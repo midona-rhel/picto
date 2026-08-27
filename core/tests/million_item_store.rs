@@ -636,7 +636,7 @@ fn timed_bulk_mutations(
         .read_snapshot(|connection| {
             Ok((
                 connection.query_row(
-                    "SELECT COUNT(DISTINCT root_item_id) FROM root_tag WHERE tag_id = ?1",
+                    "SELECT assignment_count FROM tag_summary WHERE tag_id = ?1",
                     [tag_id],
                     |row| row.get::<_, i64>(0),
                 )?,
@@ -2694,9 +2694,10 @@ fn assert_tag_cardinality(application: &Application, store: &Store, tag_name: &s
         .read_snapshot(|connection| {
             connection
                 .query_row(
-                    "SELECT t.tag_id, COUNT(rt.root_item_id)
-                     FROM tag t LEFT JOIN root_tag rt ON rt.tag_id = t.tag_id
-                     WHERE t.namespace = ?1 AND t.subtag = ?2 GROUP BY t.tag_id",
+                    "SELECT tag.tag_id, COALESCE(summary.assignment_count, 0)
+                     FROM tag
+                     LEFT JOIN tag_summary summary ON summary.tag_id = tag.tag_id
+                     WHERE tag.namespace = ?1 AND tag.subtag = ?2",
                     rusqlite::params![namespace, subtag],
                     |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
                 )

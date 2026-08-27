@@ -859,7 +859,7 @@ pub fn evaluate(connection: &Connection, smart_folder_id: i64) -> rusqlite::Resu
     compile_smart_folder(connection, smart_folder_id)
 }
 
-fn effective_predicate(
+pub(crate) fn effective_predicate(
     connection: &Connection,
     smart_folder_id: i64,
 ) -> rusqlite::Result<SmartFolderPredicate> {
@@ -888,6 +888,123 @@ fn effective_predicate(
         groups.extend(predicate.groups);
     }
     Ok(SmartFolderPredicate { groups })
+}
+
+/// Re-evaluate a bounded active-root set while resolving tag ownership from
+/// the candidate bitmap projection. Non-tag rules continue to use their
+/// indexed SQL predicates; tag ownership is never expanded into persistent
+/// relationship rows.
+pub(crate) fn evaluate_impacted_with_tag_bitmaps(
+    transaction: &Transaction<'_>,
+    predicate: &SmartFolderPredicate,
+    active_roots: &RoaringBitmap,
+    mut tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
+) -> rusqlite::Result<RoaringBitmap> {
+    if predicate.groups.is_empty() || active_roots.is_empty() {
+        return Ok(RoaringBitmap::new());
+    }
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_impacted_root (
+             root_item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_smart_impacted_root;",
+    )?;
+    {
+        let mut insert = transaction
+            .prepare_cached("INSERT INTO picto_smart_impacted_root(root_item_id) VALUES (?1)")?;
+        for root_id in active_roots {
+            insert.execute([root_id])?;
+        }
+    }
+
+    let mut result = active_roots.clone();
+    for group in &predicate.groups {
+        let mut group_result = match group.match_mode {
+            MatchMode::All => active_roots.clone(),
+            MatchMode::Any => RoaringBitmap::new(),
+        };
+        for rule in &group.rules {
+            let matches = if rule.field == "tags" {
+                tag_rule_bitmap(transaction, rule, active_roots, &mut tag_bitmap)?
+            } else {
+                let single = SmartFolderPredicate {
+                    groups: vec![SmartRuleGroup {
+                        match_mode: MatchMode::All,
+                        negate: false,
+                        rules: vec![rule.clone()],
+                    }],
+                };
+                let (sql, arguments) = predicate_sql(Some(transaction), &single, 0, true)?;
+                transaction
+                    .prepare(&sql)?
+                    .query_map(rusqlite::params_from_iter(arguments), |row| {
+                        let root_id = row.get::<_, i64>(0)?;
+                        u32::try_from(root_id)
+                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+                    })?
+                    .collect::<rusqlite::Result<RoaringBitmap>>()?
+            };
+            match group.match_mode {
+                MatchMode::All => group_result &= matches,
+                MatchMode::Any => group_result |= matches,
+            }
+        }
+        if group.negate {
+            group_result = active_roots - &group_result;
+        }
+        result &= group_result;
+    }
+    transaction.execute("DELETE FROM picto_smart_impacted_root", [])?;
+    Ok(result)
+}
+
+fn tag_rule_bitmap(
+    transaction: &Transaction<'_>,
+    rule: &PredicateRule,
+    active_roots: &RoaringBitmap,
+    tag_bitmap: &mut impl FnMut(i64) -> RoaringBitmap,
+) -> rusqlite::Result<RoaringBitmap> {
+    let values = rule.values.as_deref().unwrap_or_default();
+    if values.is_empty() {
+        return Ok(
+            if matches!(rule.op.as_str(), "do_not_include" | "exclude") {
+                active_roots.clone()
+            } else {
+                RoaringBitmap::new()
+            },
+        );
+    }
+    let mut sets = Vec::with_capacity(values.len());
+    for value in values {
+        let (namespace, subtag) = split_tag(value);
+        let tag_id = transaction
+            .query_row(
+                "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+                rusqlite::params![namespace, subtag],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        sets.push(tag_id.map(&mut *tag_bitmap).unwrap_or_default() & active_roots);
+    }
+    let combined = match rule.op.as_str() {
+        "include" | "include_all" => sets
+            .into_iter()
+            .reduce(|left, right| left & right)
+            .unwrap_or_default(),
+        "include_any" => sets
+            .into_iter()
+            .reduce(|left, right| left | right)
+            .unwrap_or_default(),
+        "do_not_include" | "exclude" => {
+            let excluded = sets
+                .into_iter()
+                .reduce(|left, right| left | right)
+                .unwrap_or_default();
+            active_roots - &excluded
+        }
+        op => return Err(invalid(format!("Unknown tag operator: {op}"))),
+    };
+    Ok(combined)
 }
 
 fn rule_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::Result<String> {
@@ -1290,6 +1407,16 @@ mod tests {
         }
     }
 
+    fn tag_rule(op: &str, values: &[&str]) -> PredicateRule {
+        PredicateRule {
+            field: "tags".to_string(),
+            op: op.to_string(),
+            value: None,
+            value2: None,
+            values: Some(values.iter().map(|value| (*value).to_string()).collect()),
+        }
+    }
+
     #[test]
     fn parent_and_child_predicates_are_composed() {
         let connection = connection();
@@ -1410,6 +1537,52 @@ mod tests {
         };
 
         assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn impacted_tag_rules_use_candidate_bitmaps_without_relationship_rows() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        connection
+            .execute(
+                "INSERT INTO tag(tag_id, namespace, subtag)
+                 VALUES (10, 'general', 'blue'),
+                        (11, 'general', 'round')",
+                [],
+            )
+            .unwrap();
+        let predicate = SmartFolderPredicate {
+            groups: vec![SmartRuleGroup {
+                match_mode: MatchMode::All,
+                negate: false,
+                rules: vec![
+                    tag_rule("include_all", &["blue", "round"]),
+                    rule("rating", "gte", serde_json::json!(4)),
+                ],
+            }],
+        };
+        let transaction = connection.transaction().unwrap();
+        let matches = evaluate_impacted_with_tag_bitmaps(
+            &transaction,
+            &predicate,
+            &RoaringBitmap::from_iter([1, 2]),
+            |tag_id| match tag_id {
+                10 => RoaringBitmap::from_iter([1, 2]),
+                11 => RoaringBitmap::from_iter([1]),
+                _ => RoaringBitmap::new(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(matches, RoaringBitmap::from_iter([1]));
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM root_tag", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

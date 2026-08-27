@@ -40,6 +40,7 @@ struct CanonicalDirty {
     lifecycle: bool,
     rating: bool,
     tags: Vec<i64>,
+    tag_roots: RoaringBitmap,
     folders: Vec<i64>,
     groups: Vec<i64>,
     smart_folders: Vec<i64>,
@@ -49,6 +50,7 @@ impl PreparedProjection {
     fn persist(&mut self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
         let revision = i64::try_from(revision)
             .map_err(|_| "Library revision exceeds SQLite range".to_string())?;
+        self.settle_tag_smart_folders(transaction)?;
         self.absorb_smart_folder_changes(transaction)?;
         if self.dirty.lifecycle {
             for (key, lifecycle) in [
@@ -250,6 +252,185 @@ impl PreparedProjection {
                     .map_err(|error| error.to_string())?;
             }
         }
+        Ok(())
+    }
+
+    fn settle_tag_smart_folders(&mut self, transaction: &Transaction<'_>) -> Result<(), String> {
+        if self.dirty.tags.is_empty() || self.dirty.tag_roots.is_empty() {
+            return Ok(());
+        }
+        transaction
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS picto_changed_tag_id (
+                     tag_id INTEGER PRIMARY KEY
+                 ) WITHOUT ROWID;
+                 CREATE TEMP TABLE IF NOT EXISTS picto_changed_tag_root (
+                     root_item_id INTEGER PRIMARY KEY
+                 ) WITHOUT ROWID;
+                 CREATE TEMP TABLE IF NOT EXISTS picto_smart_tag_match_root (
+                     root_item_id INTEGER PRIMARY KEY
+                 ) WITHOUT ROWID;
+                 DELETE FROM picto_changed_tag_id;
+                 DELETE FROM picto_changed_tag_root;
+                 DELETE FROM picto_smart_tag_match_root;",
+            )
+            .map_err(|error| error.to_string())?;
+        {
+            let mut insert = transaction
+                .prepare_cached("INSERT INTO picto_changed_tag_id(tag_id) VALUES (?1)")
+                .map_err(|error| error.to_string())?;
+            for tag_id in &self.dirty.tags {
+                insert
+                    .execute([tag_id])
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let smart_folder_ids = transaction
+            .prepare(
+                "SELECT DISTINCT dependency.smart_folder_id
+                 FROM picto_changed_tag_id changed
+                 JOIN tag ON tag.tag_id = changed.tag_id
+                 JOIN smart_folder_dependency dependency
+                   ON dependency.dependency_kind = 'tag'
+                  AND dependency.dependency_key = CASE
+                        WHEN tag.namespace = 'general' THEN tag.subtag
+                        ELSE tag.namespace || ':' || tag.subtag
+                      END
+                 ORDER BY dependency.smart_folder_id",
+            )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM picto_changed_tag_id", [])
+            .map_err(|error| error.to_string())?;
+        if smart_folder_ids.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut insert = transaction
+                .prepare_cached("INSERT INTO picto_changed_tag_root(root_item_id) VALUES (?1)")
+                .map_err(|error| error.to_string())?;
+            for root_id in &self.dirty.tag_roots {
+                insert
+                    .execute([root_id])
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+
+        let active = self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)].clone();
+        let impacted_active = &self.dirty.tag_roots & &active;
+        let state = Arc::make_mut(&mut self.state);
+        transaction
+            .execute(
+                "UPDATE projection_write_control
+                 SET suppress_smart_dirty = 1
+                 WHERE singleton = 1",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        for smart_folder_id in &smart_folder_ids {
+            let predicate = crate::smart_v2::effective_predicate(transaction, *smart_folder_id)
+                .map_err(|error| error.to_string())?;
+            let matches = crate::smart_v2::evaluate_impacted_with_tag_bitmaps(
+                transaction,
+                &predicate,
+                &impacted_active,
+                |tag_id| {
+                    state
+                        .direct_tag_bitmaps
+                        .get(&tag_id)
+                        .map(|bitmap| (**bitmap).clone())
+                        .unwrap_or_default()
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            let mut result = state
+                .smart_folder_bitmaps
+                .get(smart_folder_id)
+                .map(|bitmap| (**bitmap).clone())
+                .unwrap_or_default();
+            result -= &self.dirty.tag_roots;
+            result |= &matches;
+
+            let generation_id = transaction
+                .query_row(
+                    "SELECT generation_id FROM smart_folder_generation
+                     WHERE smart_folder_id = ?1 AND state = 'active'",
+                    [smart_folder_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "DELETE FROM smart_folder_membership
+                     WHERE generation_id = ?1
+                       AND root_item_id IN (
+                           SELECT root_item_id FROM picto_changed_tag_root
+                       )",
+                    [generation_id],
+                )
+                .map_err(|error| error.to_string())?;
+            if !matches.is_empty() {
+                transaction
+                    .execute("DELETE FROM picto_smart_tag_match_root", [])
+                    .map_err(|error| error.to_string())?;
+                {
+                    let mut insert = transaction
+                        .prepare_cached(
+                            "INSERT INTO picto_smart_tag_match_root(root_item_id) VALUES (?1)",
+                        )
+                        .map_err(|error| error.to_string())?;
+                    for root_id in &matches {
+                        insert
+                            .execute([root_id])
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                transaction
+                    .execute(
+                        "INSERT INTO smart_folder_membership(generation_id, root_item_id)
+                         SELECT ?1, root_item_id FROM picto_smart_tag_match_root",
+                        [generation_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            transaction
+                .execute(
+                    "UPDATE smart_folder_generation
+                     SET member_count = ?2
+                     WHERE generation_id = ?1",
+                    rusqlite::params![generation_id, result.len() as i64],
+                )
+                .map_err(|error| error.to_string())?;
+            if result.is_empty() {
+                state.smart_folder_bitmaps.remove(smart_folder_id);
+            } else {
+                state
+                    .smart_folder_bitmaps
+                    .insert(*smart_folder_id, result.into());
+            }
+        }
+        transaction
+            .execute(
+                "UPDATE projection_write_control
+                 SET suppress_smart_dirty = 0
+                 WHERE singleton = 1",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute_batch(
+                "DELETE FROM picto_changed_tag_root;
+                 DELETE FROM picto_smart_tag_match_root;",
+            )
+            .map_err(|error| error.to_string())?;
+        self.dirty.smart_folders.extend(smart_folder_ids);
+        self.dirty.smart_folders.sort_unstable();
+        self.dirty.smart_folders.dedup();
         Ok(())
     }
 
@@ -780,10 +961,28 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
             before.numeric.rating.value_bitmap(rating, &roots_before)
                 != after.numeric.rating.value_bitmap(rating, &roots_after)
         });
+    let tags = changed_bitmap_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps);
+    let mut tag_roots = RoaringBitmap::new();
+    for tag_id in &tags {
+        let before = before
+            .direct_tag_bitmaps
+            .get(tag_id)
+            .map(|bitmap| &**bitmap)
+            .cloned()
+            .unwrap_or_default();
+        let after = after
+            .direct_tag_bitmaps
+            .get(tag_id)
+            .map(|bitmap| &**bitmap)
+            .cloned()
+            .unwrap_or_default();
+        tag_roots |= before ^ after;
+    }
     CanonicalDirty {
         lifecycle: !Arc::ptr_eq(&before.lifecycle_bitmaps, &after.lifecycle_bitmaps),
         rating: rating_changed,
-        tags: changed_bitmap_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps),
+        tags,
+        tag_roots,
         folders: changed_bitmap_keys(&before.folder_members, &after.folder_members),
         groups: changed_bitmap_keys(&before.collection_members, &after.collection_members),
         smart_folders: changed_bitmap_keys(
@@ -1761,6 +1960,7 @@ impl ProjectionStore {
             if let Some(lifecycle) = change.lifecycle {
                 set_lifecycle(&mut state, change.item_id, lifecycle);
             } else {
+                clear_root_tag_counts(&mut state, change.item_id);
                 remove_lifecycle(&mut state, change.item_id);
                 remove_root_numeric_summary(&mut state, change.item_id as u32);
             }

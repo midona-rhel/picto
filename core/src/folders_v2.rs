@@ -361,7 +361,12 @@ impl Application {
                 let changed_tags = if added.is_empty() {
                     crate::operations_v2::BulkTagProjectionDelta::default()
                 } else {
-                    crate::operations_v2::apply_tags_to_selection(transaction, &added, true)?
+                    crate::operations_v2::apply_tags_to_selection(
+                        transaction,
+                        self.projections(),
+                        &added,
+                        true,
+                    )?
                 };
                 let changed = previous != names || changed_tags.canonical_changed;
                 Ok((root_ids, changed_tags, changed))
@@ -1475,18 +1480,27 @@ mod tests {
     }
 
     fn assigned_tag_names(app: &Application, media_id: i64) -> Vec<String> {
+        let roots = roaring::RoaringBitmap::from_iter([media_id as u32]);
+        let tag_ids = app
+            .projections()
+            .tag_memberships_for_roots(&roots)
+            .into_iter()
+            .map(|(tag_id, _)| tag_id)
+            .collect::<Vec<_>>();
         app.store()
             .read(|connection| {
+                let encoded = serde_json::to_string(&tag_ids)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
                 connection
                     .prepare(
-                        "SELECT CASE WHEN t.namespace = 'general' THEN t.subtag
-                                     ELSE t.namespace || ':' || t.subtag END
-                         FROM root_tag rt
-                         JOIN tag t ON t.tag_id = rt.tag_id
-                         WHERE rt.root_item_id = ?1
-                         ORDER BY t.namespace, t.subtag",
+                        "SELECT CASE WHEN tag.namespace = 'general' THEN tag.subtag
+                                     ELSE tag.namespace || ':' || tag.subtag END
+                         FROM tag
+                         JOIN json_each(?1) selected
+                           ON tag.tag_id = CAST(selected.value AS INTEGER)
+                         ORDER BY tag.namespace, tag.subtag",
                     )?
-                    .query_map([media_id], |row| row.get::<_, String>(0))?
+                    .query_map([encoded], |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()
             })
             .unwrap()

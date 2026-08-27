@@ -985,9 +985,10 @@ fn apply_semantic_payload(
 ) -> Result<(), String> {
     match payload {
         SemanticHistoryPayload::Lifecycle(delta) => apply_lifecycle(transaction, delta),
-        SemanticHistoryPayload::Tags(changes) => {
-            apply_memberships(transaction, "root_tag", "root_item_id", "tag_id", changes)
-        }
+        // Tag ownership is canonical bitmap state. The in-memory semantic
+        // payload is applied to the private projection candidate and persisted
+        // as one checksummed bitmap during prepared publication.
+        SemanticHistoryPayload::Tags(_) => Ok(()),
         SemanticHistoryPayload::Folders(changes) => {
             apply_memberships(transaction, "folder_item", "item_id", "folder_id", changes)
         }
@@ -1076,14 +1077,9 @@ fn collect_semantic_smart_impact(
             *roots |= delta.roots();
             fields.insert("lifecycle");
         }
-        SemanticHistoryPayload::Tags(changes) => {
-            fields.insert("tags");
-            for change in changes {
-                *roots |= &change.add;
-                *roots |= &change.remove;
-                tag_ids.insert(change.relation_id);
-            }
-        }
+        // Prepared projection settlement re-evaluates tag-dependent smart
+        // folders from the candidate bitmap. SQL read models are not involved.
+        SemanticHistoryPayload::Tags(_) => {}
         SemanticHistoryPayload::Folders(_) => {}
         SemanticHistoryPayload::Ratings(delta) => {
             fields.insert("rating");
@@ -2268,13 +2264,8 @@ mod tests {
         const ROOT_COUNT: u32 = 1_000;
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
-        let (tag_id, folder_id) = store
+        let folder_id = store
             .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO tag(namespace, subtag) VALUES ('general', 'semantic')",
-                    [],
-                )?;
-                let tag_id = transaction.last_insert_rowid();
                 transaction.execute(
                     "INSERT INTO folder
                          (folder_key, name, created_at, updated_at)
@@ -2320,7 +2311,7 @@ mod tests {
                     insert_root.execute([i64::from(root_id)])?;
                     insert_metadata.execute([i64::from(root_id)])?;
                 }
-                Ok((tag_id, folder_id))
+                Ok(folder_id)
             })
             .unwrap()
             .0;
@@ -2330,11 +2321,6 @@ mod tests {
                 active: roots.clone(),
                 ..SemanticLifecycleDelta::default()
             }),
-            SemanticHistoryPayload::Tags(vec![SemanticMembershipDelta {
-                relation_id: tag_id,
-                remove: roots.clone(),
-                ..SemanticMembershipDelta::default()
-            }]),
             SemanticHistoryPayload::Folders(vec![SemanticMembershipDelta {
                 relation_id: folder_id,
                 remove: roots.clone(),
@@ -2350,11 +2336,6 @@ mod tests {
                 trash: roots.clone(),
                 ..SemanticLifecycleDelta::default()
             }),
-            SemanticHistoryPayload::Tags(vec![SemanticMembershipDelta {
-                relation_id: tag_id,
-                add: roots.clone(),
-                ..SemanticMembershipDelta::default()
-            }]),
             SemanticHistoryPayload::Folders(vec![SemanticMembershipDelta {
                 relation_id: folder_id,
                 add: roots.clone(),
@@ -2377,11 +2358,6 @@ mod tests {
                 |transaction| {
                     transaction.execute("UPDATE library_root SET lifecycle = 'trash'", [])?;
                     transaction.execute(
-                        "INSERT INTO root_tag(root_item_id, tag_id)
-                         SELECT item_id, ?1 FROM library_root",
-                        [tag_id],
-                    )?;
-                    transaction.execute(
                         "INSERT INTO folder_item(folder_id, item_id)
                          SELECT ?1, item_id FROM library_root",
                         [folder_id],
@@ -2394,21 +2370,20 @@ mod tests {
             )
             .unwrap();
 
-        assert_semantic_state(&store, ROOT_COUNT, tag_id, folder_id, "trash", 5, true);
+        assert_semantic_state(&store, ROOT_COUNT, folder_id, "trash", 5, true);
         store
             .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
             .unwrap();
-        assert_semantic_state(&store, ROOT_COUNT, tag_id, folder_id, "active", 0, false);
+        assert_semantic_state(&store, ROOT_COUNT, folder_id, "active", 0, false);
         store
             .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
             .unwrap();
-        assert_semantic_state(&store, ROOT_COUNT, tag_id, folder_id, "trash", 5, true);
+        assert_semantic_state(&store, ROOT_COUNT, folder_id, "trash", 5, true);
     }
 
     fn assert_semantic_state(
         store: &Store,
         root_count: u32,
-        tag_id: i64,
         folder_id: i64,
         lifecycle: &str,
         rating: i64,
@@ -2434,11 +2409,6 @@ mod tests {
                         |row| row.get(0),
                     )?
                 };
-                let tag_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1",
-                    [tag_id],
-                    |row| row.get(0),
-                )?;
                 let folder_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
                     [folder_id],
@@ -2447,7 +2417,6 @@ mod tests {
                 let expected = i64::from(root_count);
                 assert_eq!(lifecycle_count, expected);
                 assert_eq!(rating_count, expected);
-                assert_eq!(tag_count, if memberships_present { expected } else { 0 });
                 assert_eq!(folder_count, if memberships_present { expected } else { 0 });
                 Ok(())
             })

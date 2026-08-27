@@ -1675,18 +1675,20 @@ mod tests {
         let receipt: MutationReceipt = serde_json::from_str(&output).unwrap();
         assert_eq!(receipt.item_ids, vec![item_id]);
         assert!(receipt.resources.iter().any(|resource| resource == "tags"));
-        let assigned: String = application
+        let tag_id: i64 = application
             .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT t.subtag
-                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
-                     WHERE rt.root_item_id = ?1",
-                    [item_id.0],
+                    "SELECT tag_id FROM tag
+                     WHERE namespace = 'general' AND subtag = 'one girl'",
+                    [],
                     |row| row.get(0),
                 )
             })
             .unwrap();
-        assert_eq!(assigned, "one girl");
+        assert!(application
+            .projections()
+            .direct_tag_bitmap(tag_id)
+            .contains(item_id.0 as u32));
     }
 }

@@ -1,7 +1,7 @@
 //! Replacement mutations over library roots and media assets.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use rand::RngCore;
 use roaring::RoaringBitmap;
@@ -56,8 +56,6 @@ struct CapturedGroupState {
     members: BTreeMap<(i64, i64), i64>,
     tag_sets: BTreeMap<i64, RoaringBitmap>,
 }
-
-type CapturedRootTagState = BTreeSet<(i64, i64)>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -362,7 +360,7 @@ impl Application {
                     if tags.is_empty() {
                         BulkTagProjectionDelta::default()
                     } else {
-                        apply_tags_to_selection(transaction, &tags, true)?
+                        apply_tags_to_selection(transaction, self.projections(), &tags, true)?
                     }
                 } else {
                     BulkTagProjectionDelta::default()
@@ -442,6 +440,14 @@ impl Application {
                     self.projections(),
                     false,
                 )?;
+                let selected_roots = bitmap_from_i64s(item_ids.iter().copied())?;
+                let inherited_tag_ids = before
+                    .tag_sets
+                    .iter()
+                    .filter_map(|(tag_id, roots)| {
+                        (roots.intersection_len(&selected_roots) > 0).then_some(*tag_id)
+                    })
+                    .collect::<Vec<_>>();
                 trace_bulk_stage("groups.organize", "capture_before", stage_started);
                 stage_started = Instant::now();
                 let (selected_count, media_count, collection_count): (i64, i64, i64) = transaction
@@ -558,27 +564,6 @@ impl Application {
 
                 let encoded_roots = serde_json::to_string(&item_ids)
                     .map_err(|error| invalid(format!("Could not encode group roots: {error}")))?;
-                if creating_collection {
-                    transaction.execute(
-                        "INSERT INTO root_tag(root_item_id, tag_id)
-                         SELECT ?1, tag_id
-                         FROM picto_group_create_tag
-                         WHERE TRUE
-                         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-                        [collection_id],
-                    )?;
-                } else {
-                    transaction.execute(
-                        "INSERT INTO root_tag(root_item_id, tag_id)
-                         SELECT ?1, relation.tag_id
-                         FROM root_tag relation
-                         JOIN picto_selected_root selected
-                           ON relation.root_item_id = selected.item_id
-                         GROUP BY relation.tag_id
-                         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-                        [collection_id],
-                    )?;
-                }
                 trace_bulk_stage("groups.organize.structure", "union_tags", stage_started);
                 stage_started = Instant::now();
                 transaction.execute(
@@ -860,7 +845,11 @@ impl Application {
                 }
                 trace_bulk_stage("groups.organize", "summary_settlement", stage_started);
                 stage_started = Instant::now();
-                let after = capture_group_state_compact(transaction, &after_universe)?;
+                let mut after = capture_group_state_compact(transaction, &after_universe)?;
+                let collection_root = RoaringBitmap::from_iter([root_id_u32(collection_id)?]);
+                for tag_id in &inherited_tag_ids {
+                    after.tag_sets.insert(*tag_id, collection_root.clone());
+                }
                 let (history, forward) = group_history_record(&before, &after)?;
                 trace_bulk_stage("groups.organize", "capture_after_history", stage_started);
                 trace_bulk_stage("groups.organize", "closure_total", operation_started);
@@ -868,8 +857,8 @@ impl Application {
                     (collection_id, affected),
                     GroupProjectionDelta {
                         structure: delta,
-                        tag_changes: forward.tag_changes,
-                        shared_tag_sets: Vec::new(),
+                        tag_changes: Vec::new(),
+                        shared_tag_sets: vec![(collection_root, inherited_tag_ids)],
                         rating_changes: forward.rating_changes,
                     },
                     history,
@@ -1274,7 +1263,7 @@ impl Application {
             ),
             |transaction| {
                 stage_root_selection(transaction, target)?;
-                let delta = apply_tags_to_selection(transaction, &tags, add)?;
+                let delta = apply_tags_to_selection(transaction, self.projections(), &tags, add)?;
                 let changed = delta.canonical_changed;
                 let undo = semantic_tag_memberships(&delta, !add);
                 let redo = semantic_tag_memberships(&delta, add);
@@ -1321,27 +1310,14 @@ impl Application {
         let (root_id, revision, _) = self.transaction_if_changed(
             |transaction| {
                 let root_id = root_for_media(transaction, media_item_id.0)?;
-                let changed_tags = apply_root_tags_in(transaction, &[root_id], &tags, true)?;
-                let changed = !changed_tags.is_empty();
-                if changed {
-                    let roots = RoaringBitmap::from_iter([root_id_u32(root_id)?]);
-                    let tag_ids = changed_tags
-                        .iter()
-                        .map(|(_, tag_id)| *tag_id)
-                        .collect::<Vec<_>>();
-                    crate::smart_v2::refresh_impacted_roots(
-                        transaction,
-                        &roots,
-                        &["tags"],
-                        &tag_ids,
-                    )?;
-                }
-                Ok((root_id, changed_tags, changed))
+                let roots = RoaringBitmap::from_iter([root_id_u32(root_id)?]);
+                let delta =
+                    apply_tags_to_roots(transaction, self.projections(), &roots, &tags, true)?;
+                let changed = delta.canonical_changed;
+                Ok((root_id, delta, changed))
             },
-            |projections, changed_tags| {
-                for (root_id, tag_id) in changed_tags {
-                    let roots = RoaringBitmap::from_iter([u32::try_from(root_id)
-                        .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?]);
+            |projections, delta| {
+                for (tag_id, roots) in delta.changes {
                     projections.apply_root_tag_bitmap(tag_id, &roots, true)?;
                 }
                 Ok(())
@@ -1403,37 +1379,33 @@ impl Application {
             ),
             |transaction| {
                 let mut root_ids = BTreeSet::new();
-                for (media_item_id, _) in &normalized {
-                    root_ids.insert(root_for_media(transaction, media_item_id.0)?);
-                }
-                let before = capture_root_tag_state(transaction, &root_ids)?;
-                let mut changed_tags = Vec::new();
+                let mut roots_by_tag = BTreeMap::<(String, String), RoaringBitmap>::new();
                 for (media_item_id, tags) in &normalized {
                     let root_id = root_for_media(transaction, media_item_id.0)?;
-                    changed_tags.extend(apply_root_tags_in(transaction, &[root_id], tags, true)?);
+                    root_ids.insert(root_id);
+                    let root_id = root_id_u32(root_id)?;
+                    for tag in tags {
+                        roots_by_tag.entry(tag.clone()).or_default().insert(root_id);
+                    }
                 }
-                let changed = !changed_tags.is_empty();
-                let history = if changed {
-                    let after = capture_root_tag_state(transaction, &root_ids)?;
-                    Some(root_tag_history_record(&before, &after)?)
-                } else {
-                    None
-                };
+                let delta =
+                    apply_tag_assignments(transaction, self.projections(), &roots_by_tag, true)?;
+                let changed = delta.canonical_changed;
+                let history = changed.then(|| {
+                    SemanticHistoryRecord::new(
+                        semantic_tag_memberships(&delta, false),
+                        semantic_tag_memberships(&delta, true),
+                    )
+                });
                 Ok((
                     root_ids.into_iter().collect::<Vec<_>>(),
-                    changed_tags,
+                    delta,
                     history,
                     changed,
                 ))
             },
-            |projections, changed_tags| {
-                let mut roots_by_tag = std::collections::BTreeMap::<i64, RoaringBitmap>::new();
-                for (root_id, tag_id) in changed_tags {
-                    let root_id = u32::try_from(root_id)
-                        .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?;
-                    roots_by_tag.entry(tag_id).or_default().insert(root_id);
-                }
-                for (tag_id, root_ids) in roots_by_tag {
+            |projections, delta| {
+                for (tag_id, root_ids) in delta.changes {
                     projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
                 }
                 Ok(())
@@ -1988,72 +1960,6 @@ fn group_history_universe(
     item_ids
 }
 
-fn capture_root_tag_state(
-    transaction: &Transaction<'_>,
-    root_ids: &BTreeSet<i64>,
-) -> rusqlite::Result<CapturedRootTagState> {
-    let encoded = serde_json::to_string(root_ids)
-        .map_err(|error| invalid(format!("Could not encode tag history roots: {error}")))?;
-    let mut statement = transaction.prepare(
-        "SELECT relation.root_item_id, relation.tag_id
-         FROM root_tag relation
-         JOIN json_each(?1) selected
-           ON relation.root_item_id = CAST(selected.value AS INTEGER)
-         ORDER BY relation.root_item_id, relation.tag_id",
-    )?;
-    let state = statement
-        .query_map([encoded], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?
-        .collect();
-    state
-}
-
-fn root_tag_history_record(
-    before: &CapturedRootTagState,
-    after: &CapturedRootTagState,
-) -> rusqlite::Result<SemanticHistoryRecord> {
-    Ok(SemanticHistoryRecord::new(
-        SemanticHistoryPayload::Tags(root_tag_delta_between(after, before)?),
-        SemanticHistoryPayload::Tags(root_tag_delta_between(before, after)?),
-    ))
-}
-
-fn root_tag_delta_between(
-    current: &CapturedRootTagState,
-    desired: &CapturedRootTagState,
-) -> rusqlite::Result<Vec<SemanticMembershipDelta>> {
-    let mut grouped = BTreeMap::<i64, (RoaringBitmap, RoaringBitmap)>::new();
-    for key @ (root_id, tag_id) in current
-        .iter()
-        .chain(desired.iter())
-        .copied()
-        .collect::<BTreeSet<_>>()
-    {
-        let current_present = current.contains(&key);
-        let desired_present = desired.contains(&key);
-        if current_present == desired_present {
-            continue;
-        }
-        let entry = grouped.entry(tag_id).or_default();
-        let root_id = root_id_u32(root_id)?;
-        if current_present {
-            entry.1.insert(root_id);
-        }
-        if desired_present {
-            entry.0.insert(root_id);
-        }
-    }
-    Ok(grouped
-        .into_iter()
-        .map(|(relation_id, (add, remove))| SemanticMembershipDelta {
-            relation_id,
-            add,
-            remove,
-        })
-        .collect())
-}
-
 fn capture_group_state_compact(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
@@ -2504,17 +2410,6 @@ fn new_key(prefix: &str) -> String {
     format!("{prefix}:{}", hex::encode(bytes))
 }
 
-fn require_root(transaction: &Transaction<'_>, item_id: i64) -> rusqlite::Result<String> {
-    transaction
-        .query_row(
-            "SELECT lifecycle FROM library_root WHERE item_id = ?1",
-            [item_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| invalid(format!("Item {item_id} is not a library root")))
-}
-
 fn require_collection_root(
     transaction: &Transaction<'_>,
     item_id: i64,
@@ -2567,19 +2462,6 @@ fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Re
         )
         .optional()?;
     found.ok_or_else(|| invalid(format!("Folder {folder_id} does not exist")))
-}
-
-fn collection_members(
-    transaction: &Transaction<'_>,
-    collection_id: i64,
-) -> rusqlite::Result<Vec<i64>> {
-    transaction
-        .prepare(
-            "SELECT media_item_id FROM collection_member
-             WHERE collection_id = ?1 ORDER BY position_rank, media_item_id",
-        )?
-        .query_map([collection_id], |row| row.get(0))?
-        .collect()
 }
 
 fn folder_ids_for_roots(
@@ -2738,30 +2620,6 @@ fn project_removed_collection(
             item_id: collection_id,
             present: false,
         }));
-}
-
-pub(crate) fn media_items_for_roots(
-    transaction: &Transaction<'_>,
-    root_ids: &[i64],
-) -> rusqlite::Result<Vec<i64>> {
-    let mut media_ids = BTreeSet::new();
-    for root_id in root_ids {
-        require_root(transaction, *root_id)?;
-        if transaction
-            .query_row(
-                "SELECT 1 FROM media_asset WHERE item_id = ?1",
-                [root_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some()
-        {
-            media_ids.insert(*root_id);
-        } else {
-            media_ids.extend(collection_members(transaction, *root_id)?);
-        }
-    }
-    Ok(media_ids.into_iter().collect())
 }
 
 fn mutation_item_hints(target: &ItemTarget) -> Vec<i64> {
@@ -3235,14 +3093,8 @@ fn begin_group_create_summary_batch(transaction: &Transaction<'_>) -> rusqlite::
              media_count INTEGER NOT NULL,
              total_size_bytes INTEGER NOT NULL
          ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_group_create_tag (
-             tag_id INTEGER PRIMARY KEY,
-             visible_root_count INTEGER NOT NULL,
-             assignment_count INTEGER NOT NULL
-         ) WITHOUT ROWID;
          DELETE FROM picto_group_create_root;
          DELETE FROM picto_group_create_folder;
-         DELETE FROM picto_group_create_tag;
 
          INSERT INTO picto_group_create_root (
              lifecycle, root_count, media_count, total_size_bytes
@@ -3266,19 +3118,7 @@ fn begin_group_create_summary_batch(transaction: &Transaction<'_>) -> rusqlite::
          FROM folder_item membership
          JOIN picto_selected_root selected ON selected.item_id = membership.item_id
          JOIN root_summary summary ON summary.root_item_id = membership.item_id
-         GROUP BY membership.folder_id;
-
-         INSERT INTO picto_group_create_tag (
-             tag_id, visible_root_count, assignment_count
-         )
-         SELECT relation.tag_id,
-                SUM(summary.lifecycle = 'active'),
-                COUNT(*)
-         FROM root_tag relation
-         JOIN picto_selected_root selected
-           ON selected.item_id = relation.root_item_id
-         JOIN root_summary summary ON summary.root_item_id = relation.root_item_id
-         GROUP BY relation.tag_id;",
+         GROUP BY membership.folder_id;",
     )?;
     suppress_structural_summaries(transaction)
 }
@@ -3359,19 +3199,6 @@ fn finish_group_create_summary_batch(
                  + CASE WHEN ?1 = 'active' THEN ?3 ELSE 0 END
          WHERE folder_id IN (SELECT folder_id FROM picto_group_create_folder)",
         params![lifecycle, media_count, total_size_bytes],
-    )?;
-    transaction.execute(
-        "UPDATE tag_summary
-         SET visible_root_count = visible_root_count
-                 - (SELECT old.visible_root_count FROM picto_group_create_tag old
-                    WHERE old.tag_id = tag_summary.tag_id)
-                 + CASE WHEN ?1 = 'active' THEN 1 ELSE 0 END,
-             assignment_count = assignment_count
-                 - (SELECT old.assignment_count FROM picto_group_create_tag old
-                    WHERE old.tag_id = tag_summary.tag_id)
-                 + 1
-         WHERE tag_id IN (SELECT tag_id FROM picto_group_create_tag)",
-        [lifecycle],
     )?;
     transaction.execute(
         "UPDATE projection_write_control
@@ -3953,142 +3780,63 @@ fn apply_folder_to_selection(
 
 pub(crate) fn apply_tags_to_selection(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     tags: &[(String, String)],
     add: bool,
 ) -> rusqlite::Result<BulkTagProjectionDelta> {
+    let selected = selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+    apply_tags_to_roots(transaction, projections, &selected, tags, add)
+}
+
+fn apply_tags_to_roots(
+    transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
+    roots: &RoaringBitmap,
+    tags: &[(String, String)],
+    add: bool,
+) -> rusqlite::Result<BulkTagProjectionDelta> {
+    let assignments = tags
+        .iter()
+        .cloned()
+        .map(|tag| (tag, roots.clone()))
+        .collect::<BTreeMap<_, _>>();
+    apply_tag_assignments(transaction, projections, &assignments, add)
+}
+
+fn apply_tag_assignments(
+    transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
+    assignments: &BTreeMap<(String, String), RoaringBitmap>,
+    add: bool,
+) -> rusqlite::Result<BulkTagProjectionDelta> {
     let mut delta = BulkTagProjectionDelta::default();
-    transaction.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root_tag (
-             root_item_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;",
-    )?;
-    for (namespace, subtag) in tags {
-        let tag_started = Instant::now();
-        let tag_was_created = transaction.execute(
+    for ((namespace, subtag), requested_roots) in assignments {
+        transaction.execute(
             "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
              ON CONFLICT(namespace, subtag) DO NOTHING",
             params![namespace, subtag],
-        )? > 0;
+        )?;
         let tag_id: i64 = transaction.query_row(
             "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
             params![namespace, subtag],
             |row| row.get(0),
         )?;
-        let lookup_elapsed = tag_started.elapsed();
-        let changed_roots_started = Instant::now();
-        transaction.execute("DELETE FROM picto_changed_root_tag", [])?;
-        if add {
-            if tag_was_created {
-                transaction.execute(
-                    "INSERT INTO picto_changed_root_tag(root_item_id)
-                     SELECT item_id FROM picto_selected_root",
-                    [],
-                )?;
-            } else {
-                transaction.execute(
-                    "INSERT INTO picto_changed_root_tag(root_item_id)
-                     SELECT selected.item_id
-                     FROM picto_selected_root selected
-                     LEFT JOIN root_tag existing
-                       ON existing.root_item_id = selected.item_id
-                      AND existing.tag_id = ?1
-                     WHERE existing.root_item_id IS NULL",
-                    [tag_id],
-                )?;
-            }
+        let existing = projections.direct_tag_bitmap(tag_id);
+        let changed_root_ids = if add {
+            requested_roots - &existing
         } else {
-            transaction.execute(
-                "INSERT INTO picto_changed_root_tag(root_item_id)
-                 SELECT existing.root_item_id
-                 FROM root_tag existing
-                 JOIN picto_selected_root selected
-                   ON selected.item_id = existing.root_item_id
-                 WHERE existing.tag_id = ?1",
-                [tag_id],
-            )?;
-        }
-        let changed_roots_elapsed = changed_roots_started.elapsed();
-        let changed_root_ids = selected_id_bitmap(
-            transaction,
-            "SELECT root_item_id FROM picto_changed_root_tag",
-        )?;
-        if add {
-            if !changed_root_ids.is_empty() {
-                delta.history_changes.push(SemanticMembershipDelta {
-                    relation_id: tag_id,
-                    add: changed_root_ids.clone(),
-                    remove: RoaringBitmap::new(),
-                });
-            }
-        } else {
-            if !changed_root_ids.is_empty() {
-                delta.history_changes.push(SemanticMembershipDelta {
-                    relation_id: tag_id,
-                    add: changed_root_ids.clone(),
-                    remove: RoaringBitmap::new(),
-                });
-            }
-        }
-        transaction.execute(
-            "UPDATE projection_write_control
-             SET suppress_tag_summary = 1, suppress_smart_dirty = 1
-             WHERE singleton = 1",
-            [],
-        )?;
-        let canonical_started = Instant::now();
-        let sql = if add {
-            "INSERT INTO root_tag (root_item_id, tag_id)
-                 SELECT root_item_id, ?1
-                 FROM picto_changed_root_tag"
-        } else {
-            "DELETE FROM root_tag
-                 WHERE tag_id = ?1
-                   AND root_item_id IN (SELECT root_item_id FROM picto_changed_root_tag)"
+            requested_roots & &existing
         };
-        let changed = transaction.execute(sql, [tag_id])?;
-        delta.canonical_changed |= changed > 0;
-        let canonical_elapsed = canonical_started.elapsed();
-        let summary_started = Instant::now();
-        transaction.execute(
-            "INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
-             VALUES (
-                 ?1,
-                 (SELECT COUNT(*) FROM root_tag relation
-                  JOIN library_root root ON root.item_id = relation.root_item_id
-                  WHERE relation.tag_id = ?1 AND root.lifecycle = 'active'),
-                 (SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1)
-             )
-             ON CONFLICT(tag_id) DO UPDATE SET
-                 visible_root_count = excluded.visible_root_count,
-                 assignment_count = excluded.assignment_count",
-            [tag_id],
-        )?;
-        let summary_elapsed = summary_started.elapsed();
-        transaction.execute(
-            "UPDATE projection_write_control
-             SET suppress_tag_summary = 0, suppress_smart_dirty = 0
-             WHERE singleton = 1",
-            [],
-        )?;
-        let bitmap_started = Instant::now();
-        if !changed_root_ids.is_empty() {
-            delta.changes.push((tag_id, changed_root_ids));
+        if changed_root_ids.is_empty() {
+            continue;
         }
-        let bitmap_elapsed = bitmap_started.elapsed();
-        if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some()
-            && tag_started.elapsed() >= Duration::from_millis(25)
-        {
-            eprintln!(
-                "bulk_root_tag_stages tag_id={} total_ms={:.2} lookup_ms={:.2} changed_roots_ms={:.2} canonical_ms={:.2} summary_ms={:.2} bitmap_ms={:.2}",
-                tag_id,
-                tag_started.elapsed().as_secs_f64() * 1_000.0,
-                lookup_elapsed.as_secs_f64() * 1_000.0,
-                changed_roots_elapsed.as_secs_f64() * 1_000.0,
-                canonical_elapsed.as_secs_f64() * 1_000.0,
-                summary_elapsed.as_secs_f64() * 1_000.0,
-                bitmap_elapsed.as_secs_f64() * 1_000.0,
-            );
-        }
+        delta.canonical_changed = true;
+        delta.history_changes.push(SemanticMembershipDelta {
+            relation_id: tag_id,
+            add: changed_root_ids.clone(),
+            remove: RoaringBitmap::new(),
+        });
+        delta.changes.push((tag_id, changed_root_ids));
     }
     Ok(delta)
 }
@@ -4104,56 +3852,6 @@ fn selected_id_bitmap(transaction: &Transaction<'_>, sql: &str) -> rusqlite::Res
         ids.insert(item_id);
     }
     Ok(ids)
-}
-
-pub(crate) fn apply_root_tags_in(
-    transaction: &Transaction<'_>,
-    root_ids: &[i64],
-    tags: &[(String, String)],
-    add: bool,
-) -> rusqlite::Result<Vec<(i64, i64)>> {
-    let mut changed_tags = Vec::new();
-    let root_ids_json = serde_json::to_string(root_ids)
-        .map_err(|error| invalid(format!("Could not encode tag targets: {error}")))?;
-    for (namespace, subtag) in tags {
-        transaction.execute(
-            "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
-             ON CONFLICT(namespace, subtag) DO NOTHING",
-            params![namespace, subtag],
-        )?;
-        let tag_id: i64 = transaction.query_row(
-            "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
-            params![namespace, subtag],
-            |row| row.get(0),
-        )?;
-        let changed_roots = if add {
-            let mut statement = transaction.prepare(
-                "INSERT INTO root_tag (root_item_id, tag_id)
-                 SELECT CAST(value AS INTEGER), ?2 FROM json_each(?1) WHERE 1
-                 ON CONFLICT(root_item_id, tag_id) DO NOTHING
-                 RETURNING root_item_id",
-            )?;
-            let root_ids = statement
-                .query_map(params![root_ids_json, tag_id], |row| row.get::<_, i64>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            root_ids
-        } else {
-            let mut statement = transaction.prepare(
-                "DELETE FROM root_tag
-                 WHERE tag_id = ?2
-                   AND root_item_id IN (
-                       SELECT CAST(value AS INTEGER) FROM json_each(?1)
-                   )
-                 RETURNING root_item_id",
-            )?;
-            let root_ids = statement
-                .query_map(params![root_ids_json, tag_id], |row| row.get::<_, i64>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            root_ids
-        };
-        changed_tags.extend(changed_roots.into_iter().map(|root_id| (root_id, tag_id)));
-    }
-    Ok(changed_tags)
 }
 
 fn root_for_media(transaction: &Transaction<'_>, media_item_id: i64) -> rusqlite::Result<i64> {
@@ -4740,24 +4438,21 @@ mod tests {
             .unwrap();
         assert_eq!(first.item_ids, vec![grouped.collection_id]);
         assert_eq!(first.revision, repeated.revision);
-        app.store()
+        let tag_id = app
+            .store()
             .read(|connection| {
-                let tagged: Vec<i64> = {
-                    let mut statement = connection.prepare(
-                        "SELECT relation.root_item_id FROM root_tag relation
-                         JOIN tag t ON t.tag_id = relation.tag_id
-                         WHERE t.namespace = 'general' AND t.subtag = 'predicted'
-                         ORDER BY relation.root_item_id",
-                    )?;
-                    let rows = statement
-                        .query_map([], |row| row.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    rows
-                };
-                assert_eq!(tagged, vec![grouped.collection_id.0]);
-                Ok(())
+                connection.query_row(
+                    "SELECT tag_id FROM tag
+                     WHERE namespace = 'general' AND subtag = 'predicted'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
             })
             .unwrap();
+        assert_eq!(
+            app.projections().direct_tag_bitmap(tag_id),
+            RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
+        );
     }
 
     #[test]
@@ -4775,42 +4470,29 @@ mod tests {
 
         assert_eq!(receipt.revision, before + 1);
         assert_eq!(receipt.item_ids, vec![grouped.collection_id]);
-        let assignments: Vec<(i64, String)> = app
+        let tag_ids: Vec<i64> = app
             .store()
             .read(|connection| {
                 connection
                     .prepare(
-                        "SELECT relation.root_item_id, t.subtag
-                         FROM root_tag relation JOIN tag t ON t.tag_id = relation.tag_id
-                         WHERE t.subtag IN ('first', 'second')
-                         ORDER BY relation.root_item_id, t.subtag",
+                        "SELECT tag_id FROM tag
+                         WHERE namespace = 'general' AND subtag IN ('first', 'second')
+                         ORDER BY subtag",
                     )?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .query_map([], |row| row.get::<_, i64>(0))?
                     .collect()
             })
             .unwrap();
-        assert_eq!(
-            assignments,
-            vec![
-                (grouped.collection_id.0, "first".to_string()),
-                (grouped.collection_id.0, "second".to_string())
-            ]
-        );
+        assert_eq!(tag_ids.len(), 2);
+        let expected = RoaringBitmap::from_iter([grouped.collection_id.0 as u32]);
+        for tag_id in &tag_ids {
+            assert_eq!(app.projections().direct_tag_bitmap(*tag_id), expected);
+        }
 
         app.undo().unwrap();
-        let remaining = app
-            .store()
-            .read(|connection| {
-                connection.query_row(
-                    "SELECT COUNT(*)
-                     FROM root_tag relation JOIN tag t ON t.tag_id = relation.tag_id
-                     WHERE t.subtag IN ('first', 'second')",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(remaining, 0);
+        for tag_id in tag_ids {
+            assert!(app.projections().direct_tag_bitmap(tag_id).is_empty());
+        }
     }
 
     #[test]
@@ -4862,12 +4544,12 @@ mod tests {
         );
         app.store()
             .read(|connection| {
-                let count: i64 = connection.query_row(
+                let legacy_row_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1",
                     [tag_id],
                     |row| row.get(0),
                 )?;
-                assert_eq!(count, 1);
+                assert_eq!(legacy_row_count, 0);
                 let smart_count: i64 = connection.query_row(
                     "SELECT COUNT(*)
                      FROM smart_folder_generation generation
