@@ -957,6 +957,28 @@ CREATE TRIGGER search_collection_member_delete AFTER DELETE ON collection_member
     ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
 END;
 
+CREATE TRIGGER search_group_order_insert
+AFTER INSERT ON canonical_order WHEN NEW.owner_kind = 'group' BEGIN
+    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
+    VALUES (NEW.owner_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
+END;
+
+CREATE TRIGGER search_group_order_update
+AFTER UPDATE OF payload, checksum ON canonical_order
+WHEN NEW.owner_kind = 'group' BEGIN
+    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
+    VALUES (NEW.owner_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
+END;
+
+CREATE TRIGGER search_group_order_delete
+AFTER DELETE ON canonical_order WHEN OLD.owner_kind = 'group' BEGIN
+    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
+    VALUES (OLD.owner_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
+END;
+
 CREATE TRIGGER search_source_post_insert AFTER INSERT ON source_post BEGIN
     INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
     VALUES (NEW.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))

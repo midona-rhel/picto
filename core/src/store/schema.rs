@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
+use crate::canonical_bitmap;
+
 pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v1";
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 5;
@@ -1635,14 +1637,36 @@ fn refresh_search_indexes_named_batch(
 }
 
 fn refresh_name_search_batch(transaction: &Transaction<'_>, limit: i64) -> rusqlite::Result<i64> {
-    let processed = transaction.query_row(
-        "SELECT COUNT(*) FROM (
-             SELECT root_item_id FROM search_dirty_name
-             ORDER BY queued_at_ms, root_item_id LIMIT ?1
-         )",
-        [limit],
-        |row| row.get(0),
-    )?;
+    let root_ids = {
+        let mut statement = transaction.prepare_cached(
+            "SELECT root_item_id FROM search_dirty_name
+             ORDER BY queued_at_ms, root_item_id LIMIT ?1",
+        )?;
+        let root_ids = statement
+            .query_map([limit], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        root_ids
+    };
+    let processed = i64::try_from(root_ids.len())
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+    if root_ids.is_empty() {
+        return Ok(0);
+    }
+
+    // Canonical group membership is a checksummed order BLOB. Decode only the
+    // bounded dirty batch, then feed one set-based FTS insert. Even a large
+    // group does not issue one SQLite write per member.
+    let mut member_rows = Vec::new();
+    for root_id in &root_ids {
+        if let Some(order) = canonical_bitmap::load_order(transaction, "group", *root_id)? {
+            for (position, media_id) in order.into_iter().enumerate() {
+                member_rows.push((*root_id, media_id, position));
+            }
+        }
+    }
+    let member_rows = serde_json::to_string(&member_rows)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+
     transaction.execute(
         "DELETE FROM root_name_fts WHERE rowid IN (
              SELECT root_item_id FROM search_dirty_name
@@ -1652,8 +1676,25 @@ fn refresh_name_search_batch(transaction: &Transaction<'_>, limit: i64) -> rusql
     )?;
     transaction.execute(
         "INSERT INTO root_name_fts(rowid, root_item_id, name)
+         WITH mapped(root_item_id, media_item_id, position) AS (
+             SELECT CAST(json_extract(value, '$[0]') AS INTEGER),
+                    CAST(json_extract(value, '$[1]') AS INTEGER),
+                    CAST(json_extract(value, '$[2]') AS INTEGER)
+             FROM json_each(?2)
+         ),
+         member_names(root_item_id, names) AS (
+             SELECT root_item_id, GROUP_CONCAT(name, ' ')
+             FROM (
+                 SELECT mapped.root_item_id, media.name
+                 FROM mapped
+                 JOIN media_asset media ON media.item_id = mapped.media_item_id
+                 ORDER BY mapped.root_item_id, mapped.position
+             )
+             GROUP BY root_item_id
+         )
          SELECT item.item_id, item.item_id,
                 trim(COALESCE(metadata.name, cover.name, '') || ' ' ||
+                     COALESCE(member_names.names, '') || ' ' ||
                      CASE item.kind WHEN 'collection' THEN 'collection group'
                                     ELSE 'standalone media' END)
          FROM library_item item
@@ -1663,11 +1704,12 @@ fn refresh_name_search_batch(transaction: &Transaction<'_>, limit: i64) -> rusql
              item.cover_media_item_id,
              CASE WHEN item.kind = 'media' THEN item.item_id END
          )
+         LEFT JOIN member_names ON member_names.root_item_id = item.item_id
          JOIN (
              SELECT root_item_id FROM search_dirty_name
              ORDER BY queued_at_ms, root_item_id LIMIT ?1
          ) dirty ON dirty.root_item_id = item.item_id",
-        [limit],
+        rusqlite::params![limit, member_rows],
     )?;
     transaction.execute(
         "DELETE FROM search_dirty_name WHERE root_item_id IN (

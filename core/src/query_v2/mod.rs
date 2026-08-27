@@ -3706,56 +3706,7 @@ mod tests {
     fn refresh_canonical_search_indexes(store: &Store) {
         store
             .transaction_if_changed(|transaction| {
-                transaction.execute_batch(
-                    "DELETE FROM root_name_fts;
-                     DELETE FROM root_notes_fts;
-                     DELETE FROM source_text_fts;
-
-                     INSERT INTO root_name_fts(root_item_id, name)
-                     WITH root_media(root_item_id, media_item_id) AS (
-                         SELECT summary.root_item_id, summary.root_item_id
-                         FROM root_summary summary WHERE summary.kind = 'media'
-                         UNION ALL
-                         SELECT summary.root_item_id, member.media_item_id
-                         FROM root_summary summary
-                         JOIN collection_member member
-                           ON member.collection_id = summary.root_item_id
-                         WHERE summary.kind = 'collection'
-                     )
-                     SELECT metadata.root_item_id,
-                            TRIM(COALESCE(metadata.name, '') || ' ' ||
-                                 COALESCE(GROUP_CONCAT(DISTINCT media.name), ''))
-                     FROM root_metadata metadata
-                     LEFT JOIN root_media mapped
-                       ON mapped.root_item_id = metadata.root_item_id
-                     LEFT JOIN media_asset media ON media.item_id = mapped.media_item_id
-                     GROUP BY metadata.root_item_id;
-
-                     INSERT INTO root_notes_fts(root_item_id, notes)
-                     SELECT root_item_id, COALESCE(notes, '') FROM root_metadata;
-
-                     INSERT INTO source_text_fts(source_post_id, searchable_text)
-                     SELECT post.source_post_id,
-                            TRIM(COALESCE(post.site_id, '') || ' ' ||
-                                 COALESCE(post.post_key, '') || ' ' ||
-                                 COALESCE(post.canonical_url, '') || ' ' ||
-                                 COALESCE(post.creator_name, '') || ' ' ||
-                                 COALESCE(post.title, '') || ' ' ||
-                                 COALESCE(post.description, '') || ' ' ||
-                                 COALESCE((
-                                     SELECT GROUP_CONCAT(
-                                         COALESCE(item.media_url, '') || ' ' ||
-                                         COALESCE(item.canonical_url, ''), ' '
-                                     )
-                                     FROM source_item item
-                                     WHERE item.source_post_id = post.source_post_id
-                                 ), ''))
-                     FROM source_post post;
-
-                     DELETE FROM search_dirty_name;
-                     DELETE FROM search_dirty_notes;
-                     DELETE FROM search_dirty_source;",
-                )?;
+                crate::store::schema::refresh_search_indexes(transaction)?;
                 Ok(((), false))
             })
             .unwrap();
@@ -4038,6 +3989,22 @@ mod tests {
     #[test]
     fn application_text_search_composes_with_canonical_organization() {
         let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE projection_write_control
+                     SET suppress_root_summary = 1 WHERE singleton = 1",
+                    [],
+                )?;
+                transaction.execute("DELETE FROM collection_member", [])?;
+                transaction.execute(
+                    "UPDATE projection_write_control
+                     SET suppress_root_summary = 0 WHERE singleton = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         refresh_canonical_search_indexes(&store);
         let application = Application::new(Arc::new(store));
         application
@@ -4049,13 +4016,12 @@ mod tests {
                 )?;
                 transaction.execute("DELETE FROM root_tag", [])?;
                 transaction.execute("DELETE FROM folder_item", [])?;
-                transaction.execute("DELETE FROM collection_member", [])?;
                 Ok(())
             })
             .unwrap();
 
         let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
-        item_query.filters.text = Some("Source Creator".to_string());
+        item_query.filters.text = Some("member-b".to_string());
         item_query.filters.include_tags = vec!["general:member-tag".to_string()];
         item_query.sort.field = crate::app::ItemSortField::Name;
         let page =
