@@ -367,9 +367,13 @@ pub(crate) fn refresh_impacted_roots(
     }
     let impacted_active = transaction
         .prepare(
+            // CROSS JOIN pins the join order: drive from the impacted ids and
+            // probe root_summary by primary key. Left reorderable, the planner
+            // scans the active index and re-parses the JSON id array once per
+            // active row — O(active x impacted), minutes at 100k.
             "SELECT summary.root_item_id
              FROM json_each(?1) impacted
-             JOIN root_summary summary
+             CROSS JOIN root_summary summary
                ON summary.root_item_id = CAST(impacted.value AS INTEGER)
              WHERE summary.lifecycle = 'active'",
         )?
@@ -378,6 +382,8 @@ pub(crate) fn refresh_impacted_roots(
             u32::try_from(root_id).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
         })?
         .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    trace_smart_stage("impacted_active", stage_started);
+    stage_started = std::time::Instant::now();
     let next_revision: i64 = transaction.query_row(
         "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
         [],
@@ -396,11 +402,14 @@ pub(crate) fn refresh_impacted_roots(
                 .map(|predicate| (smart_folder_id, generation_id, predicate))
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    trace_smart_stage("effective_predicates", stage_started);
     if !impacted_active.is_empty() {
+        stage_started = std::time::Instant::now();
         let needs_media = targets
             .iter()
             .any(|(_, _, predicate)| predicate_needs_media(predicate));
         stage_active_context(transaction, &impacted_active, needs_media)?;
+        trace_smart_stage("stage_active_context", stage_started);
     }
     for (_smart_folder_id, generation_id, predicate) in targets {
         stage_started = std::time::Instant::now();
