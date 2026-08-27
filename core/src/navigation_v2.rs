@@ -778,6 +778,8 @@ mod tests {
                         display_duration_ms: None,
                         display_width: None,
                         display_height: None,
+                        imported_at_ms: None,
+                        modified_at_ms: None,
                     },
                     crate::projection_v2::RootSummaryProjectionChange {
                         item_id: 2,
@@ -787,6 +789,8 @@ mod tests {
                         display_duration_ms: None,
                         display_width: None,
                         display_height: None,
+                        imported_at_ms: None,
+                        modified_at_ms: None,
                     },
                 ],
                 &RoaringBitmap::new(),

@@ -787,6 +787,8 @@ fn insert_media_batches(
                         display_duration_ms: None,
                         display_width: None,
                         display_height: None,
+                        imported_at_ms: None,
+                        modified_at_ms: None,
                     });
                     if item_id % 4 == 0 {
                         insert_folder_item.execute(rusqlite::params![item_id, item_id])?;

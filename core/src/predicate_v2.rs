@@ -9,7 +9,7 @@ use roaring::RoaringBitmap;
 use rusqlite::Connection;
 
 use crate::app::{FilterMatchMode, ItemFilters, ItemQuery, ItemScope, Lifecycle};
-use crate::projection_v2::ProjectionSelectionSnapshot;
+use crate::projection_v2::{timestamp_ms, ProjectionSelectionSnapshot};
 
 pub(crate) fn compile_item_query(
     connection: &Connection,
@@ -50,6 +50,7 @@ pub(crate) fn compile_item_query(
     apply_rating_filters(projection, &query.filters, &mut roots);
     apply_size_filters(projection, &query.filters, &mut roots);
     apply_display_metric_filters(projection, &query.filters, &mut roots);
+    apply_timestamp_filters(projection, &query.filters, &mut roots);
     apply_mime_filters(projection, &query.filters, &mut roots);
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
     apply_text_filter(connection, projection, &query.filters, &mut roots)?;
@@ -222,6 +223,79 @@ fn apply_nonnegative_range(
     *roots = apply(minimum, maximum, roots);
 }
 
+fn apply_timestamp_filters(
+    projection: &ProjectionSelectionSnapshot,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) {
+    let Some((imported_after, imported_before)) = parsed_timestamp_range(
+        filters.imported_after.as_deref(),
+        filters.imported_before.as_deref(),
+    ) else {
+        return;
+    };
+    apply_timestamp_range(
+        imported_after,
+        imported_before,
+        roots,
+        |minimum, maximum, universe| {
+            projection.imported_at_range_bitmap(minimum, maximum, universe)
+        },
+    );
+
+    let Some((modified_after, modified_before)) = parsed_timestamp_range(
+        filters.modified_after.as_deref(),
+        filters.modified_before.as_deref(),
+    ) else {
+        return;
+    };
+    apply_timestamp_range(
+        modified_after,
+        modified_before,
+        roots,
+        |minimum, maximum, universe| {
+            projection.modified_at_range_bitmap(minimum, maximum, universe)
+        },
+    );
+}
+
+fn apply_timestamp_range(
+    minimum: Option<i64>,
+    exclusive_maximum: Option<i64>,
+    roots: &mut RoaringBitmap,
+    apply: impl FnOnce(Option<i64>, Option<i64>, &RoaringBitmap) -> RoaringBitmap,
+) {
+    if minimum.is_none() && exclusive_maximum.is_none() {
+        return;
+    }
+    let maximum = match exclusive_maximum {
+        Some(i64::MIN) => {
+            roots.clear();
+            return;
+        }
+        Some(maximum) => Some(maximum - 1),
+        None => None,
+    };
+    *roots = apply(minimum, maximum, roots);
+}
+
+fn parsed_timestamp_range(
+    after: Option<&str>,
+    before: Option<&str>,
+) -> Option<(Option<i64>, Option<i64>)> {
+    Some((
+        parse_optional_timestamp(after)?,
+        parse_optional_timestamp(before)?,
+    ))
+}
+
+fn parse_optional_timestamp(value: Option<&str>) -> Option<Option<i64>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Some(None);
+    };
+    timestamp_ms(value).map(Some)
+}
+
 fn apply_mime_filters(
     projection: &ProjectionSelectionSnapshot,
     filters: &ItemFilters,
@@ -316,10 +390,16 @@ fn combine(bitmaps: impl IntoIterator<Item = RoaringBitmap>, union: bool) -> Roa
 
 fn has_sql_only_filters(filters: &ItemFilters) -> bool {
     filters.color_hex.is_some()
-        || filters.imported_after.is_some()
-        || filters.imported_before.is_some()
-        || filters.modified_after.is_some()
-        || filters.modified_before.is_some()
+        || parsed_timestamp_range(
+            filters.imported_after.as_deref(),
+            filters.imported_before.as_deref(),
+        )
+        .is_none()
+        || parsed_timestamp_range(
+            filters.modified_after.as_deref(),
+            filters.modified_before.as_deref(),
+        )
+        .is_none()
         || filters.notes_present.is_some()
         || filters.notes_contains.is_some()
         || filters.source_url_present.is_some()

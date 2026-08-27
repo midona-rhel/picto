@@ -11,7 +11,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemTarget, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
+    timestamp_ms, FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
     LifecycleSummaryDelta, MembershipProjectionChange, RootProjectionChange,
     RootSummaryProjectionChange, StructureProjectionDelta,
 };
@@ -2783,7 +2783,8 @@ fn root_summary_changes_for_roots(
         .prepare(
             "SELECT summary.root_item_id, summary.total_size_bytes,
                     summary.media_count, summary.sort_rating,
-                    file.duration_ms, file.pixel_width, file.pixel_height
+                    file.duration_ms, file.pixel_width, file.pixel_height,
+                    summary.imported_at, summary.updated_at
              FROM root_summary summary
              LEFT JOIN media_asset cover
                ON cover.item_id = summary.cover_media_item_id
@@ -2809,6 +2810,8 @@ fn root_summary_changes_for_roots(
                 display_duration_ms: optional_u64(row, 4)?,
                 display_width: optional_u64(row, 5)?,
                 display_height: optional_u64(row, 6)?,
+                imported_at_ms: optional_timestamp_ms(row, 7)?,
+                modified_at_ms: optional_timestamp_ms(row, 8)?,
             })
         })?
         .collect()
@@ -2820,6 +2823,13 @@ fn optional_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Optio
             u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
         })
         .transpose()
+}
+
+fn optional_timestamp_ms(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<i64>> {
+    Ok(row
+        .get::<_, Option<String>>(index)?
+        .as_deref()
+        .and_then(timestamp_ms))
 }
 
 fn limited_staged_hints(

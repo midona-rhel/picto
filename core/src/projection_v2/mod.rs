@@ -12,6 +12,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::{DateTime, NaiveDate};
 use roaring::RoaringBitmap;
 use rusqlite::{Connection, Transaction};
 
@@ -952,6 +953,8 @@ pub struct RootSummaryProjectionChange {
     pub display_duration_ms: Option<u64>,
     pub display_width: Option<u64>,
     pub display_height: Option<u64>,
+    pub imported_at_ms: Option<i64>,
+    pub modified_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1019,6 +1022,8 @@ struct NumericIndexes {
     display_duration_ms: BitSlicedU64,
     display_width: BitSlicedU64,
     display_height: BitSlicedU64,
+    imported_at: BitSlicedU64,
+    modified_at: BitSlicedU64,
 }
 
 #[derive(Clone, Default)]
@@ -1415,6 +1420,32 @@ impl ProjectionSelectionSnapshot {
             .range_bitmap(minimum, maximum, universe)
     }
 
+    pub(crate) fn imported_at_range_bitmap(
+        &self,
+        minimum: Option<i64>,
+        maximum: Option<i64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state.numeric.imported_at.range_bitmap(
+            minimum.map(ordered_i64),
+            maximum.map(ordered_i64),
+            universe,
+        )
+    }
+
+    pub(crate) fn modified_at_range_bitmap(
+        &self,
+        minimum: Option<i64>,
+        maximum: Option<i64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state.numeric.modified_at.range_bitmap(
+            minimum.map(ordered_i64),
+            maximum.map(ordered_i64),
+            universe,
+        )
+    }
+
     pub(crate) fn untagged_bitmap(&self) -> RoaringBitmap {
         &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
             - &*self.state.tagged_roots
@@ -1577,6 +1608,30 @@ fn set_optional_nonnegative(
     Ok(())
 }
 
+pub(crate) fn timestamp_ms(value: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
+        .or_else(|| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+                .map(|timestamp| timestamp.and_utc().timestamp_millis())
+        })
+}
+
+fn ordered_i64(value: i64) -> u64 {
+    (value as u64) ^ (1_u64 << 63)
+}
+
+fn set_optional_timestamp(index: &mut BitSlicedU64, item_id: u32, value: Option<&str>) {
+    set_optional_u64(
+        index,
+        item_id,
+        value.and_then(timestamp_ms).map(ordered_i64),
+    );
+}
+
 #[derive(Clone)]
 struct NumericProjectionSnapshot {
     lifecycle_bitmaps: Arc<[RoaringBitmap; 3]>,
@@ -1703,7 +1758,8 @@ impl ProjectionStore {
                 .prepare(
                     "SELECT summary.root_item_id, summary.total_size_bytes,
                             summary.media_count, file.duration_ms,
-                            file.pixel_width, file.pixel_height
+                            file.pixel_width, file.pixel_height,
+                            summary.imported_at, summary.updated_at
                      FROM root_summary summary
                      LEFT JOIN media_asset cover
                        ON cover.item_id = summary.cover_media_item_id
@@ -1719,6 +1775,8 @@ impl ProjectionStore {
                         row.get::<_, Option<i64>>(3)?,
                         row.get::<_, Option<i64>>(4)?,
                         row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 })
                 .map_err(|error| error.to_string())?;
@@ -1731,6 +1789,8 @@ impl ProjectionStore {
                     duration_ms,
                     pixel_width,
                     pixel_height,
+                    imported_at,
+                    modified_at,
                 ) = row.map_err(|error| error.to_string())?;
                 let item_id = bitmap_id(item_id)?;
                 numeric.total_size_bytes.set(
@@ -1761,6 +1821,8 @@ impl ProjectionStore {
                     pixel_height,
                     "media_file contains a negative height",
                 )?;
+                set_optional_timestamp(&mut numeric.imported_at, item_id, imported_at.as_deref());
+                set_optional_timestamp(&mut numeric.modified_at, item_id, modified_at.as_deref());
             }
         }
 
@@ -2552,6 +2614,8 @@ impl ProjectionStore {
             numeric.display_duration_ms.remove(item_id);
             numeric.display_width.remove(item_id);
             numeric.display_height.remove(item_id);
+            numeric.imported_at.remove(item_id);
+            numeric.modified_at.remove(item_id);
         }
         for change in changes {
             let item_id = change.item_id as u32;
@@ -2574,6 +2638,16 @@ impl ProjectionStore {
             );
             set_optional_u64(&mut numeric.display_width, item_id, change.display_width);
             set_optional_u64(&mut numeric.display_height, item_id, change.display_height);
+            set_optional_u64(
+                &mut numeric.imported_at,
+                item_id,
+                change.imported_at_ms.map(ordered_i64),
+            );
+            set_optional_u64(
+                &mut numeric.modified_at,
+                item_id,
+                change.modified_at_ms.map(ordered_i64),
+            );
         }
         Ok(())
     }
@@ -3125,6 +3199,8 @@ fn remove_root_numeric_summary(state: &mut State, item_id: u32) {
     numeric.display_duration_ms.remove(item_id);
     numeric.display_width.remove(item_id);
     numeric.display_height.remove(item_id);
+    numeric.imported_at.remove(item_id);
+    numeric.modified_at.remove(item_id);
 }
 
 fn set_optional_u64(index: &mut BitSlicedU64, item_id: u32, value: Option<u64>) {
@@ -3870,6 +3946,8 @@ mod tests {
                         display_duration_ms: Some(1_000),
                         display_width: Some(100),
                         display_height: Some(200),
+                        imported_at_ms: Some(1_000),
+                        modified_at_ms: Some(2_000),
                     },
                     RootSummaryProjectionChange {
                         item_id: 20,
@@ -3879,6 +3957,8 @@ mod tests {
                         display_duration_ms: None,
                         display_width: Some(500),
                         display_height: Some(600),
+                        imported_at_ms: Some(3_000),
+                        modified_at_ms: Some(4_000),
                     },
                 ],
                 &RoaringBitmap::new(),
@@ -3901,6 +3981,14 @@ mod tests {
         assert_eq!(
             snapshot.display_width_range_bitmap(Some(200), None, &selected),
             RoaringBitmap::from_iter([20])
+        );
+        assert_eq!(
+            snapshot.imported_at_range_bitmap(Some(1_500), None, &selected),
+            RoaringBitmap::from_iter([20])
+        );
+        assert_eq!(
+            snapshot.modified_at_range_bitmap(None, Some(3_000), &selected),
+            RoaringBitmap::from_iter([11])
         );
 
         projection
@@ -3926,6 +4014,8 @@ mod tests {
                     display_duration_ms: None,
                     display_width: None,
                     display_height: None,
+                    imported_at_ms: None,
+                    modified_at_ms: None,
                 }],
                 &RoaringBitmap::new(),
             )
@@ -4039,6 +4129,8 @@ mod tests {
                 display_duration_ms: None,
                 display_width: None,
                 display_height: None,
+                imported_at_ms: None,
+                modified_at_ms: None,
             })
             .collect::<Vec<_>>();
         projection

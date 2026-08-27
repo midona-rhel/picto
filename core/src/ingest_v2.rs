@@ -10,9 +10,9 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, MediaClassificationProjectionChange,
-    MembershipProjectionChange, RootProjectionChange, RootSummaryProjectionChange,
-    StructureProjectionDelta,
+    timestamp_ms, FolderProjectionChange, ItemProjectionChange,
+    MediaClassificationProjectionChange, MembershipProjectionChange, RootProjectionChange,
+    RootSummaryProjectionChange, StructureProjectionDelta,
 };
 
 pub(crate) const DELETED_SOURCE_ITEM_ERROR: &str =
@@ -170,7 +170,8 @@ impl IngestProjectionDelta {
                 .query_row(
                     "SELECT summary.total_size_bytes, summary.media_count,
                             summary.sort_rating, file.duration_ms,
-                            file.pixel_width, file.pixel_height
+                            file.pixel_width, file.pixel_height,
+                            summary.imported_at, summary.updated_at
                      FROM root_summary summary
                      LEFT JOIN media_asset cover
                        ON cover.item_id = summary.cover_media_item_id
@@ -185,6 +186,8 @@ impl IngestProjectionDelta {
                             row.get::<_, Option<i64>>(3)?,
                             row.get::<_, Option<i64>>(4)?,
                             row.get::<_, Option<i64>>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
                         ))
                     },
                 )
@@ -196,6 +199,8 @@ impl IngestProjectionDelta {
                 duration_ms,
                 pixel_width,
                 pixel_height,
+                imported_at,
+                modified_at,
             )) = summary
             else {
                 continue;
@@ -215,6 +220,8 @@ impl IngestProjectionDelta {
                 display_duration_ms: optional_nonnegative_u64(duration_ms, 3)?,
                 display_width: optional_nonnegative_u64(pixel_width, 4)?,
                 display_height: optional_nonnegative_u64(pixel_height, 5)?,
+                imported_at_ms: imported_at.as_deref().and_then(timestamp_ms),
+                modified_at_ms: modified_at.as_deref().and_then(timestamp_ms),
             });
         }
         Ok(())

@@ -17,9 +17,10 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemKind, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, MediaClassificationProjectionChange,
-    MembershipProjectionChange, ProjectionStore, RootProjectionChange, RootSummaryProjectionChange,
-    StructureProjectionDelta, TagProjectionChange,
+    timestamp_ms, FolderProjectionChange, ItemProjectionChange,
+    MediaClassificationProjectionChange, MembershipProjectionChange, ProjectionStore,
+    RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
+    TagProjectionChange,
 };
 
 pub mod blob;
@@ -1287,7 +1288,8 @@ impl CloudProjectionState {
         let mut statement = transaction.prepare(
             "SELECT summary.root_item_id, summary.total_size_bytes,
                     summary.media_count, summary.sort_rating,
-                    file.duration_ms, file.pixel_width, file.pixel_height
+                    file.duration_ms, file.pixel_width, file.pixel_height,
+                    summary.imported_at, summary.updated_at
              FROM root_summary summary
              LEFT JOIN media_asset cover
                ON cover.item_id = summary.cover_media_item_id
@@ -1310,6 +1312,8 @@ impl CloudProjectionState {
                     display_duration_ms: cloud_optional_u64(row.get(4)?)?,
                     display_width: cloud_optional_u64(row.get(5)?)?,
                     display_height: cloud_optional_u64(row.get(6)?)?,
+                    imported_at_ms: cloud_timestamp_ms(row.get(7)?),
+                    modified_at_ms: cloud_timestamp_ms(row.get(8)?),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1324,6 +1328,10 @@ fn cloud_optional_u64(value: Option<i64>) -> rusqlite::Result<Option<u64>> {
     value
         .map(|value| u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
         .transpose()
+}
+
+fn cloud_timestamp_ms(value: Option<String>) -> Option<i64> {
+    value.as_deref().and_then(timestamp_ms)
 }
 
 #[derive(Default)]

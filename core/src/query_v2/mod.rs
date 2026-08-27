@@ -3998,6 +3998,13 @@ mod tests {
                 )?;
                 transaction.execute("DELETE FROM collection_member", [])?;
                 transaction.execute(
+                    "UPDATE root_summary
+                     SET imported_at = '2026-02-10T00:00:00Z',
+                         updated_at = '2026-04-10T00:00:00Z'
+                     WHERE root_item_id = 10",
+                    [],
+                )?;
+                transaction.execute(
                     "UPDATE projection_write_control
                      SET suppress_root_summary = 0 WHERE singleton = 1",
                     [],
@@ -4027,6 +4034,9 @@ mod tests {
         item_query.filters.max_width = Some(800);
         item_query.filters.min_height = Some(800);
         item_query.filters.max_height = Some(800);
+        item_query.filters.imported_after = Some("2026-02-01T00:00:00Z".into());
+        item_query.filters.imported_before = Some("2026-03-01T00:00:00Z".into());
+        item_query.filters.modified_after = Some("2026-04-01T00:00:00Z".into());
         item_query.sort.field = crate::app::ItemSortField::Name;
         let page =
             query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();
