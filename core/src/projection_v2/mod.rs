@@ -274,24 +274,37 @@ impl PreparedProjection {
                     .map_err(|error| error.to_string())?;
                 continue;
             }
-            let order = transaction
-                .prepare_cached(
-                    "SELECT media_item_id FROM collection_member
-                     WHERE collection_id = ?1
-                     ORDER BY position_rank, media_item_id",
-                )
-                .and_then(|mut statement| {
-                    statement
-                        .query_map([group_id], |row| row.get::<_, u32>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()
+            let members = self
+                .state
+                .collection_members
+                .get(group_id)
+                .map(|members| (**members).clone())
+                .unwrap_or_default();
+            let order = self
+                .state
+                .collection_orders
+                .get(group_id)
+                .map(|order| (**order).clone())
+                .unwrap_or_default();
+            let order_u32 = order
+                .iter()
+                .map(|media_id| {
+                    u32::try_from(*media_id)
+                        .map_err(|_| format!("media {media_id} exceeds the bitmap ID range"))
                 })
-                .map_err(|error| error.to_string())?;
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered = order_u32.iter().copied().collect::<RoaringBitmap>();
+            if ordered.len() != order.len() as u64 || ordered != members {
+                return Err(format!(
+                    "canonical group {group_id} membership and order differ"
+                ));
+            }
             canonical_bitmap::replace_ordered_membership(
                 transaction,
                 "group",
                 *group_id,
                 revision,
-                &order,
+                &order_u32,
             )
             .map_err(|error| error.to_string())?;
         }
@@ -940,6 +953,12 @@ pub struct MembershipProjectionChange {
 }
 
 #[derive(Debug, Clone)]
+pub struct GroupOrderProjectionChange {
+    pub collection_id: i64,
+    pub media_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MediaClassificationProjectionChange {
     pub media_id: i64,
     pub is_image: bool,
@@ -978,6 +997,7 @@ pub struct StructureProjectionDelta {
     pub media_classifications: Vec<MediaClassificationProjectionChange>,
     pub roots: Vec<RootProjectionChange>,
     pub memberships: Vec<MembershipProjectionChange>,
+    pub group_orders: Vec<GroupOrderProjectionChange>,
     pub folders: Vec<FolderProjectionChange>,
     pub tags: Vec<TagProjectionChange>,
 }
@@ -1002,6 +1022,7 @@ struct State {
     all_image_roots: Shared<RoaringBitmap>,
     collection_ids: Shared<HashSet<i64>>,
     collection_members: ShardedMap<i64, Shared<RoaringBitmap>>,
+    collection_orders: ShardedMap<i64, Shared<Vec<i64>>>,
     media_to_root: ShardedMap<i64, i64>,
     folder_members: ShardedMap<i64, Shared<RoaringBitmap>>,
     folder_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
@@ -1024,9 +1045,9 @@ fn all_roots(state: &State) -> RoaringBitmap {
         })
 }
 
-fn changed_bitmap_keys(
-    before: &ShardedMap<i64, Shared<RoaringBitmap>>,
-    after: &ShardedMap<i64, Shared<RoaringBitmap>>,
+fn changed_shared_keys<T: Clone>(
+    before: &ShardedMap<i64, Shared<T>>,
+    after: &ShardedMap<i64, Shared<T>>,
 ) -> Vec<i64> {
     let mut changed = HashSet::new();
     for (key, value) in before.iter() {
@@ -1055,7 +1076,7 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
             before.numeric.rating.value_bitmap(rating, &roots_before)
                 != after.numeric.rating.value_bitmap(rating, &roots_after)
         });
-    let tags = changed_bitmap_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps);
+    let tags = changed_shared_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps);
     let mut tag_roots = RoaringBitmap::new();
     for tag_id in &tags {
         let before = before
@@ -1085,9 +1106,22 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
         rating: rating_changed,
         tags,
         tag_roots,
-        folders: changed_bitmap_keys(&before.folder_members, &after.folder_members),
-        groups: changed_bitmap_keys(&before.collection_members, &after.collection_members),
-        smart_folders: changed_bitmap_keys(
+        folders: changed_shared_keys(&before.folder_members, &after.folder_members),
+        groups: {
+            let mut groups =
+                changed_shared_keys(&before.collection_members, &after.collection_members)
+                    .into_iter()
+                    .chain(changed_shared_keys(
+                        &before.collection_orders,
+                        &after.collection_orders,
+                    ))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+            groups.sort_unstable();
+            groups
+        },
+        smart_folders: changed_shared_keys(
             &before.smart_folder_bitmaps,
             &after.smart_folder_bitmaps,
         ),
@@ -1664,6 +1698,10 @@ impl ProjectionStore {
             state
                 .collection_members
                 .insert(collection_id, members.into());
+            state.collection_orders.insert(
+                collection_id,
+                order.into_iter().map(i64::from).collect::<Vec<_>>().into(),
+            );
         }
 
         for media_id in state.media_ids.iter().copied() {
@@ -2094,6 +2132,7 @@ impl ProjectionStore {
                 state.image_media_ids.remove(change.item_id as u32);
                 state.collection_ids.remove(&change.item_id);
                 state.media_to_root.remove(&change.item_id);
+                state.collection_orders.remove(&change.item_id);
                 if let Some(members) = state.collection_members.remove(&change.item_id) {
                     touched_media.extend(members.iter().map(i64::from));
                 }
@@ -2124,6 +2163,9 @@ impl ProjectionStore {
                         if let Some(members) = state.collection_members.get_mut(&previous_root) {
                             members.remove(change.media_id as u32);
                         }
+                        if let Some(order) = state.collection_orders.get_mut(&previous_root) {
+                            order.retain(|media_id| *media_id != change.media_id);
+                        }
                     }
                 }
                 state
@@ -2134,6 +2176,13 @@ impl ProjectionStore {
                 state
                     .media_to_root
                     .insert(change.media_id, change.collection_id);
+                let order = state
+                    .collection_orders
+                    .entry(change.collection_id)
+                    .or_default();
+                if !order.contains(&change.media_id) {
+                    order.push(change.media_id);
+                }
                 touched_roots.insert(change.collection_id);
                 for bitmap in Arc::make_mut(&mut state.lifecycle_bitmaps) {
                     bitmap.remove(change.media_id as u32);
@@ -2142,6 +2191,9 @@ impl ProjectionStore {
                 touched_roots.insert(change.collection_id);
                 if let Some(members) = state.collection_members.get_mut(&change.collection_id) {
                     members.remove(change.media_id as u32);
+                }
+                if let Some(order) = state.collection_orders.get_mut(&change.collection_id) {
+                    order.retain(|media_id| *media_id != change.media_id);
                 }
                 if state.media_to_root.get(&change.media_id) == Some(&change.collection_id) {
                     if has_root(&state, change.media_id)
@@ -2157,6 +2209,36 @@ impl ProjectionStore {
                 }
             }
             touched_media.insert(change.media_id);
+        }
+
+        for change in delta.group_orders {
+            validate_id(change.collection_id)?;
+            let mut ordered = RoaringBitmap::new();
+            for media_id in &change.media_ids {
+                validate_id(*media_id)?;
+                if !ordered.insert(*media_id as u32) {
+                    state.abort();
+                    return Err(format!(
+                        "group {} order contains media {} more than once",
+                        change.collection_id, media_id
+                    ));
+                }
+            }
+            let members = state
+                .collection_members
+                .get(&change.collection_id)
+                .map(|members| (**members).clone())
+                .unwrap_or_default();
+            if ordered != members {
+                state.abort();
+                return Err(format!(
+                    "group {} membership and order differ",
+                    change.collection_id
+                ));
+            }
+            state
+                .collection_orders
+                .insert(change.collection_id, change.media_ids.into());
         }
 
         for media_id in touched_media {

@@ -12,8 +12,9 @@ use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
 use crate::projection_v2::{
-    ItemProjectionChange, MembershipProjectionChange, ProjectionStore, RootProjectionChange,
-    StructureProjectionDelta, TagGraphProjectionDelta, TagIdentityProjectionChange,
+    GroupOrderProjectionChange, ItemProjectionChange, MembershipProjectionChange, ProjectionStore,
+    RootProjectionChange, StructureProjectionDelta, TagGraphProjectionDelta,
+    TagIdentityProjectionChange,
 };
 use crate::store::history::{
     HistoryDescriptor, HistoryDirection, HistoryEntrySummary, HistoryProjectionRequest,
@@ -644,6 +645,25 @@ fn apply_semantic_projection(
                     present: member.present,
                 });
             }
+            let mut ordered = std::collections::BTreeMap::<i64, Vec<(i64, i64)>>::new();
+            for member in delta.members.iter().filter(|member| member.present) {
+                ordered
+                    .entry(member.collection_id)
+                    .or_default()
+                    .push((member.position_rank, member.media_item_id));
+            }
+            structure.group_orders.extend(ordered.into_iter().map(
+                |(collection_id, mut members)| {
+                    members.sort_unstable();
+                    GroupOrderProjectionChange {
+                        collection_id,
+                        media_ids: members
+                            .into_iter()
+                            .map(|(_, media_item_id)| media_item_id)
+                            .collect(),
+                    }
+                },
+            ));
             projections.apply_structure_delta(structure)?;
             apply_semantic_projection(
                 projections,

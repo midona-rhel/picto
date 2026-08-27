@@ -11,8 +11,9 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemTarget, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, LifecycleSummaryDelta,
-    MembershipProjectionChange, RootProjectionChange, StructureProjectionDelta,
+    FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
+    LifecycleSummaryDelta, MembershipProjectionChange, RootProjectionChange,
+    StructureProjectionDelta,
 };
 use crate::store::history::{
     HistoryDescriptor, SemanticGroupDelta, SemanticGroupFolder, SemanticGroupMember,
@@ -1163,7 +1164,7 @@ impl Application {
         input: ReorderCollectionInput,
     ) -> Result<MutationReceipt, String> {
         let media_ids = unique_ids(&input.media_item_ids)?;
-        let (_, revision, _) = self.undoable_transaction(
+        let (_, revision, _) = self.semantic_undoable_transaction(
             HistoryDescriptor::new(
                 "collections.reorder",
                 "Reorder group",
@@ -1175,6 +1176,13 @@ impl Application {
             ),
             |transaction| {
                 require_collection_root(transaction, input.collection_id.0)?;
+                let universe = group_history_universe(transaction, &[input.collection_id.0])?;
+                let before = capture_group_state_from_projection(
+                    transaction,
+                    &universe,
+                    self.projections(),
+                    true,
+                )?;
                 let encoded = serde_json::to_string(&media_ids)
                     .map_err(|error| invalid(format!("Could not encode group order: {error}")))?;
                 transaction.execute_batch(
@@ -1218,9 +1226,30 @@ impl Application {
                     [input.collection_id.0],
                 )?;
                 sync_collection_cover(transaction, input.collection_id.0)?;
-                Ok(((), ()))
+                let after = capture_group_state_from_projection(
+                    transaction,
+                    &universe,
+                    self.projections(),
+                    true,
+                )?;
+                let (history, forward) = group_history_record(&before, &after)?;
+                Ok((
+                    (),
+                    GroupProjectionDelta {
+                        structure: StructureProjectionDelta {
+                            group_orders: vec![GroupOrderProjectionChange {
+                                collection_id: input.collection_id.0,
+                                media_ids: media_ids.clone(),
+                            }],
+                            ..StructureProjectionDelta::default()
+                        },
+                        rating_changes: forward.rating_changes,
+                        ..GroupProjectionDelta::default()
+                    },
+                    history,
+                ))
             },
-            |_, ()| Ok(()),
+            apply_group_projection_delta,
         )?;
         Ok(receipt(
             revision,
@@ -4249,6 +4278,40 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cached_cover, Some(reordered[0].0));
+
+        let canonical_order = app
+            .store()
+            .read(|connection| load_order(connection, "group", grouped.collection_id.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            canonical_order,
+            reordered
+                .iter()
+                .map(|item_id| item_id.0 as u32)
+                .collect::<Vec<_>>()
+        );
+
+        app.undo().unwrap();
+        let original_order = app
+            .store()
+            .read(|connection| load_order(connection, "group", grouped.collection_id.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            original_order,
+            ids.iter()
+                .map(|item_id| item_id.0 as u32)
+                .collect::<Vec<_>>()
+        );
+
+        app.redo().unwrap();
+        let redone_order = app
+            .store()
+            .read(|connection| load_order(connection, "group", grouped.collection_id.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(redone_order, canonical_order);
     }
 
     #[test]
