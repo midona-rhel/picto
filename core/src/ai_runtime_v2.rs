@@ -264,6 +264,7 @@ fn resolve_prediction_items(
     application: &Application,
     item_ids: &[ItemId],
 ) -> Result<Vec<ItemId>, String> {
+    let projection = application.projections().selection_snapshot();
     application.store().read_result(|connection| {
         let mut resolved = Vec::new();
         let mut seen = BTreeSet::new();
@@ -282,19 +283,7 @@ fn resolve_prediction_items(
                     }
                 }
                 "collection" => {
-                    let mut statement = connection
-                        .prepare(
-                            "SELECT media_item_id
-                             FROM collection_member
-                             WHERE collection_id = ?1
-                             ORDER BY position_rank, media_item_id",
-                        )
-                        .map_err(|error| error.to_string())?;
-                    let members = statement
-                        .query_map([item_id.0], |row| row.get::<_, i64>(0))
-                        .map_err(|error| error.to_string())?;
-                    for member in members {
-                        let member = member.map_err(|error| error.to_string())?;
+                    for member in projection.group_order(item_id.0).unwrap_or_default() {
                         if seen.insert(member) {
                             resolved.push(ItemId(member));
                         }
@@ -504,21 +493,23 @@ fn load_media_original(
     application: &Application,
     media_item_id: ItemId,
 ) -> Result<MediaOriginal, String> {
+    let root_item_id = application
+        .projections()
+        .root_for_media(media_item_id.0)
+        .ok_or_else(|| format!("Media item {} has no owning root", media_item_id.0))?;
     application.store().read_result(|connection| {
         connection
             .query_row(
-                "SELECT COALESCE(cm.collection_id, lr.item_id), mf.file_hash, mf.mime_type
+                "SELECT mf.file_hash, mf.mime_type
                  FROM media_asset ma
                  JOIN media_file mf ON mf.file_id = ma.file_id
-                 LEFT JOIN library_root lr ON lr.item_id = ma.item_id
-                 LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
                  WHERE ma.item_id = ?1",
                 [media_item_id.0],
                 |row| {
                     Ok(MediaOriginal {
-                        root_item_id: ItemId(row.get(0)?),
-                        file_hash: row.get(1)?,
-                        mime_type: row.get(2)?,
+                        root_item_id: ItemId(root_item_id),
+                        file_hash: row.get(0)?,
+                        mime_type: row.get(1)?,
                     })
                 },
             )
@@ -1167,12 +1158,29 @@ mod tests {
                     [],
                 )?;
                 transaction.execute("DELETE FROM library_root WHERE item_id = 7", [])?;
-                transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (8, 7, 0)",
-                    [],
-                )?;
                 Ok(())
+            })
+            .unwrap();
+        application
+            .projections()
+            .apply_membership_delta(8, 7, true)
+            .unwrap();
+        application
+            .projections()
+            .apply_root_delta(
+                8,
+                crate::app::ItemKind::Collection,
+                Some(crate::app::Lifecycle::Active),
+            )
+            .unwrap();
+        application
+            .projections()
+            .apply_structure_delta(crate::projection_v2::StructureProjectionDelta {
+                group_orders: vec![crate::projection_v2::GroupOrderProjectionChange {
+                    collection_id: 8,
+                    media_ids: vec![7],
+                }],
+                ..Default::default()
             })
             .unwrap();
 
