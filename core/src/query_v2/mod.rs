@@ -332,6 +332,24 @@ pub fn query_for_application(
                     )
                     .map_err(|error| error.to_string());
                 }
+                if matches!(
+                    item_query.sort.field,
+                    crate::app::ItemSortField::CapturedAt
+                        | crate::app::ItemSortField::Name
+                        | crate::app::ItemSortField::Rating
+                        | crate::app::ItemSortField::Size
+                        | crate::app::ItemSortField::Random
+                ) {
+                    return resolve_projected_sorted_page(
+                        connection,
+                        item_query,
+                        page,
+                        revision,
+                        &projection,
+                        &roots,
+                    )
+                    .map_err(|error| error.to_string());
+                }
             }
             resolve_connection(connection, item_query, page).map_err(|error| error.to_string())
         },
@@ -1950,6 +1968,229 @@ fn invalid_target(message: impl Into<String>) -> rusqlite::Error {
 
 const SPARSE_PROJECTED_PAGE_THRESHOLD: u64 = 4_096;
 const PROJECTED_SCAN_CHUNK: i64 = 1_024;
+
+fn resolve_projected_sorted_page(
+    connection: &Connection,
+    item_query: &ItemQuery,
+    page: ItemPageRequest,
+    revision: u64,
+    projection: &ProjectionSelectionSnapshot,
+    roots: &roaring::RoaringBitmap,
+) -> rusqlite::Result<ItemPage> {
+    let ordered = if roots.len() <= SPARSE_PROJECTED_PAGE_THRESHOLD
+        || matches!(item_query.sort.field, crate::app::ItemSortField::Random)
+    {
+        ordered_sparse_projected_roots_by_sort(connection, item_query, roots, &page)?
+    } else {
+        ordered_dense_projected_roots_by_sort(connection, item_query, roots, &page)?
+    };
+    let sort_plan = SortPlan::for_query(item_query, &mut Vec::new());
+    projected_page_from_ordered(
+        connection, page, revision, projection, roots, &sort_plan, ordered,
+    )
+}
+
+fn projected_page_from_ordered(
+    connection: &Connection,
+    page: ItemPageRequest,
+    revision: u64,
+    projection: &ProjectionSelectionSnapshot,
+    roots: &roaring::RoaringBitmap,
+    sort_plan: &SortPlan,
+    ordered: Vec<(i64, CursorKey)>,
+) -> rusqlite::Result<ItemPage> {
+    let mut entries = hydrate_projected_roots(connection, revision, &ordered)?;
+    let metrics = (page.cursor.is_none()).then(|| projection.numeric_aggregates(roots));
+    let has_more = entries.len() > page.limit as usize;
+    entries.truncate(page.limit as usize);
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|(item, key)| sort_plan.encode_cursor(key.clone(), item.item_id.0))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(ItemPage {
+        items: entries.into_iter().map(|(item, _)| item).collect(),
+        next_cursor,
+        revision,
+        visible_item_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u64(metrics.selected_root_count))
+            .transpose()?,
+        visible_media_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.media_count.sum))
+            .transpose()?,
+        total_size_bytes: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.total_size_bytes.sum))
+            .transpose()?,
+    })
+}
+
+fn ordered_sparse_projected_roots_by_sort(
+    connection: &Connection,
+    item_query: &ItemQuery,
+    roots: &roaring::RoaringBitmap,
+    page: &ItemPageRequest,
+) -> rusqlite::Result<Vec<(i64, CursorKey)>> {
+    let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(bitmap_json(roots))];
+    let sort_plan = SortPlan::for_query(item_query, &mut arguments);
+    let expression = projected_sort_expression(&sort_plan.expression);
+    let cursor_clause = projected_sort_cursor_clause(
+        &sort_plan,
+        &expression,
+        page.cursor.as_deref(),
+        &mut arguments,
+    )?;
+    let limit_index = push_argument(&mut arguments, page.limit + 1);
+    let sql = format!(
+        "WITH selected(root_item_id) AS (
+             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+         )
+         SELECT summary.root_item_id, {expression}
+         FROM selected
+         JOIN root_summary summary USING (root_item_id)
+         WHERE TRUE {cursor_clause}
+         ORDER BY {expression} {direction}, summary.root_item_id ASC
+         LIMIT ?{limit_index}",
+        direction = sort_plan.direction,
+    );
+    let references = arguments
+        .iter()
+        .map(|argument| argument.as_ref())
+        .collect::<Vec<_>>();
+    connection
+        .prepare(&sql)?
+        .query_map(references.as_slice(), |row| {
+            Ok((row.get(0)?, read_cursor_key(row, 1, sort_plan.key_kind)?))
+        })?
+        .collect()
+}
+
+fn ordered_dense_projected_roots_by_sort(
+    connection: &Connection,
+    item_query: &ItemQuery,
+    roots: &roaring::RoaringBitmap,
+    page: &ItemPageRequest,
+) -> rusqlite::Result<Vec<(i64, CursorKey)>> {
+    let mut scan_cursor = page.cursor.clone();
+    let mut result = Vec::with_capacity((page.limit + 1) as usize);
+    while result.len() < (page.limit + 1) as usize {
+        let mut arguments = Vec::<Box<dyn ToSql>>::new();
+        let sort_plan = SortPlan::for_query(item_query, &mut arguments);
+        let expression = projected_sort_expression(&sort_plan.expression);
+        let cursor_clause = projected_sort_cursor_clause(
+            &sort_plan,
+            &expression,
+            scan_cursor.as_deref(),
+            &mut arguments,
+        )?;
+        let chunk_index = push_argument(&mut arguments, PROJECTED_SCAN_CHUNK);
+        let index = projected_sort_index(item_query);
+        let sql = format!(
+            "SELECT summary.root_item_id, {expression}
+             FROM root_summary summary INDEXED BY {index}
+             WHERE TRUE {cursor_clause}
+             ORDER BY {expression} {direction}, summary.root_item_id ASC
+             LIMIT ?{chunk_index}",
+            direction = sort_plan.direction,
+        );
+        let references = arguments
+            .iter()
+            .map(|argument| argument.as_ref())
+            .collect::<Vec<_>>();
+        let scanned = connection
+            .prepare(&sql)?
+            .query_map(references.as_slice(), |row| {
+                Ok((row.get(0)?, read_cursor_key(row, 1, sort_plan.key_kind)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if scanned.is_empty() {
+            break;
+        }
+        for (item_id, key) in &scanned {
+            if u32::try_from(*item_id)
+                .ok()
+                .is_some_and(|item_id| roots.contains(item_id))
+            {
+                result.push((*item_id, key.clone()));
+                if result.len() == (page.limit + 1) as usize {
+                    break;
+                }
+            }
+        }
+        if result.len() == (page.limit + 1) as usize
+            || scanned.len() < PROJECTED_SCAN_CHUNK as usize
+        {
+            break;
+        }
+        let (item_id, key) = scanned.last().expect("non-empty projected scan");
+        scan_cursor = Some(sort_plan.encode_cursor(key.clone(), *item_id)?);
+    }
+    Ok(result)
+}
+
+fn projected_sort_expression(expression: &str) -> String {
+    expression
+        .replace("fr.item_id", "summary.root_item_id")
+        .replace("fr.", "summary.")
+}
+
+fn projected_sort_index(item_query: &ItemQuery) -> &'static str {
+    use crate::app::{ItemSortField, SortDirection};
+    match (&item_query.sort.field, &item_query.sort.direction) {
+        (ItemSortField::CapturedAt, SortDirection::Ascending) => "idx_root_summary_captured_asc",
+        (ItemSortField::CapturedAt, SortDirection::Descending) => "idx_root_summary_captured_desc",
+        (ItemSortField::Name, SortDirection::Ascending) => "idx_root_summary_name_asc",
+        (ItemSortField::Name, SortDirection::Descending) => "idx_root_summary_name_desc",
+        (ItemSortField::Rating, SortDirection::Ascending) => "idx_root_summary_rating_asc",
+        (ItemSortField::Rating, SortDirection::Descending) => "idx_root_summary_rating_desc",
+        (ItemSortField::Size, SortDirection::Ascending) => "idx_root_summary_size_asc",
+        (ItemSortField::Size, SortDirection::Descending) => "idx_root_summary_size_desc",
+        _ => "sqlite_autoindex_root_summary_1",
+    }
+}
+
+fn projected_sort_cursor_clause(
+    sort_plan: &SortPlan,
+    expression: &str,
+    cursor: Option<&str>,
+    arguments: &mut Vec<Box<dyn ToSql>>,
+) -> rusqlite::Result<String> {
+    let Some(cursor) = cursor else {
+        return Ok(String::new());
+    };
+    let cursor = sort_plan.decode_cursor(cursor)?;
+    let key_index = match cursor.key {
+        CursorKey::Integer(value) => push_argument(arguments, value),
+        CursorKey::Text(value) => push_argument(arguments, value),
+    };
+    let item_index = push_argument(arguments, cursor.item_id);
+    let comparison = if sort_plan.direction == "ASC" {
+        ">"
+    } else {
+        "<"
+    };
+    Ok(format!(
+        "AND ({expression} {comparison} ?{key_index}
+              OR ({expression} = ?{key_index}
+                  AND summary.root_item_id > ?{item_index}))"
+    ))
+}
+
+fn read_cursor_key(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    kind: CursorKeyKind,
+) -> rusqlite::Result<CursorKey> {
+    match kind {
+        CursorKeyKind::Integer => row.get(index).map(CursorKey::Integer),
+        CursorKeyKind::Text => row.get(index).map(CursorKey::Text),
+    }
+}
 
 fn resolve_projected_folder_order_page(
     connection: &Connection,
@@ -3775,6 +4016,19 @@ mod tests {
         assert_eq!(item_ids, vec![ItemId(1), ItemId(10)]);
         assert_eq!(page.visible_item_count, Some(2));
         assert_eq!(page.visible_media_count, Some(3));
+
+        let mut named_query = query_for(ItemScope::Folder { folder_id });
+        named_query.sort.field = crate::app::ItemSortField::Name;
+        named_query.sort.direction = crate::app::SortDirection::Ascending;
+        let named =
+            query_for_application(&application, &named_query, ItemPageRequest::default()).unwrap();
+        let mut named_ids = named
+            .items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        named_ids.sort_by_key(|item_id| item_id.0);
+        assert_eq!(named_ids, vec![ItemId(1), ItemId(10)]);
         application
             .store()
             .read(|connection| {
@@ -3784,6 +4038,36 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(legacy_rows, 0);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn dense_projected_sort_scans_covering_indexes_without_membership_sql() {
+        use crate::app::ItemSortField;
+
+        let (_directory, store) = seed_store();
+        let roots = RoaringBitmap::from_iter([1, 10]);
+        store
+            .read(|connection| {
+                for field in [
+                    ItemSortField::CapturedAt,
+                    ItemSortField::Name,
+                    ItemSortField::Rating,
+                    ItemSortField::Size,
+                ] {
+                    let mut item_query = query_for(ItemScope::All);
+                    item_query.sort.field = field;
+                    let ordered = super::ordered_dense_projected_roots_by_sort(
+                        connection,
+                        &item_query,
+                        &roots,
+                        &ItemPageRequest::default(),
+                    )?;
+                    assert_eq!(ordered.len(), 2);
+                    assert!(ordered.iter().all(|(item_id, _)| [1, 10].contains(item_id)));
+                }
                 Ok(())
             })
             .unwrap();
