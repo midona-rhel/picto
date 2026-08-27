@@ -556,6 +556,24 @@ impl Store {
         prepare: impl FnOnce(D) -> Result<P, String>,
         publish: impl FnOnce(P),
     ) -> Result<(T, u64), String> {
+        self.transaction_settled_captured(
+            || (),
+            |transaction, ()| operation(transaction),
+            prepare,
+            publish,
+        )
+    }
+
+    /// Capture immutable projection state after writer admission so SQL and
+    /// bitmap-owned organization are read from one published revision.
+    #[track_caller]
+    pub(crate) fn transaction_settled_captured<T, D, P: PreparedSettlement, C>(
+        &self,
+        capture: impl FnOnce() -> C,
+        operation: impl FnOnce(&Transaction<'_>, C) -> rusqlite::Result<(T, D)>,
+        prepare: impl FnOnce(D) -> Result<P, String>,
+        publish: impl FnOnce(P),
+    ) -> Result<(T, u64), String> {
         let _permit = self.writer_admission.acquire(WritePriority::Foreground)?;
         let mut connection = self
             .writer
@@ -566,7 +584,9 @@ impl Store {
             .map_err(|error| error.to_string())?;
         let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
             .map_err(|error| error.to_string())?;
-        let (value, delta) = operation(&transaction).map_err(|error| error.to_string())?;
+        let captured = capture();
+        let (value, delta) =
+            operation(&transaction, captured).map_err(|error| error.to_string())?;
         schema::refresh_read_models(&transaction).map_err(|error| error.to_string())?;
         cloud_capture
             .finish(&transaction)

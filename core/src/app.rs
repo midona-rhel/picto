@@ -377,6 +377,24 @@ impl Application {
     }
 
     #[track_caller]
+    pub(crate) fn transaction_captured<T, D, C>(
+        &self,
+        capture: impl FnOnce(&ProjectionStore) -> C,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>, C) -> rusqlite::Result<(T, D)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
+    ) -> Result<(T, u64), String> {
+        let capture_projection = Arc::clone(&self.projections);
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.transaction_settled_captured(
+            move || capture(&capture_projection),
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
+        )
+    }
+
+    #[track_caller]
     pub fn undoable_transaction<T, D>(
         &self,
         descriptor: HistoryDescriptor,

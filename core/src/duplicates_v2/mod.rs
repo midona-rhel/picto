@@ -20,7 +20,8 @@ use crate::app::{resources, Application, FileHash, ItemId, MutationReceipt};
 use crate::blob_store::mime_to_extension;
 use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, RootProjectionChange, StructureProjectionDelta,
+    FolderProjectionChange, ItemProjectionChange, ProjectionSelectionSnapshot,
+    RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
 };
 
 const MAX_RECEIPT_ITEM_IDS: usize = 256;
@@ -29,6 +30,7 @@ const MAX_RECEIPT_ITEM_IDS: usize = 256;
 struct DuplicateProjectionDelta {
     structure: StructureProjectionDelta,
     root_tags_added: Vec<(i64, i64)>,
+    summaries: Vec<RootSummaryProjectionChange>,
 }
 
 fn settle_duplicate_projection(
@@ -46,6 +48,7 @@ fn settle_duplicate_projection(
     for (tag_id, root_ids) in roots_by_tag {
         projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
     }
+    projections.apply_root_summary_changes(&delta.summaries, &roaring::RoaringBitmap::new())?;
     Ok(())
 }
 
@@ -1317,147 +1320,160 @@ pub fn resolve(
     } else {
         (file_id_b, file_id_a)
     };
-    let ((affected_item_ids, freed_file_hash, collapsed_items), revision) = app.transaction(
-        |transaction| {
-            let exists: Option<(String, String)> = transaction
-                .query_row(
-                    "SELECT status, COALESCE(winner_file_id, 0)
+    let ((affected_item_ids, freed_file_hash, collapsed_items), revision) = app
+        .transaction_captured(
+            |projections| projections.selection_snapshot(),
+            |transaction, projection| {
+                let exists: Option<(String, String)> = transaction
+                    .query_row(
+                        "SELECT status, COALESCE(winner_file_id, 0)
                      FROM duplicate WHERE file_id_a = ?1 AND file_id_b = ?2",
-                    params![file_id_a, file_id_b],
-                    |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.to_string())),
-                )
-                .optional()?;
-            match exists {
-                Some((status, _)) if status == "detected" => {}
-                Some((status, _)) => {
-                    return Err(invalid(format!("Duplicate pair is already {status}")))
+                        params![file_id_a, file_id_b],
+                        |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.to_string())),
+                    )
+                    .optional()?;
+                match exists {
+                    Some((status, _)) if status == "detected" => {}
+                    Some((status, _)) => {
+                        return Err(invalid(format!("Duplicate pair is already {status}")))
+                    }
+                    None => return Err(invalid("Duplicate pair was not found")),
                 }
-                None => return Err(invalid("Duplicate pair was not found")),
-            }
 
-            let mut affected = BTreeSet::new();
-            match choice {
-                ResolutionChoice::KeepBoth => {
-                    collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
-                    transaction.execute(
-                        "UPDATE duplicate
+                let mut affected = BTreeSet::new();
+                match choice {
+                    ResolutionChoice::KeepBoth => {
+                        collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
+                        transaction.execute(
+                            "UPDATE duplicate
                          SET status = 'not_duplicate', decided_at = ?3, winner_file_id = NULL
                          WHERE file_id_a = ?1 AND file_id_b = ?2",
-                        params![file_id_a, file_id_b, Utc::now().to_rfc3339()],
-                    )?;
-                    Ok((
-                        (
-                            affected.into_iter().map(ItemId).collect::<Vec<_>>(),
-                            None,
-                            false,
-                        ),
-                        DuplicateProjectionDelta::default(),
-                    ))
-                }
-                ResolutionChoice::KeepFile { winner_file_id } => {
-                    if winner_file_id != file_id_a && winner_file_id != file_id_b {
-                        return Err(invalid("Winner must be one of the duplicate files"));
+                            params![file_id_a, file_id_b, Utc::now().to_rfc3339()],
+                        )?;
+                        Ok((
+                            (
+                                affected.into_iter().map(ItemId).collect::<Vec<_>>(),
+                                None,
+                                false,
+                            ),
+                            DuplicateProjectionDelta::default(),
+                        ))
                     }
-                    let loser_file_id = if winner_file_id == file_id_a {
-                        file_id_b
-                    } else {
-                        file_id_a
-                    };
-                    let loser_hash: String = transaction.query_row(
-                        "SELECT file_hash FROM media_file WHERE file_id = ?1",
-                        [loser_file_id],
-                        |row| row.get(0),
-                    )?;
-                    collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
-                    let collapse =
-                        collapsible_standalone_items(transaction, winner_file_id, loser_file_id)?;
-                    let mut delta = DuplicateProjectionDelta::default();
-
-                    transaction.execute(
-                        "UPDATE media_asset SET file_id = ?1 WHERE file_id = ?2",
-                        params![winner_file_id, loser_file_id],
-                    )?;
-                    if let Some((target_item_id, loser_item_ids)) = collapse {
-                        for loser_item_id in loser_item_ids {
-                            merge_standalone_item(
-                                transaction,
-                                target_item_id,
-                                loser_item_id,
-                                &mut delta,
-                            )?;
+                    ResolutionChoice::KeepFile { winner_file_id } => {
+                        if winner_file_id != file_id_a && winner_file_id != file_id_b {
+                            return Err(invalid("Winner must be one of the duplicate files"));
                         }
-                    }
-                    let impacted_roots = affected
-                        .iter()
-                        .map(|item_id| {
-                            u32::try_from(*item_id).map_err(|_| {
-                                invalid(format!("Item ID {item_id} exceeds projection capacity"))
+                        let loser_file_id = if winner_file_id == file_id_a {
+                            file_id_b
+                        } else {
+                            file_id_a
+                        };
+                        let loser_hash: String = transaction.query_row(
+                            "SELECT file_hash FROM media_file WHERE file_id = ?1",
+                            [loser_file_id],
+                            |row| row.get(0),
+                        )?;
+                        collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
+                        let collapse = collapsible_standalone_items(
+                            transaction,
+                            winner_file_id,
+                            loser_file_id,
+                        )?;
+                        let mut delta = DuplicateProjectionDelta::default();
+
+                        transaction.execute(
+                            "UPDATE media_asset SET file_id = ?1 WHERE file_id = ?2",
+                            params![winner_file_id, loser_file_id],
+                        )?;
+                        if let Some((target_item_id, loser_item_ids)) = collapse {
+                            for loser_item_id in loser_item_ids {
+                                merge_standalone_item(
+                                    transaction,
+                                    &projection,
+                                    target_item_id,
+                                    loser_item_id,
+                                    &mut delta,
+                                )?;
+                            }
+                        }
+                        let impacted_roots = affected
+                            .iter()
+                            .map(|item_id| {
+                                u32::try_from(*item_id).map_err(|_| {
+                                    invalid(format!(
+                                        "Item ID {item_id} exceeds projection capacity"
+                                    ))
+                                })
                             })
-                        })
-                        .collect::<rusqlite::Result<roaring::RoaringBitmap>>()?;
-                    let changed_tag_ids = delta
-                        .root_tags_added
-                        .iter()
-                        .map(|(_, tag_id)| *tag_id)
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    crate::smart_v2::refresh_impacted_roots(
-                        transaction,
-                        &impacted_roots,
-                        &[
-                            "name",
-                            "notes",
-                            "rating",
-                            "source_urls",
-                            "tags",
-                            "file_size",
-                            "width",
-                            "height",
-                            "duration",
-                            "aspect_ratio",
-                            "file_type",
-                            "date_added",
-                            "date_captured",
-                            "has_audio",
-                            "color",
-                        ],
-                        &changed_tag_ids,
-                    )?;
-                    transaction.execute(
-                        "UPDATE duplicate SET status = 'resolved', decided_at = ?3,
+                            .collect::<rusqlite::Result<roaring::RoaringBitmap>>()?;
+                        let changed_tag_ids = delta
+                            .root_tags_added
+                            .iter()
+                            .map(|(_, tag_id)| *tag_id)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        crate::smart_v2::refresh_impacted_roots(
+                            transaction,
+                            &impacted_roots,
+                            &[
+                                "name",
+                                "notes",
+                                "rating",
+                                "source_urls",
+                                "tags",
+                                "file_size",
+                                "width",
+                                "height",
+                                "duration",
+                                "aspect_ratio",
+                                "file_type",
+                                "date_added",
+                                "date_captured",
+                                "has_audio",
+                                "color",
+                            ],
+                            &changed_tag_ids,
+                        )?;
+                        reassert_surviving_roots(transaction, &affected, &mut delta.structure)?;
+                        delta.summaries = crate::operations_v2::root_summary_changes_for_roots(
+                            transaction,
+                            &affected.iter().copied().collect::<Vec<_>>(),
+                        )?;
+                        transaction.execute(
+                            "UPDATE duplicate SET status = 'resolved', decided_at = ?3,
                                 winner_file_id = ?4
                          WHERE file_id_a = ?1 AND file_id_b = ?2",
-                        params![
-                            file_id_a,
-                            file_id_b,
-                            Utc::now().to_rfc3339(),
-                            winner_file_id
-                        ],
-                    )?;
-                    crate::workers_v2::enqueue_blob_delete_in(
-                        transaction,
-                        &loser_hash,
-                        &Utc::now().to_rfc3339(),
-                    )?;
-                    transaction.execute(
-                        "DELETE FROM media_file WHERE file_id = ?1
+                            params![
+                                file_id_a,
+                                file_id_b,
+                                Utc::now().to_rfc3339(),
+                                winner_file_id
+                            ],
+                        )?;
+                        crate::workers_v2::enqueue_blob_delete_in(
+                            transaction,
+                            &loser_hash,
+                            &Utc::now().to_rfc3339(),
+                        )?;
+                        transaction.execute(
+                            "DELETE FROM media_file WHERE file_id = ?1
                          AND NOT EXISTS (SELECT 1 FROM media_asset WHERE file_id = ?1)",
-                        [loser_file_id],
-                    )?;
-                    Ok((
-                        (
-                            affected.into_iter().map(ItemId).collect::<Vec<_>>(),
-                            Some(FileHash(loser_hash)),
-                            !delta.structure.items.is_empty(),
-                        ),
-                        delta,
-                    ))
+                            [loser_file_id],
+                        )?;
+                        Ok((
+                            (
+                                affected.into_iter().map(ItemId).collect::<Vec<_>>(),
+                                Some(FileHash(loser_hash)),
+                                !delta.structure.items.is_empty(),
+                            ),
+                            delta,
+                        ))
+                    }
                 }
-            }
-        },
-        settle_duplicate_projection,
-    )?;
+            },
+            settle_duplicate_projection,
+        )?;
 
     let changes_library = matches!(choice, ResolutionChoice::KeepFile { .. });
     Ok(ResolutionResult {
@@ -1685,6 +1701,7 @@ fn collapsible_standalone_items(
 
 fn merge_standalone_item(
     transaction: &Transaction<'_>,
+    projection: &ProjectionSelectionSnapshot,
     target_item_id: i64,
     loser_item_id: i64,
     delta: &mut DuplicateProjectionDelta,
@@ -1732,18 +1749,7 @@ fn merge_standalone_item(
         ],
     )?;
 
-    let folders = transaction
-        .prepare("SELECT folder_id, position_rank FROM folder_item WHERE item_id = ?1")?
-        .query_map([loser_item_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (folder_id, position_rank) in folders {
-        transaction.execute(
-            "INSERT OR IGNORE INTO folder_item (folder_id, item_id, position_rank)
-             VALUES (?1, ?2, ?3)",
-            params![folder_id, target_item_id, position_rank],
-        )?;
+    for folder_id in projection.folder_ids_for_root(loser_item_id) {
         delta.structure.folders.push(FolderProjectionChange {
             folder_id,
             item_id: target_item_id,
@@ -1756,16 +1762,7 @@ fn merge_standalone_item(
         });
     }
 
-    let tags = transaction
-        .prepare("SELECT tag_id FROM root_tag WHERE root_item_id = ?1")?
-        .query_map([loser_item_id], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for tag_id in tags {
-        transaction.execute(
-            "INSERT INTO root_tag(root_item_id, tag_id) VALUES (?1, ?2)
-             ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-            params![target_item_id, tag_id],
-        )?;
+    for tag_id in projection.tag_ids_for_root(loser_item_id) {
         delta.root_tags_added.push((target_item_id, tag_id));
     }
 
@@ -1809,6 +1806,54 @@ fn merge_standalone_item(
         item_id: target_item_id,
         lifecycle: Some(target_lifecycle),
     });
+    Ok(())
+}
+
+fn reassert_surviving_roots(
+    transaction: &Transaction<'_>,
+    root_ids: &BTreeSet<i64>,
+    delta: &mut StructureProjectionDelta,
+) -> rusqlite::Result<()> {
+    if root_ids.is_empty() {
+        return Ok(());
+    }
+    let encoded = serde_json::to_string(&root_ids.iter().copied().collect::<Vec<_>>())
+        .map_err(|error| invalid(format!("Could not encode affected roots: {error}")))?;
+    let roots = transaction
+        .prepare(
+            "SELECT item.item_id, item.kind, root.lifecycle
+             FROM library_item item
+             JOIN library_root root ON root.item_id = item.item_id
+             JOIN json_each(?1) selected
+               ON CAST(selected.value AS INTEGER) = item.item_id",
+        )?
+        .query_map([encoded], |row| {
+            let item_id = row.get::<_, i64>(0)?;
+            let kind = match row.get::<_, String>(1)?.as_str() {
+                "media" => crate::app::ItemKind::Media,
+                "collection" => crate::app::ItemKind::Collection,
+                value => return Err(invalid(format!("Unknown item kind {value}"))),
+            };
+            let lifecycle = match row.get::<_, String>(2)?.as_str() {
+                "inbox" => crate::app::Lifecycle::Inbox,
+                "active" => crate::app::Lifecycle::Active,
+                "trash" => crate::app::Lifecycle::Trash,
+                value => return Err(invalid(format!("Unknown lifecycle {value}"))),
+            };
+            Ok((item_id, kind, lifecycle))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (item_id, kind, lifecycle) in roots {
+        delta.items.push(ItemProjectionChange {
+            item_id,
+            kind,
+            present: true,
+        });
+        delta.roots.push(RootProjectionChange {
+            item_id,
+            lifecycle: Some(lifecycle),
+        });
+    }
     Ok(())
 }
 
@@ -1924,7 +1969,8 @@ mod tests {
         tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality, QualityDecision,
         ResolutionChoice, MAX_RECEIPT_ITEM_IDS,
     };
-    use crate::app::{Application, FileHash};
+    use crate::app::{Application, FileHash, ItemKind, Lifecycle};
+    use crate::canonical_bitmap::{load_bitmap, BitmapDomain};
     use crate::store::Store;
     use img_hash::ImageHash;
     use rusqlite::params;
@@ -3015,19 +3061,14 @@ mod tests {
                 )?;
                 tx.execute(
                     "INSERT INTO root_metadata (
-                         root_item_id, name, notes, source_urls_json, updated_at
+                         root_item_id, name, rating, notes, source_urls_json, updated_at
                      ) VALUES
-                         (1, 'Winner', 'winner note', '[\"https://winner\"]', 'now'),
-                         (2, 'Loser', 'loser note', '[\"https://loser\"]', 'now')",
+                         (1, 'Winner', NULL, 'winner note', '[\"https://winner\"]', 'now'),
+                         (2, 'Loser', 5, 'loser note', '[\"https://loser\"]', 'now')",
                     [],
                 )?;
                 tx.execute(
                     "INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'merged')",
-                    [],
-                )?;
-                tx.execute(
-                    "INSERT INTO root_tag(root_item_id, tag_id)
-                     VALUES (1, 1), (2, 1)",
                     [],
                 )?;
                 tx.execute(
@@ -3036,16 +3077,24 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                     VALUES (1, 2, 1024)",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (10, 11, 0)",
                     [],
                 )?;
                 Ok(())
             })
+            .unwrap();
+        app.projections()
+            .apply_root_delta(1, ItemKind::Media, Some(Lifecycle::Active))
+            .unwrap();
+        app.projections()
+            .apply_root_delta(2, ItemKind::Media, Some(Lifecycle::Active))
+            .unwrap();
+        app.projections()
+            .apply_root_tag_bitmap(1, &roaring::RoaringBitmap::from_iter([1, 2]), true)
+            .unwrap();
+        app.projections().apply_folder_delta(1, 2, true).unwrap();
+        app.projections()
+            .apply_rating_bitmap(&roaring::RoaringBitmap::from_iter([2]), Some(5))
             .unwrap();
 
         let result = resolve(
@@ -3069,26 +3118,34 @@ mod tests {
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
-                let tag_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag
-                     WHERE root_item_id = 1 AND tag_id = 1",
-                    [],
-                    |row| row.get(0),
-                )?;
-                let folder_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE item_id = 1 AND folder_id = 1",
-                    [],
-                    |row| row.get(0),
-                )?;
+                let legacy_tag_count: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| row.get(0))?;
+                let legacy_folder_count: i64 =
+                    connection
+                        .query_row("SELECT COUNT(*) FROM folder_item", [], |row| row.get(0))?;
                 assert!(!loser_exists);
                 assert_eq!(notes, "winner note\n\nloser note");
                 assert_eq!(urls, "[\"https://winner\",\"https://loser\"]");
-                assert_eq!(tag_count, 1);
-                assert_eq!(folder_count, 1);
+                assert_eq!(legacy_tag_count, 0);
+                assert_eq!(legacy_folder_count, 0);
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Tag, 1)?,
+                    roaring::RoaringBitmap::from_iter([1])
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Folder, 1)?,
+                    roaring::RoaringBitmap::from_iter([1])
+                );
                 Ok(())
             })
             .unwrap();
         assert!(!app.projections().active_bitmap().contains(2));
+        assert_eq!(
+            app.projections()
+                .selection_snapshot()
+                .rating_value_bitmap(Some(5)),
+            roaring::RoaringBitmap::from_iter([1])
+        );
     }
 
     #[test]

@@ -2770,7 +2770,7 @@ fn apply_group_projection_delta(
     Ok(())
 }
 
-fn root_summary_changes_for_roots(
+pub(crate) fn root_summary_changes_for_roots(
     transaction: &Transaction<'_>,
     root_ids: &[i64],
 ) -> rusqlite::Result<Vec<RootSummaryProjectionChange>> {
