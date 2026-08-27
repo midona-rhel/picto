@@ -34,8 +34,8 @@ pub fn dispatch(
     match command {
         "items.query" => {
             let input: QueryItemsInput = parse(args_json)?;
-            read(crate::query_v2::query(
-                application.store(),
+            read(crate::query_v2::query_for_application(
+                application,
                 &input.query,
                 input.page,
             )?)

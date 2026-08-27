@@ -288,6 +288,46 @@ pub fn query(
     store.read_snapshot(|connection| resolve_connection(connection, item_query, page))
 }
 
+/// Resolve a grid page against the immutable projection captured with the
+/// same SQLite revision. Structured filters use the shared bitmap compiler;
+/// SQL-only predicates retain the indexed SQL path.
+pub fn query_for_application(
+    application: &Application,
+    item_query: &ItemQuery,
+    page: ItemPageRequest,
+) -> Result<ItemPage, String> {
+    let page = page.normalized();
+    application.store().read_snapshot_captured(
+        || application.projections().selection_snapshot(),
+        |connection, revision, projection| {
+            let plain_indexed_scope = item_query.filters == ItemFilters::default()
+                && matches!(
+                    item_query.scope,
+                    ItemScope::All | ItemScope::Inbox | ItemScope::Trash | ItemScope::Folder { .. }
+                );
+            if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt)
+                && !plain_indexed_scope
+            {
+                if let Some(roots) =
+                    crate::predicate_v2::compile_item_query(connection, &projection, item_query)
+                        .map_err(|error| error.to_string())?
+                {
+                    return resolve_projected_imported_page(
+                        connection,
+                        item_query,
+                        page,
+                        revision,
+                        &projection,
+                        &roots,
+                    )
+                    .map_err(|error| error.to_string());
+                }
+            }
+            resolve_connection(connection, item_query, page).map_err(|error| error.to_string())
+        },
+    )
+}
+
 pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
     store.read_snapshot(|connection| details_connection(connection, item_id.0))
 }
@@ -1791,6 +1831,253 @@ fn invalid_target(message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
 }
 
+const SPARSE_PROJECTED_PAGE_THRESHOLD: u64 = 4_096;
+const PROJECTED_SCAN_CHUNK: i64 = 1_024;
+
+fn resolve_projected_imported_page(
+    connection: &Connection,
+    item_query: &ItemQuery,
+    page: ItemPageRequest,
+    revision: u64,
+    projection: &ProjectionSelectionSnapshot,
+    roots: &roaring::RoaringBitmap,
+) -> rusqlite::Result<ItemPage> {
+    let sort_plan = SortPlan::for_query(item_query, &mut Vec::new());
+    let ordered = if roots.len() <= SPARSE_PROJECTED_PAGE_THRESHOLD {
+        ordered_sparse_projected_roots(
+            connection,
+            roots,
+            &sort_plan,
+            page.cursor.as_deref(),
+            page.limit + 1,
+        )?
+    } else {
+        ordered_dense_projected_roots(
+            connection,
+            roots,
+            projected_scope_lifecycle(&item_query.scope),
+            &sort_plan,
+            page.cursor.as_deref(),
+            page.limit + 1,
+        )?
+    };
+    let mut entries = hydrate_projected_roots(connection, revision, &ordered)?;
+    let metrics = (page.cursor.is_none()).then(|| projection.numeric_aggregates(roots));
+    let has_more = entries.len() > page.limit as usize;
+    entries.truncate(page.limit as usize);
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|(item, key)| sort_plan.encode_cursor(key.clone(), item.item_id.0))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(ItemPage {
+        items: entries.into_iter().map(|(item, _)| item).collect(),
+        next_cursor,
+        revision,
+        visible_item_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u64(metrics.selected_root_count))
+            .transpose()?,
+        visible_media_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.media_count.sum))
+            .transpose()?,
+        total_size_bytes: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.total_size_bytes.sum))
+            .transpose()?,
+    })
+}
+
+fn projected_scope_lifecycle(scope: &ItemScope) -> &'static str {
+    match scope {
+        ItemScope::Inbox => "inbox",
+        ItemScope::Trash => "trash",
+        ItemScope::All
+        | ItemScope::Untagged
+        | ItemScope::Uncategorized
+        | ItemScope::Folder { .. }
+        | ItemScope::SmartFolder { .. } => "active",
+        ItemScope::RecentlyViewed => unreachable!("recently viewed is not bitmap compiled"),
+    }
+}
+
+fn ordered_sparse_projected_roots(
+    connection: &Connection,
+    roots: &roaring::RoaringBitmap,
+    sort_plan: &SortPlan,
+    cursor: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<(i64, CursorKey)>> {
+    let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(bitmap_json(roots))];
+    let cursor_clause = projected_imported_cursor_clause(sort_plan, cursor, &mut arguments)?;
+    let limit_index = push_argument(&mut arguments, limit);
+    let item_direction = sort_plan.direction;
+    let sql = format!(
+        "WITH selected(root_item_id) AS (
+             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+         )
+         SELECT summary.root_item_id, summary.imported_at
+         FROM selected
+         JOIN root_summary summary USING (root_item_id)
+         WHERE summary.imported_at IS NOT NULL
+           {cursor_clause}
+         ORDER BY summary.imported_at {direction},
+                  summary.root_item_id {item_direction}
+         LIMIT ?{limit_index}",
+        direction = sort_plan.direction,
+    );
+    let references = arguments
+        .iter()
+        .map(|argument| argument.as_ref())
+        .collect::<Vec<_>>();
+    connection
+        .prepare(&sql)?
+        .query_map(references.as_slice(), |row| {
+            Ok((row.get(0)?, CursorKey::Text(row.get(1)?)))
+        })?
+        .collect()
+}
+
+fn ordered_dense_projected_roots(
+    connection: &Connection,
+    roots: &roaring::RoaringBitmap,
+    lifecycle: &str,
+    sort_plan: &SortPlan,
+    cursor: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<(i64, CursorKey)>> {
+    let mut scan_cursor = cursor.map(str::to_owned);
+    let mut result = Vec::with_capacity(limit as usize);
+    while result.len() < limit as usize {
+        let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(lifecycle.to_string())];
+        let cursor_clause =
+            projected_imported_cursor_clause(sort_plan, scan_cursor.as_deref(), &mut arguments)?;
+        let chunk_index = push_argument(&mut arguments, PROJECTED_SCAN_CHUNK);
+        let sql = format!(
+            "SELECT summary.root_item_id, summary.imported_at
+             FROM root_summary summary INDEXED BY idx_root_summary_imported_asc
+             WHERE summary.lifecycle = ?1
+               AND summary.imported_at IS NOT NULL
+               {cursor_clause}
+             ORDER BY summary.imported_at {direction},
+                      summary.root_item_id {direction}
+             LIMIT ?{chunk_index}",
+            direction = sort_plan.direction,
+        );
+        let references = arguments
+            .iter()
+            .map(|argument| argument.as_ref())
+            .collect::<Vec<_>>();
+        let scanned = connection
+            .prepare(&sql)?
+            .query_map(references.as_slice(), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if scanned.is_empty() {
+            break;
+        }
+        for (item_id, imported_at) in &scanned {
+            if u32::try_from(*item_id)
+                .ok()
+                .is_some_and(|item_id| roots.contains(item_id))
+            {
+                result.push((*item_id, CursorKey::Text(imported_at.clone())));
+                if result.len() == limit as usize {
+                    break;
+                }
+            }
+        }
+        if result.len() == limit as usize || scanned.len() < PROJECTED_SCAN_CHUNK as usize {
+            break;
+        }
+        let (item_id, imported_at) = scanned.last().expect("non-empty scan");
+        scan_cursor =
+            Some(sort_plan.encode_cursor(CursorKey::Text(imported_at.clone()), *item_id)?);
+    }
+    Ok(result)
+}
+
+fn projected_imported_cursor_clause(
+    sort_plan: &SortPlan,
+    cursor: Option<&str>,
+    arguments: &mut Vec<Box<dyn ToSql>>,
+) -> rusqlite::Result<String> {
+    let Some(cursor) = cursor else {
+        return Ok(String::new());
+    };
+    let cursor = sort_plan.decode_cursor(cursor)?;
+    let CursorKey::Text(imported_at) = cursor.key else {
+        return Err(invalid_target("Invalid imported-at page cursor"));
+    };
+    let imported_index = push_argument(arguments, imported_at);
+    let item_index = push_argument(arguments, cursor.item_id);
+    let comparison = if sort_plan.direction == "ASC" {
+        ">"
+    } else {
+        "<"
+    };
+    Ok(format!(
+        "AND (summary.imported_at {comparison} ?{imported_index}
+              OR (summary.imported_at = ?{imported_index}
+                  AND summary.root_item_id {comparison} ?{item_index}))"
+    ))
+}
+
+fn hydrate_projected_roots(
+    connection: &Connection,
+    revision: u64,
+    ordered: &[(i64, CursorKey)],
+) -> rusqlite::Result<Vec<(ItemSummary, CursorKey)>> {
+    if ordered.is_empty() {
+        return Ok(Vec::new());
+    }
+    let item_ids = ordered
+        .iter()
+        .map(|(item_id, _)| *item_id)
+        .collect::<Vec<_>>();
+    let encoded_ids = serde_json::to_string(&item_ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let revision = i64::try_from(revision)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+    let mut statement = connection.prepare(
+        "WITH selected(item_id, position) AS (
+             SELECT CAST(value AS INTEGER), CAST(key AS INTEGER)
+             FROM json_each(?1)
+         )
+         SELECT ?2, NULL, NULL, NULL,
+                summary.root_item_id, summary.kind, summary.lifecycle,
+                COALESCE(metadata.name, display_asset.name),
+                display_file.file_hash, display_file.mime_type,
+                display_file.pixel_width, display_file.pixel_height,
+                display_file.duration_ms, display_file.frame_count,
+                display_file.dominant_color_hex, metadata.rating,
+                summary.media_count, selected.position
+         FROM selected
+         JOIN root_summary summary ON summary.root_item_id = selected.item_id
+         LEFT JOIN root_metadata metadata
+           ON metadata.root_item_id = summary.root_item_id
+         JOIN media_asset display_asset
+           ON display_asset.item_id = summary.cover_media_item_id
+         JOIN media_file display_file ON display_file.file_id = display_asset.file_id
+         ORDER BY selected.position",
+    )?;
+    let summaries = statement
+        .query_map(rusqlite::params![encoded_ids, revision], |row| {
+            let item_id = row.get::<_, i64>(4)?;
+            read_summary(row, item_id)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(summaries
+        .into_iter()
+        .zip(ordered.iter().map(|(_, key)| key.clone()))
+        .collect())
+}
+
 fn resolve_connection(
     connection: &Connection,
     item_query: &ItemQuery,
@@ -2886,9 +3173,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        details, library_statistics, query, resolve_target_ids, selection_summary,
-        selection_summary_for_application, sidebar_counts_for_application, ItemPageRequest,
-        SelectionCollectionCandidate,
+        details, library_statistics, query, query_for_application, resolve_target_ids,
+        selection_summary, selection_summary_for_application, sidebar_counts_for_application,
+        ItemPageRequest, SelectionCollectionCandidate,
     };
     use crate::app::{
         Application, FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope,
@@ -3926,6 +4213,17 @@ mod tests {
         assert_eq!(page.visible_item_count, Some(1));
         assert_eq!(page.visible_media_count, Some(2));
         assert_eq!(page.items[0].item_id, ItemId(10));
+
+        let application = Application::new(Arc::new(store));
+        let projected = query_for_application(
+            &application,
+            &query_for(ItemScope::SmartFolder { smart_folder_id: 9 }),
+            ItemPageRequest::default(),
+        )
+        .unwrap();
+        assert_eq!(projected.items, page.items);
+        assert_eq!(projected.visible_item_count, page.visible_item_count);
+        assert_eq!(projected.visible_media_count, page.visible_media_count);
     }
 
     #[test]
@@ -4218,10 +4516,30 @@ mod tests {
 
         let mut images = query_for(ItemScope::All);
         images.filters.include_mime_types = vec!["image/*".to_string()];
+        let first_page =
+            query_for_application(&application, &images, ItemPageRequest::new(None, 1)).unwrap();
+        let second_page = query_for_application(
+            &application,
+            &images,
+            ItemPageRequest::new(first_page.next_cursor.clone(), 1),
+        )
+        .unwrap();
+        let mut grid_ids = first_page
+            .items
+            .iter()
+            .chain(&second_page.items)
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        grid_ids.sort_by_key(|item_id| item_id.0);
+        assert_eq!(grid_ids, vec![ItemId(1), ItemId(10)]);
+        assert_eq!(first_page.visible_item_count, Some(2));
+        assert_eq!(first_page.visible_media_count, Some(3));
+        assert_eq!(second_page.visible_item_count, None);
+
         let image_summary = selection_summary_for_application(
             &application,
             &ItemTarget::Query {
-                query: images,
+                query: images.clone(),
                 excluded_item_ids: Vec::new(),
             },
         )
@@ -4230,6 +4548,12 @@ mod tests {
 
         let mut without_video = query_for(ItemScope::All);
         without_video.filters.exclude_mime_types = vec!["video/mp4".to_string()];
+        let non_video_grid =
+            query_for_application(&application, &without_video, ItemPageRequest::default())
+                .unwrap();
+        assert_eq!(non_video_grid.items[0].item_id, ItemId(1));
+        assert_eq!(non_video_grid.visible_item_count, Some(1));
+
         let non_video_summary = selection_summary_for_application(
             &application,
             &ItemTarget::Query {
