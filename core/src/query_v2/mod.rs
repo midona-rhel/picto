@@ -300,11 +300,28 @@ pub fn query_for_application(
     application.store().read_snapshot_captured(
         || application.projections().selection_snapshot(),
         |connection, revision, projection| {
-            if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
-                if let Some(roots) =
-                    crate::predicate_v2::compile_item_query(connection, &projection, item_query)
-                        .map_err(|error| error.to_string())?
-                {
+            if let Some(roots) =
+                crate::predicate_v2::compile_item_query(connection, &projection, item_query)
+                    .map_err(|error| error.to_string())?
+            {
+                if matches!(
+                    item_query.sort.field,
+                    crate::app::ItemSortField::FolderOrder
+                ) {
+                    if let ItemScope::Folder { folder_id } = item_query.scope {
+                        return resolve_projected_folder_order_page(
+                            connection,
+                            item_query,
+                            page,
+                            revision,
+                            &projection,
+                            &roots,
+                            folder_id,
+                        )
+                        .map_err(|error| error.to_string());
+                    }
+                }
+                if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
                     return resolve_projected_imported_page(
                         connection,
                         item_query,
@@ -1933,6 +1950,85 @@ fn invalid_target(message: impl Into<String>) -> rusqlite::Error {
 
 const SPARSE_PROJECTED_PAGE_THRESHOLD: u64 = 4_096;
 const PROJECTED_SCAN_CHUNK: i64 = 1_024;
+
+fn resolve_projected_folder_order_page(
+    connection: &Connection,
+    item_query: &ItemQuery,
+    page: ItemPageRequest,
+    revision: u64,
+    projection: &ProjectionSelectionSnapshot,
+    roots: &roaring::RoaringBitmap,
+    folder_id: i64,
+) -> rusqlite::Result<ItemPage> {
+    let sort_plan = SortPlan::for_query(item_query, &mut Vec::new());
+    let mut ordered = projection
+        .folder_order(folder_id)
+        .unwrap_or_else(|| roots.iter().map(i64::from).collect());
+    ordered.retain(|item_id| {
+        u32::try_from(*item_id)
+            .ok()
+            .is_some_and(|item_id| roots.contains(item_id))
+    });
+    let mut keyed = ordered
+        .into_iter()
+        .enumerate()
+        .map(|(position, item_id)| {
+            i64::try_from(position)
+                .map(|position| (item_id, CursorKey::Integer(position)))
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if sort_plan.direction == "DESC" {
+        keyed.reverse();
+    }
+    if let Some(encoded) = page.cursor.as_deref() {
+        let cursor = sort_plan.decode_cursor(encoded)?;
+        let CursorKey::Integer(position) = cursor.key else {
+            return Err(invalid_target("Invalid folder-order page cursor"));
+        };
+        keyed.retain(|(item_id, key)| {
+            let CursorKey::Integer(candidate) = key else {
+                return false;
+            };
+            if sort_plan.direction == "ASC" {
+                *candidate > position || (*candidate == position && *item_id > cursor.item_id)
+            } else {
+                *candidate < position || (*candidate == position && *item_id > cursor.item_id)
+            }
+        });
+    }
+    keyed.truncate((page.limit + 1) as usize);
+
+    let mut entries = hydrate_projected_roots(connection, revision, &keyed)?;
+    let metrics = (page.cursor.is_none()).then(|| projection.numeric_aggregates(roots));
+    let has_more = entries.len() > page.limit as usize;
+    entries.truncate(page.limit as usize);
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|(item, key)| sort_plan.encode_cursor(key.clone(), item.item_id.0))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(ItemPage {
+        items: entries.into_iter().map(|(item, _)| item).collect(),
+        next_cursor,
+        revision,
+        visible_item_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u64(metrics.selected_root_count))
+            .transpose()?,
+        visible_media_count: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.media_count.sum))
+            .transpose()?,
+        total_size_bytes: metrics
+            .as_ref()
+            .map(|metrics| i64_from_u128(metrics.total_size_bytes.sum))
+            .transpose()?,
+    })
+}
 
 fn resolve_projected_imported_page(
     connection: &Connection,
@@ -3602,6 +3698,40 @@ mod tests {
         );
         assert_eq!(page.visible_item_count, Some(2));
         assert_eq!(page.visible_media_count, Some(3));
+    }
+
+    #[test]
+    fn application_folder_order_pages_from_canonical_vector() {
+        let (_directory, store) = seed_store();
+        let application = Application::new(Arc::new(store));
+        let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
+        item_query.sort.field = crate::app::ItemSortField::FolderOrder;
+        item_query.sort.direction = crate::app::SortDirection::Ascending;
+
+        let first = query_for_application(&application, &item_query, ItemPageRequest::new(None, 1))
+            .unwrap();
+        let second = query_for_application(
+            &application,
+            &item_query,
+            ItemPageRequest::new(first.next_cursor.clone(), 1),
+        )
+        .unwrap();
+        assert_eq!(first.items[0].item_id, ItemId(10));
+        assert_eq!(second.items[0].item_id, ItemId(1));
+        assert_eq!(first.visible_item_count, Some(2));
+        assert_eq!(second.visible_item_count, None);
+
+        item_query.sort.direction = crate::app::SortDirection::Descending;
+        let descending =
+            query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();
+        assert_eq!(
+            descending
+                .items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(1), ItemId(10)]
+        );
     }
 
     #[test]

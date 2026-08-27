@@ -480,18 +480,20 @@ pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result
     }
 
     let mut folders = BTreeMap::<i64, RoaringBitmap>::new();
+    let mut folder_orders = BTreeMap::<i64, Vec<u32>>::new();
     {
-        let mut statement =
-            transaction.prepare("SELECT folder_id, item_id FROM folder_item ORDER BY folder_id")?;
+        let mut statement = transaction.prepare(
+            "SELECT folder_id, item_id FROM folder_item
+             ORDER BY folder_id, position_rank, item_id",
+        )?;
         let rows =
             statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
         for row in rows {
             let (folder_id, root_id) = row?;
-            folders.entry(folder_id).or_default().insert(
-                u32::try_from(root_id).map_err(|_| {
-                    invalid_data("Test fixture folder root exceeds the bitmap domain")
-                })?,
-            );
+            let root_id = u32::try_from(root_id)
+                .map_err(|_| invalid_data("Test fixture folder root exceeds the bitmap domain"))?;
+            folders.entry(folder_id).or_default().insert(root_id);
+            folder_orders.entry(folder_id).or_default().push(root_id);
         }
     }
 
@@ -528,7 +530,10 @@ pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result
             BitmapDomain::GroupMember.as_i64()
         ],
     )?;
-    transaction.execute("DELETE FROM canonical_order WHERE owner_kind = 'group'", [])?;
+    transaction.execute(
+        "DELETE FROM canonical_order WHERE owner_kind IN ('group', 'folder')",
+        [],
+    )?;
     for (key, bitmap) in lifecycles {
         replace_bitmap(transaction, BitmapDomain::Lifecycle, key, revision, &bitmap)?;
     }
@@ -540,6 +545,9 @@ pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result
     }
     for (key, bitmap) in folders {
         replace_bitmap(transaction, BitmapDomain::Folder, key, revision, &bitmap)?;
+    }
+    for (folder_id, order) in folder_orders {
+        replace_order(transaction, "folder", folder_id, revision, &order)?;
     }
     for (group_id, members) in groups {
         replace_ordered_membership(transaction, "group", group_id, revision, &members)?;
