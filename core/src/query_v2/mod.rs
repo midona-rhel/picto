@@ -3612,7 +3612,14 @@ mod tests {
                     [],
                 )?;
                 tx.execute("INSERT INTO media_view (item_id, viewed_at) VALUES (1, '2026-02-01')", [])?;
-                crate::canonical_bitmap::seed_test_state(tx)?;
+                crate::canonical_bitmap::seed_test_state(
+                    tx,
+                    &crate::canonical_bitmap::TestMembership {
+                        tags: vec![(1, vec![10])],
+                        folders: vec![(7, vec![10, 1])],
+                        groups: vec![(10, vec![11, 12])],
+                    },
+                )?;
                 Ok(())
             })
             .unwrap();

@@ -1510,7 +1510,7 @@ mod tests {
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
                     [media_id],
                 )?;
-                crate::canonical_bitmap::seed_test_state(transaction)?;
+                crate::canonical_bitmap::seed_test_state(transaction, &Default::default())?;
                 Ok(media_id)
             })
             .unwrap();

@@ -22,12 +22,10 @@ const UNDOABLE_TABLES: &[&str] = &[
     "library_item",
     "library_root",
     "root_metadata",
-    "root_tag",
     "media_asset",
     "media_view",
     "tag",
     "folder",
-    "folder_item",
     "smart_folder",
     "duplicate",
     "file_color",
@@ -778,15 +776,6 @@ impl Store {
         Ok(history.state())
     }
 
-    pub(crate) fn apply_history<P: super::PreparedSettlement>(
-        &self,
-        direction: HistoryDirection,
-        prepare: impl FnOnce(HistoryProjectionRequest<'_>) -> Result<P, String>,
-        publish: impl FnOnce(P),
-    ) -> Result<HistoryMutation, String> {
-        self.apply_history_prepared(direction, |_, _| Ok(()), prepare, publish)
-    }
-
     pub(crate) fn apply_history_prepared<P: super::PreparedSettlement>(
         &self,
         direction: HistoryDirection,
@@ -1304,55 +1293,6 @@ fn apply_lifecycle(
                  WHERE tag_id IN (SELECT tag_id FROM picto_lifecycle_tag_delta);",
             )
             .map_err(|error| error.to_string())?;
-    } else {
-        transaction
-            .execute_batch(
-                "UPDATE folder_summary
-             SET visible_root_count = visible_root_count + COALESCE((
-                     SELECT SUM(CASE WHEN current.lifecycle = 'active' THEN -1 ELSE 0 END
-                                + CASE WHEN staged.lifecycle = 'active' THEN 1 ELSE 0 END)
-                     FROM folder_item AS membership INDEXED BY idx_folder_item_folder_order
-                     JOIN picto_history_lifecycle staged
-                       ON staged.root_item_id = membership.item_id
-                     JOIN root_summary current
-                       ON current.root_item_id = staged.root_item_id
-                     WHERE membership.folder_id = folder_summary.folder_id
-                 ), 0),
-                 media_count = media_count + COALESCE((
-                     SELECT SUM(current.media_count * (
-                                CASE WHEN current.lifecycle = 'active' THEN -1 ELSE 0 END
-                                + CASE WHEN staged.lifecycle = 'active' THEN 1 ELSE 0 END))
-                     FROM folder_item AS membership INDEXED BY idx_folder_item_folder_order
-                     JOIN picto_history_lifecycle staged
-                       ON staged.root_item_id = membership.item_id
-                     JOIN root_summary current
-                       ON current.root_item_id = staged.root_item_id
-                     WHERE membership.folder_id = folder_summary.folder_id
-                 ), 0),
-                 total_size_bytes = total_size_bytes + COALESCE((
-                     SELECT SUM(current.total_size_bytes * (
-                                CASE WHEN current.lifecycle = 'active' THEN -1 ELSE 0 END
-                                + CASE WHEN staged.lifecycle = 'active' THEN 1 ELSE 0 END))
-                     FROM folder_item AS membership INDEXED BY idx_folder_item_folder_order
-                     JOIN picto_history_lifecycle staged
-                       ON staged.root_item_id = membership.item_id
-                     JOIN root_summary current
-                       ON current.root_item_id = staged.root_item_id
-                     WHERE membership.folder_id = folder_summary.folder_id
-                 ), 0);
-             UPDATE tag_summary
-             SET visible_root_count = visible_root_count + COALESCE((
-                 SELECT SUM(CASE WHEN current.lifecycle = 'active' THEN -1 ELSE 0 END
-                            + CASE WHEN staged.lifecycle = 'active' THEN 1 ELSE 0 END)
-                 FROM root_tag AS relation INDEXED BY idx_root_tag_tag_root
-                 JOIN picto_history_lifecycle staged
-                   ON staged.root_item_id = relation.root_item_id
-                 JOIN root_summary current
-                   ON current.root_item_id = staged.root_item_id
-                 WHERE relation.tag_id = tag_summary.tag_id
-                 ), 0);",
-            )
-            .map_err(|error| error.to_string())?;
     }
     transaction
         .execute(
@@ -1795,7 +1735,7 @@ mod tests {
         );
 
         let undone = store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_eq!(undone.item_ids, vec![item_id]);
         assert_eq!(name(&store, item_id), "Before");
@@ -1803,7 +1743,7 @@ mod tests {
         assert_eq!(undone.state.redo.unwrap().label, "Rename item");
 
         let redone = store
-            .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Redo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_eq!(name(&store, item_id), "After");
         assert!(redone.state.redo.is_none());
@@ -1839,7 +1779,7 @@ mod tests {
             .unwrap();
 
         assert!(store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .is_err());
         assert_eq!(name(&store, item_id), "Background");
         assert!(store.history_state().unwrap().undo.is_some());
@@ -1896,7 +1836,7 @@ mod tests {
         assert_eq!(remaining, 0);
 
         store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         let restored = store
             .read(|connection| {
@@ -1956,7 +1896,7 @@ mod tests {
                 .unwrap();
         }
         store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert!(store.history_state().unwrap().redo.is_some());
 
@@ -2116,11 +2056,11 @@ mod tests {
 
         assert_semantic_state(&store, ROOT_COUNT, "trash", 5);
         store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_semantic_state(&store, ROOT_COUNT, "active", 0);
         store
-            .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Redo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_semantic_state(&store, ROOT_COUNT, "trash", 5);
     }
@@ -2187,12 +2127,12 @@ mod tests {
         assert_smart_generation_state(&store, item_id, 1, 1);
 
         store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_smart_generation_state(&store, item_id, 0, 0);
 
         store
-            .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Redo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_smart_generation_state(&store, item_id, 1, 1);
 
@@ -2221,12 +2161,12 @@ mod tests {
         assert_smart_generation_state(&store, item_id, 1, 0);
 
         store
-            .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Undo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_smart_generation_state(&store, item_id, 1, 1);
 
         store
-            .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
+            .apply_history_prepared(HistoryDirection::Redo, |_, _| Ok(()), |_| Ok(()), |()| {})
             .unwrap();
         assert_smart_generation_state(&store, item_id, 1, 0);
     }

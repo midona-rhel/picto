@@ -123,12 +123,13 @@ mod tests {
                      VALUES (10, 'Album', '[]', '2026-01-01')",
                     [],
                 )?;
-                transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (10, 11, 0)",
-                    [],
+                crate::canonical_bitmap::seed_test_state(
+                    transaction,
+                    &crate::canonical_bitmap::TestMembership {
+                        groups: vec![(10, vec![11])],
+                        ..Default::default()
+                    },
                 )?;
-                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(())
             })
             .unwrap();

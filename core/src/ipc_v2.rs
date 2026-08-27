@@ -1408,7 +1408,7 @@ mod tests {
                      VALUES (?1, 'active')",
                     [item_id],
                 )?;
-                crate::canonical_bitmap::seed_test_state(transaction)?;
+                crate::canonical_bitmap::seed_test_state(transaction, &Default::default())?;
                 Ok(item_id)
             })
             .unwrap();

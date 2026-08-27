@@ -414,8 +414,21 @@ pub fn load_order(
         .transpose()
 }
 
+/// Explicit membership for test seeding: canonical ownership is supplied by
+/// the fixture instead of being derived from relationship rows.
 #[cfg(test)]
-pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+#[derive(Default)]
+pub(crate) struct TestMembership {
+    pub tags: Vec<(i64, Vec<u32>)>,
+    pub folders: Vec<(i64, Vec<u32>)>,
+    pub groups: Vec<(i64, Vec<u32>)>,
+}
+
+#[cfg(test)]
+pub(crate) fn seed_test_state(
+    transaction: &Transaction<'_>,
+    membership: &TestMembership,
+) -> rusqlite::Result<()> {
     let revision = transaction.query_row(
         "SELECT revision FROM library_meta WHERE singleton = 1",
         [],
@@ -464,37 +477,23 @@ pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result
     }
 
     let mut tags = BTreeMap::<i64, RoaringBitmap>::new();
-    {
-        let mut statement =
-            transaction.prepare("SELECT tag_id, root_item_id FROM root_tag ORDER BY tag_id")?;
-        let rows =
-            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
-        for row in rows {
-            let (tag_id, root_id) = row?;
-            tags.entry(tag_id)
-                .or_default()
-                .insert(u32::try_from(root_id).map_err(|_| {
-                    invalid_data("Test fixture tag root exceeds the bitmap domain")
-                })?);
-        }
+    for (tag_id, roots) in &membership.tags {
+        tags.entry(*tag_id)
+            .or_default()
+            .extend(roots.iter().copied());
     }
 
     let mut folders = BTreeMap::<i64, RoaringBitmap>::new();
     let mut folder_orders = BTreeMap::<i64, Vec<u32>>::new();
-    {
-        let mut statement = transaction.prepare(
-            "SELECT folder_id, item_id FROM folder_item
-             ORDER BY folder_id, position_rank, item_id",
-        )?;
-        let rows =
-            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
-        for row in rows {
-            let (folder_id, root_id) = row?;
-            let root_id = u32::try_from(root_id)
-                .map_err(|_| invalid_data("Test fixture folder root exceeds the bitmap domain"))?;
-            folders.entry(folder_id).or_default().insert(root_id);
-            folder_orders.entry(folder_id).or_default().push(root_id);
-        }
+    for (folder_id, roots) in &membership.folders {
+        folders
+            .entry(*folder_id)
+            .or_default()
+            .extend(roots.iter().copied());
+        folder_orders
+            .entry(*folder_id)
+            .or_default()
+            .extend(roots.iter().copied());
     }
 
     let mut groups = BTreeMap::<i64, Vec<u32>>::new();
@@ -507,20 +506,8 @@ pub(crate) fn seed_test_state(transaction: &Transaction<'_>) -> rusqlite::Result
             groups.insert(row?, Vec::new());
         }
     }
-    {
-        let mut statement = transaction.prepare(
-            "SELECT collection_id, media_item_id
-             FROM collection_member
-             ORDER BY collection_id, position_rank, media_item_id",
-        )?;
-        let rows =
-            statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
-        for row in rows {
-            let (group_id, media_id) = row?;
-            let media_id = u32::try_from(media_id)
-                .map_err(|_| invalid_data("Test fixture media ID exceeds the bitmap domain"))?;
-            groups.entry(group_id).or_default().push(media_id);
-        }
+    for (group_id, media_ids) in &membership.groups {
+        groups.insert(*group_id, media_ids.clone());
     }
 
     transaction.execute(

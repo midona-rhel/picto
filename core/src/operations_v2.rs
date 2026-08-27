@@ -1857,16 +1857,6 @@ fn remove_staged_roots_for_collection(transaction: &Transaction<'_>) -> rusqlite
              WHERE item_id IN (SELECT item_id FROM picto_selected_root)",
         ),
         (
-            "folders",
-            "DELETE FROM folder_item
-             WHERE item_id IN (SELECT item_id FROM picto_selected_root)",
-        ),
-        (
-            "tags",
-            "DELETE FROM root_tag
-             WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
-        ),
-        (
             "metadata",
             "DELETE FROM root_metadata
              WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
@@ -2997,12 +2987,6 @@ fn prepare_structural_summary_tables(transaction: &Transaction<'_>) -> rusqlite:
         "CREATE TEMP TABLE IF NOT EXISTS picto_structural_root (
              item_id INTEGER PRIMARY KEY
          ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_folder (
-             folder_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_tag (
-             tag_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
          CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_summary (
              root_item_id INTEGER PRIMARY KEY,
              lifecycle TEXT NOT NULL,
@@ -3015,57 +2999,9 @@ fn prepare_structural_summary_tables(transaction: &Transaction<'_>) -> rusqlite:
              media_count INTEGER NOT NULL,
              total_size_bytes INTEGER NOT NULL
          ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_folder (
-             root_item_id INTEGER NOT NULL,
-             folder_id INTEGER NOT NULL,
-             PRIMARY KEY (root_item_id, folder_id)
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_tag (
-             root_item_id INTEGER NOT NULL,
-             tag_id INTEGER NOT NULL,
-             PRIMARY KEY (root_item_id, tag_id)
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_folder_before (
-             folder_id INTEGER PRIMARY KEY,
-             visible_root_count INTEGER NOT NULL,
-             media_count INTEGER NOT NULL,
-             total_size_bytes INTEGER NOT NULL
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_structural_tag_before (
-             tag_id INTEGER PRIMARY KEY,
-             visible_root_count INTEGER NOT NULL,
-             assignment_count INTEGER NOT NULL
-         ) WITHOUT ROWID;
-         CREATE INDEX IF NOT EXISTS temp.picto_structural_old_folder_by_folder
-             ON picto_structural_old_folder(folder_id, root_item_id);
-         CREATE INDEX IF NOT EXISTS temp.picto_structural_old_tag_by_tag
-             ON picto_structural_old_tag(tag_id, root_item_id);
          DELETE FROM picto_structural_root;
-         DELETE FROM picto_structural_folder;
-         DELETE FROM picto_structural_tag;
          DELETE FROM picto_structural_old_summary;
-         DELETE FROM picto_structural_lifecycle_before;
-         DELETE FROM picto_structural_old_folder;
-         DELETE FROM picto_structural_old_tag;
-         DELETE FROM picto_structural_folder_before;
-         DELETE FROM picto_structural_tag_before;",
-    )
-}
-
-fn stage_structural_summary_dependencies(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-    transaction.execute_batch(
-        "INSERT INTO picto_structural_folder(folder_id)
-         SELECT DISTINCT membership.folder_id
-         FROM folder_item membership
-         JOIN picto_structural_root changed ON changed.item_id = membership.item_id
-         WHERE TRUE
-         ON CONFLICT DO NOTHING;
-         INSERT INTO picto_structural_tag(tag_id)
-         SELECT DISTINCT relation.tag_id
-         FROM root_tag relation
-         JOIN picto_structural_root changed ON changed.item_id = relation.root_item_id
-         WHERE TRUE
-         ON CONFLICT DO NOTHING;",
+         DELETE FROM picto_structural_lifecycle_before;",
     )
 }
 
@@ -3109,14 +3045,7 @@ fn begin_group_create_summary_batch(transaction: &Transaction<'_>) -> rusqlite::
              media_count INTEGER NOT NULL,
              total_size_bytes INTEGER NOT NULL
          ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_group_create_folder (
-             folder_id INTEGER PRIMARY KEY,
-             visible_root_count INTEGER NOT NULL,
-             media_count INTEGER NOT NULL,
-             total_size_bytes INTEGER NOT NULL
-         ) WITHOUT ROWID;
          DELETE FROM picto_group_create_root;
-         DELETE FROM picto_group_create_folder;
 
          INSERT INTO picto_group_create_root (
              lifecycle, root_count, media_count, total_size_bytes
@@ -3126,21 +3055,7 @@ fn begin_group_create_summary_batch(transaction: &Transaction<'_>) -> rusqlite::
          FROM root_summary summary
          JOIN picto_selected_root selected
            ON selected.item_id = summary.root_item_id
-         GROUP BY summary.lifecycle;
-
-         INSERT INTO picto_group_create_folder (
-             folder_id, visible_root_count, media_count, total_size_bytes
-         )
-         SELECT membership.folder_id,
-                SUM(summary.lifecycle = 'active'),
-                COALESCE(SUM(CASE WHEN summary.lifecycle = 'active'
-                                  THEN summary.media_count ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN summary.lifecycle = 'active'
-                                  THEN summary.total_size_bytes ELSE 0 END), 0)
-         FROM folder_item membership
-         JOIN picto_selected_root selected ON selected.item_id = membership.item_id
-         JOIN root_summary summary ON summary.root_item_id = membership.item_id
-         GROUP BY membership.folder_id;",
+         GROUP BY summary.lifecycle;",
     )?;
     suppress_structural_summaries(transaction)
 }
@@ -3171,23 +3086,6 @@ fn finish_group_create_summary_batch(
                  - COALESCE((SELECT total_size_bytes FROM picto_group_create_root old
                              WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
                  + CASE WHEN lifecycle = ?1 THEN ?3 ELSE 0 END",
-        params![lifecycle, media_count, total_size_bytes],
-    )?;
-    transaction.execute(
-        "UPDATE folder_summary
-         SET visible_root_count = visible_root_count
-                 - (SELECT old.visible_root_count FROM picto_group_create_folder old
-                    WHERE old.folder_id = folder_summary.folder_id)
-                 + CASE WHEN ?1 = 'active' THEN 1 ELSE 0 END,
-             media_count = media_count
-                 - (SELECT old.media_count FROM picto_group_create_folder old
-                    WHERE old.folder_id = folder_summary.folder_id)
-                 + CASE WHEN ?1 = 'active' THEN ?2 ELSE 0 END,
-             total_size_bytes = total_size_bytes
-                 - (SELECT old.total_size_bytes FROM picto_group_create_folder old
-                    WHERE old.folder_id = folder_summary.folder_id)
-                 + CASE WHEN ?1 = 'active' THEN ?3 ELSE 0 END
-         WHERE folder_id IN (SELECT folder_id FROM picto_group_create_folder)",
         params![lifecycle, media_count, total_size_bytes],
     )?;
     transaction.execute(
@@ -3371,28 +3269,7 @@ fn capture_structural_summary_baseline(transaction: &Transaction<'_>) -> rusqlit
              lifecycle, root_count, media_count, total_size_bytes
          )
          SELECT lifecycle, root_count, media_count, total_size_bytes
-         FROM lifecycle_summary;
-         INSERT INTO picto_structural_old_folder(root_item_id, folder_id)
-         SELECT membership.item_id, membership.folder_id
-         FROM folder_item membership
-         JOIN picto_structural_root changed ON changed.item_id = membership.item_id;
-         INSERT INTO picto_structural_old_tag(root_item_id, tag_id)
-         SELECT relation.root_item_id, relation.tag_id
-         FROM root_tag relation
-         JOIN picto_structural_root changed ON changed.item_id = relation.root_item_id;
-         INSERT INTO picto_structural_folder_before (
-             folder_id, visible_root_count, media_count, total_size_bytes
-         )
-         SELECT summary.folder_id, summary.visible_root_count,
-                summary.media_count, summary.total_size_bytes
-         FROM folder_summary summary
-         JOIN picto_structural_folder changed ON changed.folder_id = summary.folder_id;
-         INSERT INTO picto_structural_tag_before (
-             tag_id, visible_root_count, assignment_count
-         )
-         SELECT summary.tag_id, summary.visible_root_count, summary.assignment_count
-         FROM tag_summary summary
-         JOIN picto_structural_tag changed ON changed.tag_id = summary.tag_id;",
+         FROM lifecycle_summary;",
     )
 }
 
@@ -3402,7 +3279,6 @@ fn begin_structural_summary_batch(
 ) -> rusqlite::Result<()> {
     prepare_structural_summary_tables(transaction)?;
     stage_structural_summary_roots(transaction, root_ids)?;
-    stage_structural_summary_dependencies(transaction)?;
     capture_structural_summary_baseline(transaction)?;
     suppress_structural_summaries(transaction)
 }
@@ -3417,7 +3293,6 @@ fn begin_structural_summary_batch_from_staged_roots(
          WHERE TRUE
          ON CONFLICT DO NOTHING;",
     )?;
-    stage_structural_summary_dependencies(transaction)?;
     capture_structural_summary_baseline(transaction)?;
     suppress_structural_summaries(transaction)
 }
@@ -3437,7 +3312,6 @@ fn finish_structural_summary_batch_from_staged_roots(
 }
 
 fn finish_structural_summary_batch_inner(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
-    stage_structural_summary_dependencies(transaction)?;
     transaction.execute(
         "DELETE FROM root_summary
          WHERE root_item_id IN (SELECT item_id FROM picto_structural_root)
@@ -3447,6 +3321,9 @@ fn finish_structural_summary_batch_inner(transaction: &Transaction<'_>) -> rusql
            )",
         [],
     )?;
+    // Media roots rebuild from their own asset facts. Collection root
+    // summaries are owned by the group operations themselves, which upsert
+    // exact member aggregates via `upsert_group_root_summary`.
     transaction.execute(
         "INSERT INTO root_summary (
              root_item_id, lifecycle, kind, cover_media_item_id, media_count,
@@ -3456,65 +3333,22 @@ fn finish_structural_summary_batch_inner(transaction: &Transaction<'_>) -> rusql
          SELECT item.item_id,
                 root.lifecycle,
                 item.kind,
-                COALESCE(
-                    item.cover_media_item_id,
-                    CASE WHEN item.kind = 'media' THEN item.item_id END,
-                    (SELECT member.media_item_id
-                     FROM collection_member member
-                     WHERE member.collection_id = item.item_id
-                     ORDER BY member.position_rank, member.media_item_id
-                     LIMIT 1)
-                ),
-                CASE WHEN item.kind = 'media' THEN 1 ELSE (
-                    SELECT COUNT(*) FROM collection_member member
-                    WHERE member.collection_id = item.item_id
-                ) END,
-                CASE WHEN item.kind = 'media' THEN COALESCE(file.size_bytes, 0)
-                     ELSE COALESCE((
-                         SELECT SUM(member_file.size_bytes)
-                         FROM collection_member member
-                         JOIN media_asset member_asset
-                           ON member_asset.item_id = member.media_item_id
-                         JOIN media_file member_file
-                           ON member_file.file_id = member_asset.file_id
-                         WHERE member.collection_id = item.item_id
-                     ), 0) END,
-                CASE WHEN item.kind = 'media' THEN asset.imported_at ELSE (
-                    SELECT MAX(member_asset.imported_at)
-                    FROM collection_member member
-                    JOIN media_asset member_asset
-                      ON member_asset.item_id = member.media_item_id
-                    WHERE member.collection_id = item.item_id
-                ) END,
-                CASE WHEN item.kind = 'media' THEN asset.captured_at ELSE (
-                    SELECT MAX(member_asset.captured_at)
-                    FROM collection_member member
-                    JOIN media_asset member_asset
-                      ON member_asset.item_id = member.media_item_id
-                    WHERE member.collection_id = item.item_id
-                ) END,
+                COALESCE(item.cover_media_item_id, item.item_id),
+                1,
+                COALESCE(file.size_bytes, 0),
+                asset.imported_at,
+                asset.captured_at,
                 metadata.rating,
                 COALESCE(metadata.name, asset.name),
                 COALESCE(metadata.updated_at, item.updated_at)
          FROM picto_structural_root changed
          JOIN library_root root ON root.item_id = changed.item_id
-         JOIN library_item item ON item.item_id = root.item_id
-         LEFT JOIN media_asset asset ON asset.item_id = COALESCE(
-             item.cover_media_item_id,
-             CASE WHEN item.kind = 'media' THEN item.item_id END,
-             (SELECT member.media_item_id
-              FROM collection_member member
-              WHERE member.collection_id = item.item_id
-              ORDER BY member.position_rank, member.media_item_id
-              LIMIT 1)
-         )
+         JOIN library_item item
+           ON item.item_id = root.item_id AND item.kind = 'media'
+         LEFT JOIN media_asset asset
+           ON asset.item_id = COALESCE(item.cover_media_item_id, item.item_id)
          LEFT JOIN media_file file ON file.file_id = asset.file_id
          LEFT JOIN root_metadata metadata ON metadata.root_item_id = item.item_id
-         WHERE item.kind = 'media'
-            OR EXISTS (
-                SELECT 1 FROM collection_member member
-                WHERE member.collection_id = item.item_id
-            )
          ON CONFLICT(root_item_id) DO UPDATE SET
              lifecycle = excluded.lifecycle,
              kind = excluded.kind,
@@ -3568,106 +3402,6 @@ fn finish_structural_summary_batch_inner(transaction: &Transaction<'_>) -> rusql
                          JOIN picto_structural_root changed
                            ON changed.item_id = summary.root_item_id
                          WHERE summary.lifecycle = lifecycle_summary.lifecycle), 0);
-
-         INSERT INTO folder_summary (
-             folder_id, visible_root_count, media_count, total_size_bytes
-         )
-         SELECT folder.folder_id,
-                COALESCE(baseline.visible_root_count, 0)
-                    - (SELECT COUNT(*)
-                       FROM picto_structural_old_folder old_membership
-                       JOIN picto_structural_old_summary old_summary
-                         ON old_summary.root_item_id = old_membership.root_item_id
-                       WHERE old_membership.folder_id = folder.folder_id
-                         AND old_summary.lifecycle = 'active')
-                    + (SELECT COUNT(*)
-                       FROM folder_item membership
-                       JOIN picto_structural_root changed_root
-                         ON changed_root.item_id = membership.item_id
-                       JOIN root_summary summary
-                         ON summary.root_item_id = membership.item_id
-                       WHERE membership.folder_id = folder.folder_id
-                         AND summary.lifecycle = 'active'),
-                COALESCE(baseline.media_count, 0)
-                    - COALESCE((
-                        SELECT SUM(old_summary.media_count)
-                        FROM picto_structural_old_folder old_membership
-                        JOIN picto_structural_old_summary old_summary
-                          ON old_summary.root_item_id = old_membership.root_item_id
-                        WHERE old_membership.folder_id = folder.folder_id
-                          AND old_summary.lifecycle = 'active'
-                    ), 0)
-                    + COALESCE((
-                        SELECT SUM(summary.media_count)
-                        FROM folder_item membership
-                        JOIN picto_structural_root changed_root
-                          ON changed_root.item_id = membership.item_id
-                        JOIN root_summary summary
-                          ON summary.root_item_id = membership.item_id
-                        WHERE membership.folder_id = folder.folder_id
-                          AND summary.lifecycle = 'active'
-                    ), 0),
-                COALESCE(baseline.total_size_bytes, 0)
-                    - COALESCE((
-                        SELECT SUM(old_summary.total_size_bytes)
-                        FROM picto_structural_old_folder old_membership
-                        JOIN picto_structural_old_summary old_summary
-                          ON old_summary.root_item_id = old_membership.root_item_id
-                        WHERE old_membership.folder_id = folder.folder_id
-                          AND old_summary.lifecycle = 'active'
-                    ), 0)
-                    + COALESCE((
-                        SELECT SUM(summary.total_size_bytes)
-                        FROM folder_item membership
-                        JOIN picto_structural_root changed_root
-                          ON changed_root.item_id = membership.item_id
-                        JOIN root_summary summary
-                          ON summary.root_item_id = membership.item_id
-                        WHERE membership.folder_id = folder.folder_id
-                          AND summary.lifecycle = 'active'
-                    ), 0)
-         FROM picto_structural_folder changed
-         JOIN folder ON folder.folder_id = changed.folder_id
-         LEFT JOIN picto_structural_folder_before baseline
-           ON baseline.folder_id = folder.folder_id
-         ON CONFLICT(folder_id) DO UPDATE SET
-             visible_root_count = excluded.visible_root_count,
-             media_count = excluded.media_count,
-             total_size_bytes = excluded.total_size_bytes;
-
-         INSERT INTO tag_summary (
-             tag_id, visible_root_count, assignment_count
-         )
-         SELECT tag.tag_id,
-                COALESCE(baseline.visible_root_count, 0)
-                    - (SELECT COUNT(*)
-                       FROM picto_structural_old_tag old_relation
-                       JOIN picto_structural_old_summary old_summary
-                         ON old_summary.root_item_id = old_relation.root_item_id
-                       WHERE old_relation.tag_id = tag.tag_id
-                         AND old_summary.lifecycle = 'active')
-                    + (SELECT COUNT(*)
-                       FROM root_tag relation
-                       JOIN picto_structural_root changed_root
-                         ON changed_root.item_id = relation.root_item_id
-                       JOIN root_summary summary
-                         ON summary.root_item_id = relation.root_item_id
-                       WHERE relation.tag_id = tag.tag_id
-                         AND summary.lifecycle = 'active'),
-                COALESCE(baseline.assignment_count, 0)
-                    - (SELECT COUNT(*) FROM picto_structural_old_tag old_relation
-                       WHERE old_relation.tag_id = tag.tag_id)
-                    + (SELECT COUNT(*)
-                       FROM root_tag relation
-                       JOIN picto_structural_root changed_root
-                         ON changed_root.item_id = relation.root_item_id
-                       WHERE relation.tag_id = tag.tag_id)
-         FROM picto_structural_tag changed
-         JOIN tag ON tag.tag_id = changed.tag_id
-         LEFT JOIN picto_structural_tag_before baseline ON baseline.tag_id = tag.tag_id
-         ON CONFLICT(tag_id) DO UPDATE SET
-             visible_root_count = excluded.visible_root_count,
-             assignment_count = excluded.assignment_count;
 
          UPDATE projection_write_control
          SET suppress_root_summary = 0,
@@ -3879,13 +3613,18 @@ mod tests {
                         "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
                         [item_id],
                     )?;
-                    transaction.execute(
-                        "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                        params![folder_id, item_id],
-                    )?;
                     ids.push(ItemId(item_id));
                 }
-                crate::canonical_bitmap::seed_test_state(transaction)?;
+                crate::canonical_bitmap::seed_test_state(
+                    transaction,
+                    &crate::canonical_bitmap::TestMembership {
+                        folders: vec![(
+                            folder_id,
+                            ids.iter().map(|item| item.0 as u32).collect(),
+                        )],
+                        ..Default::default()
+                    },
+                )?;
                 Ok(ids)
             })
             .unwrap();
@@ -4790,7 +4529,7 @@ mod tests {
                      VALUES (?1, 'active')",
                     [collection_id],
                 )?;
-                crate::canonical_bitmap::seed_test_state(transaction)?;
+                crate::canonical_bitmap::seed_test_state(transaction, &Default::default())?;
                 Ok(collection_id)
             })
             .unwrap();
