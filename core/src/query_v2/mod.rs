@@ -277,16 +277,6 @@ pub struct LibraryStatistics {
     pub revision: u64,
 }
 
-/// Resolve one canonical page from the replacement store.
-pub fn query(
-    store: &Store,
-    item_query: &ItemQuery,
-    page: ItemPageRequest,
-) -> Result<ItemPage, String> {
-    let page = page.normalized();
-    store.read_snapshot(|connection| resolve_connection(connection, item_query, page))
-}
-
 /// Resolve a grid page against the immutable projection captured with the
 /// same SQLite revision. Structured filters use the shared bitmap compiler;
 /// SQL-only predicates retain the indexed SQL path.
@@ -299,58 +289,62 @@ pub fn query_for_application(
     application.store().read_snapshot_captured(
         || application.projections().selection_snapshot(),
         |connection, revision, projection| {
-            if let Some(roots) =
+            let roots =
                 crate::predicate_v2::compile_item_query(connection, &projection, item_query)
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())?;
+            // Folder order only exists inside a folder; elsewhere the sort
+            // falls back to the default imported ordering.
+            let fallback_query;
+            let item_query = if matches!(
+                item_query.sort.field,
+                crate::app::ItemSortField::FolderOrder
+            ) && !matches!(item_query.scope, ItemScope::Folder { .. })
             {
+                fallback_query = ItemQuery {
+                    scope: item_query.scope.clone(),
+                    filters: item_query.filters.clone(),
+                    sort: crate::app::ItemSort {
+                        field: crate::app::ItemSortField::ImportedAt,
+                        ..item_query.sort.clone()
+                    },
+                };
+                &fallback_query
+            } else {
+                item_query
+            };
+            if let ItemScope::Folder { folder_id } = item_query.scope {
                 if matches!(
                     item_query.sort.field,
                     crate::app::ItemSortField::FolderOrder
                 ) {
-                    if let ItemScope::Folder { folder_id } = item_query.scope {
-                        return resolve_projected_folder_order_page(
-                            connection,
-                            item_query,
-                            page,
-                            revision,
-                            &projection,
-                            &roots,
-                            folder_id,
-                        )
-                        .map_err(|error| error.to_string());
-                    }
-                }
-                if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
-                    return resolve_projected_imported_page(
+                    return resolve_projected_folder_order_page(
                         connection,
                         item_query,
                         page,
                         revision,
                         &projection,
                         &roots,
-                    )
-                    .map_err(|error| error.to_string());
-                }
-                if matches!(
-                    item_query.sort.field,
-                    crate::app::ItemSortField::CapturedAt
-                        | crate::app::ItemSortField::Name
-                        | crate::app::ItemSortField::Rating
-                        | crate::app::ItemSortField::Size
-                        | crate::app::ItemSortField::Random
-                ) {
-                    return resolve_projected_sorted_page(
-                        connection,
-                        item_query,
-                        page,
-                        revision,
-                        &projection,
-                        &roots,
+                        folder_id,
                     )
                     .map_err(|error| error.to_string());
                 }
             }
-            resolve_connection(connection, item_query, page).map_err(|error| error.to_string())
+            if matches!(item_query.scope, ItemScope::RecentlyViewed) {
+                return resolve_projected_sorted_page(
+                    connection, item_query, page, revision, &projection, &roots,
+                )
+                .map_err(|error| error.to_string());
+            }
+            if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
+                return resolve_projected_imported_page(
+                    connection, item_query, page, revision, &projection, &roots,
+                )
+                .map_err(|error| error.to_string());
+            }
+            resolve_projected_sorted_page(
+                connection, item_query, page, revision, &projection, &roots,
+            )
+            .map_err(|error| error.to_string())
         },
     )
 }
@@ -365,10 +359,6 @@ pub fn details(application: &Application, item_id: ItemId) -> Result<ItemDetails
     )
 }
 
-pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
-    store.read_snapshot(|connection| selection_summary_connection(connection, target, None, None))
-}
-
 pub fn selection_summary_for_application(
     application: &Application,
     target: &ItemTarget,
@@ -380,25 +370,21 @@ pub fn selection_summary_for_application(
                 ItemTarget::Query {
                     query,
                     excluded_item_ids,
-                } => crate::predicate_v2::compile_item_query(connection, &projection, query)
-                    .map_err(|error| error.to_string())?
-                    .map(|mut roots| {
-                        for item_id in excluded_item_ids {
-                            if let Ok(item_id) = u32::try_from(item_id.0) {
-                                roots.remove(item_id);
-                            }
+                } => {
+                    let mut roots =
+                        crate::predicate_v2::compile_item_query(connection, &projection, query)
+                            .map_err(|error| error.to_string())?;
+                    for item_id in excluded_item_ids {
+                        if let Ok(item_id) = u32::try_from(item_id.0) {
+                            roots.remove(item_id);
                         }
-                        roots
-                    }),
+                    }
+                    Some(roots)
+                }
                 ItemTarget::Explicit { .. } | ItemTarget::Range { .. } => None,
             };
-            selection_summary_connection(
-                connection,
-                target,
-                Some(&projection),
-                preselected.as_ref(),
-            )
-            .map_err(|error| error.to_string())
+            selection_summary_connection(connection, target, &projection, preselected.as_ref())
+                .map_err(|error| error.to_string())
         },
     )
 }
@@ -406,15 +392,16 @@ pub fn selection_summary_for_application(
 fn selection_summary_connection(
     connection: &Connection,
     target: &ItemTarget,
-    projection: Option<&ProjectionSelectionSnapshot>,
+    projection: &ProjectionSelectionSnapshot,
     preselected: Option<&roaring::RoaringBitmap>,
 ) -> rusqlite::Result<SelectionSummary> {
     let operation_started = std::time::Instant::now();
     let mut stage_started = operation_started;
-    let selection = MaterializedSelection::new(connection, target, preselected)?;
+    let selection = MaterializedSelection::new(connection, projection, target, preselected)?;
     trace_selection_stage("materialize", stage_started);
     stage_started = std::time::Instant::now();
-    let selected_roots = projection.map(|_| selection.bitmap()).transpose()?;
+    let selected_roots = selection.bitmap()?;
+    let aggregate = projection.numeric_aggregates(&selected_roots);
     let (
         selected_count,
         selected_active_count,
@@ -423,44 +410,15 @@ fn selection_summary_connection(
         min_rating,
         max_rating,
         rated_count,
-    ) = if let (Some(projection), Some(roots)) = (projection, selected_roots.as_ref()) {
-        let aggregate = projection.numeric_aggregates(roots);
-        (
-            i64_from_u64(aggregate.selected_root_count)?,
-            i64_from_u64(aggregate.active_root_count)?,
-            i64_from_u128(aggregate.total_size_bytes.sum)?,
-            i64_from_u128(aggregate.media_count.sum)?,
-            aggregate.rating_min.map(i64::from),
-            aggregate.rating_max.map(i64::from),
-            i64_from_u64(aggregate.rating.count)?,
-        )
-    } else {
-        connection
-            .prepare_cached(
-                "SELECT COUNT(*),
-                            COALESCE(SUM(summary.lifecycle = 'active'), 0),
-                            COALESCE(SUM(summary.total_size_bytes), 0),
-                            COALESCE(SUM(summary.media_count), 0),
-                            MIN(metadata.rating),
-                            MAX(metadata.rating),
-                            COUNT(metadata.rating)
-                     FROM picto_selected_root selected
-                     JOIN root_summary summary ON summary.root_item_id = selected.item_id
-                     LEFT JOIN root_metadata metadata
-                       ON metadata.root_item_id = selected.item_id",
-            )?
-            .query_row([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                ))
-            })?
-    };
+    ) = (
+        i64_from_u64(aggregate.selected_root_count)?,
+        i64_from_u64(aggregate.active_root_count)?,
+        i64_from_u128(aggregate.total_size_bytes.sum)?,
+        i64_from_u128(aggregate.media_count.sum)?,
+        aggregate.rating_min.map(i64::from),
+        aggregate.rating_max.map(i64::from),
+        i64_from_u64(aggregate.rating.count)?,
+    );
     trace_selection_stage("scalar_aggregates", stage_started);
     stage_started = std::time::Instant::now();
 
@@ -475,12 +433,7 @@ fn selection_summary_connection(
             .then_some(min_rating)
             .flatten(),
     };
-    let all_media_are_images =
-        if let (Some(projection), Some(roots)) = (projection, selected_roots.as_ref()) {
-            projection.all_media_are_images(roots)
-        } else {
-            selection_all_media_are_images(connection, media_count)?
-        };
+    let all_media_are_images = projection.all_media_are_images(&selected_roots);
     trace_selection_stage("media_compatibility", stage_started);
     stage_started = std::time::Instant::now();
     let active_count: i64 = connection.query_row(
@@ -490,25 +443,15 @@ fn selection_summary_connection(
     )?;
     let full_active_library =
         selected_active_count == selected_count && selected_count == active_count;
-    let (shared_tags, top_tags) =
-        if !full_active_library && projection.is_some() && selected_roots.is_some() {
-            selection_tag_counts_projected(
-                connection,
-                projection.unwrap(),
-                selected_roots.as_ref().unwrap(),
-                selected_count,
-            )?
-        } else {
-            selection_tag_counts(connection, selected_count, selected_active_count)?
-        };
+    let (shared_tags, top_tags) = if full_active_library {
+        selection_tag_counts_full_library(connection, selected_count)?
+    } else {
+        selection_tag_counts_projected(connection, projection, &selected_roots, selected_count)?
+    };
     trace_selection_stage("tag_counts", stage_started);
     stage_started = std::time::Instant::now();
     let shared_folders =
-        if let (Some(projection), Some(roots)) = (projection, selected_roots.as_ref()) {
-            selection_shared_folders_projected(connection, projection, roots)?
-        } else {
-            selection_shared_folders(connection, selected_count)?
-        };
+        selection_shared_folders_projected(connection, projection, &selected_roots)?;
     trace_selection_stage("shared_folders", stage_started);
     stage_started = std::time::Instant::now();
     let selected_collection_candidates = selection_collection_candidates(connection)?;
@@ -665,6 +608,7 @@ struct MaterializedSelection<'connection> {
 impl<'connection> MaterializedSelection<'connection> {
     fn new(
         connection: &'connection Connection,
+        projection: &ProjectionSelectionSnapshot,
         target: &ItemTarget,
         preselected: Option<&roaring::RoaringBitmap>,
     ) -> rusqlite::Result<Self> {
@@ -685,7 +629,7 @@ impl<'connection> MaterializedSelection<'connection> {
                     [ids],
                 )?;
             } else {
-                let selection = target_selection_sql(connection, target)?;
+                let selection = target_selection_sql(connection, projection, target)?;
                 let sql = format!(
                     "{}
                      INSERT INTO picto_selected_root(item_id)
@@ -749,73 +693,22 @@ impl Drop for MaterializedSelection<'_> {
     }
 }
 
-fn selection_all_media_are_images(
-    connection: &Connection,
-    media_count: i64,
-) -> rusqlite::Result<bool> {
-    if media_count == 0 {
-        return Ok(false);
-    }
-    connection.query_row(
-        "SELECT NOT EXISTS (
-             SELECT 1
-             FROM (
-                 SELECT selected.item_id AS media_item_id
-                 FROM picto_selected_root selected
-                 JOIN root_summary summary ON summary.root_item_id = selected.item_id
-                 WHERE summary.kind = 'media'
-                 UNION ALL
-                 SELECT member.media_item_id
-                 FROM picto_selected_root selected
-                 JOIN collection_member member ON member.collection_id = selected.item_id
-             ) selected_media
-             JOIN media_asset asset ON asset.item_id = selected_media.media_item_id
-             JOIN media_file file ON file.file_id = asset.file_id
-             WHERE file.mime_type NOT LIKE 'image/%'
-             LIMIT 1
-         )",
-        [],
-        |row| row.get(0),
-    )
-}
-
-fn selection_tag_counts(
+fn selection_tag_counts_full_library(
     connection: &Connection,
     selected_count: i64,
-    selected_active_count: i64,
 ) -> rusqlite::Result<(Vec<SelectionTagCount>, Vec<SelectionTagCount>)> {
     if selected_count == 0 {
         return Ok((Vec::new(), Vec::new()));
     }
-
-    let active_count: i64 = connection.query_row(
-        "SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'active'",
-        [],
-        |row| row.get(0),
-    )?;
-    let full_active_library =
-        selected_active_count == selected_count && selected_count == active_count;
-
-    let sql = if full_active_library {
+    let mut statement = connection.prepare_cached(
         "SELECT CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
                      ELSE tag.namespace || ':' || tag.subtag END,
                 summary.visible_root_count
          FROM tag_summary summary
          JOIN tag ON tag.tag_id = summary.tag_id
          WHERE summary.visible_root_count > 0
-         ORDER BY summary.visible_root_count DESC, tag.namespace, tag.subtag"
-    } else {
-        "SELECT CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
-                     ELSE tag.namespace || ':' || tag.subtag END,
-                COUNT(*) AS root_count
-         FROM picto_selected_root selected
-         CROSS JOIN root_tag selected_tag
-         JOIN tag ON tag.tag_id = selected_tag.tag_id
-         WHERE selected_tag.root_item_id = selected.item_id
-         GROUP BY selected_tag.tag_id, tag.namespace, tag.subtag
-         ORDER BY root_count DESC, tag.namespace, tag.subtag"
-    };
-    let mut statement = connection.prepare_cached(sql)?;
+         ORDER BY summary.visible_root_count DESC, tag.namespace, tag.subtag",
+    )?;
     let rows = statement.query_map([], |row| {
         Ok(SelectionTagCount {
             tag: row.get(0)?,
@@ -893,38 +786,6 @@ fn selection_tag_counts_projected(
     Ok((shared, rows))
 }
 
-fn selection_shared_folders(
-    connection: &Connection,
-    selected_count: i64,
-) -> rusqlite::Result<Vec<SelectionFolderInfo>> {
-    if selected_count == 0 {
-        return Ok(Vec::new());
-    }
-    let mut statement = connection.prepare_cached(
-        "WITH first_selected(item_id) AS (
-             SELECT item_id FROM picto_selected_root ORDER BY item_id LIMIT 1
-         )
-         SELECT folder.folder_id, folder.name
-         FROM first_selected first
-         JOIN folder_item candidate ON candidate.item_id = first.item_id
-         JOIN folder ON folder.folder_id = candidate.folder_id
-         JOIN folder_item membership ON membership.folder_id = candidate.folder_id
-         JOIN picto_selected_root selected ON selected.item_id = membership.item_id
-         GROUP BY folder.folder_id, folder.name
-         HAVING COUNT(*) = ?1
-         ORDER BY folder.folder_id",
-    )?;
-    let folders = statement
-        .query_map([selected_count], |row| {
-            Ok(SelectionFolderInfo {
-                folder_id: row.get(0)?,
-                name: row.get(1)?,
-            })
-        })?
-        .collect();
-    folders
-}
-
 fn selection_shared_folders_projected(
     connection: &Connection,
     projection: &crate::projection_v2::ProjectionSelectionSnapshot,
@@ -994,8 +855,24 @@ impl TargetSelectionSql {
     }
 }
 
+pub(crate) fn target_selection_sql_bitmap_roots(
+    connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
+    query: &ItemQuery,
+    excluded_item_ids: &[ItemId],
+) -> rusqlite::Result<roaring::RoaringBitmap> {
+    let mut roots = crate::predicate_v2::compile_item_query(connection, projection, query)?;
+    for item_id in excluded_item_ids {
+        if let Ok(item_id) = u32::try_from(item_id.0) {
+            roots.remove(item_id);
+        }
+    }
+    Ok(roots)
+}
+
 pub(crate) fn target_selection_sql(
     connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
     target: &ItemTarget,
 ) -> rusqlite::Result<TargetSelectionSql> {
     match target {
@@ -1029,15 +906,6 @@ pub(crate) fn target_selection_sql(
                         SELECT lr.item_id
                         FROM json_each(?1) target
                         JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
-                    ),
-                    selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                        SELECT sr.item_id, sr.item_id
-                        FROM selected_roots sr
-                        JOIN media_asset ma ON ma.item_id = sr.item_id
-                        UNION ALL
-                        SELECT sr.item_id, cm.media_item_id
-                        FROM selected_roots sr
-                        JOIN collection_member cm ON cm.collection_id = sr.item_id
                     )"
                 .to_string(),
                 arguments: vec![Box::new(encoded)],
@@ -1047,249 +915,29 @@ pub(crate) fn target_selection_sql(
             query,
             excluded_item_ids,
         } => {
-            if let Some(selection) = summary_range_query_target_sql(query, excluded_item_ids)? {
-                return Ok(selection);
-            }
-            if query.filters == ItemFilters::default() {
-                let mut arguments: Vec<Box<dyn ToSql>> = Vec::new();
-                let roots_sql = match &query.scope {
-                    ItemScope::All => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         WHERE summary.lifecycle = 'active'"
-                        .to_string(),
-                    ItemScope::Inbox => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         WHERE summary.lifecycle = 'inbox'"
-                        .to_string(),
-                    ItemScope::Trash => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         WHERE summary.lifecycle = 'trash'"
-                        .to_string(),
-                    ItemScope::RecentlyViewed => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         JOIN media_view viewed ON viewed.item_id = summary.root_item_id
-                         WHERE summary.lifecycle = 'active'"
-                        .to_string(),
-                    ItemScope::Untagged => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         WHERE summary.lifecycle = 'active'
-                           AND NOT EXISTS (
-                               SELECT 1 FROM root_tag tags
-                               WHERE tags.root_item_id = summary.root_item_id
-                           )"
-                    .to_string(),
-                    ItemScope::Uncategorized => "SELECT summary.root_item_id AS item_id
-                         FROM root_summary summary
-                         WHERE summary.lifecycle = 'active'
-                           AND NOT EXISTS (
-                               SELECT 1 FROM folder_item folders
-                               WHERE folders.item_id = summary.root_item_id
-                           )"
-                    .to_string(),
-                    ItemScope::Folder { folder_id } => {
-                        arguments.push(Box::new(*folder_id));
-                        "SELECT folders.item_id
-                         FROM folder_item folders
-                         JOIN root_summary summary ON summary.root_item_id = folders.item_id
-                         WHERE folders.folder_id = ?1 AND summary.lifecycle = 'active'"
-                            .to_string()
-                    }
-                    ItemScope::SmartFolder { smart_folder_id } => {
-                        arguments.push(Box::new(*smart_folder_id));
-                        "SELECT membership.root_item_id AS item_id
-                         FROM smart_folder_generation generation
-                         JOIN smart_folder_membership membership
-                           ON membership.generation_id = generation.generation_id
-                         JOIN root_summary summary
-                           ON summary.root_item_id = membership.root_item_id
-                         WHERE generation.smart_folder_id = ?1
-                           AND generation.state = 'active'
-                           AND summary.lifecycle = 'active'"
-                            .to_string()
-                    }
-                };
-                let exclusion = if excluded_item_ids.is_empty() {
-                    String::new()
-                } else {
-                    let encoded = serde_json::to_string(
-                        &excluded_item_ids
-                            .iter()
-                            .map(|item_id| item_id.0)
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(|error| {
-                        invalid_target(format!("Could not encode excluded item IDs: {error}"))
-                    })?;
-                    let index = push_argument(&mut arguments, encoded);
-                    format!(
-                        "WHERE NOT EXISTS (
-                             SELECT 1 FROM json_each(?{index}) excluded
-                             WHERE CAST(excluded.value AS INTEGER) = candidates.item_id
-                         )"
-                    )
-                };
-                return Ok(TargetSelectionSql {
-                    with_clause: format!(
-                        "WITH
-                         selected_roots(item_id) AS MATERIALIZED (
-                             SELECT candidates.item_id
-                             FROM ({roots_sql}) candidates
-                             {exclusion}
-                         ),
-                         selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                             SELECT selected.item_id, selected.item_id
-                             FROM selected_roots selected
-                             JOIN media_asset asset ON asset.item_id = selected.item_id
-                             UNION ALL
-                             SELECT selected.item_id, member.media_item_id
-                             FROM selected_roots selected
-                             JOIN collection_member member
-                               ON member.collection_id = selected.item_id
-                         )"
-                    ),
-                    arguments,
-                });
-            }
-
-            let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(match &query.scope {
-                ItemScope::Folder { folder_id } => *folder_id,
-                _ => -1,
-            })];
-            let mut predicates = vec![scope_predicate(connection, &query.scope, &mut arguments)?];
-            apply_filters(connection, &query.filters, &mut predicates, &mut arguments)?;
-            if !excluded_item_ids.is_empty() {
-                let encoded = serde_json::to_string(
-                    &excluded_item_ids
-                        .iter()
-                        .map(|item_id| item_id.0)
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|error| {
-                    invalid_target(format!("Could not encode excluded item IDs: {error}"))
-                })?;
-                let index = push_argument(&mut arguments, encoded);
-                predicates.push(format!(
-                    "NOT EXISTS (
-                        SELECT 1 FROM json_each(?{index}) excluded
-                        WHERE CAST(excluded.value AS INTEGER) = ri.item_id
-                    )"
-                ));
-            }
+            let roots =
+                target_selection_sql_bitmap_roots(connection, projection, query, excluded_item_ids)?;
+            let encoded = bitmap_json(&roots);
             Ok(TargetSelectionSql {
-                with_clause: format!(
-                    "WITH
-                     root_items AS NOT MATERIALIZED (
-                         SELECT summary.root_item_id AS item_id,
-                                summary.lifecycle, li.kind,
-                                li.created_at, li.updated_at,
-                                fi.position_rank AS folder_position, mv.viewed_at
-                         FROM root_summary summary
-                         JOIN library_item li ON li.item_id = summary.root_item_id
-                         LEFT JOIN folder_item fi
-                           ON fi.item_id = summary.root_item_id AND fi.folder_id = ?1
-                         LEFT JOIN media_view mv ON mv.item_id = summary.root_item_id
-                     ),
-                     root_media AS NOT MATERIALIZED (
-                         SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
-                         FROM root_items ri WHERE ri.kind = 'media'
-                         UNION ALL
-                         SELECT ri.item_id, cm.media_item_id
-                         FROM root_items ri
-                         JOIN collection_member cm ON cm.collection_id = ri.item_id
-                         WHERE ri.kind = 'collection'
-                     ),
-                     selected_roots(item_id) AS MATERIALIZED (
-                         SELECT ri.item_id FROM root_items ri WHERE {}
-                     ),
-                     selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                         SELECT rm.root_item_id, rm.media_item_id
-                         FROM root_media rm
-                         JOIN selected_roots sr ON sr.item_id = rm.root_item_id
-                     )",
-                    predicates.join(" AND ")
-                ),
-                arguments,
+                with_clause: "WITH
+                    selected_roots(item_id) AS MATERIALIZED (
+                        SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                    )"
+                .to_string(),
+                arguments: vec![Box::new(encoded)],
             })
         }
         ItemTarget::Range {
             query,
             anchor_item_id,
             focus_item_id,
-        } => range_target_selection_sql(connection, query, *anchor_item_id, *focus_item_id),
+        } => range_target_selection_sql(connection, projection, query, *anchor_item_id, *focus_item_id),
     }
-}
-
-fn summary_range_query_target_sql(
-    query: &ItemQuery,
-    excluded_item_ids: &[ItemId],
-) -> rusqlite::Result<Option<TargetSelectionSql>> {
-    let lifecycle = match query.scope {
-        ItemScope::All => "active",
-        ItemScope::Inbox => "inbox",
-        ItemScope::Trash => "trash",
-        _ => return Ok(None),
-    };
-    let mut remaining = query.filters.clone();
-    remaining.min_size_bytes = None;
-    remaining.max_size_bytes = None;
-    if remaining != ItemFilters::default()
-        || (query.filters.min_size_bytes.is_none() && query.filters.max_size_bytes.is_none())
-    {
-        return Ok(None);
-    }
-
-    let mut arguments: Vec<Box<dyn ToSql>> = Vec::new();
-    let mut predicates = vec![format!("summary.lifecycle = '{lifecycle}'")];
-    if let Some(minimum) = query.filters.min_size_bytes {
-        let index = push_argument(&mut arguments, minimum);
-        predicates.push(format!("summary.total_size_bytes >= ?{index}"));
-    }
-    if let Some(maximum) = query.filters.max_size_bytes {
-        let index = push_argument(&mut arguments, maximum);
-        predicates.push(format!("summary.total_size_bytes <= ?{index}"));
-    }
-    if !excluded_item_ids.is_empty() {
-        let encoded = serde_json::to_string(
-            &excluded_item_ids
-                .iter()
-                .map(|item_id| item_id.0)
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|error| invalid_target(format!("Could not encode excluded item IDs: {error}")))?;
-        let index = push_argument(&mut arguments, encoded);
-        predicates.push(format!(
-            "NOT EXISTS (
-                 SELECT 1 FROM json_each(?{index}) excluded
-                 WHERE CAST(excluded.value AS INTEGER) = summary.root_item_id
-             )"
-        ));
-    }
-
-    Ok(Some(TargetSelectionSql {
-        with_clause: format!(
-            "WITH
-             selected_roots(item_id) AS MATERIALIZED (
-                 SELECT summary.root_item_id
-                 FROM root_summary summary
-                 WHERE {}
-             ),
-             selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                 SELECT selected.item_id, selected.item_id
-                 FROM selected_roots selected
-                 JOIN media_asset asset ON asset.item_id = selected.item_id
-                 UNION ALL
-                 SELECT selected.item_id, member.media_item_id
-                 FROM selected_roots selected
-                 JOIN collection_member member ON member.collection_id = selected.item_id
-             )",
-            predicates.join(" AND ")
-        ),
-        arguments,
-    }))
 }
 
 fn range_target_selection_sql(
     connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
     query: &ItemQuery,
     anchor_item_id: ItemId,
     focus_item_id: ItemId,
@@ -1312,12 +960,21 @@ fn range_target_selection_sql(
         }
     }
 
-    let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(match &query.scope {
-        ItemScope::Folder { folder_id } => *folder_id,
-        _ => -1,
-    })];
-    let mut predicates = vec![scope_predicate(connection, &query.scope, &mut arguments)?];
-    apply_filters(connection, &query.filters, &mut predicates, &mut arguments)?;
+    let roots = crate::predicate_v2::compile_item_query(connection, projection, query)?;
+    let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(bitmap_json(&roots))];
+    // Manual folder order is a canonical vector; its ordinal positions come
+    // from the vector index rather than relationship rows.
+    let folder_order = match (&query.sort.field, &query.scope) {
+        (crate::app::ItemSortField::FolderOrder, ItemScope::Folder { folder_id }) => {
+            projection.folder_order(*folder_id).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    let order_index = push_argument(
+        &mut arguments,
+        serde_json::to_string(&folder_order)
+            .map_err(|error| invalid_target(format!("Could not encode folder order: {error}")))?,
+    );
     let sort_plan = SortPlan::for_query(query, &mut arguments);
     let anchor_index = push_argument(&mut arguments, anchor_item_id.0);
     let focus_index = push_argument(&mut arguments, focus_item_id.0);
@@ -1355,49 +1012,34 @@ fn range_target_selection_sql(
     Ok(TargetSelectionSql {
         with_clause: format!(
             "WITH
-             root_items AS NOT MATERIALIZED (
+             selected_scope(item_id) AS MATERIALIZED (
+                 SELECT CAST(value AS INTEGER) FROM json_each(?1)
+             ),
+             folder_position(item_id, position) AS MATERIALIZED (
+                 SELECT CAST(value AS INTEGER), key FROM json_each(?{order_index})
+             ),
+             filtered_roots AS MATERIALIZED (
                  SELECT summary.root_item_id AS item_id,
                         summary.lifecycle, item.kind,
                         metadata.name AS root_name,
                         metadata.rating AS root_rating,
                         item.created_at, item.updated_at,
-                        folder.position_rank AS folder_position,
-                        viewed.viewed_at
-                 FROM root_summary summary
+                        fp.position AS folder_position,
+                        viewed.viewed_at,
+                        summary.media_count,
+                        summary.total_size_bytes,
+                        COALESCE(summary.imported_at, item.created_at) AS imported_at,
+                        summary.captured_at,
+                        COALESCE(metadata.name, first_asset.name) AS sort_name,
+                        summary.sort_rating
+                 FROM selected_scope
+                 JOIN root_summary summary ON summary.root_item_id = selected_scope.item_id
                  JOIN library_item item ON item.item_id = summary.root_item_id
                  LEFT JOIN root_metadata metadata
                    ON metadata.root_item_id = summary.root_item_id
-                 LEFT JOIN folder_item folder
-                   ON folder.item_id = summary.root_item_id AND folder.folder_id = ?1
+                 LEFT JOIN folder_position fp ON fp.item_id = summary.root_item_id
                  LEFT JOIN media_view viewed ON viewed.item_id = summary.root_item_id
-             ),
-             root_media AS NOT MATERIALIZED (
-                 SELECT root.item_id AS root_item_id, root.item_id AS media_item_id
-                 FROM root_items root WHERE root.kind = 'media'
-                 UNION ALL
-                 SELECT root.item_id, member.media_item_id
-                 FROM root_items root
-                 JOIN collection_member member ON member.collection_id = root.item_id
-                 WHERE root.kind = 'collection'
-             ),
-             candidate_roots AS MATERIALIZED (
-                 SELECT ri.* FROM root_items ri
-                 WHERE {where_clause}
-             ),
-             filtered_roots AS MATERIALIZED (
-                 SELECT ri.item_id, ri.lifecycle, ri.kind,
-                        ri.root_name, ri.root_rating,
-                        ri.created_at, ri.updated_at,
-                        ri.folder_position, ri.viewed_at,
-                        summary.media_count,
-                        summary.total_size_bytes,
-                        COALESCE(summary.imported_at, ri.created_at) AS imported_at,
-                        summary.captured_at,
-                        COALESCE(ri.root_name, first_asset.name) AS sort_name,
-                        summary.sort_rating
-                 FROM candidate_roots ri
-                 JOIN root_summary summary ON summary.root_item_id = ri.item_id
-                 JOIN media_asset first_asset
+                 LEFT JOIN media_asset first_asset
                    ON first_asset.item_id = summary.cover_media_item_id
              ),
              ordered_roots(item_id, sort_key) AS MATERIALIZED (
@@ -1420,18 +1062,7 @@ fn range_target_selection_sql(
                  WHERE endpoints.endpoint_count = {expected_endpoint_count}
                    AND (({after_anchor} AND {before_focus})
                      OR ({after_focus} AND {before_anchor}))
-             ),
-             selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                 SELECT selected.item_id, selected.item_id
-                 FROM selected_roots selected
-                 JOIN media_asset asset ON asset.item_id = selected.item_id
-                 UNION ALL
-                 SELECT selected.item_id, member.media_item_id
-                 FROM selected_roots selected
-                 JOIN collection_member member
-                   ON member.collection_id = selected.item_id
              )",
-            where_clause = predicates.join(" AND "),
             sort_expression = sort_plan.expression,
         ),
         arguments,
@@ -1492,15 +1123,6 @@ fn size_range_target_selection_sql(
                    AND endpoints.endpoint_count = {expected_endpoint_count}
                    AND (({after_anchor} AND {before_focus})
                      OR ({after_focus} AND {before_anchor}))
-             ),
-             selected_media(root_item_id, media_item_id) AS MATERIALIZED (
-                 SELECT selected.item_id, selected.item_id
-                 FROM selected_roots selected
-                 JOIN media_asset asset ON asset.item_id = selected.item_id
-                 UNION ALL
-                 SELECT selected.item_id, member.media_item_id
-                 FROM selected_roots selected
-                 JOIN collection_member member ON member.collection_id = selected.item_id
              )"
         ),
         arguments: vec![Box::new(anchor_item_id.0), Box::new(focus_item_id.0)],
@@ -1611,9 +1233,6 @@ pub fn library_statistics(store: &Store) -> Result<LibraryStatistics, String> {
                  SELECT lr.item_id, lr.lifecycle, li.kind
                  FROM library_root lr
                  JOIN library_item li ON li.item_id = lr.item_id
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM collection_member cm WHERE cm.media_item_id = lr.item_id
-                 )
              )
              SELECT
                  COUNT(*) FILTER (WHERE lifecycle = 'active'),
@@ -1830,6 +1449,7 @@ fn parse_lifecycle(value: &str) -> rusqlite::Result<Lifecycle> {
 /// use the same scope and filter compiler as grid pages and counts.
 pub(crate) fn resolve_target_ids(
     connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
     target: &ItemTarget,
 ) -> rusqlite::Result<Vec<i64>> {
     match target {
@@ -1862,7 +1482,7 @@ pub(crate) fn resolve_target_ids(
             Ok(resolved)
         }
         ItemTarget::Query { .. } | ItemTarget::Range { .. } => {
-            let selection = target_selection_sql(connection, target)?;
+            let selection = target_selection_sql(connection, projection, target)?;
             let sql = format!(
                 "{}
                  SELECT item_id FROM selected_roots ORDER BY item_id",
@@ -1895,6 +1515,7 @@ fn resolve_projected_sorted_page(
 ) -> rusqlite::Result<ItemPage> {
     let ordered = if roots.len() <= SPARSE_PROJECTED_PAGE_THRESHOLD
         || matches!(item_query.sort.field, crate::app::ItemSortField::Random)
+        || matches!(item_query.scope, ItemScope::RecentlyViewed)
     {
         ordered_sparse_projected_roots_by_sort(connection, item_query, roots, &page)?
     } else {
@@ -1969,6 +1590,7 @@ fn ordered_sparse_projected_roots_by_sort(
          SELECT summary.root_item_id, {expression}
          FROM selected
          JOIN root_summary summary USING (root_item_id)
+         LEFT JOIN media_view mv ON mv.item_id = summary.root_item_id
          WHERE TRUE {cursor_clause}
          ORDER BY {expression} {direction}, summary.root_item_id ASC
          LIMIT ?{limit_index}",
@@ -2052,6 +1674,7 @@ fn ordered_dense_projected_roots_by_sort(
 fn projected_sort_expression(expression: &str) -> String {
     expression
         .replace("fr.item_id", "summary.root_item_id")
+        .replace("fr.viewed_at", "mv.viewed_at")
         .replace("fr.", "summary.")
 }
 
@@ -2431,435 +2054,9 @@ fn hydrate_projected_roots(
         .collect())
 }
 
-fn resolve_connection(
-    connection: &Connection,
-    item_query: &ItemQuery,
-    page: ItemPageRequest,
-) -> rusqlite::Result<ItemPage> {
-    if item_query.filters == ItemFilters::default()
-        && matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt)
-        && matches!(
-            item_query.scope,
-            ItemScope::All | ItemScope::Inbox | ItemScope::Trash | ItemScope::Folder { .. }
-        )
-    {
-        return resolve_indexed_imported_page(connection, item_query, page);
-    }
-
-    let mut arguments: Vec<Box<dyn ToSql>> = Vec::new();
-
-    // Parameter 1 is always present so the root CTE can expose folder order
-    // without requiring a separate SQL shape for folder queries.
-    arguments.push(Box::new(match &item_query.scope {
-        ItemScope::Folder { folder_id } => *folder_id,
-        _ => -1,
-    }));
-
-    let mut predicates = vec![scope_predicate(
-        connection,
-        &item_query.scope,
-        &mut arguments,
-    )?];
-    apply_filters(
-        connection,
-        &item_query.filters,
-        &mut predicates,
-        &mut arguments,
-    )?;
-    let where_clause = predicates.join(" AND ");
-
-    let sort_plan = SortPlan::for_query(item_query, &mut arguments);
-    let cursor_clause = if let Some(encoded) = page.cursor.as_deref() {
-        let cursor = sort_plan.decode_cursor(encoded)?;
-        let key_index = match cursor.key {
-            CursorKey::Integer(value) => push_argument(&mut arguments, value),
-            CursorKey::Text(value) => push_argument(&mut arguments, value),
-        };
-        let item_index = push_argument(&mut arguments, cursor.item_id);
-        let comparison = if sort_plan.direction == "ASC" {
-            ">"
-        } else {
-            "<"
-        };
-        format!(
-            "WHERE ({expression} {comparison} ?{key_index}\n\
-                 OR ({expression} = ?{key_index} AND fr.item_id > ?{item_index}))",
-            expression = sort_plan.expression,
-        )
-    } else {
-        String::new()
-    };
-    let limit_index = arguments.len() + 1;
-    arguments.push(Box::new(page.limit + 1));
-
-    let lifecycle_metrics = if item_query.filters == ItemFilters::default() {
-        match item_query.scope {
-            ItemScope::All => Some("active"),
-            ItemScope::Inbox => Some("inbox"),
-            ItemScope::Trash => Some("trash"),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    let metrics_cte = if page.cursor.is_some() {
-        "metrics AS (
-             SELECT revision, NULL AS visible_item_count,
-                    NULL AS visible_media_count, NULL AS total_size_bytes
-             FROM library_meta WHERE singleton = 1
-         )"
-        .to_string()
-    } else if let Some(lifecycle) = lifecycle_metrics {
-        format!(
-            "metrics AS (
-                 SELECT lm.revision,
-                        ls.root_count AS visible_item_count,
-                        ls.media_count AS visible_media_count,
-                        ls.total_size_bytes
-                 FROM library_meta lm
-                 JOIN lifecycle_summary ls ON ls.lifecycle = '{lifecycle}'
-                 WHERE lm.singleton = 1
-             )"
-        )
-    } else {
-        "metrics AS (
-             SELECT
-                 (SELECT revision FROM library_meta WHERE singleton = 1) AS revision,
-                 COUNT(*) AS visible_item_count,
-                 COALESCE(SUM(media_count), 0) AS visible_media_count,
-                 COALESCE(SUM(total_size_bytes), 0) AS total_size_bytes
-             FROM filtered_roots
-         )"
-        .to_string()
-    };
-    let sql = format!(
-        "WITH
-         root_items AS NOT MATERIALIZED (
-             SELECT
-                 lr.item_id,
-                 lr.lifecycle,
-                 li.kind,
-                 metadata.name AS root_name,
-                 metadata.rating AS root_rating,
-                 li.created_at,
-                 li.updated_at,
-                 fi.position_rank AS folder_position,
-                 mv.viewed_at
-             FROM library_root lr
-             JOIN library_item li ON li.item_id = lr.item_id
-             LEFT JOIN root_metadata metadata ON metadata.root_item_id = lr.item_id
-             LEFT JOIN folder_item fi
-               ON fi.item_id = lr.item_id AND fi.folder_id = ?1
-             LEFT JOIN media_view mv ON mv.item_id = lr.item_id
-             WHERE NOT EXISTS (
-                 SELECT 1
-                 FROM collection_member member_root
-                 WHERE member_root.media_item_id = lr.item_id
-             )
-         ),
-         root_media AS NOT MATERIALIZED (
-             SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
-             FROM root_items ri
-             WHERE ri.kind = 'media'
-             UNION ALL
-             SELECT ri.item_id, cm.media_item_id
-             FROM root_items ri
-             JOIN collection_member cm ON cm.collection_id = ri.item_id
-             WHERE ri.kind = 'collection'
-         ),
-         candidate_roots AS MATERIALIZED (
-             SELECT ri.*
-             FROM root_items ri
-             WHERE {where_clause}
-         ),
-         filtered_roots AS (
-             SELECT
-                 ri.item_id,
-                 ri.lifecycle,
-                 ri.kind,
-                 ri.root_name,
-                 ri.root_rating,
-                 ri.created_at,
-                 ri.updated_at,
-                 ri.folder_position,
-                 ri.viewed_at,
-                 rs.media_count,
-                 rs.total_size_bytes,
-                 COALESCE(rs.imported_at, ri.created_at) AS imported_at,
-                 rs.captured_at,
-                 COALESCE(ri.root_name, first_asset.name) AS sort_name,
-                 rs.sort_rating,
-                 rs.cover_media_item_id AS resolved_cover_media_item_id
-             FROM candidate_roots ri
-             JOIN root_summary rs ON rs.root_item_id = ri.item_id
-             JOIN media_asset first_asset ON first_asset.item_id = rs.cover_media_item_id
-         ),
-         {metrics_cte},
-         paged AS (
-             SELECT
-                 fr.*,
-                 display_asset.name AS display_name,
-                 display_file.mime_type AS display_mime_type,
-                 display_file.file_hash AS display_file_hash,
-                 display_file.pixel_width,
-                 display_file.pixel_height,
-                 display_file.duration_ms,
-                 display_file.frame_count,
-                 display_file.has_audio,
-                 display_file.dominant_color_hex,
-                 {sort_expression} AS sort_key
-             FROM filtered_roots fr
-             JOIN media_asset display_asset
-               ON display_asset.item_id = fr.resolved_cover_media_item_id
-             JOIN media_file display_file ON display_file.file_id = display_asset.file_id
-             {cursor_clause}
-             ORDER BY {sort_expression} {sort_direction}, fr.item_id ASC
-             LIMIT ?{limit_index}
-         )
-         SELECT
-             metrics.revision,
-             metrics.visible_item_count,
-             metrics.visible_media_count,
-             metrics.total_size_bytes,
-             paged.item_id,
-             paged.kind,
-             paged.lifecycle,
-             COALESCE(paged.root_name, paged.display_name),
-             paged.display_file_hash,
-             paged.display_mime_type,
-             paged.pixel_width,
-             paged.pixel_height,
-             paged.duration_ms,
-             paged.frame_count,
-             paged.dominant_color_hex,
-             paged.root_rating,
-             paged.media_count,
-             paged.sort_key
-         FROM metrics
-         LEFT JOIN paged ON TRUE
-         ORDER BY paged.sort_key {sort_direction}, paged.item_id ASC",
-        sort_expression = sort_plan.expression,
-        sort_direction = sort_plan.direction,
-    );
-
-    let references: Vec<&dyn ToSql> = arguments.iter().map(|value| value.as_ref()).collect();
-    let mut statement = connection.prepare_cached(&sql)?;
-    let mut rows = statement.query(references.as_slice())?;
-
-    let mut revision = 0;
-    let mut visible_item_count = None;
-    let mut visible_media_count = None;
-    let mut total_size_bytes = None;
-    let mut entries = Vec::new();
-    while let Some(row) = rows.next()? {
-        revision = row_revision(row, 0)?;
-        visible_item_count = row.get(1)?;
-        visible_media_count = row.get(2)?;
-        total_size_bytes = row.get(3)?;
-        let item_id: Option<i64> = row.get(4)?;
-        if let Some(item_id) = item_id {
-            let key = match sort_plan.key_kind {
-                CursorKeyKind::Integer => CursorKey::Integer(row.get(17)?),
-                CursorKeyKind::Text => CursorKey::Text(row.get(17)?),
-            };
-            entries.push((read_summary(row, item_id)?, key));
-        }
-    }
-    if page.cursor.is_some() {
-        visible_item_count = None;
-        visible_media_count = None;
-        total_size_bytes = None;
-    }
-
-    let has_more = entries.len() > page.limit as usize;
-    entries.truncate(page.limit as usize);
-    let next_cursor = if has_more {
-        entries
-            .last()
-            .map(|(item, key)| sort_plan.encode_cursor(key.clone(), item.item_id.0))
-            .transpose()?
-    } else {
-        None
-    };
-    Ok(ItemPage {
-        items: entries.into_iter().map(|(item, _)| item).collect(),
-        next_cursor,
-        revision,
-        visible_item_count,
-        visible_media_count,
-        total_size_bytes,
-    })
-}
-
-/// The common All/Inbox/Trash grid must not materialize every matching root
-/// before applying its page limit. Walk the imported-at index, test lifecycle,
-/// and hydrate only the requested page.
-fn resolve_indexed_imported_page(
-    connection: &Connection,
-    item_query: &ItemQuery,
-    page: ItemPageRequest,
-) -> rusqlite::Result<ItemPage> {
-    use crate::app::SortDirection;
-
-    let (scope_predicate, metrics_cte, result_lifecycle, mut arguments): (
-        String,
-        String,
-        &'static str,
-        Vec<Box<dyn ToSql>>,
-    ) = match item_query.scope {
-        ItemScope::All | ItemScope::Inbox | ItemScope::Trash => {
-            let lifecycle = match item_query.scope {
-                ItemScope::All => "active",
-                ItemScope::Inbox => "inbox",
-                ItemScope::Trash => "trash",
-                _ => unreachable!(),
-            };
-            (
-                "rs.lifecycle = ?1".to_string(),
-                "metrics AS (
-                     SELECT lm.revision, ls.root_count AS visible_item_count,
-                            ls.media_count AS visible_media_count,
-                            ls.total_size_bytes
-                     FROM library_meta lm
-                     JOIN lifecycle_summary ls ON ls.lifecycle = ?1
-                     WHERE lm.singleton = 1
-                 )"
-                .to_string(),
-                lifecycle,
-                vec![Box::new(lifecycle.to_string())],
-            )
-        }
-        ItemScope::Folder { folder_id } => (
-            "rs.lifecycle = 'active'
-             AND EXISTS (
-                 SELECT 1 FROM folder_item fi
-                 WHERE fi.folder_id = ?1 AND fi.item_id = rs.root_item_id
-             )"
-            .to_string(),
-            "metrics AS (
-                 SELECT lm.revision,
-                        COALESCE(fs.visible_root_count, 0) AS visible_item_count,
-                        COALESCE(fs.media_count, 0) AS visible_media_count,
-                        COALESCE(fs.total_size_bytes, 0) AS total_size_bytes
-                 FROM library_meta lm
-                 LEFT JOIN folder_summary fs ON fs.folder_id = ?1
-                 WHERE lm.singleton = 1
-             )"
-            .to_string(),
-            "active",
-            vec![Box::new(folder_id)],
-        ),
-        _ => unreachable!("indexed imported-at path called for an unsupported scope"),
-    };
-    let direction = match item_query.sort.direction {
-        SortDirection::Ascending => "ASC",
-        SortDirection::Descending => "DESC",
-    };
-    let index = "idx_root_summary_imported_asc";
-    let sort_plan = SortPlan::for_query(item_query, &mut Vec::new());
-    let cursor_clause = if let Some(encoded) = page.cursor.as_deref() {
-        let cursor = sort_plan.decode_cursor(encoded)?;
-        let CursorKey::Text(imported_at) = cursor.key else {
-            return Err(invalid_target("Invalid imported-at page cursor"));
-        };
-        let imported_index = push_argument(&mut arguments, imported_at);
-        let item_index = push_argument(&mut arguments, cursor.item_id);
-        let comparison = if direction == "ASC" { ">" } else { "<" };
-        let item_comparison = if direction == "ASC" { ">" } else { "<" };
-        format!(
-            "AND (rs.imported_at {comparison} ?{imported_index}
-                  OR (rs.imported_at = ?{imported_index}
-                      AND rs.root_item_id {item_comparison} ?{item_index}))"
-        )
-    } else {
-        String::new()
-    };
-    let limit_index = push_argument(&mut arguments, page.limit + 1);
-    let sql = format!(
-        "WITH {metrics_cte},
-         candidates AS MATERIALIZED (
-             SELECT rs.root_item_id AS item_id,
-                    rs.media_count,
-                    rs.total_size_bytes,
-                    rs.imported_at,
-                    rs.captured_at,
-                    rs.sort_rating,
-                    li.kind,
-                    metadata.name AS root_name,
-                    metadata.rating AS root_rating,
-                    rs.cover_media_item_id AS display_media_item_id
-             FROM root_summary rs INDEXED BY {index}
-             JOIN library_item li ON li.item_id = rs.root_item_id
-             LEFT JOIN root_metadata metadata ON metadata.root_item_id = rs.root_item_id
-             WHERE {scope_predicate}
-               AND rs.imported_at IS NOT NULL
-               AND NOT EXISTS (
-                   SELECT 1 FROM collection_member member_root
-                   WHERE member_root.media_item_id = rs.root_item_id
-               )
-               {cursor_clause}
-             ORDER BY rs.imported_at {direction}, rs.root_item_id {direction}
-             LIMIT ?{limit_index}
-         )
-         SELECT metrics.revision,
-                metrics.visible_item_count, metrics.visible_media_count,
-                metrics.total_size_bytes,
-                candidate.item_id, candidate.kind, '{result_lifecycle}',
-                COALESCE(candidate.root_name, display_asset.name),
-                display_file.file_hash, display_file.mime_type,
-                display_file.pixel_width, display_file.pixel_height,
-                display_file.duration_ms, display_file.frame_count,
-                display_file.dominant_color_hex, candidate.root_rating,
-                candidate.media_count, candidate.imported_at
-         FROM metrics
-         LEFT JOIN candidates candidate ON TRUE
-         LEFT JOIN media_asset display_asset
-           ON display_asset.item_id = candidate.display_media_item_id
-         LEFT JOIN media_file display_file
-           ON display_file.file_id = display_asset.file_id
-         ORDER BY candidate.imported_at {direction}, candidate.item_id {direction}"
-    );
-    let references: Vec<&dyn ToSql> = arguments.iter().map(|value| value.as_ref()).collect();
-    let mut statement = connection.prepare_cached(&sql)?;
-    let mut rows = statement.query(references.as_slice())?;
-    let mut revision = 0;
-    let mut visible_item_count = None;
-    let mut visible_media_count = None;
-    let mut total_size_bytes = None;
-    let mut entries = Vec::new();
-    while let Some(row) = rows.next()? {
-        revision = row_revision(row, 0)?;
-        visible_item_count = row.get(1)?;
-        visible_media_count = row.get(2)?;
-        total_size_bytes = row.get(3)?;
-        if let Some(item_id) = row.get::<_, Option<i64>>(4)? {
-            let key = CursorKey::Text(row.get(17)?);
-            entries.push((read_summary(row, item_id)?, key));
-        }
-    }
-    if page.cursor.is_some() {
-        visible_item_count = None;
-        visible_media_count = None;
-        total_size_bytes = None;
-    }
-    let has_more = entries.len() > page.limit as usize;
-    entries.truncate(page.limit as usize);
-    let next_cursor = if has_more {
-        entries
-            .last()
-            .map(|(item, key)| sort_plan.encode_cursor(key.clone(), item.item_id.0))
-            .transpose()?
-    } else {
-        None
-    };
-    Ok(ItemPage {
-        items: entries.into_iter().map(|(item, _)| item).collect(),
-        next_cursor,
-        revision,
-        visible_item_count,
-        visible_media_count,
-        total_size_bytes,
-    })
+fn row_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
 }
 
 fn read_summary(row: &rusqlite::Row<'_>, item_id: i64) -> rusqlite::Result<ItemSummary> {
@@ -2908,439 +2105,6 @@ fn read_summary(row: &rusqlite::Row<'_>, item_id: i64) -> rusqlite::Result<ItemS
         rating: row.get(15)?,
         media_count: row.get(16)?,
     })
-}
-
-fn row_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
-    let value: i64 = row.get(index)?;
-    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
-}
-
-fn scope_predicate(
-    _connection: &Connection,
-    scope: &ItemScope,
-    arguments: &mut Vec<Box<dyn ToSql>>,
-) -> rusqlite::Result<String> {
-    let predicate = match scope {
-        ItemScope::All => "ri.lifecycle = 'active'".to_string(),
-        ItemScope::Inbox => "ri.lifecycle = 'inbox'".to_string(),
-        ItemScope::Trash => "ri.lifecycle = 'trash'".to_string(),
-        ItemScope::RecentlyViewed => {
-            "ri.lifecycle = 'active' AND ri.viewed_at IS NOT NULL".to_string()
-        }
-        ItemScope::Untagged => "ri.lifecycle = 'active' AND NOT EXISTS (
-                 SELECT 1 FROM root_tag root_tag
-                 WHERE root_tag.root_item_id = ri.item_id
-             )"
-        .to_string(),
-        ItemScope::Uncategorized => "ri.lifecycle = 'active' AND NOT EXISTS (
-                 SELECT 1 FROM folder_item categorized_folder
-                 WHERE categorized_folder.item_id = ri.item_id
-             )"
-        .to_string(),
-        ItemScope::Folder { .. } => "ri.lifecycle = 'active' AND EXISTS (
-                 SELECT 1 FROM folder_item scoped_folder
-                 WHERE scoped_folder.folder_id = ?1
-                   AND scoped_folder.item_id = ri.item_id
-             )"
-        .to_string(),
-        ItemScope::SmartFolder { smart_folder_id } => {
-            let index = push_argument(arguments, *smart_folder_id);
-            format!(
-                "ri.lifecycle = 'active' AND EXISTS (
-                     SELECT 1
-                     FROM smart_folder_generation generation
-                     JOIN smart_folder_membership membership
-                       ON membership.generation_id = generation.generation_id
-                     WHERE generation.smart_folder_id = ?{index}
-                       AND generation.state = 'active'
-                       AND membership.root_item_id = ri.item_id
-                 )"
-            )
-        }
-    };
-    Ok(predicate)
-}
-
-fn apply_filters(
-    connection: &Connection,
-    filters: &ItemFilters,
-    predicates: &mut Vec<String>,
-    arguments: &mut Vec<Box<dyn ToSql>>,
-) -> rusqlite::Result<()> {
-    if let Some(text) = filters.text.as_deref().filter(|text| !text.is_empty()) {
-        if let Some(query) = crate::predicate_v2::fts_match_query(text) {
-            let index = push_argument(arguments, query);
-            predicates.push(format!(
-                "ri.lifecycle = 'active' AND ri.item_id IN (
-                    SELECT CAST(root_name_fts.root_item_id AS INTEGER)
-                    FROM root_name_fts
-                    WHERE root_name_fts MATCH ?{index}
-
-                    UNION
-
-                    SELECT CAST(root_notes_fts.root_item_id AS INTEGER)
-                    FROM root_notes_fts
-                    WHERE root_notes_fts MATCH ?{index}
-
-                    UNION
-
-                    SELECT COALESCE(post.root_item_id, member.collection_id, item.media_item_id)
-                    FROM source_text_fts
-                    JOIN source_post post
-                      ON post.source_post_id = source_text_fts.source_post_id
-                    LEFT JOIN source_item item
-                      ON item.source_post_id = post.source_post_id
-                    LEFT JOIN collection_member member
-                      ON member.media_item_id = item.media_item_id
-                    WHERE source_text_fts MATCH ?{index}
-                      AND COALESCE(
-                          post.root_item_id, member.collection_id, item.media_item_id
-                      ) IS NOT NULL
-                )"
-            ));
-        } else {
-            predicates.push("0".to_string());
-        }
-    }
-
-    if let Some(color_hex) = filters
-        .color_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let hex_index = push_argument(arguments, color_hex.to_ascii_lowercase());
-        if let Some((l, a, b)) = crate::media_processing::colors::lab_components_from_hex(color_hex)
-        {
-            let l_index = push_argument(arguments, l);
-            let a_index = push_argument(arguments, a);
-            let b_index = push_argument(arguments, b);
-            let threshold_index = push_argument(
-                arguments,
-                crate::media_processing::colors::FILTER_DELTA_E.powi(2),
-            );
-            predicates.push(format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                     JOIN file_color fc ON fc.file_id = ma.file_id
-                     WHERE rm.root_item_id = ri.item_id
-                       AND (lower(fc.hex) = ?{hex_index}
-                            OR ((fc.l - ?{l_index}) * (fc.l - ?{l_index})
-                              + (fc.a - ?{a_index}) * (fc.a - ?{a_index})
-                              + (fc.b - ?{b_index}) * (fc.b - ?{b_index})) <= ?{threshold_index})
-                 )"
-            ));
-        } else {
-            predicates.push(format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                     JOIN file_color fc ON fc.file_id = ma.file_id
-                     WHERE rm.root_item_id = ri.item_id AND lower(fc.hex) = ?{hex_index}
-                 )"
-            ));
-        }
-    }
-
-    apply_text_range(
-        "COALESCE((SELECT summary.imported_at FROM root_summary summary WHERE summary.root_item_id = ri.item_id), ri.created_at)",
-        filters.imported_after.as_deref(),
-        filters.imported_before.as_deref(),
-        predicates,
-        arguments,
-    );
-    apply_text_range(
-        "MAX(ri.updated_at, COALESCE((SELECT MAX(ma.updated_at) FROM root_media rm JOIN media_asset ma ON ma.item_id = rm.media_item_id WHERE rm.root_item_id = ri.item_id), ri.updated_at))",
-        filters.modified_after.as_deref(),
-        filters.modified_before.as_deref(),
-        predicates,
-        arguments,
-    );
-    apply_i64_range(
-        &display_file_metric("duration_ms"),
-        filters.min_duration_ms,
-        filters.max_duration_ms,
-        predicates,
-        arguments,
-    );
-    apply_i64_range(
-        "COALESCE((SELECT summary.total_size_bytes FROM root_summary summary WHERE summary.root_item_id = ri.item_id), 0)",
-        filters.min_size_bytes,
-        filters.max_size_bytes,
-        predicates,
-        arguments,
-    );
-    apply_i64_range(
-        &display_file_metric("pixel_width"),
-        filters.min_width,
-        filters.max_width,
-        predicates,
-        arguments,
-    );
-    apply_i64_range(
-        &display_file_metric("pixel_height"),
-        filters.min_height,
-        filters.max_height,
-        predicates,
-        arguments,
-    );
-    apply_presence_filter(
-        "EXISTS (SELECT 1 FROM root_metadata metadata WHERE metadata.root_item_id = ri.item_id AND NULLIF(TRIM(metadata.notes), '') IS NOT NULL)",
-        filters.notes_present,
-        predicates,
-    );
-    if let Some(keyword) = nonempty_filter_text(filters.notes_contains.as_deref()) {
-        let index = push_argument(arguments, format!("%{keyword}%"));
-        predicates.push(format!(
-            "EXISTS (SELECT 1 FROM root_metadata metadata WHERE metadata.root_item_id = ri.item_id AND metadata.notes LIKE ?{index})"
-        ));
-    }
-    apply_presence_filter(
-        "EXISTS (SELECT 1 FROM root_metadata metadata WHERE metadata.root_item_id = ri.item_id AND json_array_length(metadata.source_urls_json) > 0)",
-        filters.source_url_present,
-        predicates,
-    );
-    if let Some(keyword) = nonempty_filter_text(filters.source_url_contains.as_deref()) {
-        let index = push_argument(arguments, format!("%{keyword}%"));
-        predicates.push(format!(
-            "EXISTS (SELECT 1 FROM root_metadata metadata WHERE metadata.root_item_id = ri.item_id AND metadata.source_urls_json LIKE ?{index})"
-        ));
-    }
-
-    if !filters.include_folder_ids.is_empty() {
-        let matches = filters
-            .include_folder_ids
-            .iter()
-            .map(|folder_id| {
-                let index = push_argument(arguments, *folder_id);
-                format!("fi.folder_id = ?{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        match filters.folder_match_mode {
-            FilterMatchMode::Any => predicates.push(format!(
-                "EXISTS (SELECT 1 FROM folder_item fi WHERE fi.item_id = ri.item_id AND ({matches}))"
-            )),
-            FilterMatchMode::All | FilterMatchMode::Exact => {
-                predicates.push(format!(
-                    "(SELECT COUNT(DISTINCT fi.folder_id) FROM folder_item fi WHERE fi.item_id = ri.item_id AND ({matches})) = {}",
-                    filters.include_folder_ids.len()
-                ));
-                if filters.folder_match_mode == FilterMatchMode::Exact {
-                    predicates.push(format!(
-                        "(SELECT COUNT(DISTINCT fi.folder_id) FROM folder_item fi WHERE fi.item_id = ri.item_id) = {}",
-                        filters.include_folder_ids.len()
-                    ));
-                }
-            }
-        }
-    }
-
-    if !filters.exclude_folder_ids.is_empty() {
-        let matches = filters
-            .exclude_folder_ids
-            .iter()
-            .map(|folder_id| {
-                let index = push_argument(arguments, *folder_id);
-                format!("fi.folder_id = ?{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        predicates.push(format!(
-            "NOT EXISTS (SELECT 1 FROM folder_item fi WHERE fi.item_id = ri.item_id AND ({matches}))"
-        ));
-    }
-
-    if !filters.ratings.is_empty() {
-        let selected = filters
-            .ratings
-            .iter()
-            .map(|rating| {
-                let index = push_argument(arguments, *rating);
-                format!("?{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        predicates.push(format!(
-            "COALESCE((SELECT metadata.rating FROM root_metadata metadata
-                        WHERE metadata.root_item_id = ri.item_id), 0) IN ({selected})"
-        ));
-    }
-
-    if !filters.include_mime_types.is_empty() {
-        let matches = filters
-            .include_mime_types
-            .iter()
-            .map(|mime_type| {
-                let index = push_argument(arguments, mime_type.to_ascii_lowercase());
-                format!("lower(mf.mime_type) = ?{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        predicates.push(format!(
-            "EXISTS (
-                 SELECT 1
-                 FROM root_media rm
-                 JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                 JOIN media_file mf ON mf.file_id = ma.file_id
-                 WHERE rm.root_item_id = ri.item_id AND ({matches})
-             )"
-        ));
-    }
-
-    if !filters.exclude_mime_types.is_empty() {
-        let matches = filters
-            .exclude_mime_types
-            .iter()
-            .map(|mime_type| {
-                let index = push_argument(arguments, mime_type.to_ascii_lowercase());
-                format!("lower(mf.mime_type) = ?{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        predicates.push(format!(
-            "NOT EXISTS (
-                 SELECT 1
-                 FROM root_media rm
-                 JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                 JOIN media_file mf ON mf.file_id = ma.file_id
-                 WHERE rm.root_item_id = ri.item_id AND ({matches})
-             )"
-        ));
-    }
-
-    if !filters.include_tags.is_empty() {
-        let effective_matches = filters
-            .include_tags
-            .iter()
-            .map(|tag| effective_root_tag_predicate(connection, tag, arguments))
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        match filters.tag_match_mode {
-            FilterMatchMode::Any => {
-                predicates.push(format!("({})", effective_matches.join(" OR ")))
-            }
-            FilterMatchMode::All | FilterMatchMode::Exact => {
-                predicates.extend(effective_matches);
-                if filters.tag_match_mode == FilterMatchMode::Exact {
-                    predicates.push(format!(
-                        "(SELECT COUNT(*) FROM root_tag root_tag
-                          WHERE root_tag.root_item_id = ri.item_id) = {}",
-                        filters.include_tags.len()
-                    ));
-                }
-            }
-        }
-    }
-
-    for tag in &filters.exclude_tags {
-        let effective_match = effective_root_tag_predicate(connection, tag, arguments)?;
-        predicates.push(format!("NOT ({effective_match})"));
-    }
-
-    Ok(())
-}
-
-fn effective_root_tag_predicate(
-    connection: &Connection,
-    tag: &str,
-    arguments: &mut Vec<Box<dyn ToSql>>,
-) -> rusqlite::Result<String> {
-    let (namespace, subtag) = split_tag(tag);
-    let tag_ids = crate::tags_v2::effective_query_tag_ids(connection, &namespace, &subtag)?;
-    if tag_ids.is_empty() {
-        return Ok("0".to_string());
-    }
-    let placeholders = tag_ids
-        .into_iter()
-        .map(|tag_id| {
-            let index = push_argument(arguments, tag_id);
-            format!("?{index}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(format!(
-        "ri.item_id IN (
-             SELECT root_tag.root_item_id FROM root_tag root_tag
-             WHERE root_tag.tag_id IN ({placeholders})
-         )"
-    ))
-}
-
-fn display_file_metric(column: &str) -> String {
-    format!(
-        "(SELECT mf.{column}
-          FROM media_asset ma
-          JOIN media_file mf ON mf.file_id = ma.file_id
-          WHERE ma.item_id = (
-              SELECT summary.cover_media_item_id
-              FROM root_summary summary
-              WHERE summary.root_item_id = ri.item_id
-          ))"
-    )
-}
-
-fn apply_i64_range(
-    expression: &str,
-    minimum: Option<i64>,
-    maximum: Option<i64>,
-    predicates: &mut Vec<String>,
-    arguments: &mut Vec<Box<dyn ToSql>>,
-) {
-    if let Some(minimum) = minimum {
-        let index = push_argument(arguments, minimum);
-        predicates.push(format!("{expression} >= ?{index}"));
-    }
-    if let Some(maximum) = maximum {
-        let index = push_argument(arguments, maximum);
-        predicates.push(format!("{expression} <= ?{index}"));
-    }
-}
-
-fn apply_text_range(
-    expression: &str,
-    after: Option<&str>,
-    before: Option<&str>,
-    predicates: &mut Vec<String>,
-    arguments: &mut Vec<Box<dyn ToSql>>,
-) {
-    if let Some(after) = nonempty_filter_text(after) {
-        let index = push_argument(arguments, after.to_string());
-        predicates.push(format!("{expression} >= ?{index}"));
-    }
-    if let Some(before) = nonempty_filter_text(before) {
-        let index = push_argument(arguments, before.to_string());
-        predicates.push(format!("{expression} < ?{index}"));
-    }
-}
-
-fn apply_presence_filter(
-    exists_predicate: &str,
-    present: Option<bool>,
-    predicates: &mut Vec<String>,
-) {
-    match present {
-        Some(true) => predicates.push(exists_predicate.to_string()),
-        Some(false) => predicates.push(format!("NOT ({exists_predicate})")),
-        None => {}
-    }
-}
-
-fn nonempty_filter_text(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-fn split_tag(value: &str) -> (String, String) {
-    value
-        .split_once(':')
-        .map(|(namespace, subtag)| {
-            (
-                namespace.trim().to_lowercase(),
-                subtag.trim().to_lowercase(),
-            )
-        })
-        .unwrap_or_else(|| ("general".to_string(), value.trim().to_lowercase()))
 }
 
 fn push_argument<T: ToSql + 'static>(arguments: &mut Vec<Box<dyn ToSql>>, value: T) -> usize {
@@ -3519,9 +2283,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        details_connection, library_statistics, query, query_for_application, resolve_target_ids,
-        selection_summary, selection_summary_for_application, sidebar_counts_for_application,
-        ItemPageRequest, SelectionCollectionCandidate,
+        details_connection, library_statistics, query_for_application, resolve_target_ids,
+        selection_summary_for_application, sidebar_counts_for_application, ItemPage,
+        ItemPageRequest, SelectionCollectionCandidate, SelectionSummary,
     };
     use crate::app::{
         Application, FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope,
@@ -3539,7 +2303,37 @@ mod tests {
         }
     }
 
-    fn seed_store() -> (tempfile::TempDir, Store) {
+    fn query(
+        application: &Application,
+        item_query: &ItemQuery,
+        page: ItemPageRequest,
+    ) -> Result<ItemPage, String> {
+        query_for_application(application, item_query, page)
+    }
+
+    fn selection_summary(
+        application: &Application,
+        target: &ItemTarget,
+    ) -> Result<SelectionSummary, String> {
+        selection_summary_for_application(application, target)
+    }
+
+    fn base_membership() -> crate::canonical_bitmap::TestMembership {
+        crate::canonical_bitmap::TestMembership {
+            tags: vec![(1, vec![10])],
+            folders: vec![(7, vec![10, 1])],
+            groups: vec![(10, vec![11, 12])],
+        }
+    }
+
+    fn seed_store() -> (tempfile::TempDir, Application) {
+        seed_store_with(base_membership(), |_| Ok(()))
+    }
+
+    fn seed_store_with(
+        membership: crate::canonical_bitmap::TestMembership,
+        extra: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
+    ) -> (tempfile::TempDir, Application) {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         store
@@ -3612,19 +2406,13 @@ mod tests {
                     [],
                 )?;
                 tx.execute("INSERT INTO media_view (item_id, viewed_at) VALUES (1, '2026-02-01')", [])?;
-                crate::canonical_bitmap::seed_test_state(
-                    tx,
-                    &crate::canonical_bitmap::TestMembership {
-                        tags: vec![(1, vec![10])],
-                        folders: vec![(7, vec![10, 1])],
-                        groups: vec![(10, vec![11, 12])],
-                    },
-                )?;
+                extra(tx)?;
+                crate::canonical_bitmap::seed_test_state(tx, &membership)?;
                 Ok(())
             })
             .unwrap();
         refresh_canonical_search_indexes(&store);
-        (directory, store)
+        (directory, Application::new(Arc::new(store)))
     }
 
     fn refresh_canonical_search_indexes(store: &Store) {
@@ -3810,8 +2598,7 @@ mod tests {
 
     #[test]
     fn application_folder_order_pages_from_canonical_vector() {
-        let (_directory, store) = seed_store();
-        let application = Application::new(Arc::new(store));
+        let (_directory, application) = seed_store();
         let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
         item_query.sort.field = crate::app::ItemSortField::FolderOrder;
         item_query.sort.direction = crate::app::SortDirection::Ascending;
@@ -3844,8 +2631,7 @@ mod tests {
 
     #[test]
     fn application_folder_grid_reads_canonical_bitmap_membership() {
-        let (_directory, store) = seed_store();
-        let application = Application::new(Arc::new(store));
+        let (_directory, application) = seed_store();
         let folder_id = application
             .store()
             .transaction(|transaction| {
@@ -3912,44 +2698,33 @@ mod tests {
 
     #[test]
     fn application_text_search_composes_with_canonical_organization() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "UPDATE projection_write_control
-                     SET suppress_root_summary = 1 WHERE singleton = 1",
-                    [],
-                )?;
-                transaction.execute("DELETE FROM collection_member", [])?;
-                transaction.execute(
-                    "UPDATE root_summary
-                     SET imported_at = '2026-02-10T00:00:00Z',
-                         updated_at = '2026-04-10T00:00:00Z'
-                     WHERE root_item_id = 10",
-                    [],
-                )?;
-                transaction.execute(
-                    "UPDATE projection_write_control
-                     SET suppress_root_summary = 0 WHERE singleton = 1",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        refresh_canonical_search_indexes(&store);
-        let application = Application::new(Arc::new(store));
-        application
-            .store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "UPDATE source_post SET root_item_id = NULL WHERE source_post_id = 1",
-                    [],
-                )?;
-                transaction.execute("DELETE FROM root_tag", [])?;
-                transaction.execute("DELETE FROM folder_item", [])?;
-                Ok(())
-            })
-            .unwrap();
+        let (_directory, application) = seed_store_with(base_membership(), |transaction| {
+            transaction.execute(
+                "UPDATE projection_write_control
+                 SET suppress_root_summary = 1 WHERE singleton = 1",
+                [],
+            )?;
+            transaction.execute("DELETE FROM collection_member", [])?;
+            transaction.execute(
+                "UPDATE root_summary
+                 SET imported_at = '2026-02-10T00:00:00Z',
+                     updated_at = '2026-04-10T00:00:00Z'
+                 WHERE root_item_id = 10",
+                [],
+            )?;
+            transaction.execute(
+                "UPDATE projection_write_control
+                 SET suppress_root_summary = 0 WHERE singleton = 1",
+                [],
+            )?;
+            transaction.execute(
+                "UPDATE source_post SET root_item_id = NULL WHERE source_post_id = 1",
+                [],
+            )?;
+            transaction.execute("DELETE FROM root_tag", [])?;
+            transaction.execute("DELETE FROM folder_item", [])?;
+            Ok(())
+        });
 
         let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
         item_query.filters.text = Some("member-b".to_string());
@@ -3983,6 +2758,7 @@ mod tests {
         let (_directory, store) = seed_store();
         let roots = RoaringBitmap::from_iter([1, 10]);
         store
+            .store()
             .read(|connection| {
                 for field in [
                     ItemSortField::CapturedAt,
@@ -4010,13 +2786,14 @@ mod tests {
     fn folder_imported_page_uses_exact_incremental_totals() {
         let (_directory, store) = seed_store();
         let query = query_for(ItemScope::Folder { folder_id: 7 });
-        let counts = |store: &Store| {
-            let page = super::query(store, &query, ItemPageRequest::default()).unwrap();
+        let counts = |store: &Application| {
+            let page = query_for_application(store, &query, ItemPageRequest::default()).unwrap();
             (page.visible_item_count, page.visible_media_count)
         };
 
         assert_eq!(counts(&store), (Some(2), Some(3)));
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE library_root SET lifecycle = 'trash' WHERE item_id = 1",
@@ -4025,9 +2802,14 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        store
+            .projections()
+            .apply_lifecycle_delta(1, crate::app::Lifecycle::Trash)
+            .unwrap();
         assert_eq!(counts(&store), (Some(1), Some(2)));
 
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE library_root SET lifecycle = 'active' WHERE item_id = 1",
@@ -4036,28 +2818,16 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        store
+            .projections()
+            .apply_lifecycle_delta(1, crate::app::Lifecycle::Active)
+            .unwrap();
         assert_eq!(counts(&store), (Some(2), Some(3)));
 
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "DELETE FROM folder_item WHERE folder_id = 7 AND item_id = 1",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        store.projections().apply_folder_delta(7, 1, false).unwrap();
         assert_eq!(counts(&store), (Some(1), Some(2)));
 
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder_item(folder_id, item_id) VALUES (7, 1)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        store.projections().apply_folder_delta(7, 1, true).unwrap();
         assert_eq!(counts(&store), (Some(2), Some(3)));
     }
 
@@ -4081,31 +2851,28 @@ mod tests {
 
     #[test]
     fn applicable_filter_contract_uses_display_and_aggregate_values() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|tx| {
-                tx.execute(
-                    "UPDATE media_asset
-                     SET imported_at = CASE item_id
-                         WHEN 1 THEN '2026-01-10T00:00:00Z'
-                         WHEN 11 THEN '2026-02-10T00:00:00Z'
-                         ELSE imported_at END,
-                         updated_at = CASE item_id
-                         WHEN 1 THEN '2026-04-10T00:00:00Z'
-                         WHEN 11 THEN '2026-02-10T00:00:00Z'
-                         ELSE updated_at END
-                     WHERE item_id IN (1, 11)",
-                    [],
-                )?;
-                tx.execute(
-                    "UPDATE media_file
-                     SET duration_ms = CASE file_id WHEN 1 THEN 5000 WHEN 12 THEN 10000 END
-                     WHERE file_id IN (1, 12)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        let (_directory, store) = seed_store_with(base_membership(), |tx| {
+            tx.execute(
+                "UPDATE media_asset
+                 SET imported_at = CASE item_id
+                     WHEN 1 THEN '2026-01-10T00:00:00Z'
+                     WHEN 11 THEN '2026-02-10T00:00:00Z'
+                     ELSE imported_at END,
+                     updated_at = CASE item_id
+                     WHEN 1 THEN '2026-04-10T00:00:00Z'
+                     WHEN 11 THEN '2026-02-10T00:00:00Z'
+                     ELSE updated_at END
+                 WHERE item_id IN (1, 11)",
+                [],
+            )?;
+            tx.execute(
+                "UPDATE media_file
+                 SET duration_ms = CASE file_id WHEN 1 THEN 5000 WHEN 12 THEN 10000 END
+                 WHERE file_id IN (1, 12)",
+                [],
+            )?;
+            Ok(())
+        });
 
         let matching_ids = |filters: ItemFilters| {
             let mut item_query = query_for(ItemScope::All);
@@ -4179,7 +2946,8 @@ mod tests {
         };
         assert_eq!(
             store
-                .read(|connection| resolve_target_ids(connection, &target))
+                .store()
+                .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
                 .unwrap(),
             vec![10]
         );
@@ -4197,7 +2965,7 @@ mod tests {
                 .iter()
                 .map(|item| item.item_id)
                 .collect::<Vec<_>>(),
-            vec![ItemId(1), ItemId(10)]
+            vec![ItemId(10), ItemId(1)]
         );
 
         item_query.filters.include_folder_ids.clear();
@@ -4208,22 +2976,19 @@ mod tests {
 
     #[test]
     fn rating_filter_is_exact_multi_value_and_includes_unrated() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|tx| {
-                insert_media(
-                    tx,
-                    4,
-                    "unrated",
-                    "active",
-                    "unrated.png",
-                    "image/png",
-                    12,
-                    None,
-                );
-                Ok(())
-            })
-            .unwrap();
+        let (_directory, store) = seed_store_with(base_membership(), |tx| {
+            insert_media(
+                tx,
+                4,
+                "unrated",
+                "active",
+                "unrated.png",
+                "image/png",
+                12,
+                None,
+            );
+            Ok(())
+        });
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.ratings = vec![2];
         let rated = query(&store, &item_query, ItemPageRequest::default()).unwrap();
@@ -4271,7 +3036,7 @@ mod tests {
                 .iter()
                 .map(|item| item.item_id)
                 .collect::<Vec<_>>(),
-            vec![ItemId(1), ItemId(10)]
+            vec![ItemId(10), ItemId(1)]
         );
 
         item_query.filters.exclude_mime_types = vec!["video/mp4".to_string()];
@@ -4291,6 +3056,7 @@ mod tests {
     fn text_search_covers_media_and_source_facts_but_not_structured_taxonomies() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE media_asset SET name = 'hidden member name' WHERE item_id = 11",
@@ -4299,7 +3065,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        refresh_canonical_search_indexes(&store);
+        refresh_canonical_search_indexes(store.store());
         let mut item_query = query_for(ItemScope::All);
         for (text, expected) in [
             ("one.jpg", vec![ItemId(1)]),
@@ -4331,7 +3097,7 @@ mod tests {
     #[test]
     fn text_search_never_projects_inbox_or_trash_roots() {
         let (_directory, store) = seed_store();
-        refresh_canonical_search_indexes(&store);
+        refresh_canonical_search_indexes(store.store());
 
         for (scope, text) in [(ItemScope::Inbox, "inbox"), (ItemScope::Trash, "trash")] {
             let mut item_query = query_for(scope);
@@ -4347,6 +3113,7 @@ mod tests {
     fn text_search_indexes_follow_media_and_source_renames_only() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE media_asset SET name = 'renamed asset' WHERE item_id = 1",
@@ -4370,7 +3137,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        refresh_canonical_search_indexes(&store);
+        refresh_canonical_search_indexes(store.store());
 
         for (text, expected) in [
             ("renamed asset", vec![ItemId(1)]),
@@ -4401,8 +3168,7 @@ mod tests {
 
     #[test]
     fn color_filter_matches_any_persisted_palette_color() {
-        let (_directory, store) = seed_store();
-        let application = Application::new(Arc::new(store));
+        let (_directory, application) = seed_store();
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.color_hex = Some("#ABCDEF".to_string());
         let page =
@@ -4419,20 +3185,16 @@ mod tests {
 
     #[test]
     fn color_filter_matches_perceptually_near_palette_colors() {
-        let (_directory, store) = seed_store();
         let (l, a, b) =
             crate::media_processing::colors::lab_components_from_hex("#36a852").unwrap();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO file_color (file_id, hex, l, a, b)
-                     VALUES (11, '#36a852', ?1, ?2, ?3)",
-                    rusqlite::params![l, a, b],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        let application = Application::new(Arc::new(store));
+        let (_directory, application) = seed_store_with(base_membership(), |transaction| {
+            transaction.execute(
+                "INSERT INTO file_color (file_id, hex, l, a, b)
+                 VALUES (11, '#36a852', ?1, ?2, ?3)",
+                rusqlite::params![l, a, b],
+            )?;
+            Ok(())
+        });
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.color_hex = Some("#2f9f4b".to_string());
 
@@ -4533,22 +3295,17 @@ mod tests {
 
     #[test]
     fn tag_filter_modes_match_any_all_and_exact_root_tags() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO tag (tag_id, namespace, subtag) VALUES
-                     (5, 'general', 'red'), (6, 'general', 'blue')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO root_tag (root_item_id, tag_id) VALUES
-                     (1, 5), (10, 5), (10, 6)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        let mut membership = base_membership();
+        membership.tags.push((5, vec![1, 10]));
+        membership.tags.push((6, vec![10]));
+        let (_directory, store) = seed_store_with(membership, |transaction| {
+            transaction.execute(
+                "INSERT INTO tag (tag_id, namespace, subtag) VALUES
+                 (5, 'general', 'red'), (6, 'general', 'blue')",
+                [],
+            )?;
+            Ok(())
+        });
 
         let ids_for = |mode| {
             let mut item_query = query_for(ItemScope::All);
@@ -4561,7 +3318,7 @@ mod tests {
                 .map(|item| item.item_id)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids_for(FilterMatchMode::Any), vec![ItemId(1), ItemId(10)]);
+        assert_eq!(ids_for(FilterMatchMode::Any), vec![ItemId(10), ItemId(1)]);
         assert_eq!(ids_for(FilterMatchMode::All), vec![ItemId(10)]);
 
         let mut exact = query_for(ItemScope::All);
@@ -4578,21 +3335,16 @@ mod tests {
 
     #[test]
     fn folder_filter_modes_match_any_all_and_exact_membership() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder (folder_id, folder_key, name, created_at, updated_at)
+        let mut membership = base_membership();
+        membership.folders.push((8, vec![10]));
+        let (_directory, store) = seed_store_with(membership, |transaction| {
+            transaction.execute(
+                "INSERT INTO folder (folder_id, folder_key, name, created_at, updated_at)
                  VALUES (8, 'second-folder', 'Second', 'now', 'now')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank) VALUES (8, 10, 0)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+                [],
+            )?;
+            Ok(())
+        });
 
         let ids_for = |mode| {
             let mut item_query = query_for(ItemScope::All);
@@ -4605,7 +3357,7 @@ mod tests {
                 .map(|item| item.item_id)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids_for(FilterMatchMode::Any), vec![ItemId(1), ItemId(10)]);
+        assert_eq!(ids_for(FilterMatchMode::Any), vec![ItemId(10), ItemId(1)]);
         assert_eq!(ids_for(FilterMatchMode::All), vec![ItemId(10)]);
 
         let mut exact = query_for(ItemScope::All);
@@ -4684,31 +3436,28 @@ mod tests {
 
     #[test]
     fn smart_folder_scope_uses_the_same_page_and_count_query() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO smart_folder (
-                         smart_folder_id, smart_folder_key, name, predicate_json,
-                         created_at, updated_at
-                     ) VALUES (9, 'smart:9', 'Tagged', ?1, 'now', 'now')",
-                    [serde_json::json!({
-                        "groups": [{
-                            "match_mode": "all",
-                            "negate": false,
-                            "rules": [{
-                                "field": "tags",
-                                "op": "include",
-                                "values": ["general:member-tag"]
-                            }]
+        let (_directory, store) = seed_store_with(base_membership(), |transaction| {
+            transaction.execute(
+                "INSERT INTO smart_folder (
+                     smart_folder_id, smart_folder_key, name, predicate_json,
+                     created_at, updated_at
+                 ) VALUES (9, 'smart:9', 'Tagged', ?1, 'now', 'now')",
+                [serde_json::json!({
+                    "groups": [{
+                        "match_mode": "all",
+                        "negate": false,
+                        "rules": [{
+                            "field": "tags",
+                            "op": "include",
+                            "values": ["general:member-tag"]
                         }]
-                    })
-                    .to_string()],
-                )?;
-                activate_smart_folder(transaction, 9, &[10])?;
-                Ok(())
-            })
-            .unwrap();
+                    }]
+                })
+                .to_string()],
+            )?;
+            activate_smart_folder(transaction, 9, &[10])?;
+            Ok(())
+        });
 
         let page = query(
             &store,
@@ -4720,7 +3469,7 @@ mod tests {
         assert_eq!(page.visible_media_count, Some(2));
         assert_eq!(page.items[0].item_id, ItemId(10));
 
-        let application = Application::new(Arc::new(store));
+        let application = store;
         let projected = query_for_application(
             &application,
             &query_for(ItemScope::SmartFolder { smart_folder_id: 9 }),
@@ -4740,7 +3489,8 @@ mod tests {
             excluded_item_ids: vec![ItemId(1)],
         };
         let ids = store
-            .read(|connection| resolve_target_ids(connection, &target))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
             .unwrap();
         assert_eq!(ids, vec![10]);
     }
@@ -4749,24 +3499,21 @@ mod tests {
     fn range_target_uses_stable_query_order_and_includes_unloaded_items() {
         use crate::app::{ItemSortField, SortDirection};
 
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                for (item_id, name) in [(20, "range-a"), (21, "range-b"), (22, "range-c")] {
-                    insert_media(
-                        transaction,
-                        item_id,
-                        &format!("range-{item_id}"),
-                        "active",
-                        name,
-                        "image/jpeg",
-                        10,
-                        Some(4),
-                    );
-                }
-                Ok(())
-            })
-            .unwrap();
+        let (_directory, store) = seed_store_with(base_membership(), |transaction| {
+            for (item_id, name) in [(20, "range-a"), (21, "range-b"), (22, "range-c")] {
+                insert_media(
+                    transaction,
+                    item_id,
+                    &format!("range-{item_id}"),
+                    "active",
+                    name,
+                    "image/jpeg",
+                    10,
+                    Some(4),
+                );
+            }
+            Ok(())
+        });
 
         let mut range_query = query_for(ItemScope::All);
         range_query.filters.ratings = vec![4];
@@ -4781,7 +3528,8 @@ mod tests {
             focus_item_id: ItemId(22),
         };
         let ids = store
-            .read(|connection| resolve_target_ids(connection, &target))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
             .unwrap();
         assert_eq!(ids, vec![20, 21, 22]);
         assert_eq!(
@@ -4795,7 +3543,8 @@ mod tests {
             focus_item_id: ItemId(20),
         };
         let reversed_ids = store
-            .read(|connection| resolve_target_ids(connection, &reversed))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &reversed))
             .unwrap();
         assert_eq!(reversed_ids, ids);
     }
@@ -4804,24 +3553,21 @@ mod tests {
     fn range_target_respects_descending_ties_and_requires_both_query_endpoints() {
         use crate::app::{ItemSortField, SortDirection};
 
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                for item_id in [20, 21, 22] {
-                    insert_media(
-                        transaction,
-                        item_id,
-                        &format!("range-{item_id}"),
-                        "active",
-                        "same-name",
-                        "image/jpeg",
-                        10,
-                        Some(4),
-                    );
-                }
-                Ok(())
-            })
-            .unwrap();
+        let (_directory, store) = seed_store_with(base_membership(), |transaction| {
+            for item_id in [20, 21, 22] {
+                insert_media(
+                    transaction,
+                    item_id,
+                    &format!("range-{item_id}"),
+                    "active",
+                    "same-name",
+                    "image/jpeg",
+                    10,
+                    Some(4),
+                );
+            }
+            Ok(())
+        });
 
         let mut range_query = query_for(ItemScope::All);
         range_query.filters.ratings = vec![4];
@@ -4833,7 +3579,8 @@ mod tests {
             focus_item_id: ItemId(22),
         };
         let ids = store
-            .read(|connection| resolve_target_ids(connection, &target))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
             .unwrap();
         assert_eq!(ids, vec![20, 21, 22]);
 
@@ -4844,7 +3591,8 @@ mod tests {
         };
         assert_eq!(
             store
-                .read(|connection| resolve_target_ids(connection, &one))
+                .store()
+                .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &one))
                 .unwrap(),
             vec![21]
         );
@@ -4856,7 +3604,8 @@ mod tests {
             focus_item_id: ItemId(22),
         };
         assert!(store
-            .read(|connection| resolve_target_ids(connection, &outside_query))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &outside_query))
             .unwrap()
             .is_empty());
     }
@@ -4868,7 +3617,8 @@ mod tests {
             item_ids: vec![ItemId(10), ItemId(1), ItemId(3), ItemId(2)],
         };
         let ids = store
-            .read(|connection| resolve_target_ids(connection, &target))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
             .unwrap();
         assert_eq!(ids, vec![10, 1, 3, 2]);
 
@@ -4876,7 +3626,8 @@ mod tests {
             item_ids: vec![ItemId(1), ItemId(1)],
         };
         assert!(store
-            .read(|connection| resolve_target_ids(connection, &duplicate))
+            .store()
+            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &duplicate))
             .is_err());
     }
 
@@ -4884,13 +3635,15 @@ mod tests {
     fn collection_details_are_ordered_and_aggregate_member_tags() {
         let (_directory, store) = seed_store();
         let projection = store
+            .store()
             .read(|connection| {
                 crate::projection_v2::ProjectionStore::from_connection(connection)
                     .map_err(rusqlite::Error::InvalidParameterName)
             })
             .unwrap();
-        let revision = store.revision().unwrap();
+        let revision = store.store().revision().unwrap();
         let details = store
+            .store()
             .read(|connection| {
                 details_connection(connection, 10, &projection.selection_snapshot(), revision)
             })
@@ -4928,6 +3681,7 @@ mod tests {
     fn root_owned_metadata_wins_over_attached_media_organization() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE media_asset
@@ -4940,13 +3694,15 @@ mod tests {
             .unwrap();
 
         let projection = store
+            .store()
             .read(|connection| {
                 crate::projection_v2::ProjectionStore::from_connection(connection)
                     .map_err(rusqlite::Error::InvalidParameterName)
             })
             .unwrap();
-        let revision = store.revision().unwrap();
+        let revision = store.store().revision().unwrap();
         let details = store
+            .store()
             .read(|connection| {
                 details_connection(connection, 10, &projection.selection_snapshot(), revision)
             })
@@ -4962,13 +3718,13 @@ mod tests {
 
         let mut query = query_for(ItemScope::All);
         query.filters.ratings = vec![1];
-        assert!(super::query(&store, &query, ItemPageRequest::default())
+        assert!(query_for_application(&store, &query, ItemPageRequest::default())
             .unwrap()
             .items
             .is_empty());
         query.filters.ratings = vec![5];
         assert_eq!(
-            super::query(&store, &query, ItemPageRequest::default())
+            query_for_application(&store, &query, ItemPageRequest::default())
                 .unwrap()
                 .items
                 .into_iter()
@@ -4980,21 +3736,14 @@ mod tests {
 
     #[test]
     fn inbox_and_trash_root_tags_remain_stored_but_do_not_enter_active_counts() {
-        let (_directory, store) = seed_store();
-        store
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO root_tag (root_item_id, tag_id) VALUES (2, 1), (3, 1)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        let mut membership = base_membership();
+        membership.tags = vec![(1, vec![10, 2, 3])];
+        let (_directory, store) = seed_store_with(membership, |_| Ok(()));
 
         let tagged_ids = |scope| {
             let mut query = query_for(scope);
             query.filters.include_tags = vec!["member-tag".to_string()];
-            super::query(&store, &query, ItemPageRequest::default())
+            query_for_application(&store, &query, ItemPageRequest::default())
                 .unwrap()
                 .items
                 .into_iter()
@@ -5036,8 +3785,7 @@ mod tests {
 
     #[test]
     fn application_selection_uses_group_aware_bitmap_mime_predicates() {
-        let (_directory, store) = seed_store();
-        let application = Application::new(Arc::new(store));
+        let (_directory, application) = seed_store();
 
         let mut images = query_for(ItemScope::All);
         images.filters.include_mime_types = vec!["image/*".to_string()];
@@ -5112,6 +3860,7 @@ mod tests {
     fn selection_summary_uses_the_same_root_and_media_counts_as_grid() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE root_metadata
@@ -5165,6 +3914,7 @@ mod tests {
         assert!(!excluded_summary.stats.all_media_are_images);
 
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "INSERT INTO root_tag (root_item_id, tag_id) VALUES (1, 1)",
@@ -5190,6 +3940,7 @@ mod tests {
         );
 
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE root_metadata
@@ -5210,6 +3961,7 @@ mod tests {
         assert_eq!(summary.shared_source_urls, None);
 
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE root_metadata
@@ -5229,6 +3981,7 @@ mod tests {
         );
 
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE root_metadata
@@ -5251,6 +4004,7 @@ mod tests {
     fn selection_summary_preserves_recent_explicit_selection_order_for_stacking() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE media_asset SET imported_at = CASE item_id
@@ -5289,6 +4043,7 @@ mod tests {
     fn sidebar_counts_match_canonical_active_root_scopes() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "INSERT INTO smart_folder (
@@ -5313,7 +4068,7 @@ mod tests {
             })
             .unwrap();
 
-        let application = crate::app::Application::try_new(std::sync::Arc::new(store)).unwrap();
+        let application = store;
         let counts = sidebar_counts_for_application(&application).unwrap();
         assert_eq!(counts.all, 2);
         assert_eq!(counts.inbox, 1);
@@ -5330,6 +4085,7 @@ mod tests {
     fn library_statistics_separate_roots_assets_and_physical_storage() {
         let (_directory, store) = seed_store();
         store
+            .store()
             .transaction(|transaction| {
                 transaction.execute(
                     "INSERT INTO smart_folder (
@@ -5348,7 +4104,7 @@ mod tests {
             })
             .unwrap();
 
-        let statistics = library_statistics(&store).unwrap();
+        let statistics = library_statistics(store.store()).unwrap();
         assert_eq!(statistics.active_items, 2);
         assert_eq!(statistics.inbox_items, 1);
         assert_eq!(statistics.trash_items, 1);

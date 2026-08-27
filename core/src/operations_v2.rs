@@ -435,8 +435,9 @@ impl Application {
             |transaction| {
                 let operation_started = Instant::now();
                 let mut stage_started = operation_started;
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
                 let projection = self.projections().selection_snapshot();
+                let item_ids =
+                    crate::query_v2::resolve_target_ids(transaction, &projection, &input.target)?;
                 stage_root_ids(transaction, &item_ids, &projection)?;
                 let before_universe = group_history_universe(&projection, &item_ids)?;
                 let before = capture_group_state_from_projection(
@@ -1459,7 +1460,8 @@ impl Application {
                 vec![],
             ),
             |transaction| {
-                stage_root_selection(transaction, target)?;
+                let projection = self.projections().selection_snapshot();
+                stage_root_selection(transaction, &projection, target)?;
                 let item_ids = limited_staged_hints(
                     transaction,
                     "picto_selected_root",
@@ -2799,16 +2801,17 @@ fn stage_mutation_selection(
     target: &ItemTarget,
     projection: &crate::projection_v2::ProjectionSelectionSnapshot,
 ) -> rusqlite::Result<()> {
-    stage_root_selection(transaction, target)?;
+    stage_root_selection(transaction, projection, target)?;
     populate_staged_media(transaction, projection)
 }
 
 fn stage_root_selection(
     transaction: &Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     target: &ItemTarget,
 ) -> rusqlite::Result<()> {
     prepare_mutation_selection_tables(transaction)?;
-    let selection = crate::query_v2::target_selection_sql(transaction, target)?;
+    let selection = crate::query_v2::target_selection_sql(transaction, projection, target)?;
     let sql = format!(
         "{}
          INSERT INTO picto_selected_root(item_id)
@@ -2829,18 +2832,15 @@ fn stage_root_selection_projected(
         excluded_item_ids,
     } = target
     {
-        if let Some(mut roots) =
-            crate::predicate_v2::compile_item_query(transaction, projection, query)?
-        {
-            for item_id in excluded_item_ids {
-                if let Ok(item_id) = u32::try_from(item_id.0) {
-                    roots.remove(item_id);
-                }
+        let mut roots = crate::predicate_v2::compile_item_query(transaction, projection, query)?;
+        for item_id in excluded_item_ids {
+            if let Ok(item_id) = u32::try_from(item_id.0) {
+                roots.remove(item_id);
             }
-            return stage_root_bitmap(transaction, &roots);
         }
+        return stage_root_bitmap(transaction, &roots);
     }
-    stage_root_selection(transaction, target)
+    stage_root_selection(transaction, projection, target)
 }
 
 fn stage_root_bitmap(transaction: &Transaction<'_>, roots: &RoaringBitmap) -> rusqlite::Result<()> {

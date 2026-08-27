@@ -711,23 +711,6 @@ fn normalize_search(value: &str) -> String {
         .replace(' ', "_")
 }
 
-pub(crate) fn effective_query_tag_ids(
-    connection: &rusqlite::Connection,
-    namespace: &str,
-    subtag: &str,
-) -> rusqlite::Result<Vec<i64>> {
-    connection
-        .prepare_cached(
-            "SELECT tag_id FROM tag
-             WHERE namespace = ?1 AND subtag = ?2
-             ORDER BY tag_id",
-        )?
-        .query_map(rusqlite::params![namespace, subtag], |row| {
-            row.get::<_, i64>(0)
-        })?
-        .collect()
-}
-
 fn invalid(message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
 }

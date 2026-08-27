@@ -21,13 +21,28 @@ use picto_core::projection_v2::{
     RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
 };
 use picto_core::query_v2::{
-    details, query, selection_summary, selection_summary_for_application,
-    sidebar_counts_for_application, ItemPageRequest,
+    details, query_for_application, selection_summary_for_application,
+    sidebar_counts_for_application, ItemPage, ItemPageRequest,
 };
 use picto_core::smart_v2::SmartFolderPredicate;
 use picto_core::store::{PublicationGateStats, Store};
 use roaring::RoaringBitmap;
 use rusqlite::OptionalExtension;
+
+fn query(
+    application: &Application,
+    item_query: &ItemQuery,
+    page: ItemPageRequest,
+) -> Result<ItemPage, String> {
+    query_for_application(application, item_query, page)
+}
+
+fn selection_summary(
+    application: &Application,
+    target: &ItemTarget,
+) -> Result<picto_core::query_v2::SelectionSummary, String> {
+    selection_summary_for_application(application, target)
+}
 
 const CI_ACTIVE_ROWS: usize = 10_000;
 const CI_INBOX_ROWS: usize = 2_000;
@@ -289,20 +304,20 @@ fn run_scale(
     assert_sidebar_values(&sidebar, expected);
     assert_budget("sidebar counts", sidebar_elapsed, query_budget);
 
-    let all = timed_scope_query(&store, ItemScope::All, expected.active, query_budget);
-    let inbox = timed_scope_query(&store, ItemScope::Inbox, expected.inbox, query_budget);
-    let trash = timed_scope_query(&store, ItemScope::Trash, expected.trash, query_budget);
+    let all = timed_scope_query(&application, ItemScope::All, expected.active, query_budget);
+    let inbox = timed_scope_query(&application, ItemScope::Inbox, expected.inbox, query_budget);
+    let trash = timed_scope_query(&application, ItemScope::Trash, expected.trash, query_budget);
     let folder = timed_scope_query(
-        &store,
+        &application,
         ItemScope::Folder { folder_id: 1 },
         expected.folder_active,
         query_budget,
     );
-    let tag = timed_tag_query(&store, active_rows, query_budget);
-    let smart_tag = timed_tag_smart_folder_query(&store, active_rows, query_budget);
-    let smart_numeric = timed_numeric_smart_folder_query(&store, active_rows, query_budget);
-    let smart_text = timed_text_smart_folder_query(&store, active_rows, query_budget);
-    let (fts_settle, fts_query) = timed_search_settlement(&store, active_rows, query_budget);
+    let tag = timed_tag_query(&application, active_rows, query_budget);
+    let smart_tag = timed_tag_smart_folder_query(&application, active_rows, query_budget);
+    let smart_numeric = timed_numeric_smart_folder_query(&application, active_rows, query_budget);
+    let smart_text = timed_text_smart_folder_query(&application, active_rows, query_budget);
+    let (fts_settle, fts_query) = timed_search_settlement(&application, active_rows, query_budget);
     let bulk = timed_bulk_mutations(&application, &store, active_rows, read_budget);
 
     // A lifecycle write must move one root in both the canonical query and
@@ -321,7 +336,7 @@ fn run_scale(
     assert!(application.projections().trash_bitmap().contains(4));
     assert_sidebar_counts(&application, after_transition);
     let transitioned_trash = timed_scope_query(
-        &store,
+        &application,
         ItemScope::Trash,
         after_transition.trash,
         query_budget,
@@ -412,7 +427,7 @@ fn concurrent_ingest(
                 let started = Instant::now();
                 let observation = match reader_id {
                     0 => query(
-                        &store,
+                        &application,
                         &ItemQuery {
                             scope: ItemScope::All,
                             filters: ItemFilters::default(),
@@ -562,7 +577,7 @@ fn timed_bulk_mutations(
                 let started = Instant::now();
                 let result = if reader_id % 2 == 0 {
                     query(
-                        &store,
+                        &application,
                         &ItemQuery {
                             scope: ItemScope::All,
                             filters: ItemFilters::default(),
@@ -903,12 +918,12 @@ fn synthetic_membership_count(rows: usize) -> usize {
     (1..=rows as i64).map(synthetic_tags_per_item).sum()
 }
 
-fn timed_tag_query(store: &Store, rows: usize, budget: Duration) -> Duration {
+fn timed_tag_query(application: &Application, rows: usize, budget: Duration) -> Duration {
     let tag = "creator:creator_0000";
     let expected = expected_creator_matches(rows);
     let started = Instant::now();
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope: ItemScope::All,
             filters: ItemFilters {
@@ -926,11 +941,11 @@ fn timed_tag_query(store: &Store, rows: usize, budget: Duration) -> Duration {
     elapsed
 }
 
-fn timed_tag_smart_folder_query(store: &Store, rows: usize, budget: Duration) -> Duration {
-    insert_smart_folder(store, 1, tag_smart_folder_predicate());
+fn timed_tag_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
+    insert_smart_folder(application.store(), 1, tag_smart_folder_predicate());
     let started = Instant::now();
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope: ItemScope::SmartFolder { smart_folder_id: 1 },
             filters: ItemFilters::default(),
@@ -962,13 +977,13 @@ fn tag_smart_folder_predicate() -> serde_json::Value {
     })
 }
 
-fn timed_numeric_smart_folder_query(store: &Store, rows: usize, budget: Duration) -> Duration {
+fn timed_numeric_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
     let minimum_size = 501_024_i64;
-    insert_smart_folder(store, 2, numeric_smart_folder_predicate(minimum_size));
+    insert_smart_folder(application.store(), 2, numeric_smart_folder_predicate(minimum_size));
     let expected = (1..=rows as i64)
         .filter(|item_id| 1_024 + item_id >= minimum_size)
         .count() as i64;
-    timed_smart_scope(store, 2, expected, "numeric smart-folder query", budget)
+    timed_smart_scope(application, 2, expected, "numeric smart-folder query", budget)
 }
 
 fn numeric_smart_folder_predicate(minimum_size: i64) -> serde_json::Value {
@@ -985,13 +1000,13 @@ fn numeric_smart_folder_predicate(minimum_size: i64) -> serde_json::Value {
     })
 }
 
-fn timed_text_smart_folder_query(store: &Store, rows: usize, budget: Duration) -> Duration {
+fn timed_text_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
     let needle = "9999";
-    insert_smart_folder(store, 3, text_smart_folder_predicate(needle));
+    insert_smart_folder(application.store(), 3, text_smart_folder_predicate(needle));
     let expected = (1..=rows as i64)
         .filter(|item_id| format!("item-{item_id}.png").contains(needle))
         .count() as i64;
-    timed_smart_scope(store, 3, expected, "text smart-folder query", budget)
+    timed_smart_scope(application, 3, expected, "text smart-folder query", budget)
 }
 
 fn text_smart_folder_predicate(needle: &str) -> serde_json::Value {
@@ -1066,7 +1081,7 @@ fn insert_smart_folder(store: &Store, smart_folder_id: i64, predicate: serde_jso
 }
 
 fn timed_smart_scope(
-    store: &Store,
+    application: &Application,
     smart_folder_id: i64,
     expected: i64,
     label: &str,
@@ -1074,7 +1089,7 @@ fn timed_smart_scope(
 ) -> Duration {
     let started = Instant::now();
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope: ItemScope::SmartFolder { smart_folder_id },
             filters: ItemFilters::default(),
@@ -1089,16 +1104,16 @@ fn timed_smart_scope(
     elapsed
 }
 
-fn timed_search_settlement(store: &Store, rows: usize, budget: Duration) -> (Duration, Duration) {
+fn timed_search_settlement(application: &Application, rows: usize, budget: Duration) -> (Duration, Duration) {
     let settle_started = Instant::now();
-    store.refresh_search_indexes().unwrap();
+    application.store().refresh_search_indexes().unwrap();
     let settle_elapsed = settle_started.elapsed();
     assert_budget("FTS settlement", settle_elapsed, budget);
 
     let item_id = rows as i64;
     let query_started = Instant::now();
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope: ItemScope::All,
             filters: ItemFilters {
@@ -1147,10 +1162,10 @@ fn transition_lifecycle(application: &Application, item_id: i64, lifecycle: Life
         .unwrap();
 }
 
-fn timed_scope_query(store: &Store, scope: ItemScope, expected: i64, budget: Duration) -> Duration {
+fn timed_scope_query(application: &Application, scope: ItemScope, expected: i64, budget: Duration) -> Duration {
     let started = Instant::now();
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope,
             filters: ItemFilters::default(),
@@ -2050,8 +2065,8 @@ fn exercise_rating(
     set_result.unwrap();
     measure_validation("rating.set", cardinality, || {
         assert_rating_cardinality(application, store, 4, cardinality as i64);
-        assert_smart_cardinality(store, 4, cardinality as i64);
-        let summary = selection_summary(store, target).unwrap();
+        assert_smart_cardinality(application, store, 4, cardinality as i64);
+        let summary = selection_summary(application, target).unwrap();
         assert_eq!(summary.stats.rating_stats.min, Some(4));
         assert_eq!(summary.stats.rating_stats.max, Some(4));
         assert_eq!(summary.stats.rating_stats.shared, Some(4));
@@ -2068,7 +2083,7 @@ fn exercise_rating(
     undo_result.unwrap();
     measure_validation("rating.set.undo", cardinality, || {
         assert_rating_cardinality(application, store, 4, 0);
-        assert_smart_cardinality(store, 4, 0);
+        assert_smart_cardinality(application, store, 4, 0);
     });
 
     let (redo_result, redo) = measure_mutation(
@@ -2082,7 +2097,7 @@ fn exercise_rating(
     redo_result.unwrap();
     measure_validation("rating.set.redo", cardinality, || {
         assert_rating_cardinality(application, store, 4, cardinality as i64);
-        assert_smart_cardinality(store, 4, cardinality as i64);
+        assert_smart_cardinality(application, store, 4, cardinality as i64);
     });
 
     let clear_patch = MediaMetadataPatch {
@@ -2101,7 +2116,7 @@ fn exercise_rating(
     clear_result.unwrap();
     measure_validation("rating.clear", cardinality, || {
         assert_rating_cardinality(application, store, 4, 0);
-        assert_smart_cardinality(store, 4, 0);
+        assert_smart_cardinality(application, store, 4, 0);
     });
 
     for (label, value) in [
@@ -2147,7 +2162,7 @@ fn exercise_smart_folder_mutations(
         );
         let smart_id = created.unwrap().0;
         let expected_tag = expected_creator_matches(rows);
-        assert_smart_cardinality(store, smart_id, expected_tag);
+        assert_smart_cardinality(application, store, smart_id, expected_tag);
 
         let metadata_input = CreateSmartFolderInput {
             name: format!("Matrix smart {cardinality} renamed"),
@@ -2163,7 +2178,7 @@ fn exercise_smart_folder_mutations(
             || application.update_smart_folder_v2(smart_id, &metadata_input),
         );
         metadata_result.unwrap();
-        assert_smart_cardinality(store, smart_id, expected_tag);
+        assert_smart_cardinality(application, store, smart_id, expected_tag);
 
         let predicate_input = CreateSmartFolderInput {
             predicate: numeric_predicate,
@@ -2178,11 +2193,11 @@ fn exercise_smart_folder_mutations(
             || application.update_smart_folder_v2(smart_id, &predicate_input),
         );
         predicate_result.unwrap();
-        assert_smart_cardinality(store, smart_id, cardinality as i64);
+        assert_smart_cardinality(application, store, smart_id, cardinality as i64);
         application.undo().unwrap();
-        assert_smart_cardinality(store, smart_id, expected_tag);
+        assert_smart_cardinality(application, store, smart_id, expected_tag);
         application.redo().unwrap();
-        assert_smart_cardinality(store, smart_id, cardinality as i64);
+        assert_smart_cardinality(application, store, smart_id, cardinality as i64);
 
         let (delete_result, delete) = measure_mutation(
             "smart.delete",
@@ -2193,11 +2208,11 @@ fn exercise_smart_folder_mutations(
             || application.delete_smart_folder_v2(smart_id),
         );
         delete_result.unwrap();
-        assert_smart_cardinality(store, smart_id, 0);
+        assert_smart_cardinality(application, store, smart_id, 0);
         application.undo().unwrap();
-        assert_smart_cardinality(store, smart_id, cardinality as i64);
+        assert_smart_cardinality(application, store, smart_id, cardinality as i64);
         application.redo().unwrap();
-        assert_smart_cardinality(store, smart_id, 0);
+        assert_smart_cardinality(application, store, smart_id, 0);
         for (label, value) in [
             ("smart.create", create),
             ("smart.metadata_update", metadata),
@@ -2428,7 +2443,7 @@ fn fixed_rate_read(
 ) -> Result<i64, String> {
     match reader_id {
         0 => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::All,
                 filters: ItemFilters::default(),
@@ -2439,7 +2454,7 @@ fn fixed_rate_read(
         .map(|page| page.items.len() as i64),
         1 => sidebar_counts_for_application(application).map(|counts| counts.all),
         2 => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::Folder { folder_id: 1 },
                 filters: ItemFilters::default(),
@@ -2449,7 +2464,7 @@ fn fixed_rate_read(
         )
         .map(|page| page.items.len() as i64),
         3 => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::SmartFolder { smart_folder_id: 1 },
                 filters: ItemFilters::default(),
@@ -2460,7 +2475,7 @@ fn fixed_rate_read(
         .map(|page| page.items.len() as i64),
         4 => {
             let page = query(
-                store,
+                application,
                 &ItemQuery {
                     scope: ItemScope::All,
                     filters: ItemFilters::default(),
@@ -2478,7 +2493,7 @@ fn fixed_rate_read(
             }
         }
         5 => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::All,
                 filters: ItemFilters {
@@ -2491,7 +2506,7 @@ fn fixed_rate_read(
         )
         .map(|page| page.items.len() as i64),
         6 => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::Inbox,
                 filters: ItemFilters::default(),
@@ -2501,7 +2516,7 @@ fn fixed_rate_read(
         )
         .map(|page| page.items.len() as i64),
         _ => query(
-            store,
+            application,
             &ItemQuery {
                 scope: ItemScope::Trash,
                 filters: ItemFilters::default(),
@@ -2666,7 +2681,7 @@ fn assert_root_state(application: &Application, active: i64, inbox: i64, trash: 
     assert_eq!(application.projections().trash_bitmap().len(), trash as u64);
     assert_eq!(
         query(
-            application.store(),
+            application,
             &ItemQuery {
                 scope: ItemScope::All,
                 filters: ItemFilters::default(),
@@ -2747,7 +2762,12 @@ fn assert_folder_cardinality(
     );
 }
 
-fn assert_smart_cardinality(store: &Store, smart_folder_id: i64, expected: i64) {
+fn assert_smart_cardinality(
+    application: &Application,
+    store: &Store,
+    smart_folder_id: i64,
+    expected: i64,
+) {
     let exists: bool = store
         .read_snapshot(|connection| {
             connection.query_row(
@@ -2762,7 +2782,7 @@ fn assert_smart_cardinality(store: &Store, smart_folder_id: i64, expected: i64) 
         return;
     }
     let page = query(
-        store,
+        application,
         &ItemQuery {
             scope: ItemScope::SmartFolder { smart_folder_id },
             filters: ItemFilters::default(),

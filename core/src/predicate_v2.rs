@@ -15,35 +15,22 @@ pub(crate) fn compile_item_query(
     connection: &Connection,
     projection: &ProjectionSelectionSnapshot,
     query: &ItemQuery,
-) -> rusqlite::Result<Option<RoaringBitmap>> {
-    if has_sql_only_filters(&query.filters) {
-        return Ok(None);
-    }
-
-    let active_scope = matches!(
-        query.scope,
-        ItemScope::All | ItemScope::Untagged | ItemScope::Uncategorized | ItemScope::Folder { .. }
-    );
-    if !active_scope
-        && (!query.filters.include_tags.is_empty()
-            || !query.filters.exclude_tags.is_empty()
-            || !query.filters.include_folder_ids.is_empty()
-            || !query.filters.exclude_folder_ids.is_empty())
-    {
-        return Ok(None);
-    }
-
+) -> rusqlite::Result<RoaringBitmap> {
     let mut roots = match query.scope {
         ItemScope::All => projection.lifecycle_bitmap(Lifecycle::Active),
         ItemScope::Inbox => projection.lifecycle_bitmap(Lifecycle::Inbox),
         ItemScope::Trash => projection.lifecycle_bitmap(Lifecycle::Trash),
         ItemScope::Untagged => projection.untagged_bitmap(),
         ItemScope::Uncategorized => projection.uncategorized_bitmap(),
-        ItemScope::Folder { folder_id } => projection.folder_bitmap(folder_id),
+        ItemScope::Folder { folder_id } => {
+            // Trash and Inbox retain folder organization; the visible folder
+            // scope is membership intersected with the active lifecycle.
+            projection.folder_bitmap(folder_id) & projection.lifecycle_bitmap(Lifecycle::Active)
+        }
         ItemScope::SmartFolder { smart_folder_id } => {
             projection.smart_folder_bitmap(smart_folder_id)
         }
-        ItemScope::RecentlyViewed => return Ok(None),
+        ItemScope::RecentlyViewed => recently_viewed_bitmap(connection, projection)?,
     };
 
     apply_folder_filters(projection, &query.filters, &mut roots);
@@ -51,11 +38,101 @@ pub(crate) fn compile_item_query(
     apply_size_filters(projection, &query.filters, &mut roots);
     apply_display_metric_filters(projection, &query.filters, &mut roots);
     apply_timestamp_filters(projection, &query.filters, &mut roots);
-    apply_color_filter(projection, &query.filters, &mut roots);
+    apply_color_filter(connection, projection, &query.filters, &mut roots)?;
     apply_mime_filters(projection, &query.filters, &mut roots);
+    apply_metadata_text_filters(connection, &query.filters, &mut roots)?;
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
     apply_text_filter(connection, projection, &query.filters, &mut roots)?;
-    Ok(Some(roots))
+    Ok(roots)
+}
+
+fn recently_viewed_bitmap(
+    connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
+) -> rusqlite::Result<RoaringBitmap> {
+    let viewed = connection
+        .prepare_cached("SELECT item_id FROM media_view")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .filter_map(|item_id| match item_id {
+            Ok(item_id) => u32::try_from(item_id).ok().map(Ok),
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    Ok(viewed & projection.lifecycle_bitmap(Lifecycle::Active))
+}
+
+/// Notes and source-URL predicates read root_metadata (a permitted indexed
+/// table) and intersect the result as a bitmap.
+fn apply_metadata_text_filters(
+    connection: &Connection,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) -> rusqlite::Result<()> {
+    if let Some(present) = filters.notes_present {
+        let matches = metadata_bitmap(
+            connection,
+            "SELECT root_item_id FROM root_metadata
+             WHERE NULLIF(TRIM(notes), '') IS NOT NULL",
+            None,
+        )?;
+        if present {
+            *roots &= matches;
+        } else {
+            *roots -= matches;
+        }
+    }
+    if let Some(keyword) = nonempty_text(filters.notes_contains.as_deref()) {
+        let matches = metadata_bitmap(
+            connection,
+            "SELECT root_item_id FROM root_metadata WHERE notes LIKE ?1",
+            Some(format!("%{keyword}%")),
+        )?;
+        *roots &= matches;
+    }
+    if let Some(present) = filters.source_url_present {
+        let matches = metadata_bitmap(
+            connection,
+            "SELECT root_item_id FROM root_metadata
+             WHERE json_array_length(source_urls_json) > 0",
+            None,
+        )?;
+        if present {
+            *roots &= matches;
+        } else {
+            *roots -= matches;
+        }
+    }
+    if let Some(keyword) = nonempty_text(filters.source_url_contains.as_deref()) {
+        let matches = metadata_bitmap(
+            connection,
+            "SELECT root_item_id FROM root_metadata WHERE source_urls_json LIKE ?1",
+            Some(format!("%{keyword}%")),
+        )?;
+        *roots &= matches;
+    }
+    Ok(())
+}
+
+fn metadata_bitmap(
+    connection: &Connection,
+    sql: &str,
+    argument: Option<String>,
+) -> rusqlite::Result<RoaringBitmap> {
+    let mut statement = connection.prepare_cached(sql)?;
+    let map = |row: &rusqlite::Row<'_>| row.get::<_, i64>(0);
+    let rows = match argument {
+        Some(argument) => statement.query_map([argument], map)?,
+        None => statement.query_map([], map)?,
+    };
+    rows.filter_map(|root_id| match root_id {
+        Ok(root_id) => u32::try_from(root_id).ok().map(Ok),
+        Err(error) => Some(Err(error)),
+    })
+    .collect()
+}
+
+fn nonempty_text(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn apply_text_filter(
@@ -233,6 +310,7 @@ fn apply_timestamp_filters(
         filters.imported_after.as_deref(),
         filters.imported_before.as_deref(),
     ) else {
+        roots.clear();
         return;
     };
     apply_timestamp_range(
@@ -248,6 +326,7 @@ fn apply_timestamp_filters(
         filters.modified_after.as_deref(),
         filters.modified_before.as_deref(),
     ) else {
+        roots.clear();
         return;
     };
     apply_timestamp_range(
@@ -298,27 +377,50 @@ fn parse_optional_timestamp(value: Option<&str>) -> Option<Option<i64>> {
 }
 
 fn apply_color_filter(
+    connection: &Connection,
     projection: &ProjectionSelectionSnapshot,
     filters: &ItemFilters,
     roots: &mut RoaringBitmap,
-) {
-    let Some(Some((l, a, b))) = parsed_color(filters.color_hex.as_deref()) else {
-        return;
+) -> rusqlite::Result<()> {
+    let Some(color_hex) = nonempty_text(filters.color_hex.as_deref()) else {
+        return Ok(());
     };
-    *roots = projection.color_match_bitmap(
-        l,
-        a,
-        b,
-        crate::media_processing::colors::FILTER_DELTA_E,
-        roots,
-    );
-}
-
-fn parsed_color(value: Option<&str>) -> Option<Option<(f64, f64, f64)>> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Some(None);
-    };
-    crate::media_processing::colors::lab_components_from_hex(value).map(Some)
+    match crate::media_processing::colors::lab_components_from_hex(color_hex) {
+        Some((l, a, b)) => {
+            *roots = projection.color_match_bitmap(
+                l,
+                a,
+                b,
+                crate::media_processing::colors::FILTER_DELTA_E,
+                roots,
+            );
+        }
+        None => {
+            // Not a decodable color: match the literal palette hex of any
+            // owned member, as the SQL filter always has.
+            let mut matches = RoaringBitmap::new();
+            let mut statement = connection.prepare_cached(
+                "SELECT ma.item_id
+                 FROM file_color fc
+                 JOIN media_asset ma ON ma.file_id = fc.file_id
+                 WHERE lower(fc.hex) = ?1",
+            )?;
+            let media_ids = statement
+                .query_map([color_hex.to_ascii_lowercase()], |row| {
+                    row.get::<_, i64>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for media_id in media_ids {
+                if let Some(root_id) = projection.root_for_media(media_id) {
+                    if let Ok(root_id) = u32::try_from(root_id) {
+                        matches.insert(root_id);
+                    }
+                }
+            }
+            *roots &= matches;
+        }
+    }
+    Ok(())
 }
 
 fn apply_mime_filters(
@@ -357,7 +459,9 @@ fn apply_tag_filters(
 ) -> rusqlite::Result<()> {
     let include_tag_ids = resolve_tag_ids(connection, &filters.include_tags)?;
     if !filters.include_tags.is_empty() {
-        if include_tag_ids.len() != filters.include_tags.len() {
+        if filters.tag_match_mode != FilterMatchMode::Any
+            && include_tag_ids.len() != filters.include_tags.len()
+        {
             roots.clear();
             return Ok(());
         }
@@ -411,24 +515,6 @@ fn combine(bitmaps: impl IntoIterator<Item = RoaringBitmap>, union: bool) -> Roa
         }
     }
     result
-}
-
-fn has_sql_only_filters(filters: &ItemFilters) -> bool {
-    parsed_color(filters.color_hex.as_deref()).is_none()
-        || parsed_timestamp_range(
-            filters.imported_after.as_deref(),
-            filters.imported_before.as_deref(),
-        )
-        .is_none()
-        || parsed_timestamp_range(
-            filters.modified_after.as_deref(),
-            filters.modified_before.as_deref(),
-        )
-        .is_none()
-        || filters.notes_present.is_some()
-        || filters.notes_contains.is_some()
-        || filters.source_url_present.is_some()
-        || filters.source_url_contains.is_some()
 }
 
 pub(crate) fn fts_match_query(text: &str) -> Option<String> {
