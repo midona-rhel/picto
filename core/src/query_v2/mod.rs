@@ -1537,101 +1537,17 @@ fn selection_display_hashes(
         })
 }
 
-fn sidebar_counts_connection(connection: &Connection) -> rusqlite::Result<SidebarCounts> {
-    let mut result = connection.query_row(
-        "SELECT
-             (SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'active'),
-             (SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'inbox'),
-             (SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'trash'),
-             (SELECT COUNT(*) FROM media_view mv
-              WHERE EXISTS (
-                  SELECT 1 FROM library_root lr
-                  WHERE lr.item_id = mv.item_id AND lr.lifecycle = 'active'
-              )),
-             (SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'active')
-                 - (SELECT COUNT(*) FROM (
-                        SELECT rtc.root_item_id
-                        FROM root_tag rtc
-                        JOIN library_root lr ON lr.item_id = rtc.root_item_id
-                        WHERE lr.lifecycle = 'active'
-                          AND NOT EXISTS (
-                              SELECT 1 FROM collection_member cm
-                              WHERE cm.media_item_id = lr.item_id
-                          )
-                        GROUP BY rtc.root_item_id
-                    )),
-             (SELECT root_count FROM lifecycle_summary WHERE lifecycle = 'active')
-                 - (SELECT COUNT(*) FROM (
-                        SELECT fi.item_id
-                        FROM folder_item fi
-                        JOIN library_root lr ON lr.item_id = fi.item_id
-                        WHERE lr.lifecycle = 'active'
-                          AND NOT EXISTS (
-                              SELECT 1 FROM collection_member cm
-                              WHERE cm.media_item_id = lr.item_id
-                          )
-                        GROUP BY fi.item_id
-                    ))",
-        [],
-        |row| {
-            Ok(SidebarCounts {
-                all: row.get(0)?,
-                inbox: row.get(1)?,
-                trash: row.get(2)?,
-                recently_viewed: row.get(3)?,
-                untagged: row.get(4)?,
-                uncategorized: row.get(5)?,
-                ..SidebarCounts::default()
-            })
-        },
-    )?;
-    result.duplicates = crate::duplicates_v2::count_candidates(connection)?;
-    result.folders = connection
-        .prepare(
-            "SELECT folder.folder_id, COALESCE(summary.visible_root_count, 0)
-             FROM folder
-             LEFT JOIN folder_summary summary ON summary.folder_id = folder.folder_id
-             ORDER BY folder.folder_id",
-        )?
-        .query_map([], |row| {
-            Ok(ScopeCount {
-                id: row.get(0)?,
-                count: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    result.smart_folders = connection
-        .prepare(
-            "SELECT smart_folder.smart_folder_id,
-                    COALESCE(generation.member_count, 0)
-             FROM smart_folder
-             LEFT JOIN smart_folder_generation generation
-               ON generation.smart_folder_id = smart_folder.smart_folder_id
-              AND generation.state = 'active'
-             ORDER BY smart_folder.smart_folder_id",
-        )?
-        .query_map([], |row| {
-            Ok(ScopeCount {
-                id: row.get(0)?,
-                count: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    result.revision = crate::store::schema::revision(connection)?;
-    Ok(result)
-}
-
-pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
-    store.read_snapshot(sidebar_counts_connection)
-}
-
 pub fn sidebar_counts_for_application(
     application: &crate::app::Application,
 ) -> Result<SidebarCounts, String> {
     application.store().read_snapshot_captured(
-        || application.projections().sidebar_snapshot_all(),
-        |connection, revision, snapshot| {
+        || {
+            (
+                application.projections().sidebar_snapshot_all(),
+                application.projections().selection_snapshot(),
+            )
+        },
+        |connection, revision, (snapshot, selection)| {
             (|| -> rusqlite::Result<SidebarCounts> {
                 let mut result = SidebarCounts {
                     all: snapshot.all,
@@ -1651,7 +1567,7 @@ pub fn sidebar_counts_for_application(
                     [],
                     |row| row.get(0),
                 )?;
-                result.duplicates = crate::duplicates_v2::count_candidates(connection)?;
+                result.duplicates = crate::duplicates_v2::count_candidates(connection, &selection)?;
 
                 let folder_counts = snapshot.folders.into_iter().collect::<HashMap<_, _>>();
                 result.folders = connection
@@ -5067,9 +4983,6 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-
-        let counts = super::sidebar_counts(&store).unwrap();
-        assert_eq!(counts.untagged, 1);
 
         let tagged_ids = |scope| {
             let mut query = query_for(scope);

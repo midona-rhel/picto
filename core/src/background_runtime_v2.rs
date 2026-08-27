@@ -575,6 +575,14 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        application
+            .projections()
+            .apply_root_delta(
+                11,
+                crate::app::ItemKind::Media,
+                Some(crate::app::Lifecycle::Active),
+            )
+            .unwrap();
         let original_lookups = Arc::new(AtomicUsize::new(0));
         let thumbnail_writes = Arc::new(AtomicUsize::new(0));
         let blobs = CountingBlobSource {

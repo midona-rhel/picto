@@ -1324,6 +1324,12 @@ impl ProjectionSelectionSnapshot {
         self.state.media_to_root.get(&media_id).copied()
     }
 
+    /// A root is published once it belongs to a lifecycle bitmap. Provisional
+    /// collection roots stay unpublished until their group becomes coherent.
+    pub(crate) fn has_root(&self, item_id: i64) -> bool {
+        has_root(&self.state, item_id)
+    }
+
     pub(crate) fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
         self.state
             .root_owned_tags

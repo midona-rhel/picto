@@ -1069,8 +1069,9 @@ pub struct ResolutionResult {
 /// `not_duplicate` decisions are retained, so rescans do not reopen a user's
 /// explicit decision.
 pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanResult, String> {
-    let ((candidates, affected_item_ids), revision) = app.transaction(
-        |transaction| {
+    let ((candidates, affected_item_ids), revision) = app.transaction_captured(
+        |projections| projections.selection_snapshot(),
+        |transaction, projection| {
             let files = load_files_with_hash(transaction)?;
             let parsed = files
                 .iter()
@@ -1168,8 +1169,8 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
                 if inserted == 0 {
                     continue;
                 }
-                let left_occurrences = occurrences_for_file(transaction, file_id_a)?;
-                let right_occurrences = occurrences_for_file(transaction, file_id_b)?;
+                let left_occurrences = occurrences_for_file(transaction, &projection, file_id_a)?;
+                let right_occurrences = occurrences_for_file(transaction, &projection, file_id_b)?;
                 // Keep detection durable while a subscription collection is being
                 // assembled, but do not expose it until both sides have roots.
                 if left_occurrences.is_empty() || right_occurrences.is_empty() {
@@ -1229,78 +1230,84 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
 }
 
 pub fn list_candidates(app: &Application, limit: i64) -> Result<Vec<DuplicateCandidate>, String> {
-    let limit = limit.clamp(1, 500);
-    app.store().read(|connection| {
-        let mut statement = connection.prepare(
-            "SELECT d.file_id_a, d.file_id_b, d.distance
-             FROM duplicate d
-             WHERE d.status = 'detected'
-               AND EXISTS (
-                   SELECT 1
-                   FROM media_asset ma
-                   LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-                   LEFT JOIN library_root media_root ON media_root.item_id = ma.item_id
-                   LEFT JOIN library_root collection_root
-                     ON collection_root.item_id = cm.collection_id
-                   WHERE ma.file_id = d.file_id_a
-                     AND COALESCE(collection_root.item_id, media_root.item_id) IS NOT NULL
-               )
-               AND EXISTS (
-                   SELECT 1
-                   FROM media_asset ma
-                   LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-                   LEFT JOIN library_root media_root ON media_root.item_id = ma.item_id
-                   LEFT JOIN library_root collection_root
-                     ON collection_root.item_id = cm.collection_id
-                   WHERE ma.file_id = d.file_id_b
-                     AND COALESCE(collection_root.item_id, media_root.item_id) IS NOT NULL
-               )
-             ORDER BY distance ASC, file_id_a ASC, file_id_b ASC
-             LIMIT ?1",
-        )?;
-        let rows = statement.query_map([limit], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, u32>(2)?,
-            ))
-        })?;
-        let pairs = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        pairs
-            .into_iter()
-            .map(|(file_id_a, file_id_b, distance)| {
-                candidate_for_pair(app, connection, file_id_a, file_id_b, distance)
-            })
-            .collect()
-    })
+    let limit = limit.clamp(1, 500) as usize;
+    app.store().read_snapshot_captured(
+        || app.projections().selection_snapshot(),
+        |connection, _revision, projection| {
+            (|| -> rusqlite::Result<Vec<DuplicateCandidate>> {
+                let mut statement = connection.prepare(
+                    "SELECT file_id_a, file_id_b, distance
+                     FROM duplicate
+                     WHERE status = 'detected'
+                     ORDER BY distance ASC, file_id_a ASC, file_id_b ASC",
+                )?;
+                let pairs = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, u32>(2)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut visible_files = HashMap::new();
+                let mut candidates = Vec::new();
+                for (file_id_a, file_id_b, distance) in pairs {
+                    if candidates.len() == limit {
+                        break;
+                    }
+                    let mut visible = |file_id: i64| -> rusqlite::Result<bool> {
+                        if let Some(known) = visible_files.get(&file_id) {
+                            return Ok(*known);
+                        }
+                        let value = file_has_visible_occurrence(connection, &projection, file_id)?;
+                        visible_files.insert(file_id, value);
+                        Ok(value)
+                    };
+                    if !visible(file_id_a)? || !visible(file_id_b)? {
+                        continue;
+                    }
+                    candidates.push(candidate_for_pair(
+                        app,
+                        connection,
+                        &projection,
+                        file_id_a,
+                        file_id_b,
+                        distance,
+                    )?);
+                }
+                Ok(candidates)
+            })()
+            .map_err(|error| error.to_string())
+        },
+    )
 }
 
-pub fn count_candidates(connection: &Connection) -> rusqlite::Result<i64> {
-    connection.query_row(
-        "SELECT COUNT(*)
-         FROM duplicate d
-         WHERE d.status = 'detected'
-           AND EXISTS (
-               SELECT 1
-               FROM media_asset ma
-               LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-               LEFT JOIN library_root media_root ON media_root.item_id = ma.item_id
-               LEFT JOIN library_root collection_root ON collection_root.item_id = cm.collection_id
-               WHERE ma.file_id = d.file_id_a
-                 AND COALESCE(collection_root.item_id, media_root.item_id) IS NOT NULL
-           )
-           AND EXISTS (
-               SELECT 1
-               FROM media_asset ma
-               LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-               LEFT JOIN library_root media_root ON media_root.item_id = ma.item_id
-               LEFT JOIN library_root collection_root ON collection_root.item_id = cm.collection_id
-               WHERE ma.file_id = d.file_id_b
-                 AND COALESCE(collection_root.item_id, media_root.item_id) IS NOT NULL
-           )",
-        [],
-        |row| row.get(0),
-    )
+pub fn count_candidates(
+    connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
+) -> rusqlite::Result<i64> {
+    let mut statement = connection
+        .prepare("SELECT file_id_a, file_id_b FROM duplicate WHERE status = 'detected'")?;
+    let pairs = statement
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut visible_files = HashMap::new();
+    let mut count = 0_i64;
+    for (file_id_a, file_id_b) in pairs {
+        let mut visible = |file_id: i64| -> rusqlite::Result<bool> {
+            if let Some(known) = visible_files.get(&file_id) {
+                return Ok(*known);
+            }
+            let value = file_has_visible_occurrence(connection, projection, file_id)?;
+            visible_files.insert(file_id, value);
+            Ok(value)
+        };
+        if visible(file_id_a)? && visible(file_id_b)? {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// Resolve one file-level pair. Collection members and sourced occurrences keep
@@ -1343,7 +1350,13 @@ pub fn resolve(
                 let mut affected = BTreeSet::new();
                 match choice {
                     ResolutionChoice::KeepBoth => {
-                        collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
+                        collect_pair_roots(
+                            transaction,
+                            &projection,
+                            file_id_a,
+                            file_id_b,
+                            &mut affected,
+                        )?;
                         transaction.execute(
                             "UPDATE duplicate
                          SET status = 'not_duplicate', decided_at = ?3, winner_file_id = NULL
@@ -1373,7 +1386,13 @@ pub fn resolve(
                             [loser_file_id],
                             |row| row.get(0),
                         )?;
-                        collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
+                        collect_pair_roots(
+                            transaction,
+                            &projection,
+                            file_id_a,
+                            file_id_b,
+                            &mut affected,
+                        )?;
                         let collapse = collapsible_standalone_items(
                             transaction,
                             winner_file_id,
@@ -1499,16 +1518,29 @@ pub fn resolve_automatically(
     } else {
         (file_id_b, file_id_a)
     };
-    let winner_file_id = app.store().read(|connection| {
-        let distance = connection.query_row(
-            "SELECT distance FROM duplicate
-             WHERE file_id_a = ?1 AND file_id_b = ?2 AND status = 'detected'",
-            params![file_id_a, file_id_b],
-            |row| row.get::<_, u32>(0),
-        )?;
-        let candidate = candidate_for_pair(app, connection, file_id_a, file_id_b, distance)?;
-        Ok(candidate.decision.winner(file_id_a, file_id_b))
-    })?;
+    let winner_file_id = app.store().read_snapshot_captured(
+        || app.projections().selection_snapshot(),
+        |connection, _revision, projection| {
+            (|| -> rusqlite::Result<Option<i64>> {
+                let distance = connection.query_row(
+                    "SELECT distance FROM duplicate
+                     WHERE file_id_a = ?1 AND file_id_b = ?2 AND status = 'detected'",
+                    params![file_id_a, file_id_b],
+                    |row| row.get::<_, u32>(0),
+                )?;
+                let candidate = candidate_for_pair(
+                    app,
+                    connection,
+                    &projection,
+                    file_id_a,
+                    file_id_b,
+                    distance,
+                )?;
+                Ok(candidate.decision.winner(file_id_a, file_id_b))
+            })()
+            .map_err(|error| error.to_string())
+        },
+    )?;
     let Some(winner_file_id) = winner_file_id else {
         return Ok(None);
     };
@@ -1572,35 +1604,55 @@ fn load_files_with_hash(transaction: &Transaction<'_>) -> rusqlite::Result<Vec<S
 
 fn occurrences_for_file(
     connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
     file_id: i64,
 ) -> rusqlite::Result<Vec<CandidateOccurrence>> {
-    let mut statement = connection.prepare(
-        "SELECT ma.item_id,
-                COALESCE(collection_root.item_id, media_root.item_id),
-                CASE WHEN collection_root.item_id IS NOT NULL THEN cm.collection_id END
-         FROM media_asset ma
-         LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-         LEFT JOIN library_root media_root ON media_root.item_id = ma.item_id
-         LEFT JOIN library_root collection_root ON collection_root.item_id = cm.collection_id
-         WHERE ma.file_id = ?1
-           AND COALESCE(collection_root.item_id, media_root.item_id) IS NOT NULL
-         ORDER BY COALESCE(collection_root.item_id, media_root.item_id), ma.item_id",
-    )?;
-    let occurrences = statement
-        .query_map([file_id], |row| {
-            Ok(CandidateOccurrence {
-                media_item_id: ItemId(row.get(0)?),
-                root_item_id: ItemId(row.get(1)?),
-                collection_id: row.get::<_, Option<i64>>(2)?.map(ItemId),
-            })
-        })?
-        .collect();
-    occurrences
+    let mut statement = connection
+        .prepare("SELECT item_id FROM media_asset WHERE file_id = ?1 ORDER BY item_id")?;
+    let media_item_ids = statement
+        .query_map([file_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut occurrences = Vec::new();
+    for media_item_id in media_item_ids {
+        let Some(root_item_id) = projection.root_for_media(media_item_id) else {
+            continue;
+        };
+        if !projection.has_root(root_item_id) {
+            continue;
+        }
+        occurrences.push(CandidateOccurrence {
+            media_item_id: ItemId(media_item_id),
+            root_item_id: ItemId(root_item_id),
+            collection_id: (root_item_id != media_item_id).then_some(ItemId(root_item_id)),
+        });
+    }
+    occurrences.sort_by_key(|occurrence| (occurrence.root_item_id.0, occurrence.media_item_id.0));
+    Ok(occurrences)
+}
+
+fn file_has_visible_occurrence(
+    connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
+    file_id: i64,
+) -> rusqlite::Result<bool> {
+    let mut statement = connection.prepare("SELECT item_id FROM media_asset WHERE file_id = ?1")?;
+    let mut rows = statement.query([file_id])?;
+    while let Some(row) = rows.next()? {
+        let media_item_id: i64 = row.get(0)?;
+        if projection
+            .root_for_media(media_item_id)
+            .is_some_and(|root_item_id| projection.has_root(root_item_id))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn candidate_for_pair(
     app: &Application,
     connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
     file_id_a: i64,
     file_id_b: i64,
     distance: u32,
@@ -1614,11 +1666,11 @@ fn candidate_for_pair(
         decision: compare_quality_with_recency(app, connection, &left, &right, Some(distance))?,
         left: CandidateSide {
             file: left,
-            occurrences: occurrences_for_file(connection, file_id_a)?,
+            occurrences: occurrences_for_file(connection, projection, file_id_a)?,
         },
         right: CandidateSide {
             file: right,
-            occurrences: occurrences_for_file(connection, file_id_b)?,
+            occurrences: occurrences_for_file(connection, projection, file_id_b)?,
         },
     })
 }
@@ -1647,13 +1699,14 @@ fn quality_for_file(connection: &Connection, file_id: i64) -> rusqlite::Result<F
 
 fn collect_pair_roots(
     transaction: &Transaction<'_>,
+    projection: &ProjectionSelectionSnapshot,
     file_id_a: i64,
     file_id_b: i64,
     affected: &mut BTreeSet<i64>,
 ) -> rusqlite::Result<()> {
-    for occurrence in occurrences_for_file(transaction, file_id_a)?
+    for occurrence in occurrences_for_file(transaction, projection, file_id_a)?
         .into_iter()
-        .chain(occurrences_for_file(transaction, file_id_b)?)
+        .chain(occurrences_for_file(transaction, projection, file_id_b)?)
     {
         affected.insert(occurrence.root_item_id.0);
     }
@@ -1974,6 +2027,35 @@ mod tests {
     use crate::store::Store;
     use img_hash::ImageHash;
     use rusqlite::params;
+
+    fn register_media_root(app: &Application, item_id: i64, lifecycle: Lifecycle) {
+        app.projections()
+            .apply_root_delta(item_id, ItemKind::Media, Some(lifecycle))
+            .unwrap();
+    }
+
+    fn register_collection_root(app: &Application, item_id: i64, lifecycle: Lifecycle) {
+        app.projections()
+            .apply_root_delta(item_id, ItemKind::Collection, Some(lifecycle))
+            .unwrap();
+    }
+
+    fn register_member(app: &Application, collection_id: i64, media_item_id: i64) {
+        app.projections()
+            .apply_membership_delta(collection_id, media_item_id, true)
+            .unwrap();
+    }
+
+    fn candidate_count(app: &Application) -> i64 {
+        app.store()
+            .read_snapshot_captured(
+                || app.projections().selection_snapshot(),
+                |connection, _revision, projection| {
+                    count_candidates(connection, &projection).map_err(|error| error.to_string())
+                },
+            )
+            .unwrap()
+    }
 
     #[test]
     fn duplicate_receipt_item_ids_are_bounded() {
@@ -2527,6 +2609,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        for index in 0..hashes.len() {
+            register_media_root(&app, index as i64 + 1, Lifecycle::Active);
+        }
         write_test_thumbnail_color(&app, hashes[0], [220, 20, 20]);
         write_test_thumbnail_color(&app, hashes[1], [20, 20, 220]);
         write_test_thumbnail_color(&app, hashes[2], [20, 20, 220]);
@@ -2582,11 +2667,6 @@ mod tests {
                     [],
                 )?;
                 transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (101, 1, 1024), (102, 2, 1024)",
-                    [],
-                )?;
-                transaction.execute(
                     "INSERT INTO library_root (item_id, lifecycle)
                      VALUES (101, 'active'), (102, 'active')",
                     [],
@@ -2594,6 +2674,10 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        register_member(&app, 101, 1);
+        register_member(&app, 102, 2);
+        register_collection_root(&app, 101, Lifecycle::Active);
+        register_collection_root(&app, 102, Lifecycle::Active);
 
         assert!(app.blobs().read_thumbnail(hashes[0]).unwrap().is_none());
         assert!(app.blobs().read_thumbnail(hashes[1]).unwrap().is_none());
@@ -2661,6 +2745,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        for item_id in 1..=3_i64 {
+            register_media_root(&app, item_id, Lifecycle::Active);
+        }
 
         assert_eq!(
             list_candidates(&app, 10)
@@ -2715,6 +2802,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        for item_id in 1..=3_i64 {
+            register_media_root(&app, item_id, Lifecycle::Active);
+        }
         write_test_thumbnail(&app, hash_a);
         write_test_thumbnail(&app, hash_b);
 
@@ -2787,20 +2877,17 @@ mod tests {
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (2, 'inbox')",
                     [],
                 )?;
-                tx.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (100, 1, 1024)",
-                    [],
-                )?;
                 Ok(())
             })
             .unwrap();
+        register_media_root(&app, 2, Lifecycle::Inbox);
+        register_member(&app, 100, 1);
         write_test_thumbnail(&app, pending_hash);
         write_test_thumbnail(&app, visible_hash);
 
         assert_eq!(scan(&app, 0).unwrap().candidate_count, 0);
         assert!(list_candidates(&app, 10).unwrap().is_empty());
-        assert_eq!(app.store().read(count_candidates).unwrap(), 0);
+        assert_eq!(candidate_count(&app), 0);
 
         app.store()
             .transaction(|tx| {
@@ -2811,7 +2898,8 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert_eq!(app.store().read(count_candidates).unwrap(), 1);
+        register_collection_root(&app, 100, Lifecycle::Inbox);
+        assert_eq!(candidate_count(&app), 1);
         assert_eq!(
             list_candidates(&app, 10).unwrap()[0].left.occurrences[0].root_item_id,
             crate::app::ItemId(100)
@@ -2863,10 +2951,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (2, 1)",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO source_post
                          (source_post_id, site_id, post_key, created_at, updated_at)
                      VALUES (1, 'test', 'post', 'now', 'now')",
@@ -2888,6 +2972,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        register_media_root(&app, 1, Lifecycle::Active);
+        register_media_root(&app, 2, Lifecycle::Active);
+        app.projections()
+            .apply_tag_changes(&[(2, 1)], true)
+            .unwrap();
 
         let result = resolve(
             &app,
@@ -2898,6 +2987,10 @@ mod tests {
         .unwrap();
         assert_eq!(result.affected_item_ids.len(), 2);
         assert_eq!(result.freed_file_hash, Some(FileHash("loser".to_string())));
+        assert_eq!(
+            app.projections().selection_snapshot().tag_ids_for_root(2),
+            vec![1]
+        );
 
         app.store()
             .read(|connection| {
@@ -2906,12 +2999,6 @@ mod tests {
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                     .collect::<rusqlite::Result<_>>()?;
                 assert_eq!(assets, vec![(1, 10), (2, 10)]);
-                let tag_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = 2",
-                    [],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(tag_count, 1);
                 let source_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM source_item WHERE media_item_id IN (1, 2)",
                     [],
@@ -2964,11 +3051,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (100, 1, 1024)",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (100, 'active')",
                     [],
                 )?;
@@ -2983,6 +3065,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        register_media_root(&app, 2, Lifecycle::Active);
+        register_member(&app, 100, 1);
+        register_collection_root(&app, 100, Lifecycle::Active);
 
         let candidate = list_candidates(&app, 10).unwrap().remove(0);
         assert_eq!(
@@ -3016,17 +3101,14 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let membership: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM collection_member
-                     WHERE collection_id = 100 AND media_item_id = 1 AND position_rank = 1024",
-                    [],
-                    |row| row.get(0),
-                )?;
                 assert_eq!(member_file, 11);
-                assert_eq!(membership, 1);
                 Ok(())
             })
             .unwrap();
+        assert_eq!(
+            app.projections().selection_snapshot().root_for_media(1),
+            Some(100)
+        );
     }
 
     #[test]
@@ -3118,16 +3200,9 @@ mod tests {
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
-                let legacy_tag_count: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| row.get(0))?;
-                let legacy_folder_count: i64 =
-                    connection
-                        .query_row("SELECT COUNT(*) FROM folder_item", [], |row| row.get(0))?;
                 assert!(!loser_exists);
                 assert_eq!(notes, "winner note\n\nloser note");
                 assert_eq!(urls, "[\"https://winner\",\"https://loser\"]");
-                assert_eq!(legacy_tag_count, 0);
-                assert_eq!(legacy_folder_count, 0);
                 assert_eq!(
                     load_bitmap(connection, BitmapDomain::Tag, 1)?,
                     roaring::RoaringBitmap::from_iter([1])
@@ -3180,6 +3255,8 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        register_media_root(&app, 1, Lifecycle::Active);
+        register_media_root(&app, 2, Lifecycle::Active);
         resolve(&app, 10, 11, ResolutionChoice::KeepBoth).unwrap();
         app.store()
             .read(|connection| {
