@@ -1424,6 +1424,7 @@ mod tests {
                      VALUES (?1, 'active')",
                     [item_id],
                 )?;
+                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(item_id)
             })
             .unwrap();
@@ -1697,10 +1698,7 @@ mod tests {
                      FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
                      WHERE rt.root_item_id = ?1
                        AND (rt.provenance_mask & ?2) != 0",
-                    rusqlite::params![
-                        item_id.0,
-                        crate::ai_runtime_v2::AI_PROVENANCE_MASK
-                    ],
+                    rusqlite::params![item_id.0, crate::ai_runtime_v2::AI_PROVENANCE_MASK],
                     |row| row.get(0),
                 )
             })

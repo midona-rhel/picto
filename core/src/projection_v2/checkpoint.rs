@@ -253,7 +253,7 @@ fn encode_state(state: &State) -> Result<Vec<u8>, String> {
     encoder.bitmap(&state.image_media_ids)?;
     encoder.bitmap(&state.all_image_roots)?;
     encoder.id_set(&state.collection_ids);
-    encoder.id_set_map(&state.collection_members);
+    encoder.bitmap_map(&state.collection_members)?;
     encoder.id_map(&state.media_to_root);
     encoder.bitmap_map(&state.folder_members)?;
     encoder.bitmap_map(&state.folder_bitmaps)?;
@@ -276,7 +276,7 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
         image_media_ids: decoder.bitmap()?.into(),
         all_image_roots: decoder.bitmap()?.into(),
         collection_ids: decoder.id_set()?.into(),
-        collection_members: decoder.id_set_map()?,
+        collection_members: decoder.bitmap_map()?,
         media_to_root: decoder.id_map()?,
         folder_members: decoder.bitmap_map()?,
         folder_bitmaps: decoder.bitmap_map()?,
@@ -353,16 +353,6 @@ impl Encoder {
         self.len(values.len());
         for value in values {
             self.i64(value);
-        }
-    }
-
-    fn id_set_map(&mut self, map: &ShardedMap<i64, Shared<HashSet<i64>>>) {
-        let mut entries = map.iter().collect::<Vec<_>>();
-        entries.sort_unstable_by_key(|(key, _)| **key);
-        self.len(entries.len());
-        for (key, values) in entries {
-            self.i64(*key);
-            self.id_set(values);
         }
     }
 
@@ -570,17 +560,6 @@ impl<'a> Decoder<'a> {
         Ok(set)
     }
 
-    fn id_set_map(&mut self) -> Result<ShardedMap<i64, Shared<HashSet<i64>>>, String> {
-        let count = self.count(16)?;
-        let mut map = ShardedMap::default();
-        for _ in 0..count {
-            let key = self.i64()?;
-            let value = Shared::from(self.id_set()?);
-            insert_unique(&mut map, key, value)?;
-        }
-        Ok(map)
-    }
-
     fn id_vec_map(&mut self) -> Result<ShardedMap<i64, Shared<Vec<i64>>>, String> {
         let count = self.count(16)?;
         let mut map = ShardedMap::default();
@@ -666,6 +645,10 @@ mod tests {
 
     use super::checkpoint_path;
     use crate::app::Lifecycle;
+    use crate::canonical_bitmap::{
+        replace_bitmap, BitmapDomain, LIFECYCLE_ACTIVE_KEY, LIFECYCLE_INBOX_KEY,
+        LIFECYCLE_TRASH_KEY, RATING_UNRATED_KEY,
+    };
     use crate::projection_v2::ProjectionStore;
 
     fn fixture() -> (TempDir, Connection, ProjectionStore) {
@@ -687,20 +670,72 @@ mod tests {
                  VALUES (1, 'Checkpoint item', 'now');",
             )
             .unwrap();
+        let transaction = connection.transaction().unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            1,
+            &RoaringBitmap::from_iter([1]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_INBOX_KEY,
+            1,
+            &RoaringBitmap::new(),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_TRASH_KEY,
+            1,
+            &RoaringBitmap::new(),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Rating,
+            RATING_UNRATED_KEY,
+            1,
+            &RoaringBitmap::from_iter([1]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         let projection = ProjectionStore::from_connection(&connection).unwrap();
         (directory, connection, projection)
     }
 
     #[test]
     fn corruption_rebuilds_from_sqlite() {
-        let (_directory, connection, projection) = fixture();
+        let (_directory, mut connection, projection) = fixture();
         projection.write_checkpoint(&connection).unwrap();
-        connection
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute(
                 "UPDATE library_root SET lifecycle = 'trash' WHERE item_id = 1",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            2,
+            &RoaringBitmap::new(),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_TRASH_KEY,
+            2,
+            &RoaringBitmap::from_iter([1]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         fs::write(checkpoint_path(&connection).unwrap().unwrap(), b"corrupt").unwrap();
 
         let initialized = ProjectionStore::initialize(&connection).unwrap();
@@ -711,14 +746,32 @@ mod tests {
 
     #[test]
     fn revision_mismatch_rebuilds_from_sqlite() {
-        let (_directory, connection, projection) = fixture();
+        let (_directory, mut connection, projection) = fixture();
         projection.write_checkpoint(&connection).unwrap();
-        connection
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute_batch(
                 "UPDATE library_root SET lifecycle = 'trash' WHERE item_id = 1;
                  UPDATE library_meta SET revision = revision + 1 WHERE singleton = 1;",
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            2,
+            &RoaringBitmap::new(),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_TRASH_KEY,
+            2,
+            &RoaringBitmap::from_iter([1]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
 
         let initialized = ProjectionStore::initialize(&connection).unwrap();
 

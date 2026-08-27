@@ -485,7 +485,7 @@ impl HistoryBuffer {
 }
 
 impl Store {
-    pub fn undoable_transaction_settled<T, D, P>(
+    pub(crate) fn undoable_transaction_settled<T, D, P: super::PreparedSettlement>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D)>,
@@ -501,7 +501,7 @@ impl Store {
         Ok((value, revision, history))
     }
 
-    pub fn undoable_transaction_if_changed_settled<T, D, P>(
+    pub(crate) fn undoable_transaction_if_changed_settled<T, D, P: super::PreparedSettlement>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
@@ -511,7 +511,7 @@ impl Store {
         self.undoable_transaction_inner(descriptor, operation, prepare, publish)
     }
 
-    fn undoable_transaction_inner<T, D, P>(
+    fn undoable_transaction_inner<T, D, P: super::PreparedSettlement>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
@@ -578,6 +578,9 @@ impl Store {
 
         let prepare_started = Instant::now();
         let prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_ref() {
+            prepared.persist(&transaction, revision)?;
+        }
         let prepare_elapsed = prepare_started.elapsed();
         let publication_started = Instant::now();
         let _publication = self.consistency_write(std::panic::Location::caller())?;
@@ -634,7 +637,11 @@ impl Store {
     /// Run a broad undoable operation without constructing a row-level SQLite
     /// Session changeset. The operation returns compact directional semantic
     /// payloads alongside its already-prepared projection delta.
-    pub fn semantic_undoable_transaction_if_changed_settled<T, D, P>(
+    pub(crate) fn semantic_undoable_transaction_if_changed_settled<
+        T,
+        D,
+        P: super::PreparedSettlement,
+    >(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(
@@ -654,7 +661,12 @@ impl Store {
 
     /// Capture immutable caller state after writer admission so a broad SQL
     /// mutation can prepare exact deltas from the matching published view.
-    pub fn semantic_undoable_transaction_if_changed_settled_captured<T, D, P, C>(
+    pub(crate) fn semantic_undoable_transaction_if_changed_settled_captured<
+        T,
+        D,
+        P: super::PreparedSettlement,
+        C,
+    >(
         &self,
         descriptor: HistoryDescriptor,
         capture: impl FnOnce() -> C,
@@ -715,6 +727,9 @@ impl Store {
 
         let prepare_started = Instant::now();
         let prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_ref() {
+            prepared.persist(&transaction, revision)?;
+        }
         let prepare_elapsed = prepare_started.elapsed();
         let commit_started = Instant::now();
         let _publication = self.consistency_write(std::panic::Location::caller())?;
@@ -755,7 +770,7 @@ impl Store {
         Ok((value, revision, entry, changed))
     }
 
-    pub fn semantic_undoable_transaction_settled<T, D, P>(
+    pub(crate) fn semantic_undoable_transaction_settled<T, D, P: super::PreparedSettlement>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, SemanticHistoryRecord)>,
@@ -782,7 +797,7 @@ impl Store {
         Ok(history.state())
     }
 
-    pub fn apply_history<P>(
+    pub(crate) fn apply_history<P: super::PreparedSettlement>(
         &self,
         direction: HistoryDirection,
         prepare: impl FnOnce(HistoryProjectionRequest<'_>) -> Result<P, String>,
@@ -791,7 +806,7 @@ impl Store {
         self.apply_history_prepared(direction, |_, _| Ok(()), prepare, publish)
     }
 
-    pub(crate) fn apply_history_prepared<P>(
+    pub(crate) fn apply_history_prepared<P: super::PreparedSettlement>(
         &self,
         direction: HistoryDirection,
         prepare_semantic: impl FnOnce(&Transaction<'_>, &SemanticHistoryPayload) -> Result<(), String>,
@@ -889,6 +904,7 @@ impl Store {
                 schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
             let prepare_started = Instant::now();
             let prepared = prepare(projection_request)?;
+            prepared.persist(&transaction, revision)?;
             let prepare_elapsed = prepare_started.elapsed();
             let commit_started = Instant::now();
             let _publication = self.consistency_write(std::panic::Location::caller())?;

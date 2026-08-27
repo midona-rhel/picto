@@ -128,6 +128,7 @@ mod tests {
                      VALUES (10, 11, 0)",
                     [],
                 )?;
+                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(())
             })
             .unwrap();

@@ -3,8 +3,10 @@
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v1";
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 5;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
+const SCHEMA_V1_DDL: &str = include_str!("schema_v1.sql");
 
 pub const SUBSCRIPTION_READ_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_subscription_source_post_query
@@ -87,7 +89,8 @@ CREATE TABLE media_file (
 );
 
 CREATE TABLE library_item (
-    item_id INTEGER PRIMARY KEY,
+    item_id INTEGER PRIMARY KEY AUTOINCREMENT
+        CHECK (item_id BETWEEN 1 AND 4294967295),
     item_key TEXT NOT NULL UNIQUE,
     kind TEXT NOT NULL CHECK (kind IN ('media', 'collection')),
     label TEXT,
@@ -142,7 +145,8 @@ CREATE TABLE media_view (
 CREATE INDEX idx_media_view_recent ON media_view(viewed_at DESC, item_id);
 
 CREATE TABLE tag (
-    tag_id INTEGER PRIMARY KEY,
+    tag_id INTEGER PRIMARY KEY AUTOINCREMENT
+        CHECK (tag_id BETWEEN 1 AND 4294967295),
     namespace TEXT NOT NULL DEFAULT 'general',
     subtag TEXT NOT NULL,
     UNIQUE (namespace, subtag)
@@ -173,7 +177,8 @@ CREATE TABLE tag_summary (
 );
 
 CREATE TABLE folder (
-    folder_id INTEGER PRIMARY KEY,
+    folder_id INTEGER PRIMARY KEY AUTOINCREMENT
+        CHECK (folder_id BETWEEN 1 AND 4294967295),
     folder_key TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     parent_id INTEGER REFERENCES folder(folder_id) ON DELETE CASCADE,
@@ -197,7 +202,8 @@ CREATE TABLE folder_item (
 CREATE INDEX idx_folder_item_item ON folder_item(item_id, folder_id);
 
 CREATE TABLE smart_folder (
-    smart_folder_id INTEGER PRIMARY KEY,
+    smart_folder_id INTEGER PRIMARY KEY AUTOINCREMENT
+        CHECK (smart_folder_id BETWEEN 1 AND 4294967295),
     smart_folder_key TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE CASCADE,
@@ -1883,791 +1889,6 @@ pub fn create(connection: &mut Connection) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
-const CANONICAL_V1_DDL: &str = r#"
-DROP TABLE IF EXISTS smart_folder_root;
-DROP TABLE IF EXISTS smart_projection_dirty_root;
-DROP TABLE IF EXISTS smart_projection_dirty_all;
-DROP TABLE IF EXISTS read_model_dirty_root;
-DROP TABLE IF EXISTS folder_summary;
-DROP TABLE IF EXISTS lifecycle_summary;
-DROP TABLE IF EXISTS root_summary;
-DROP TABLE IF EXISTS root_tag_count;
-DROP TABLE IF EXISTS root_tag;
-DROP TABLE IF EXISTS tag_summary;
-DROP TABLE IF EXISTS root_metadata;
-DROP TABLE IF EXISTS smart_folder_dependency;
-DROP TABLE IF EXISTS projection_checkpoint;
-
-DROP TABLE IF EXISTS item_search_fts;
-DROP TABLE IF EXISTS media_search_fts;
-DROP TABLE IF EXISTS tag_search_fts;
-DROP TABLE IF EXISTS folder_search_fts;
-DROP TABLE IF EXISTS search_dirty_item;
-DROP TABLE IF EXISTS search_dirty_media;
-DROP TABLE IF EXISTS search_dirty_tag;
-DROP TABLE IF EXISTS search_dirty_folder;
-DROP TABLE IF EXISTS tag_alias;
-DROP TABLE IF EXISTS tag_implication;
-
-DROP TABLE IF EXISTS media_tag;
-
-ALTER TABLE library_item DROP COLUMN label;
-DROP INDEX IF EXISTS idx_media_asset_rating;
-ALTER TABLE media_asset DROP COLUMN notes;
-ALTER TABLE media_asset DROP COLUMN rating;
-ALTER TABLE media_asset DROP COLUMN source_urls_json;
-
-CREATE TABLE root_metadata (
-    root_item_id INTEGER PRIMARY KEY
-        REFERENCES library_root(item_id) ON DELETE CASCADE,
-    name TEXT,
-    rating INTEGER CHECK (rating IS NULL OR rating BETWEEN 0 AND 5),
-    notes TEXT,
-    source_urls_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(source_urls_json)),
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_root_metadata_rating
-    ON root_metadata(rating, root_item_id);
-CREATE INDEX idx_root_metadata_name
-    ON root_metadata(name COLLATE NOCASE, root_item_id);
-CREATE INDEX idx_root_metadata_notes_present
-    ON root_metadata(root_item_id)
-    WHERE notes IS NOT NULL AND TRIM(notes) <> '';
-CREATE INDEX idx_root_metadata_sources_present
-    ON root_metadata(root_item_id)
-    WHERE json_array_length(source_urls_json) > 0;
-
-CREATE TABLE root_tag (
-    root_item_id INTEGER NOT NULL
-        REFERENCES library_root(item_id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
-    direct_assignment_count INTEGER NOT NULL DEFAULT 1
-        CHECK (direct_assignment_count > 0),
-    provenance_mask INTEGER NOT NULL DEFAULT 0,
-    source_mask INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (root_item_id, tag_id)
-) WITHOUT ROWID;
-CREATE INDEX idx_root_tag_tag_root
-    ON root_tag(tag_id, root_item_id);
-
-CREATE TABLE root_summary (
-    root_item_id INTEGER PRIMARY KEY
-        REFERENCES library_root(item_id) ON DELETE CASCADE,
-    lifecycle TEXT NOT NULL CHECK (lifecycle IN ('inbox', 'active', 'trash')),
-    kind TEXT NOT NULL CHECK (kind IN ('media', 'collection')),
-    cover_media_item_id INTEGER
-        REFERENCES media_asset(item_id) ON DELETE SET NULL,
-    media_count INTEGER NOT NULL CHECK (media_count >= 0),
-    total_size_bytes INTEGER NOT NULL CHECK (total_size_bytes >= 0),
-    imported_at TEXT,
-    captured_at TEXT,
-    sort_rating INTEGER,
-    sort_name TEXT,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX idx_root_summary_imported_asc
-    ON root_summary(lifecycle, imported_at ASC, root_item_id ASC);
-CREATE INDEX idx_root_summary_captured_desc
-    ON root_summary(captured_at DESC, root_item_id ASC);
-CREATE INDEX idx_root_summary_captured_asc
-    ON root_summary(captured_at ASC, root_item_id ASC);
-CREATE INDEX idx_root_summary_rating_desc
-    ON root_summary(sort_rating DESC, root_item_id ASC);
-CREATE INDEX idx_root_summary_rating_asc
-    ON root_summary(sort_rating ASC, root_item_id ASC);
-CREATE INDEX idx_root_summary_size_desc
-    ON root_summary(total_size_bytes DESC, root_item_id ASC);
-CREATE INDEX idx_root_summary_size_asc
-    ON root_summary(total_size_bytes ASC, root_item_id ASC);
-CREATE INDEX idx_root_summary_name_asc
-    ON root_summary(sort_name COLLATE NOCASE ASC, root_item_id ASC);
-CREATE INDEX idx_root_summary_name_desc
-    ON root_summary(sort_name COLLATE NOCASE DESC, root_item_id ASC);
-CREATE INDEX idx_root_summary_kind
-    ON root_summary(kind, root_item_id);
-
-CREATE TABLE lifecycle_summary (
-    lifecycle TEXT PRIMARY KEY CHECK (lifecycle IN ('inbox', 'active', 'trash')),
-    root_count INTEGER NOT NULL DEFAULT 0,
-    media_count INTEGER NOT NULL DEFAULT 0,
-    total_size_bytes INTEGER NOT NULL DEFAULT 0
-) WITHOUT ROWID;
-INSERT INTO lifecycle_summary(lifecycle) VALUES ('inbox'), ('active'), ('trash');
-
-CREATE TABLE folder_summary (
-    folder_id INTEGER PRIMARY KEY REFERENCES folder(folder_id) ON DELETE CASCADE,
-    visible_root_count INTEGER NOT NULL DEFAULT 0,
-    media_count INTEGER NOT NULL DEFAULT 0,
-    total_size_bytes INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE tag_summary (
-    tag_id INTEGER PRIMARY KEY REFERENCES tag(tag_id) ON DELETE CASCADE,
-    visible_root_count INTEGER NOT NULL DEFAULT 0,
-    assignment_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE smart_folder_dependency (
-    smart_folder_id INTEGER NOT NULL
-        REFERENCES smart_folder(smart_folder_id) ON DELETE CASCADE,
-    dependency_kind TEXT NOT NULL,
-    dependency_key TEXT NOT NULL,
-    PRIMARY KEY (smart_folder_id, dependency_kind, dependency_key)
-) WITHOUT ROWID;
-CREATE INDEX idx_smart_folder_dependency_lookup
-    ON smart_folder_dependency(dependency_kind, dependency_key, smart_folder_id);
-
-CREATE TABLE smart_folder_generation (
-    generation_id INTEGER PRIMARY KEY,
-    smart_folder_id INTEGER NOT NULL
-        REFERENCES smart_folder(smart_folder_id) ON DELETE CASCADE,
-    database_revision INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('building', 'active', 'retired')),
-    member_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    activated_at TEXT
-);
-CREATE UNIQUE INDEX idx_smart_folder_generation_active
-    ON smart_folder_generation(smart_folder_id)
-    WHERE state = 'active';
-CREATE UNIQUE INDEX idx_smart_folder_generation_building
-    ON smart_folder_generation(smart_folder_id)
-    WHERE state = 'building';
-CREATE INDEX idx_smart_folder_generation_state
-    ON smart_folder_generation(state, smart_folder_id, generation_id);
-
-CREATE TABLE smart_folder_membership (
-    generation_id INTEGER NOT NULL
-        REFERENCES smart_folder_generation(generation_id) ON DELETE CASCADE,
-    root_item_id INTEGER NOT NULL
-        REFERENCES library_root(item_id) ON DELETE CASCADE,
-    PRIMARY KEY (generation_id, root_item_id)
-) WITHOUT ROWID;
-CREATE INDEX idx_smart_folder_membership_root
-    ON smart_folder_membership(root_item_id, generation_id);
-CREATE TRIGGER smart_generation_membership_insert
-AFTER INSERT ON smart_folder_membership
-WHEN (SELECT suppress_smart_dirty FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE smart_folder_generation
-    SET member_count = member_count + 1
-    WHERE generation_id = NEW.generation_id;
-END;
-CREATE TRIGGER smart_generation_membership_delete
-AFTER DELETE ON smart_folder_membership
-WHEN (SELECT suppress_smart_dirty FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE smart_folder_generation
-    SET member_count = member_count - 1
-    WHERE generation_id = OLD.generation_id;
-END;
-
-CREATE TRIGGER smart_generation_definition_insert
-AFTER INSERT ON smart_folder BEGIN
-    INSERT OR IGNORE INTO smart_folder_generation (
-        smart_folder_id, database_revision, state, created_at
-    ) VALUES (
-        NEW.smart_folder_id,
-        (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
-        'building',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    );
-END;
-CREATE TRIGGER smart_generation_definition_update
-AFTER UPDATE OF parent_id, predicate_json ON smart_folder BEGIN
-    INSERT OR IGNORE INTO smart_folder_generation (
-        smart_folder_id, database_revision, state, created_at
-    )
-    WITH RECURSIVE affected(smart_folder_id) AS (
-        SELECT NEW.smart_folder_id
-        UNION
-        SELECT child.smart_folder_id
-        FROM smart_folder child
-        JOIN affected parent ON child.parent_id = parent.smart_folder_id
-    )
-    SELECT smart_folder_id,
-           (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
-           'building',
-           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    FROM affected;
-END;
-CREATE TRIGGER smart_generation_tag_insert AFTER INSERT ON tag BEGIN
-    INSERT OR IGNORE INTO smart_folder_generation (
-        smart_folder_id, database_revision, state, created_at
-    )
-    SELECT dependency.smart_folder_id,
-           (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
-           'building',
-           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    FROM smart_folder_dependency dependency
-    WHERE dependency.dependency_kind = 'tag'
-      AND dependency.dependency_key = CASE
-            WHEN NEW.namespace = 'general' THEN NEW.subtag
-            ELSE NEW.namespace || ':' || NEW.subtag
-          END;
-END;
-CREATE TRIGGER smart_generation_tag_identity_update
-AFTER UPDATE OF namespace, subtag ON tag BEGIN
-    INSERT OR IGNORE INTO smart_folder_generation (
-        smart_folder_id, database_revision, state, created_at
-    )
-    SELECT dependency.smart_folder_id,
-           (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
-           'building',
-           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    FROM smart_folder_dependency dependency
-    WHERE dependency.dependency_kind = 'tag'
-      AND dependency.dependency_key IN (
-          CASE WHEN OLD.namespace = 'general' THEN OLD.subtag
-               ELSE OLD.namespace || ':' || OLD.subtag END,
-          CASE WHEN NEW.namespace = 'general' THEN NEW.subtag
-               ELSE NEW.namespace || ':' || NEW.subtag END
-      );
-END;
-CREATE TRIGGER smart_generation_tag_delete AFTER DELETE ON tag BEGIN
-    INSERT OR IGNORE INTO smart_folder_generation (
-        smart_folder_id, database_revision, state, created_at
-    )
-    SELECT dependency.smart_folder_id,
-           (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
-           'building',
-           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    FROM smart_folder_dependency dependency
-    WHERE dependency.dependency_kind = 'tag'
-      AND dependency.dependency_key = CASE
-            WHEN OLD.namespace = 'general' THEN OLD.subtag
-            ELSE OLD.namespace || ':' || OLD.subtag
-          END;
-END;
-CREATE TABLE projection_checkpoint (
-    component TEXT PRIMARY KEY,
-    schema_fingerprint TEXT NOT NULL,
-    implementation_hash TEXT NOT NULL,
-    database_revision INTEGER NOT NULL,
-    checksum TEXT NOT NULL,
-    health TEXT NOT NULL CHECK (health IN ('healthy', 'rebuilding', 'unhealthy')),
-    checkpoint_path TEXT,
-    updated_at TEXT NOT NULL
-) WITHOUT ROWID;
-
-CREATE TABLE search_dirty_name (
-    root_item_id INTEGER PRIMARY KEY,
-    queued_at_ms INTEGER NOT NULL
-);
-CREATE TABLE search_dirty_notes (
-    root_item_id INTEGER PRIMARY KEY,
-    queued_at_ms INTEGER NOT NULL
-);
-CREATE TABLE search_dirty_source (
-    source_post_id INTEGER PRIMARY KEY,
-    queued_at_ms INTEGER NOT NULL
-);
-CREATE VIRTUAL TABLE root_name_fts USING fts5(
-    root_item_id UNINDEXED,
-    name,
-    tokenize='unicode61 remove_diacritics 2',
-    prefix='2 3'
-);
-CREATE VIRTUAL TABLE root_notes_fts USING fts5(
-    root_item_id UNINDEXED,
-    notes,
-    tokenize='unicode61 remove_diacritics 2',
-    prefix='2 3'
-);
-CREATE VIRTUAL TABLE source_text_fts USING fts5(
-    source_post_id UNINDEXED,
-    searchable_text,
-    tokenize='unicode61 remove_diacritics 2',
-    prefix='2 3'
-);
-
-CREATE TRIGGER search_root_metadata_insert AFTER INSERT ON root_metadata BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (NEW.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-    INSERT INTO search_dirty_notes(root_item_id, queued_at_ms)
-    VALUES (NEW.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_root_metadata_update
-AFTER UPDATE OF name, notes ON root_metadata BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    SELECT NEW.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER)
-    WHERE OLD.name IS NOT NEW.name
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-    INSERT INTO search_dirty_notes(root_item_id, queued_at_ms)
-    SELECT NEW.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER)
-    WHERE OLD.notes IS NOT NEW.notes
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_root_metadata_delete AFTER DELETE ON root_metadata BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (OLD.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-    INSERT INTO search_dirty_notes(root_item_id, queued_at_ms)
-    VALUES (OLD.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_media_name_update
-AFTER UPDATE OF name ON media_asset BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    SELECT roots.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER)
-    FROM (
-        SELECT item_id AS root_item_id FROM library_root WHERE item_id = NEW.item_id
-        UNION
-        SELECT collection_id FROM collection_member WHERE media_item_id = NEW.item_id
-    ) roots
-    WHERE 1
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (NEW.collection_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_collection_member_delete AFTER DELETE ON collection_member BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (OLD.collection_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_post_insert AFTER INSERT ON source_post BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (NEW.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_post_update
-AFTER UPDATE OF site_id, post_key, canonical_url, creator_name, title, description
-ON source_post BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (NEW.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_post_delete AFTER DELETE ON source_post BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (OLD.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_item_insert AFTER INSERT ON source_item BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (NEW.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_item_update
-AFTER UPDATE OF source_post_id, media_url, canonical_url ON source_item BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (OLD.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (NEW.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-CREATE TRIGGER search_source_item_delete AFTER DELETE ON source_item BEGIN
-    INSERT INTO search_dirty_source(source_post_id, queued_at_ms)
-    VALUES (OLD.source_post_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(source_post_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-
-DROP INDEX IF EXISTS idx_work_ready;
-ALTER TABLE work_item ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX idx_work_ready_priority
-    ON work_item(status, priority DESC, available_at, work_id);
-
-CREATE INDEX IF NOT EXISTS idx_folder_item_root_folder
-    ON folder_item(item_id, folder_id);
-CREATE INDEX IF NOT EXISTS idx_folder_item_folder_order
-    ON folder_item(folder_id, position_rank, item_id);
-CREATE INDEX IF NOT EXISTS idx_collection_member_media_owner
-    ON collection_member(media_item_id, collection_id);
-CREATE INDEX IF NOT EXISTS idx_media_view_root_recent
-    ON media_view(item_id, viewed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_duplicate_status_files
-    ON duplicate(status, file_id_a, file_id_b);
-CREATE INDEX IF NOT EXISTS idx_source_item_media_source
-    ON source_item(media_item_id, source_post_id, position)
-    WHERE media_item_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_source_item_post_order
-    ON source_item(source_post_id, position, source_item_id);
-CREATE INDEX IF NOT EXISTS idx_source_post_root
-    ON source_post(root_item_id, source_post_id)
-    WHERE root_item_id IS NOT NULL;
-"#;
-
-const CANONICAL_INCREMENTAL_DDL: &str = r#"
-ALTER TABLE projection_write_control
-    ADD COLUMN suppress_root_summary INTEGER NOT NULL DEFAULT 0
-    CHECK (suppress_root_summary IN (0, 1));
-
-DROP TRIGGER IF EXISTS canonical_root_insert;
-DROP TRIGGER IF EXISTS canonical_root_lifecycle_update;
-DROP TRIGGER IF EXISTS canonical_member_insert;
-DROP TRIGGER IF EXISTS canonical_member_delete;
-DROP TRIGGER IF EXISTS canonical_member_update;
-DROP TRIGGER IF EXISTS canonical_metadata_insert;
-DROP TRIGGER IF EXISTS canonical_metadata_update;
-DROP TRIGGER IF EXISTS canonical_cover_update;
-DROP TRIGGER IF EXISTS canonical_media_update;
-DROP TRIGGER IF EXISTS canonical_media_insert;
-DROP TRIGGER IF EXISTS canonical_file_size_update;
-DROP TRIGGER IF EXISTS canonical_lifecycle_summary_insert;
-DROP TRIGGER IF EXISTS canonical_lifecycle_summary_delete;
-DROP TRIGGER IF EXISTS canonical_lifecycle_summary_update;
-DROP TRIGGER IF EXISTS canonical_folder_insert;
-DROP TRIGGER IF EXISTS canonical_folder_item_insert;
-DROP TRIGGER IF EXISTS canonical_folder_item_delete;
-DROP TRIGGER IF EXISTS canonical_folder_root_insert;
-DROP TRIGGER IF EXISTS canonical_folder_root_delete;
-DROP TRIGGER IF EXISTS canonical_folder_root_update;
-DROP TRIGGER IF EXISTS canonical_tag_insert;
-DROP TRIGGER IF EXISTS canonical_root_tag_insert;
-DROP TRIGGER IF EXISTS canonical_root_tag_delete;
-DROP TRIGGER IF EXISTS canonical_root_tag_lifecycle_update;
-
-CREATE TRIGGER canonical_root_insert AFTER INSERT ON library_root
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO root_summary (
-        root_item_id, lifecycle, kind, cover_media_item_id, media_count,
-        total_size_bytes, imported_at, captured_at, sort_rating, sort_name, updated_at
-    )
-    SELECT item.item_id, NEW.lifecycle, item.kind,
-           COALESCE(item.cover_media_item_id,
-                    CASE WHEN item.kind = 'media' THEN asset.item_id END),
-           CASE WHEN item.kind = 'media' AND asset.item_id IS NOT NULL THEN 1
-                WHEN item.kind = 'media' THEN 0
-                ELSE (SELECT COUNT(*) FROM collection_member
-                      WHERE collection_id = item.item_id) END,
-           CASE WHEN item.kind = 'media'
-                THEN COALESCE(file.size_bytes, 0)
-                ELSE COALESCE((
-                    SELECT SUM(member_file.size_bytes)
-                    FROM collection_member member
-                    JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-                    JOIN media_file member_file ON member_file.file_id = member_asset.file_id
-                    WHERE member.collection_id = item.item_id
-                ), 0) END,
-           CASE WHEN item.kind = 'media' THEN asset.imported_at ELSE (
-               SELECT MAX(member_asset.imported_at)
-               FROM collection_member member
-               JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-               WHERE member.collection_id = item.item_id
-           ) END,
-           CASE WHEN item.kind = 'media' THEN asset.captured_at ELSE (
-               SELECT MAX(member_asset.captured_at)
-               FROM collection_member member
-               JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-               WHERE member.collection_id = item.item_id
-           ) END,
-           metadata.rating,
-           COALESCE(metadata.name, asset.name),
-           COALESCE(metadata.updated_at, item.updated_at)
-    FROM library_item item
-    LEFT JOIN media_asset asset ON asset.item_id = COALESCE(
-        item.cover_media_item_id, CASE WHEN item.kind = 'media' THEN item.item_id END
-    )
-    LEFT JOIN media_file file ON file.file_id = asset.file_id
-    LEFT JOIN root_metadata metadata ON metadata.root_item_id = item.item_id
-    WHERE item.item_id = NEW.item_id;
-END;
-
-CREATE TRIGGER canonical_root_lifecycle_update
-AFTER UPDATE OF lifecycle ON library_root
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET lifecycle = NEW.lifecycle,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = NEW.item_id;
-END;
-
-CREATE TRIGGER canonical_member_insert AFTER INSERT ON collection_member
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        cover_media_item_id = COALESCE(
-            (SELECT cover_media_item_id FROM library_item WHERE item_id = NEW.collection_id),
-            (SELECT media_item_id FROM collection_member
-             WHERE collection_id = NEW.collection_id
-             ORDER BY position_rank, media_item_id LIMIT 1)
-        ),
-        media_count = (SELECT COUNT(*) FROM collection_member
-                       WHERE collection_id = NEW.collection_id),
-        total_size_bytes = COALESCE((
-            SELECT SUM(file.size_bytes) FROM collection_member member
-            JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = NEW.collection_id
-        ), 0),
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = NEW.collection_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = NEW.collection_id),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = NEW.collection_id;
-END;
-
-CREATE TRIGGER canonical_member_delete AFTER DELETE ON collection_member
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        cover_media_item_id = COALESCE(
-            (SELECT cover_media_item_id FROM library_item WHERE item_id = OLD.collection_id),
-            (SELECT media_item_id FROM collection_member
-             WHERE collection_id = OLD.collection_id
-             ORDER BY position_rank, media_item_id LIMIT 1)
-        ),
-        media_count = (SELECT COUNT(*) FROM collection_member
-                       WHERE collection_id = OLD.collection_id),
-        total_size_bytes = COALESCE((
-            SELECT SUM(file.size_bytes) FROM collection_member member
-            JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = OLD.collection_id
-        ), 0),
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = OLD.collection_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = OLD.collection_id),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = OLD.collection_id;
-END;
-
-CREATE TRIGGER canonical_member_update AFTER UPDATE OF collection_id ON collection_member
-WHEN OLD.collection_id <> NEW.collection_id
- AND (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        media_count = (SELECT COUNT(*) FROM collection_member WHERE collection_id = OLD.collection_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = OLD.collection_id), 0),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = OLD.collection_id;
-    UPDATE root_summary SET
-        media_count = (SELECT COUNT(*) FROM collection_member WHERE collection_id = NEW.collection_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = NEW.collection_id), 0),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = NEW.collection_id;
-END;
-
-CREATE TRIGGER canonical_metadata_insert AFTER INSERT ON root_metadata
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET sort_rating = NEW.rating,
-        sort_name = COALESCE(NEW.name, sort_name), updated_at = NEW.updated_at
-    WHERE root_item_id = NEW.root_item_id;
-END;
-CREATE TRIGGER canonical_metadata_update
-AFTER UPDATE OF name, rating, updated_at ON root_metadata
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET sort_rating = NEW.rating,
-        sort_name = COALESCE(NEW.name, sort_name), updated_at = NEW.updated_at
-    WHERE root_item_id = NEW.root_item_id;
-END;
-CREATE TRIGGER canonical_cover_update AFTER UPDATE OF cover_media_item_id ON library_item
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET cover_media_item_id = COALESCE(
-        NEW.cover_media_item_id, CASE WHEN NEW.kind = 'media' THEN NEW.item_id END
-    ), updated_at = NEW.updated_at WHERE root_item_id = NEW.item_id;
-END;
-CREATE TRIGGER canonical_media_update
-AFTER UPDATE OF imported_at, captured_at, name, file_id ON media_asset
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        imported_at = CASE WHEN kind = 'media' THEN NEW.imported_at ELSE imported_at END,
-        captured_at = CASE WHEN kind = 'media' THEN NEW.captured_at ELSE captured_at END,
-        sort_name = CASE WHEN kind = 'media' AND NOT EXISTS (
-            SELECT 1 FROM root_metadata WHERE root_item_id = root_summary.root_item_id
-              AND name IS NOT NULL
-        ) THEN NEW.name ELSE sort_name END,
-        total_size_bytes = CASE WHEN kind = 'media' THEN COALESCE((
-            SELECT size_bytes FROM media_file WHERE file_id = NEW.file_id
-        ), 0) ELSE total_size_bytes END,
-        updated_at = NEW.updated_at
-    WHERE root_item_id = NEW.item_id;
-    UPDATE root_summary SET
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = root_summary.root_item_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = root_summary.root_item_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = root_summary.root_item_id), 0),
-        updated_at = NEW.updated_at
-    WHERE root_item_id IN (SELECT collection_id FROM collection_member WHERE media_item_id = NEW.item_id);
-END;
-CREATE TRIGGER canonical_media_insert AFTER INSERT ON media_asset
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        cover_media_item_id = CASE WHEN kind = 'media' THEN NEW.item_id ELSE cover_media_item_id END,
-        media_count = CASE WHEN kind = 'media' THEN 1 ELSE media_count END,
-        imported_at = CASE WHEN kind = 'media' THEN NEW.imported_at ELSE imported_at END,
-        captured_at = CASE WHEN kind = 'media' THEN NEW.captured_at ELSE captured_at END,
-        sort_name = CASE WHEN kind = 'media' AND NOT EXISTS (
-            SELECT 1 FROM root_metadata WHERE root_item_id = root_summary.root_item_id
-              AND name IS NOT NULL
-        ) THEN NEW.name ELSE sort_name END,
-        total_size_bytes = CASE WHEN kind = 'media' THEN COALESCE((
-            SELECT size_bytes FROM media_file WHERE file_id = NEW.file_id
-        ), 0) ELSE total_size_bytes END,
-        updated_at = NEW.updated_at
-    WHERE root_item_id = NEW.item_id;
-END;
-CREATE TRIGGER canonical_file_size_update AFTER UPDATE OF size_bytes ON media_file
-WHEN OLD.size_bytes <> NEW.size_bytes
- AND (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET total_size_bytes = total_size_bytes + NEW.size_bytes - OLD.size_bytes
-    WHERE root_item_id IN (
-        SELECT asset.item_id FROM media_asset asset JOIN library_root root ON root.item_id = asset.item_id
-        WHERE asset.file_id = NEW.file_id
-        UNION
-        SELECT member.collection_id FROM media_asset asset
-        JOIN collection_member member ON member.media_item_id = asset.item_id
-        WHERE asset.file_id = NEW.file_id
-    );
-END;
-
-CREATE TRIGGER canonical_lifecycle_summary_insert AFTER INSERT ON root_summary
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE lifecycle_summary SET root_count = root_count + 1,
-        media_count = media_count + NEW.media_count,
-        total_size_bytes = total_size_bytes + NEW.total_size_bytes
-    WHERE lifecycle = NEW.lifecycle;
-END;
-CREATE TRIGGER canonical_lifecycle_summary_delete BEFORE DELETE ON root_summary
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE lifecycle_summary SET root_count = root_count - 1,
-        media_count = media_count - OLD.media_count,
-        total_size_bytes = total_size_bytes - OLD.total_size_bytes
-    WHERE lifecycle = OLD.lifecycle;
-END;
-CREATE TRIGGER canonical_lifecycle_summary_update
-AFTER UPDATE OF lifecycle, media_count, total_size_bytes ON root_summary
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE lifecycle_summary SET root_count = root_count - 1,
-        media_count = media_count - OLD.media_count,
-        total_size_bytes = total_size_bytes - OLD.total_size_bytes
-    WHERE lifecycle = OLD.lifecycle;
-    UPDATE lifecycle_summary SET root_count = root_count + 1,
-        media_count = media_count + NEW.media_count,
-        total_size_bytes = total_size_bytes + NEW.total_size_bytes
-    WHERE lifecycle = NEW.lifecycle;
-END;
-
-CREATE TRIGGER canonical_folder_insert AFTER INSERT ON folder BEGIN
-    INSERT INTO folder_summary(folder_id) VALUES (NEW.folder_id)
-    ON CONFLICT(folder_id) DO NOTHING;
-END;
-CREATE TRIGGER canonical_folder_item_insert AFTER INSERT ON folder_item
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO folder_summary(folder_id, visible_root_count, media_count, total_size_bytes)
-    SELECT NEW.folder_id, 1, summary.media_count, summary.total_size_bytes
-    FROM root_summary summary
-    WHERE summary.root_item_id = NEW.item_id AND summary.lifecycle = 'active'
-    ON CONFLICT(folder_id) DO UPDATE SET
-        visible_root_count = folder_summary.visible_root_count + 1,
-        media_count = folder_summary.media_count + excluded.media_count,
-        total_size_bytes = folder_summary.total_size_bytes + excluded.total_size_bytes;
-END;
-CREATE TRIGGER canonical_folder_item_delete BEFORE DELETE ON folder_item
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count - 1,
-        media_count = media_count - COALESCE((SELECT media_count FROM root_summary
-            WHERE root_item_id = OLD.item_id AND lifecycle = 'active'), 0),
-        total_size_bytes = total_size_bytes - COALESCE((SELECT total_size_bytes FROM root_summary
-            WHERE root_item_id = OLD.item_id AND lifecycle = 'active'), 0)
-    WHERE folder_id = OLD.folder_id AND EXISTS (
-        SELECT 1 FROM root_summary WHERE root_item_id = OLD.item_id AND lifecycle = 'active'
-    );
-END;
-CREATE TRIGGER canonical_folder_root_insert AFTER INSERT ON root_summary
-WHEN NEW.lifecycle = 'active'
- AND (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count + 1,
-        media_count = media_count + NEW.media_count,
-        total_size_bytes = total_size_bytes + NEW.total_size_bytes
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = NEW.root_item_id);
-END;
-CREATE TRIGGER canonical_folder_root_delete BEFORE DELETE ON root_summary
-WHEN OLD.lifecycle = 'active'
- AND (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count - 1,
-        media_count = media_count - OLD.media_count,
-        total_size_bytes = total_size_bytes - OLD.total_size_bytes
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = OLD.root_item_id);
-END;
-CREATE TRIGGER canonical_folder_root_update
-AFTER UPDATE OF lifecycle, media_count, total_size_bytes ON root_summary
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET
-        visible_root_count = visible_root_count - CASE WHEN OLD.lifecycle = 'active' THEN 1 ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN 1 ELSE 0 END,
-        media_count = media_count - CASE WHEN OLD.lifecycle = 'active' THEN OLD.media_count ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN NEW.media_count ELSE 0 END,
-        total_size_bytes = total_size_bytes - CASE WHEN OLD.lifecycle = 'active' THEN OLD.total_size_bytes ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN NEW.total_size_bytes ELSE 0 END
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = NEW.root_item_id);
-END;
-
-CREATE TRIGGER canonical_tag_insert AFTER INSERT ON tag BEGIN
-    INSERT INTO tag_summary(tag_id) VALUES (NEW.tag_id) ON CONFLICT(tag_id) DO NOTHING;
-END;
-CREATE TRIGGER canonical_root_tag_insert AFTER INSERT ON root_tag
-WHEN (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
-    SELECT NEW.tag_id,
-           CASE WHEN summary.lifecycle = 'active' THEN 1 ELSE 0 END,
-           1
-    FROM root_summary summary WHERE summary.root_item_id = NEW.root_item_id
-    ON CONFLICT(tag_id) DO UPDATE SET
-        visible_root_count = tag_summary.visible_root_count + excluded.visible_root_count,
-        assignment_count = tag_summary.assignment_count + 1;
-END;
-CREATE TRIGGER canonical_root_tag_delete BEFORE DELETE ON root_tag
-WHEN (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE tag_summary SET
-        visible_root_count = visible_root_count - CASE WHEN EXISTS (
-            SELECT 1 FROM root_summary WHERE root_item_id = OLD.root_item_id AND lifecycle = 'active'
-        ) THEN 1 ELSE 0 END,
-        assignment_count = assignment_count - 1
-    WHERE tag_id = OLD.tag_id;
-END;
-CREATE TRIGGER canonical_root_tag_lifecycle_update AFTER UPDATE OF lifecycle ON root_summary
-WHEN OLD.lifecycle <> NEW.lifecycle
- AND (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE tag_summary SET visible_root_count = visible_root_count
-        - CASE WHEN OLD.lifecycle = 'active' THEN 1 ELSE 0 END
-        + CASE WHEN NEW.lifecycle = 'active' THEN 1 ELSE 0 END
-    WHERE tag_id IN (SELECT tag_id FROM root_tag WHERE root_item_id = NEW.root_item_id);
-END;
-"#;
-
 const BULK_LIFECYCLE_TRIGGER_DDL: &str = r#"
 CREATE TRIGGER canonical_root_lifecycle_update
 AFTER UPDATE OF lifecycle ON library_root
@@ -2810,41 +2031,53 @@ pub(crate) fn restore_bulk_folder_membership_triggers(
     )
 }
 
-/// Create the exact post-cutover schema in a new, empty database.
+/// Create backend schema generation 1 in a new, empty database.
 ///
-/// The legacy constructor is retained only by the standalone development
-/// library converter and its fixtures. Runtime library creation uses this
-/// constructor directly; this is not an in-place migration.
+/// This is the only runtime schema creation path. The temporary conversion
+/// executable is external to this contract and is deleted after verification.
 pub fn create_canonical_v1(connection: &mut Connection) -> Result<(), String> {
-    create(connection)?;
-
-    let trigger_names = {
-        let mut statement = connection
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
-            .map_err(|error| format!("Failed to inspect fresh schema triggers: {error}"))?;
-        let names = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| format!("Failed to inspect fresh schema triggers: {error}"))?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Failed to inspect fresh schema triggers: {error}"))?;
-        names
-    };
-
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Failed to start canonical schema finalization: {error}"))?;
-    for trigger_name in trigger_names {
-        let quoted = trigger_name.replace('"', "\"\"");
-        transaction
-            .execute_batch(&format!("DROP TRIGGER \"{quoted}\";"))
-            .map_err(|error| format!("Failed to remove legacy trigger {trigger_name}: {error}"))?;
-    }
+        .map_err(|error| format!("Failed to start schema generation 1 creation: {error}"))?;
     transaction
-        .execute_batch(CANONICAL_V1_DDL)
-        .map_err(|error| format!("Failed to finalize canonical schema generation 1: {error}"))?;
+        .execute_batch(SCHEMA_V1_DDL)
+        .map_err(|error| format!("Failed to create schema generation 1: {error}"))?;
     transaction
-        .execute_batch(CANONICAL_INCREMENTAL_DDL)
-        .map_err(|error| format!("Failed to install canonical incremental views: {error}"))?;
+        .execute(
+            "INSERT INTO library_meta (
+                 singleton, schema_version, revision, schema_fingerprint
+             ) VALUES (1, ?1, 1, ?2)",
+            rusqlite::params![CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_FINGERPRINT],
+        )
+        .map_err(|error| format!("Failed to initialize schema generation 1: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO cloud_state (singleton, library_id, device_id)
+             VALUES (1, lower(hex(randomblob(16))), lower(hex(randomblob(16))))",
+            [],
+        )
+        .map_err(|error| format!("Failed to initialize library identity: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO setting (key, value_json) VALUES (?1, ?2)",
+            rusqlite::params![
+                PHASH_VERSION_SETTING,
+                CURRENT_PHASH_ANALYSIS_VERSION.to_string()
+            ],
+        )
+        .map_err(|error| format!("Failed to initialize media analysis version: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO projection_write_control(singleton) VALUES (1)",
+            [],
+        )
+        .map_err(|error| format!("Failed to initialize projection controls: {error}"))?;
+    transaction
+        .execute_batch(
+            "INSERT INTO lifecycle_summary(lifecycle)
+             VALUES ('inbox'), ('active'), ('trash');",
+        )
+        .map_err(|error| format!("Failed to initialize lifecycle summaries: {error}"))?;
     transaction.commit().map_err(|error| error.to_string())
 }
 
@@ -2867,8 +2100,26 @@ pub fn validate(connection: &Connection) -> Result<(), String> {
 }
 
 fn validate_canonical_shape(connection: &Connection) -> Result<(), String> {
+    let fingerprint: Option<String> = connection
+        .query_row(
+            "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Invalid Picto library schema: {error}"))?;
+    if fingerprint.as_deref() != Some(CURRENT_SCHEMA_FINGERPRINT) {
+        return Err(
+            "This library is incompatible with Picto backend schema generation 1".to_string(),
+        );
+    }
+
     for table in [
         "root_metadata",
+        "canonical_bitmap_key",
+        "canonical_bitmap_key_allocator",
+        "canonical_bitmap",
+        "canonical_order",
         "root_tag",
         "root_summary",
         "tag_summary",
@@ -2894,7 +2145,7 @@ fn validate_canonical_shape(connection: &Connection) -> Result<(), String> {
             .map_err(|error| format!("Invalid Picto library schema: {error}"))?;
         if !exists {
             return Err(format!(
-                "Picto schema generation 1 is incomplete (missing {table}); run the one-time development library converter"
+                "Picto backend schema generation 1 is incomplete (missing {table})"
             ));
         }
     }
@@ -2914,7 +2165,7 @@ fn validate_canonical_shape(connection: &Connection) -> Result<(), String> {
             .map_err(|error| format!("Invalid Picto library schema: {error}"))?;
         if present {
             return Err(format!(
-                "Picto schema generation 1 still contains legacy {table}.{forbidden_column}; run the one-time development library converter"
+                "Picto backend schema generation 1 contains incompatible {table}.{forbidden_column}"
             ));
         }
     }
@@ -3757,6 +3008,42 @@ mod tests {
             transaction.commit().unwrap();
         }
         assert_eq!(smart_members(&connection), vec![2]);
+    }
+
+    #[test]
+    fn canonical_bitmap_ids_are_u32_and_never_reused() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        create_canonical_v1(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_item
+                     (item_key, kind, created_at, updated_at)
+                 VALUES ('first', 'media', 'now', 'now')",
+                [],
+            )
+            .unwrap();
+        let first = connection.last_insert_rowid();
+        connection
+            .execute("DELETE FROM library_item WHERE item_id = ?1", [first])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_item
+                     (item_key, kind, created_at, updated_at)
+                 VALUES ('second', 'media', 'now', 'now')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(connection.last_insert_rowid(), first + 1);
+
+        assert!(connection
+            .execute(
+                "INSERT INTO library_item
+                     (item_id, item_key, kind, created_at, updated_at)
+                 VALUES (4294967296, 'overflow', 'media', 'now', 'now')",
+                [],
+            )
+            .is_err());
     }
 
     fn smart_members(connection: &Connection) -> Vec<i64> {

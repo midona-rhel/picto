@@ -2925,6 +2925,7 @@ mod tests {
                     [],
                 )?;
                 tx.execute("INSERT INTO media_view (item_id, viewed_at) VALUES (1, '2026-02-01')", [])?;
+                crate::canonical_bitmap::seed_test_state(tx)?;
                 Ok(())
             })
             .unwrap();

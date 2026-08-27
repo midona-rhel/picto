@@ -34,6 +34,19 @@ pub struct Store {
     publication_max_hold_micros: AtomicU64,
 }
 
+/// A projection settlement prepared before commit may persist the durable
+/// representation it is about to publish. This runs inside the same SQLite
+/// transaction and before the publication gate is acquired.
+pub(crate) trait PreparedSettlement {
+    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String>;
+}
+
+impl PreparedSettlement for () {
+    fn persist(&self, _transaction: &Transaction<'_>, _revision: u64) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PublicationGateStats {
     pub samples: u64,
@@ -222,12 +235,13 @@ impl Store {
             .map_err(|error| format!("Failed to create library directory: {error}"))?;
         let path = library_root.join(DATABASE_FILE);
         let existed = path.exists();
-        let mut writer = open_connection(&path, false)?;
-
         if existed {
-            schema::validate(&writer)?;
-            // Compatible libraries already contain the exact generation-1
-            // schema. Opening a library must not double as a migration path.
+            let validation = open_connection(&path, true)?;
+            schema::validate(&validation)?;
+        }
+
+        let mut writer = open_connection(&path, false)?;
+        if existed {
             writer
                 .execute_batch(
                     "PRAGMA analysis_limit=1000;
@@ -536,7 +550,7 @@ impl Store {
     /// Settlement must be bounded; callers decide how to recover a failed
     /// rebuildable component after this method releases the gate.
     #[track_caller]
-    pub fn transaction_settled<T, D, P>(
+    pub(crate) fn transaction_settled<T, D, P: PreparedSettlement>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D)>,
         prepare: impl FnOnce(D) -> Result<P, String>,
@@ -560,6 +574,7 @@ impl Store {
         let revision =
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
         let prepared = prepare(delta)?;
+        prepared.persist(&transaction, revision)?;
         let _publication = self.consistency_write(std::panic::Location::caller())?;
         transaction.commit().map_err(|error| error.to_string())?;
         publish(prepared);
@@ -567,7 +582,7 @@ impl Store {
     }
 
     #[track_caller]
-    pub fn transaction_if_changed_settled<T, D, P>(
+    pub(crate) fn transaction_if_changed_settled<T, D, P: PreparedSettlement>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         prepare: impl FnOnce(D) -> Result<P, String>,
@@ -585,7 +600,7 @@ impl Store {
     /// Visible ingest publishes exact canonical and projection state, but it
     /// yields writer admission to direct user mutations.
     #[track_caller]
-    pub(crate) fn transaction_if_changed_settled_maintenance<T, D, P>(
+    pub(crate) fn transaction_if_changed_settled_maintenance<T, D, P: PreparedSettlement>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         prepare: impl FnOnce(D) -> Result<P, String>,
@@ -604,7 +619,11 @@ impl Store {
     /// admission to interactive mutations while retaining the same atomic
     /// commit/projection publication boundary.
     #[track_caller]
-    pub(crate) fn transaction_if_changed_settled_without_cloud_maintenance<T, D, P>(
+    pub(crate) fn transaction_if_changed_settled_without_cloud_maintenance<
+        T,
+        D,
+        P: PreparedSettlement,
+    >(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         prepare: impl FnOnce(D) -> Result<P, String>,
@@ -620,7 +639,7 @@ impl Store {
     }
 
     #[track_caller]
-    fn transaction_if_changed_settled_inner<T, D, P>(
+    fn transaction_if_changed_settled_inner<T, D, P: PreparedSettlement>(
         &self,
         priority: WritePriority,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
@@ -654,6 +673,9 @@ impl Store {
         };
         drop(cloud_capture);
         let prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_ref() {
+            prepared.persist(&transaction, revision)?;
+        }
         let _publication = self.consistency_write(std::panic::Location::caller())?;
         transaction.commit().map_err(|error| error.to_string())?;
         if let Some(prepared) = prepared {
@@ -822,10 +844,53 @@ impl Aggregate<i64, i64> for BitOr {
 
 #[cfg(test)]
 mod tests {
-    use super::{Store, WritePriority};
+    use super::{Store, WritePriority, DATABASE_FILE};
+    use rusqlite::Connection;
+    use std::fs;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
+
+    #[test]
+    fn incompatible_database_is_rejected_without_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(DATABASE_FILE);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE library_meta (
+                     singleton INTEGER PRIMARY KEY,
+                     schema_version INTEGER NOT NULL,
+                     revision INTEGER NOT NULL
+                 );
+                 INSERT INTO library_meta VALUES (1, 1, 27);
+                 CREATE TABLE foreign_backend_state (value TEXT NOT NULL);
+                 INSERT INTO foreign_backend_state VALUES ('preserve me');",
+            )
+            .unwrap();
+        drop(connection);
+        let before = fs::read(&path).unwrap();
+
+        let error = match Store::open(directory.path()) {
+            Ok(_) => panic!("incompatible database opened successfully"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("Invalid Picto library schema"));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!path.with_extension("sqlite-wal").exists());
+        assert!(!path.with_extension("sqlite-shm").exists());
+        let connection =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM foreign_backend_state", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+            "preserve me"
+        );
+    }
 
     #[test]
     fn transaction_commits_one_revision() {

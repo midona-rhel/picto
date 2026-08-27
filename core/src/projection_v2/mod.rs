@@ -17,6 +17,10 @@ use rusqlite::{Connection, Transaction};
 
 pub use crate::app::{ItemKind, Lifecycle};
 use crate::bit_sliced::{BitSlicedU64, FilteredAggregate, OptionalU8};
+use crate::canonical_bitmap::{
+    self, rating_key, BitmapDomain, LIFECYCLE_ACTIVE_KEY, LIFECYCLE_INBOX_KEY, LIFECYCLE_TRASH_KEY,
+    RATING_UNRATED_KEY,
+};
 
 /// A rebuildable projection of root, folder, membership, and tag state.
 pub struct ProjectionStore {
@@ -28,6 +32,153 @@ pub struct ProjectionStore {
 /// invariant check. Publishing it is a single infallible pointer swap.
 pub(crate) struct PreparedProjection {
     state: Arc<State>,
+    dirty: CanonicalDirty,
+}
+
+#[derive(Default)]
+struct CanonicalDirty {
+    lifecycle: bool,
+    rating: bool,
+    tags: Vec<i64>,
+    folders: Vec<i64>,
+    groups: Vec<i64>,
+}
+
+impl PreparedProjection {
+    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
+        let revision = i64::try_from(revision)
+            .map_err(|_| "Library revision exceeds SQLite range".to_string())?;
+        if self.dirty.lifecycle {
+            for (key, lifecycle) in [
+                (LIFECYCLE_ACTIVE_KEY, Lifecycle::Active),
+                (LIFECYCLE_INBOX_KEY, Lifecycle::Inbox),
+                (LIFECYCLE_TRASH_KEY, Lifecycle::Trash),
+            ] {
+                canonical_bitmap::replace_bitmap(
+                    transaction,
+                    BitmapDomain::Lifecycle,
+                    key,
+                    revision,
+                    &self.state.lifecycle_bitmaps[lifecycle_index(lifecycle)],
+                )
+                .map_err(|error| error.to_string())?;
+            }
+        }
+
+        if self.dirty.rating {
+            let roots = all_roots(&self.state);
+            let rated = self.state.numeric.rating.present_bitmap();
+            canonical_bitmap::replace_bitmap(
+                transaction,
+                BitmapDomain::Rating,
+                RATING_UNRATED_KEY,
+                revision,
+                &(&roots - &rated),
+            )
+            .map_err(|error| error.to_string())?;
+            for rating in 0..=5_u8 {
+                canonical_bitmap::replace_bitmap(
+                    transaction,
+                    BitmapDomain::Rating,
+                    rating_key(Some(rating)),
+                    revision,
+                    &self.state.numeric.rating.value_bitmap(rating, &roots),
+                )
+                .map_err(|error| error.to_string())?;
+            }
+        }
+
+        for tag_id in &self.dirty.tags {
+            let bitmap = self
+                .state
+                .direct_tag_bitmaps
+                .get(tag_id)
+                .map(|value| (**value).clone())
+                .unwrap_or_default();
+            canonical_bitmap::replace_bitmap(
+                transaction,
+                BitmapDomain::Tag,
+                *tag_id,
+                revision,
+                &bitmap,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+
+        for folder_id in &self.dirty.folders {
+            let bitmap = self
+                .state
+                .folder_members
+                .get(folder_id)
+                .map(|value| (**value).clone())
+                .unwrap_or_default();
+            canonical_bitmap::replace_bitmap(
+                transaction,
+                BitmapDomain::Folder,
+                *folder_id,
+                revision,
+                &bitmap,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+
+        for group_id in &self.dirty.groups {
+            let exists = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM library_item
+                         WHERE item_id = ?1 AND kind = 'collection'
+                     )",
+                    [group_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !exists {
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_bitmap
+                         WHERE domain = ?1 AND key_id = ?2",
+                        rusqlite::params![BitmapDomain::GroupMember.as_i64(), group_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_order
+                         WHERE owner_kind = 'group' AND owner_id = ?1",
+                        [group_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                continue;
+            }
+            let order = transaction
+                .prepare_cached(
+                    "SELECT media_item_id FROM collection_member
+                     WHERE collection_id = ?1
+                     ORDER BY position_rank, media_item_id",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([group_id], |row| row.get::<_, u32>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .map_err(|error| error.to_string())?;
+            canonical_bitmap::replace_ordered_membership(
+                transaction,
+                "group",
+                *group_id,
+                revision,
+                &order,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+impl crate::store::PreparedSettlement for PreparedProjection {
+    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
+        self.persist(transaction, revision)
+    }
 }
 
 /// An atomically published immutable `Arc` snapshot.
@@ -141,6 +292,12 @@ impl<T: Clone> DerefMut for Shared<T> {
 impl<T: Clone> From<T> for Shared<T> {
     fn from(value: T) -> Self {
         Self(Arc::new(value))
+    }
+}
+
+impl<T: Clone> Shared<T> {
+    fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -404,7 +561,7 @@ struct State {
     image_media_ids: Shared<RoaringBitmap>,
     all_image_roots: Shared<RoaringBitmap>,
     collection_ids: Shared<HashSet<i64>>,
-    collection_members: ShardedMap<i64, Shared<HashSet<i64>>>,
+    collection_members: ShardedMap<i64, Shared<RoaringBitmap>>,
     media_to_root: ShardedMap<i64, i64>,
     folder_members: ShardedMap<i64, Shared<RoaringBitmap>>,
     folder_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
@@ -413,6 +570,56 @@ struct State {
     root_owned_tags: ShardedMap<i64, Shared<Vec<i64>>>,
     direct_tag_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
     tagged_roots: Shared<RoaringBitmap>,
+}
+
+fn all_roots(state: &State) -> RoaringBitmap {
+    state
+        .lifecycle_bitmaps
+        .iter()
+        .fold(RoaringBitmap::new(), |mut roots, bitmap| {
+            roots |= bitmap;
+            roots
+        })
+}
+
+fn changed_bitmap_keys(
+    before: &ShardedMap<i64, Shared<RoaringBitmap>>,
+    after: &ShardedMap<i64, Shared<RoaringBitmap>>,
+) -> Vec<i64> {
+    let mut changed = HashSet::new();
+    for (key, value) in before.iter() {
+        if after.get(key).is_none_or(|next| !value.ptr_eq(next)) {
+            changed.insert(*key);
+        }
+    }
+    for (key, value) in after.iter() {
+        if before
+            .get(key)
+            .is_none_or(|previous| !value.ptr_eq(previous))
+        {
+            changed.insert(*key);
+        }
+    }
+    let mut changed = changed.into_iter().collect::<Vec<_>>();
+    changed.sort_unstable();
+    changed
+}
+
+fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
+    let roots_before = all_roots(before);
+    let roots_after = all_roots(after);
+    let rating_changed = roots_before != roots_after
+        || (0..=5_u8).any(|rating| {
+            before.numeric.rating.value_bitmap(rating, &roots_before)
+                != after.numeric.rating.value_bitmap(rating, &roots_after)
+        });
+    CanonicalDirty {
+        lifecycle: !Arc::ptr_eq(&before.lifecycle_bitmaps, &after.lifecycle_bitmaps),
+        rating: rating_changed,
+        tags: changed_bitmap_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps),
+        folders: changed_bitmap_keys(&before.folder_members, &after.folder_members),
+        groups: changed_bitmap_keys(&before.collection_members, &after.collection_members),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -660,14 +867,16 @@ impl ProjectionStore {
         &self,
         update: impl FnOnce(&ProjectionStore) -> Result<(), String>,
     ) -> Result<PreparedProjection, String> {
+        let before = self.state.load();
         let candidate = Self {
-            state: RcuCell::new(self.state.load()),
+            state: RcuCell::new(Arc::clone(&before)),
             writer: Mutex::new(()),
         };
         update(&candidate)?;
         let state = candidate.state.load();
         validate_bitmap_ids(&state)?;
-        Ok(PreparedProjection { state })
+        let dirty = canonical_diff(&before, &state);
+        Ok(PreparedProjection { state, dirty })
     }
 
     /// Publish a previously validated settlement. No allocation, validation,
@@ -720,29 +929,33 @@ impl ProjectionStore {
             }
         }
 
-        {
-            let mut statement = connection
-                .prepare("SELECT item_id, lifecycle FROM library_root")
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|error| error.to_string())?;
-            for row in rows {
-                let (item_id, lifecycle) = row.map_err(|error| error.to_string())?;
-                let item_id = bitmap_id(item_id)?;
-                Arc::make_mut(&mut state.lifecycle_bitmaps)
-                    [lifecycle_index(parse_lifecycle(&lifecycle)?)]
-                .insert(item_id);
-            }
+        state.lifecycle_bitmaps = Arc::new([
+            canonical_bitmap::load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_INBOX_KEY)
+                .map_err(|error| error.to_string())?,
+            canonical_bitmap::load_bitmap(
+                connection,
+                BitmapDomain::Lifecycle,
+                LIFECYCLE_ACTIVE_KEY,
+            )
+            .map_err(|error| error.to_string())?,
+            canonical_bitmap::load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_TRASH_KEY)
+                .map_err(|error| error.to_string())?,
+        ]);
+        let root_ids = all_roots(&state);
+        let lifecycle_cardinality = state
+            .lifecycle_bitmaps
+            .iter()
+            .map(RoaringBitmap::len)
+            .sum::<u64>();
+        if lifecycle_cardinality != root_ids.len() {
+            return Err("canonical lifecycle bitmaps overlap".to_string());
         }
 
         {
             let mut statement = connection
                 .prepare(
                     "SELECT root_item_id, total_size_bytes,
-                            media_count, sort_rating
+                            media_count
                      FROM root_summary",
                 )
                 .map_err(|error| error.to_string())?;
@@ -752,13 +965,12 @@ impl ProjectionStore {
                         row.get::<_, i64>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
-                        row.get::<_, Option<i64>>(3)?,
                     ))
                 })
                 .map_err(|error| error.to_string())?;
             let numeric = Arc::make_mut(&mut state.numeric);
             for row in rows {
-                let (item_id, total_size_bytes, media_count, rating) =
+                let (item_id, total_size_bytes, media_count) =
                     row.map_err(|error| error.to_string())?;
                 let item_id = bitmap_id(item_id)?;
                 numeric.total_size_bytes.set(
@@ -771,32 +983,85 @@ impl ProjectionStore {
                     u64::try_from(media_count)
                         .map_err(|_| "root_summary contains a negative media count".to_string())?,
                 );
-                if let Some(rating) = rating {
-                    numeric.rating.set(
-                        item_id,
-                        u8::try_from(rating)
-                            .map_err(|_| "root_summary contains an invalid rating".to_string())?,
-                    );
-                }
             }
         }
 
-        {
-            let mut statement = connection
-                .prepare("SELECT collection_id, media_item_id FROM collection_member")
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-                .map_err(|error| error.to_string())?;
-            for row in rows {
-                let (collection_id, media_id) = row.map_err(|error| error.to_string())?;
-                state
-                    .collection_members
-                    .entry(collection_id)
-                    .or_default()
-                    .insert(media_id);
-                state.media_to_root.insert(media_id, collection_id);
+        let summary_roots = state.numeric.total_size_bytes.present_bitmap();
+        if summary_roots != root_ids {
+            return Err("canonical lifecycle membership does not match root summaries".to_string());
+        }
+
+        let rating_bitmaps = canonical_bitmap::load_domain(connection, BitmapDomain::Rating)
+            .map_err(|error| error.to_string())?;
+        let mut rated_or_unrated = RoaringBitmap::new();
+        for (key, roots) in rating_bitmaps {
+            if !rated_or_unrated.is_disjoint(&roots) {
+                return Err("canonical rating bitmaps overlap".to_string());
             }
+            let invalid = &roots - &root_ids;
+            if let Some(root_id) = invalid.min() {
+                return Err(format!(
+                    "canonical rating references unknown root {root_id}"
+                ));
+            }
+            rated_or_unrated |= &roots;
+            if key == RATING_UNRATED_KEY {
+                continue;
+            }
+            let rating =
+                u8::try_from(key - 1).map_err(|_| format!("invalid canonical rating key {key}"))?;
+            if rating > 5 {
+                return Err(format!("invalid canonical rating key {key}"));
+            }
+            for root_id in roots {
+                Arc::make_mut(&mut state.numeric)
+                    .rating
+                    .set(root_id, rating);
+            }
+        }
+        if rated_or_unrated != root_ids {
+            return Err("canonical rating membership does not cover every root".to_string());
+        }
+
+        let mut group_members =
+            canonical_bitmap::load_domain(connection, BitmapDomain::GroupMember)
+                .map_err(|error| error.to_string())?;
+        for collection_id in group_members.keys() {
+            if !state.collection_ids.contains(&collection_id) {
+                return Err(format!(
+                    "canonical group membership references unknown group {collection_id}"
+                ));
+            }
+        }
+        for collection_id in state.collection_ids.iter().copied() {
+            let members = group_members.remove(&collection_id).unwrap_or_default();
+            let order = canonical_bitmap::load_order(connection, "group", collection_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("canonical group {collection_id} has no order"))?;
+            let ordered_members = order.iter().copied().collect::<RoaringBitmap>();
+            if ordered_members.len() != order.len() as u64 || ordered_members != members {
+                return Err(format!(
+                    "canonical group {collection_id} membership and order differ"
+                ));
+            }
+            for media_id in &members {
+                let media_id = i64::from(media_id);
+                if !state.media_ids.contains(&media_id) {
+                    return Err(format!(
+                        "canonical group {collection_id} references unknown media {media_id}"
+                    ));
+                }
+                if state
+                    .media_to_root
+                    .insert(media_id, collection_id)
+                    .is_some()
+                {
+                    return Err(format!("media {media_id} belongs to multiple groups"));
+                }
+            }
+            state
+                .collection_members
+                .insert(collection_id, members.into());
         }
 
         for media_id in state.media_ids.iter().copied() {
@@ -805,35 +1070,32 @@ impl ProjectionStore {
             }
         }
 
+        for (folder_id, members) in canonical_bitmap::load_domain(connection, BitmapDomain::Folder)
+            .map_err(|error| error.to_string())?
         {
-            let mut statement = connection
-                .prepare("SELECT folder_id, item_id FROM folder_item")
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-                .map_err(|error| error.to_string())?;
-            for row in rows {
-                let (folder_id, item_id) = row.map_err(|error| error.to_string())?;
-                validate_id(item_id)?;
-                state
-                    .folder_members
-                    .entry(folder_id)
-                    .or_default()
-                    .insert(item_id as u32);
+            let invalid = &members - &root_ids;
+            if let Some(root_id) = invalid.min() {
+                return Err(format!(
+                    "canonical folder {folder_id} references unknown root {root_id}"
+                ));
             }
+            state.folder_members.insert(folder_id, members.into());
         }
 
+        for (tag_id, members) in canonical_bitmap::load_domain(connection, BitmapDomain::Tag)
+            .map_err(|error| error.to_string())?
         {
-            let mut statement = connection
-                .prepare("SELECT root_item_id, tag_id FROM root_tag")
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-                .map_err(|error| error.to_string())?;
-            for row in rows {
-                let (root_id, tag_id) = row.map_err(|error| error.to_string())?;
-                validate_id(root_id)?;
-                insert_sorted_tag(state.root_owned_tags.entry(root_id).or_default(), tag_id);
+            let invalid = &members - &root_ids;
+            if let Some(root_id) = invalid.min() {
+                return Err(format!(
+                    "canonical tag {tag_id} references unknown root {root_id}"
+                ));
+            }
+            for root_id in members {
+                insert_sorted_tag(
+                    state.root_owned_tags.entry(i64::from(root_id)).or_default(),
+                    tag_id,
+                );
             }
         }
 
@@ -1111,7 +1373,7 @@ impl ProjectionStore {
                 state.collection_ids.remove(&change.item_id);
                 state.media_to_root.remove(&change.item_id);
                 if let Some(members) = state.collection_members.remove(&change.item_id) {
-                    touched_media.extend(members);
+                    touched_media.extend(members.iter().map(i64::from));
                 }
             }
         }
@@ -1137,7 +1399,7 @@ impl ProjectionStore {
                         && state.collection_ids.contains(&previous_root)
                     {
                         if let Some(members) = state.collection_members.get_mut(&previous_root) {
-                            members.remove(&change.media_id);
+                            members.remove(change.media_id as u32);
                         }
                     }
                 }
@@ -1145,7 +1407,7 @@ impl ProjectionStore {
                     .collection_members
                     .entry(change.collection_id)
                     .or_default()
-                    .insert(change.media_id);
+                    .insert(change.media_id as u32);
                 state
                     .media_to_root
                     .insert(change.media_id, change.collection_id);
@@ -1156,7 +1418,7 @@ impl ProjectionStore {
             } else {
                 touched_roots.insert(change.collection_id);
                 if let Some(members) = state.collection_members.get_mut(&change.collection_id) {
-                    members.remove(&change.media_id);
+                    members.remove(change.media_id as u32);
                 }
                 if state.media_to_root.get(&change.media_id) == Some(&change.collection_id) {
                     if has_root(&state, change.media_id)
@@ -1385,7 +1647,7 @@ impl ProjectionStore {
                     && !state
                         .collection_members
                         .values()
-                        .any(|members| members.contains(&item_id))
+                        .any(|members| members.contains(item_id as u32))
                 {
                     state.media_to_root.insert(item_id, item_id);
                 }
@@ -1395,7 +1657,7 @@ impl ProjectionStore {
                         .get(&item_id)
                         .cloned()
                         .unwrap_or_default();
-                    for member_id in members {
+                    for member_id in members.iter().map(i64::from) {
                         state.media_to_root.insert(member_id, item_id);
                     }
                 }
@@ -1417,7 +1679,7 @@ impl ProjectionStore {
                         .get(&item_id)
                         .cloned()
                         .unwrap_or_default();
-                    for member_id in members {
+                    for member_id in members.iter().map(i64::from) {
                         if has_root(&state, member_id) {
                             state.media_to_root.insert(member_id, member_id);
                         } else {
@@ -1669,7 +1931,7 @@ impl ProjectionStore {
             if let Some(previous_root) = old_root {
                 if previous_root != collection_id && state.collection_ids.contains(&previous_root) {
                     if let Some(members) = state.collection_members.get_mut(&previous_root) {
-                        members.remove(&media_id);
+                        members.remove(media_id as u32);
                     }
                 }
             }
@@ -1677,11 +1939,11 @@ impl ProjectionStore {
                 .collection_members
                 .entry(collection_id)
                 .or_default()
-                .insert(media_id);
+                .insert(media_id as u32);
             state.media_to_root.insert(media_id, collection_id);
         } else {
             if let Some(members) = state.collection_members.get_mut(&collection_id) {
-                members.remove(&media_id);
+                members.remove(media_id as u32);
             }
             match has_root(&state, media_id) {
                 true => {
@@ -1883,7 +2145,7 @@ fn sync_all_image_root(state: &mut State, root_id: i64) {
                 !members.is_empty()
                     && members
                         .iter()
-                        .all(|media_id| state.image_media_ids.contains(*media_id as u32))
+                        .all(|media_id| state.image_media_ids.contains(media_id))
             })
     } else {
         false
@@ -2012,6 +2274,10 @@ mod tests {
         MediaClassificationProjectionChange, MembershipProjectionChange, ProjectionStore,
         RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
     };
+    use crate::canonical_bitmap::{
+        replace_bitmap, replace_ordered_membership, BitmapDomain, LIFECYCLE_ACTIVE_KEY,
+        LIFECYCLE_INBOX_KEY, LIFECYCLE_TRASH_KEY, RATING_UNRATED_KEY,
+    };
 
     fn fixture() -> (Connection, ProjectionStore) {
         let mut connection = Connection::open_in_memory().unwrap();
@@ -2046,6 +2312,57 @@ mod tests {
                 ",
             )
             .unwrap();
+        let transaction = connection.transaction().unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            1,
+            &RoaringBitmap::from_iter([11, 20]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_INBOX_KEY,
+            1,
+            &RoaringBitmap::from_iter([12]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_TRASH_KEY,
+            1,
+            &RoaringBitmap::new(),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Rating,
+            RATING_UNRATED_KEY,
+            1,
+            &RoaringBitmap::from_iter([11, 12, 20]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Folder,
+            7,
+            1,
+            &RoaringBitmap::from_iter([20]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Tag,
+            100,
+            1,
+            &RoaringBitmap::from_iter([20]),
+        )
+        .unwrap();
+        replace_ordered_membership(&transaction, "group", 20, 1, &[10]).unwrap();
+        transaction.commit().unwrap();
         let projection = ProjectionStore::from_connection(&connection).unwrap();
         (connection, projection)
     }
@@ -2170,13 +2487,23 @@ mod tests {
 
     #[test]
     fn folder_projection_excludes_non_active_roots() {
-        let (connection, projection) = fixture();
-        connection
+        let (mut connection, projection) = fixture();
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute(
                 "INSERT INTO folder_item (folder_id, item_id) VALUES (7, 12)",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Folder,
+            7,
+            2,
+            &RoaringBitmap::from_iter([12, 20]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         projection.reload(&connection).unwrap();
 
         assert_eq!(projection.folder_bitmap(7), RoaringBitmap::from_iter([20]));
@@ -2184,13 +2511,31 @@ mod tests {
 
     #[test]
     fn replace_with_publishes_an_already_built_projection() {
-        let (connection, projection) = fixture();
-        connection
+        let (mut connection, projection) = fixture();
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute(
                 "UPDATE library_root SET lifecycle = 'trash' WHERE item_id = 11",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            2,
+            &RoaringBitmap::from_iter([20]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_TRASH_KEY,
+            2,
+            &RoaringBitmap::from_iter([11]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         let rebuilt = ProjectionStore::from_connection(&connection).unwrap();
 
         projection.replace_with(rebuilt);
@@ -2216,20 +2561,39 @@ mod tests {
 
     #[test]
     fn structure_delta_does_not_move_root_owned_tags_between_collections() {
-        let (connection, projection) = fixture();
-        connection
+        let (mut connection, projection) = fixture();
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute(
                 "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
                  VALUES (21, 'collection-b', 'collection', 'now', 'now')",
                 [],
             )
             .unwrap();
-        connection
+        transaction
             .execute(
                 "INSERT INTO library_root (item_id, lifecycle) VALUES (21, 'active')",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Lifecycle,
+            LIFECYCLE_ACTIVE_KEY,
+            2,
+            &RoaringBitmap::from_iter([11, 20, 21]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Rating,
+            RATING_UNRATED_KEY,
+            2,
+            &RoaringBitmap::from_iter([11, 12, 20, 21]),
+        )
+        .unwrap();
+        replace_ordered_membership(&transaction, "group", 21, 2, &[]).unwrap();
+        transaction.commit().unwrap();
         projection.reload(&connection).unwrap();
 
         projection
@@ -2450,14 +2814,32 @@ mod tests {
 
     #[test]
     fn canonical_root_tags_accumulate_without_member_tag_state() {
-        let (connection, projection) = fixture();
-        connection
+        let (mut connection, projection) = fixture();
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute(
                 "INSERT INTO root_tag(root_item_id, tag_id)
                  VALUES (11, 100), (20, 101)",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Tag,
+            100,
+            2,
+            &RoaringBitmap::from_iter([11, 20]),
+        )
+        .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Tag,
+            101,
+            2,
+            &RoaringBitmap::from_iter([20]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         projection.reload(&connection).unwrap();
 
         assert_eq!(
@@ -2472,16 +2854,26 @@ mod tests {
 
     #[test]
     fn root_tag_bitmap_preserves_direct_matches() {
-        let (connection, projection) = fixture();
-        connection
+        let (mut connection, projection) = fixture();
+        let transaction = connection.transaction().unwrap();
+        transaction
             .execute("INSERT INTO tag(tag_id, subtag) VALUES (200, 'plain')", [])
             .unwrap();
-        connection
+        transaction
             .execute(
                 "INSERT INTO root_tag(root_item_id, tag_id) VALUES (20, 101)",
                 [],
             )
             .unwrap();
+        replace_bitmap(
+            &transaction,
+            BitmapDomain::Tag,
+            101,
+            2,
+            &RoaringBitmap::from_iter([20]),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
         projection.reload(&connection).unwrap();
 
         projection

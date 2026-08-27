@@ -303,10 +303,14 @@ fn dominant_color_for_file(store: &Store, file_id: Option<i64>) -> Result<Option
 mod tests {
     use super::{drain_claimed_batch, DrainBatchResult};
     use crate::app::{resources, Application, ItemId};
+    use crate::canonical_bitmap::{
+        replace_bitmap, BitmapDomain, LIFECYCLE_ACTIVE_KEY, RATING_UNRATED_KEY,
+    };
     use crate::media_processing_v2::BlobSource;
     use crate::store::Store;
     use crate::workers_v2::{self, WorkKind, WorkSpec};
     use image::{DynamicImage, RgbImage};
+    use roaring::RoaringBitmap;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -406,6 +410,21 @@ mod tests {
                     "INSERT INTO library_root (item_id, lifecycle)
                      VALUES (9, 'active'), (10, 'active')",
                     [],
+                )?;
+                let roots = [9_u32, 10].into_iter().collect::<RoaringBitmap>();
+                replace_bitmap(
+                    transaction,
+                    BitmapDomain::Lifecycle,
+                    LIFECYCLE_ACTIVE_KEY,
+                    1,
+                    &roots,
+                )?;
+                replace_bitmap(
+                    transaction,
+                    BitmapDomain::Rating,
+                    RATING_UNRATED_KEY,
+                    1,
+                    &roots,
                 )?;
                 Ok(())
             })

@@ -142,6 +142,28 @@ impl BitSlicedU64 {
         )
     }
 
+    /// Return the identifiers whose stored value exactly matches `value`.
+    /// The result is restricted to `universe`, which lets categorical views
+    /// such as ratings be serialized without scanning individual roots.
+    pub fn value_bitmap(&self, value: u64, universe: &RoaringBitmap) -> RoaringBitmap {
+        if bit_width(value) > self.slices.len() {
+            return RoaringBitmap::new();
+        }
+        let mut matches = &self.present & universe;
+        for (bit, slice) in self.slices.iter().enumerate() {
+            if value & (1_u64 << bit) == 0 {
+                matches -= slice;
+            } else {
+                matches &= slice;
+            }
+        }
+        matches
+    }
+
+    pub fn present_bitmap(&self) -> RoaringBitmap {
+        self.present.clone()
+    }
+
     /// Count stored values selected by `filter`. Unknown IDs are ignored.
     pub fn filtered_count(&self, filter: &RoaringBitmap) -> u64 {
         self.present.intersection_len(filter)
@@ -268,6 +290,14 @@ impl OptionalU8 {
 
     pub fn get(&self, item_id: u32) -> Option<u8> {
         self.values.get(item_id).map(|value| value as u8)
+    }
+
+    pub fn value_bitmap(&self, value: u8, universe: &RoaringBitmap) -> RoaringBitmap {
+        self.values.value_bitmap(u64::from(value), universe)
+    }
+
+    pub fn present_bitmap(&self) -> RoaringBitmap {
+        self.values.present_bitmap()
     }
 
     pub fn filtered_count(&self, filter: &RoaringBitmap) -> u64 {

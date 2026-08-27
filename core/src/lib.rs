@@ -8,6 +8,7 @@ pub mod auth_v2;
 pub mod background_runtime_v2;
 pub mod bit_sliced;
 pub mod blob_store;
+pub mod canonical_bitmap;
 pub mod cloud;
 pub mod constants;
 pub mod credential_store;

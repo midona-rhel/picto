@@ -1453,6 +1453,22 @@ impl Application {
         target: &ItemTarget,
         patch: &MediaMetadataPatch,
     ) -> Result<MutationReceipt, String> {
+        let projection_rating = patch
+            .rating
+            .map(|rating| {
+                rating
+                    .map(u8::try_from)
+                    .transpose()
+                    .map_err(|_| "Rating must be between 0 and 5".to_string())
+                    .and_then(|rating| {
+                        if rating.is_some_and(|rating| rating > 5) {
+                            Err("Rating must be between 0 and 5".to_string())
+                        } else {
+                            Ok(rating)
+                        }
+                    })
+            })
+            .transpose()?;
         if let Some(rating) = patch.rating {
             if patch.notes.is_none() && patch.source_urls.is_none() {
                 return self.patch_rating(target, rating);
@@ -1537,9 +1553,14 @@ impl Application {
                     &changed_fields,
                     &[],
                 )?;
-                Ok((item_ids, ()))
+                Ok((item_ids, roots))
             },
-            |_, ()| Ok(()),
+            |projections, changed_roots| {
+                if let Some(rating) = projection_rating {
+                    projections.apply_rating_bitmap(&changed_roots, rating)?;
+                }
+                Ok(())
+            },
         )?;
         Ok(receipt(
             revision,
@@ -1602,11 +1623,15 @@ impl Application {
                         [],
                     )?;
                     transaction.execute(
-                        "UPDATE root_metadata
-                         SET rating = ?1, updated_at = ?2
-                         WHERE root_item_id IN (
-                             SELECT item_id FROM picto_selected_root
-                         )",
+                        "INSERT INTO root_metadata (
+                             root_item_id, rating, source_urls_json, updated_at
+                         )
+                         SELECT item_id, ?1, '[]', ?2
+                         FROM picto_selected_root
+                         WHERE TRUE
+                         ON CONFLICT(root_item_id) DO UPDATE SET
+                             rating = excluded.rating,
+                             updated_at = excluded.updated_at",
                         params![rating, now],
                     )?;
                     transaction.execute(
@@ -4226,14 +4251,19 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use roaring::RoaringBitmap;
     use rusqlite::params;
 
     use super::{
-        DetachItemsInput, ItemRename, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult,
-        ReorderCollectionInput,
+        DetachItemsInput, ItemRename, MediaMetadataPatch, OrganizeIntoCollectionInput,
+        OrganizeIntoCollectionResult, ReorderCollectionInput,
     };
     use crate::app::{
         Application, ItemFilters, ItemId, ItemQuery, ItemScope, ItemSort, ItemTarget, Lifecycle,
+    };
+    use crate::canonical_bitmap::{
+        load_bitmap, load_order, rating_key, BitmapDomain, LIFECYCLE_ACTIVE_KEY,
+        LIFECYCLE_TRASH_KEY,
     };
     use crate::store::Store;
 
@@ -4281,6 +4311,7 @@ mod tests {
                     )?;
                     ids.push(ItemId(item_id));
                 }
+                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(ids)
             })
             .unwrap();
@@ -5127,6 +5158,7 @@ mod tests {
                      VALUES (?1, 'active')",
                     [collection_id],
                 )?;
+                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(collection_id)
             })
             .unwrap();
@@ -5206,6 +5238,132 @@ mod tests {
                 )?;
                 assert_eq!(active, 1);
                 assert_eq!(trash, 2);
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_ACTIVE_KEY)?,
+                    RoaringBitmap::from_iter([ids[0].0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_TRASH_KEY)?,
+                    RoaringBitmap::from_iter([ids[1].0 as u32, ids[2].0 as u32])
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn prepared_publication_persists_only_canonical_bitmap_components() {
+        let (_directory, app, ids) = fixture();
+        let target = ItemTarget::Explicit {
+            item_ids: ids[..2].to_vec(),
+        };
+        app.apply_tags(&target, &["creator:test".to_string()], true, 1)
+            .unwrap();
+        app.set_folder_membership(&target, 1, true).unwrap();
+        app.patch_metadata(
+            &target,
+            &MediaMetadataPatch {
+                rating: Some(Some(4)),
+                notes: None,
+                source_urls: None,
+            },
+        )
+        .unwrap();
+        let grouped = organize(&app, &ids[..2], Some("Canonical"), None);
+
+        app.store()
+            .read(|connection| {
+                let tag_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'creator' AND subtag = 'test'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Tag, tag_id)?,
+                    RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Folder, 1)?,
+                    RoaringBitmap::from_iter([grouped.collection_id.0 as u32, ids[2].0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Rating, rating_key(Some(4)))?,
+                    RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(
+                        connection,
+                        BitmapDomain::GroupMember,
+                        grouped.collection_id.0
+                    )?,
+                    RoaringBitmap::from_iter([ids[0].0 as u32, ids[1].0 as u32])
+                );
+                assert_eq!(
+                    load_order(connection, "group", grouped.collection_id.0)?.unwrap(),
+                    vec![ids[0].0 as u32, ids[1].0 as u32]
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        app.undo().unwrap();
+        app.store()
+            .read(|connection| {
+                let tag_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'creator' AND subtag = 'test'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Tag, tag_id)?,
+                    RoaringBitmap::from_iter([ids[0].0 as u32, ids[1].0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Folder, 1)?,
+                    RoaringBitmap::from_iter(ids.iter().map(|item| item.0 as u32))
+                );
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Rating, rating_key(Some(4)))?,
+                    RoaringBitmap::from_iter([ids[0].0 as u32, ids[1].0 as u32])
+                );
+                assert!(load_bitmap(
+                    connection,
+                    BitmapDomain::GroupMember,
+                    grouped.collection_id.0
+                )?
+                .is_empty());
+                assert_eq!(
+                    load_order(connection, "group", grouped.collection_id.0)?,
+                    None
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        app.redo().unwrap();
+        app.store()
+            .read(|connection| {
+                let tag_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'creator' AND subtag = 'test'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Tag, tag_id)?,
+                    RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
+                );
+                assert_eq!(
+                    load_bitmap(
+                        connection,
+                        BitmapDomain::GroupMember,
+                        grouped.collection_id.0
+                    )?,
+                    RoaringBitmap::from_iter([ids[0].0 as u32, ids[1].0 as u32])
+                );
+                assert_eq!(
+                    load_order(connection, "group", grouped.collection_id.0)?.unwrap(),
+                    vec![ids[0].0 as u32, ids[1].0 as u32]
+                );
                 Ok(())
             })
             .unwrap();
@@ -5218,6 +5376,58 @@ mod tests {
         assert_eq!(receipt.revision, 4);
         assert_eq!(receipt.resources, vec!["library"]);
         assert!(receipt.item_ids.is_empty());
+    }
+
+    #[test]
+    fn mixed_metadata_patch_settles_rating_projection_before_returning() {
+        let (_directory, app, ids) = fixture();
+        let target = ItemTarget::Explicit {
+            item_ids: vec![ids[0]],
+        };
+
+        app.patch_metadata(
+            &target,
+            &MediaMetadataPatch {
+                rating: Some(Some(4)),
+                notes: Some(Some("Reviewed".to_string())),
+                source_urls: Some(vec!["https://example.test/source".to_string()]),
+            },
+        )
+        .unwrap();
+
+        let selected = RoaringBitmap::from_iter([ids[0].0 as u32]);
+        let aggregate = app.projections().rating_aggregate(&selected);
+        assert_eq!((aggregate.count, aggregate.sum), (1, 4));
+        app.store()
+            .read(|connection| {
+                let metadata: (Option<i64>, Option<String>, String) = connection.query_row(
+                    "SELECT rating, notes, source_urls_json
+                     FROM root_metadata WHERE root_item_id = ?1",
+                    [ids[0].0],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(metadata.0, Some(4));
+                assert_eq!(metadata.1.as_deref(), Some("Reviewed"));
+                assert_eq!(
+                    serde_json::from_str::<Vec<String>>(&metadata.2).unwrap(),
+                    vec!["https://example.test/source"]
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        app.patch_metadata(
+            &target,
+            &MediaMetadataPatch {
+                rating: Some(None),
+                notes: Some(Some("Unrated".to_string())),
+                source_urls: None,
+            },
+        )
+        .unwrap();
+
+        let aggregate = app.projections().rating_aggregate(&selected);
+        assert_eq!((aggregate.count, aggregate.sum), (0, 0));
     }
 
     #[test]

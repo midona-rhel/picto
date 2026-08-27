@@ -20,6 +20,7 @@ const APPLICATION_SETTINGS_KEY: &str = "application";
 const FOLDER_AUTO_TAGS_KEY: &str = "folderAutoTags";
 const FOLDER_COVERS_KEY: &str = "folderCovers";
 const MAX_FOLDER_RESOURCE_HINTS: usize = 256;
+const MAX_RECEIPT_ITEM_IDS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -385,7 +386,10 @@ impl Application {
             resources::SMART_FOLDERS.to_string(),
             resources::SETTINGS.to_string(),
         ]);
-        receipt.receipt.item_ids = root_ids.into_iter().map(ItemId).collect();
+        set_receipt_item_ids(
+            &mut receipt.receipt,
+            root_ids.into_iter().map(ItemId).collect(),
+        );
         Ok(receipt)
     }
 
@@ -591,7 +595,7 @@ impl Application {
             |_, ()| Ok(()),
         )?;
         let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
-        receipt.receipt.item_ids = input.item_ids.clone();
+        set_receipt_item_ids(&mut receipt.receipt, input.item_ids.clone());
         Ok(receipt)
     }
 
@@ -637,7 +641,10 @@ impl Application {
             |_, _| Ok(()),
         )?;
         let mut receipt = folder_receipt(revision, vec![folder_id], Vec::new(), None);
-        receipt.receipt.item_ids = item_ids.into_iter().map(ItemId).collect();
+        set_receipt_item_ids(
+            &mut receipt.receipt,
+            item_ids.into_iter().map(ItemId).collect(),
+        );
         Ok(receipt)
     }
 
@@ -831,9 +838,17 @@ impl Application {
             |_, ()| Ok(()),
         )?;
         let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
-        receipt.receipt.item_ids.push(input.item_id);
+        set_receipt_item_ids(&mut receipt.receipt, vec![input.item_id]);
         Ok(receipt)
     }
+}
+
+fn set_receipt_item_ids(receipt: &mut MutationReceipt, item_ids: Vec<ItemId>) {
+    receipt.item_ids = if item_ids.len() <= MAX_RECEIPT_ITEM_IDS {
+        item_ids
+    } else {
+        Vec::new()
+    };
 }
 
 fn folder_history(command: &str, label: &str, folder_ids: &[FolderId]) -> HistoryDescriptor {
@@ -1386,12 +1401,39 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        CreateFolderInput, FolderId, FolderMetadataInput, FolderWatchInput,
-        ReorderFolderChildrenInput, ReorderFolderItemsInput, SetFolderAutoTagsInput,
-        SetFolderCoverInput, SortFolderTreeInput, RANK_GAP,
+        folder_receipt, set_receipt_item_ids, CreateFolderInput, FolderId, FolderMetadataInput,
+        FolderWatchInput, ReorderFolderChildrenInput, ReorderFolderItemsInput,
+        SetFolderAutoTagsInput, SetFolderCoverInput, SortFolderTreeInput, MAX_RECEIPT_ITEM_IDS,
+        RANK_GAP,
     };
     use crate::app::{Application, ItemId, ItemTarget};
     use crate::store::Store;
+
+    #[test]
+    fn folder_receipt_item_ids_are_bounded() {
+        let folder_id = FolderId(1);
+        let mut at_limit = folder_receipt(1, vec![folder_id], Vec::new(), None);
+        set_receipt_item_ids(
+            &mut at_limit.receipt,
+            (1..=MAX_RECEIPT_ITEM_IDS as i64).map(ItemId).collect(),
+        );
+        assert_eq!(at_limit.receipt.item_ids.len(), MAX_RECEIPT_ITEM_IDS);
+
+        let mut above_limit = folder_receipt(2, vec![folder_id], Vec::new(), None);
+        set_receipt_item_ids(
+            &mut above_limit.receipt,
+            (1..=MAX_RECEIPT_ITEM_IDS as i64 + 1).map(ItemId).collect(),
+        );
+        assert!(above_limit.receipt.item_ids.is_empty());
+        assert!(above_limit
+            .receipt
+            .resources
+            .contains(&crate::app::resources::FOLDERS.to_string()));
+        assert!(above_limit
+            .receipt
+            .resources
+            .contains(&crate::app::resources::LIBRARY.to_string()));
+    }
 
     fn fixture() -> (tempfile::TempDir, Application, i64) {
         let directory = tempfile::tempdir().unwrap();
@@ -1421,6 +1463,7 @@ mod tests {
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
                     [media_id],
                 )?;
+                crate::canonical_bitmap::seed_test_state(transaction)?;
                 Ok(media_id)
             })
             .unwrap();

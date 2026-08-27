@@ -23,6 +23,8 @@ use crate::projection_v2::{
     FolderProjectionChange, ItemProjectionChange, RootProjectionChange, StructureProjectionDelta,
 };
 
+const MAX_RECEIPT_ITEM_IDS: usize = 256;
+
 #[derive(Default)]
 struct DuplicateProjectionDelta {
     structure: StructureProjectionDelta,
@@ -1768,13 +1770,7 @@ fn merge_standalone_item(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (
-        tag_id,
-        direct_assignment_count,
-        provenance_mask,
-        source_mask,
-    ) in tags
-    {
+    for (tag_id, direct_assignment_count, provenance_mask, source_mask) in tags {
         transaction.execute(
             "INSERT INTO root_tag (
                  root_item_id, tag_id, direct_assignment_count,
@@ -1929,7 +1925,11 @@ fn receipt(
     MutationReceipt {
         revision,
         resources,
-        item_ids,
+        item_ids: if item_ids.len() <= MAX_RECEIPT_ITEM_IDS {
+            item_ids
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -1944,14 +1944,43 @@ mod tests {
     use super::{
         candidate_plan, compare_quality, compare_quality_with_encoding, count_candidates,
         jpeg_encoding_class, list_candidates, parse_jpeg_quantization, parse_supported_hash,
-        resolve, scan, spatial_comparison, spatial_descriptor, spatially_consistent,
+        receipt, resolve, scan, spatial_comparison, spatial_descriptor, spatially_consistent,
         tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality, QualityDecision,
-        ResolutionChoice,
+        ResolutionChoice, MAX_RECEIPT_ITEM_IDS,
     };
     use crate::app::{Application, FileHash};
     use crate::store::Store;
     use img_hash::ImageHash;
     use rusqlite::params;
+
+    #[test]
+    fn duplicate_receipt_item_ids_are_bounded() {
+        let at_limit = receipt(
+            1,
+            (1..=MAX_RECEIPT_ITEM_IDS as i64)
+                .map(crate::app::ItemId)
+                .collect(),
+            true,
+            false,
+        );
+        assert_eq!(at_limit.item_ids.len(), MAX_RECEIPT_ITEM_IDS);
+
+        let above_limit = receipt(
+            2,
+            (1..=MAX_RECEIPT_ITEM_IDS as i64 + 1)
+                .map(crate::app::ItemId)
+                .collect(),
+            true,
+            false,
+        );
+        assert!(above_limit.item_ids.is_empty());
+        assert!(above_limit
+            .resources
+            .contains(&crate::app::resources::DUPLICATES.to_string()));
+        assert!(above_limit
+            .resources
+            .contains(&crate::app::resources::LIBRARY.to_string()));
+    }
 
     fn encoded_png(image: &image::DynamicImage) -> Vec<u8> {
         let mut bytes = Vec::new();

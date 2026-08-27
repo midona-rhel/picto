@@ -6,6 +6,7 @@
 //! separate, explicit operation that atomically replaces only the database
 //! file. No command implicitly opens, mutates, or deletes a source library.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -14,7 +15,12 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use picto_core::canonical_bitmap::{
+    intern_key, load_bitmap, load_order, rating_key, replace_bitmap, replace_ordered_membership,
+    BitmapDomain, LIFECYCLE_ACTIVE_KEY, LIFECYCLE_INBOX_KEY, LIFECYCLE_TRASH_KEY,
+};
 use picto_core::store::schema;
+use roaring::RoaringBitmap;
 use rusqlite::{Connection, OpenFlags, MAIN_DB};
 use sha2::{Digest, Sha256};
 
@@ -485,6 +491,10 @@ fn validate_canonical_v1(connection: &Connection, counts: &Counts) -> Result<(),
     }
     for required in [
         "root_metadata",
+        "canonical_bitmap_key",
+        "canonical_bitmap_key_allocator",
+        "canonical_bitmap",
+        "canonical_order",
         "root_tag",
         "root_summary",
         "tag_summary",
@@ -583,7 +593,102 @@ fn validate_canonical_v1(connection: &Connection, counts: &Counts) -> Result<(),
             "{bad_tag_summaries} tag summaries are inconsistent"
         ));
     }
+    validate_canonical_memberships(connection)?;
     Ok(())
+}
+
+fn validate_canonical_memberships(connection: &Connection) -> Result<(), String> {
+    let expected_roots = query_bitmap(connection, "SELECT item_id FROM library_root")?;
+    let active = load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_ACTIVE_KEY)
+        .map_err(|error| format!("cannot decode active lifecycle bitmap: {error}"))?;
+    let inbox = load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_INBOX_KEY)
+        .map_err(|error| format!("cannot decode Inbox lifecycle bitmap: {error}"))?;
+    let trash = load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_TRASH_KEY)
+        .map_err(|error| format!("cannot decode Trash lifecycle bitmap: {error}"))?;
+    if !(&active & &inbox).is_empty()
+        || !(&active & &trash).is_empty()
+        || !(&inbox & &trash).is_empty()
+        || (&active | &inbox | &trash) != expected_roots
+    {
+        return Err("canonical lifecycle bitmaps are not an exact root partition".into());
+    }
+
+    let tag_ids = connection
+        .prepare("SELECT tag_id FROM tag ORDER BY tag_id")
+        .map_err(|error| format!("cannot read tags: {error}"))?
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("cannot read tags: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("cannot read tags: {error}"))?;
+    for tag_id in tag_ids {
+        let expected = query_bitmap_with_key(
+            connection,
+            "SELECT root_item_id FROM root_tag WHERE tag_id = ?1",
+            tag_id,
+        )?;
+        let actual = load_bitmap(connection, BitmapDomain::Tag, tag_id)
+            .map_err(|error| format!("cannot decode tag {tag_id}: {error}"))?;
+        if actual != expected {
+            return Err(format!("canonical tag bitmap {tag_id} is inconsistent"));
+        }
+    }
+
+    let groups = connection
+        .prepare("SELECT item_id FROM library_item WHERE kind = 'collection' ORDER BY item_id")
+        .map_err(|error| format!("cannot read groups: {error}"))?
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("cannot read groups: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("cannot read groups: {error}"))?;
+    for group_id in groups {
+        let members = load_bitmap(connection, BitmapDomain::GroupMember, group_id)
+            .map_err(|error| format!("cannot decode group {group_id}: {error}"))?;
+        let order = load_order(connection, "group", group_id)
+            .map_err(|error| format!("cannot decode group order {group_id}: {error}"))?
+            .ok_or_else(|| format!("group {group_id} has no canonical order"))?;
+        if order.iter().copied().collect::<RoaringBitmap>() != members
+            || order.len() != members.len() as usize
+        {
+            return Err(format!("group {group_id} membership and order diverge"));
+        }
+    }
+    Ok(())
+}
+
+fn query_bitmap(connection: &Connection, sql: &str) -> Result<RoaringBitmap, String> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| format!("cannot query bitmap validation set: {error}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("cannot query bitmap validation set: {error}"))?;
+    let mut result = RoaringBitmap::new();
+    for row in rows {
+        result.insert(bitmap_id(row.map_err(|error| {
+            format!("cannot query bitmap validation set: {error}")
+        })?)?);
+    }
+    Ok(result)
+}
+
+fn query_bitmap_with_key(
+    connection: &Connection,
+    sql: &str,
+    key: i64,
+) -> Result<RoaringBitmap, String> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| format!("cannot query bitmap validation set: {error}"))?;
+    let rows = statement
+        .query_map([key], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("cannot query bitmap validation set: {error}"))?;
+    let mut result = RoaringBitmap::new();
+    for row in rows {
+        result.insert(bitmap_id(row.map_err(|error| {
+            format!("cannot query bitmap validation set: {error}")
+        })?)?);
+    }
+    Ok(result)
 }
 
 fn convert_library(
@@ -1286,38 +1391,282 @@ fn rebuild_derived_state(connection: &mut Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("cannot seed derived-state rebuild: {error}"))?;
 
-    let checkpoint_material: String = transaction
-        .query_row(
-            "SELECT printf(
-                 'roots=%d;tags=%d;folders=%d;smart=%d;fts=%d/%d/%d',
-                 (SELECT COUNT(*) FROM root_summary),
-                 (SELECT COUNT(*) FROM root_tag),
-                 (SELECT COUNT(*) FROM folder_item),
-                 (SELECT COUNT(*) FROM smart_folder_membership),
-                 (SELECT COUNT(*) FROM root_name_fts),
-                 (SELECT COUNT(*) FROM root_notes_fts),
-                 (SELECT COUNT(*) FROM source_text_fts)
-             )",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| format!("cannot fingerprint rebuilt state: {error}"))?;
-    let checksum = hex::encode(Sha256::digest(checkpoint_material.as_bytes()));
+    populate_canonical_bitmaps(&transaction)?;
+
+    let checksum = canonical_payload_checksum(&transaction)?;
     transaction
         .execute(
             "INSERT INTO projection_checkpoint (
                  component, schema_fingerprint, implementation_hash,
                  database_revision, checksum, health, checkpoint_path, updated_at
              ) VALUES (
-                 'canonical-sql-read-models', 'schema-generation-1',
-                 'converter-v1', 1, ?1, 'healthy', NULL, datetime('now')
+                 'canonical-bitmaps', ?2,
+                 'canonical-bitmap-v1', 1, ?1, 'healthy', NULL, datetime('now')
              )",
-            [checksum],
+            rusqlite::params![checksum, schema::CURRENT_SCHEMA_FINGERPRINT],
         )
         .map_err(|error| format!("cannot record projection checkpoint metadata: {error}"))?;
     transaction
         .commit()
         .map_err(|error| format!("cannot commit derived-state rebuild: {error}"))
+}
+
+fn canonical_payload_checksum(transaction: &rusqlite::Transaction<'_>) -> Result<String, String> {
+    let mut digest = Sha256::new();
+    let mut statement = transaction
+        .prepare(
+            "SELECT domain, key_id, shard, revision, cardinality,
+                    format_version, checksum, payload
+             FROM canonical_bitmap ORDER BY domain, key_id, shard",
+        )
+        .map_err(|error| format!("cannot inspect canonical bitmaps: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Vec<u8>>(7)?,
+            ))
+        })
+        .map_err(|error| format!("cannot inspect canonical bitmaps: {error}"))?;
+    for row in rows {
+        let (domain, key_id, shard, revision, cardinality, version, checksum, payload) =
+            row.map_err(|error| format!("cannot inspect canonical bitmaps: {error}"))?;
+        for value in [domain, key_id, shard, revision, cardinality, version] {
+            digest.update(value.to_le_bytes());
+        }
+        digest.update(checksum.as_bytes());
+        digest.update(payload);
+    }
+    drop(statement);
+
+    let mut statement = transaction
+        .prepare(
+            "SELECT owner_kind, owner_id, revision, cardinality,
+                    format_version, checksum, payload
+             FROM canonical_order ORDER BY owner_kind, owner_id",
+        )
+        .map_err(|error| format!("cannot inspect canonical ordering: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+            ))
+        })
+        .map_err(|error| format!("cannot inspect canonical ordering: {error}"))?;
+    for row in rows {
+        let (kind, owner_id, revision, cardinality, version, checksum, payload) =
+            row.map_err(|error| format!("cannot inspect canonical ordering: {error}"))?;
+        digest.update(kind.as_bytes());
+        for value in [owner_id, revision, cardinality, version] {
+            digest.update(value.to_le_bytes());
+        }
+        digest.update(checksum.as_bytes());
+        digest.update(payload);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn populate_canonical_bitmaps(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    transaction
+        .execute("DELETE FROM canonical_bitmap", [])
+        .map_err(|error| format!("cannot clear canonical bitmaps: {error}"))?;
+    transaction
+        .execute("DELETE FROM canonical_order", [])
+        .map_err(|error| format!("cannot clear canonical ordering: {error}"))?;
+
+    let mut lifecycle = BTreeMap::<i64, RoaringBitmap>::new();
+    let mut ratings = BTreeMap::<i64, RoaringBitmap>::new();
+    let root_rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT root.item_id, root.lifecycle, metadata.rating
+                 FROM library_root root
+                 JOIN root_metadata metadata ON metadata.root_item_id = root.item_id",
+            )
+            .map_err(|error| format!("cannot read root memberships: {error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<u8>>(2)?,
+                ))
+            })
+            .map_err(|error| format!("cannot read root memberships: {error}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("cannot read root memberships: {error}"))?;
+        rows
+    };
+    for (root_id, lifecycle_name, rating) in root_rows {
+        let root_id = bitmap_id(root_id)?;
+        let lifecycle_key = match lifecycle_name.as_str() {
+            "active" => LIFECYCLE_ACTIVE_KEY,
+            "inbox" => LIFECYCLE_INBOX_KEY,
+            "trash" => LIFECYCLE_TRASH_KEY,
+            _ => return Err(format!("invalid lifecycle {lifecycle_name}")),
+        };
+        lifecycle.entry(lifecycle_key).or_default().insert(root_id);
+        ratings
+            .entry(rating_key(rating))
+            .or_default()
+            .insert(root_id);
+    }
+    write_bitmap_map(transaction, BitmapDomain::Lifecycle, lifecycle)?;
+    write_bitmap_map(transaction, BitmapDomain::Rating, ratings)?;
+
+    let tags = collect_pair_bitmaps(
+        transaction,
+        "SELECT tag_id, root_item_id FROM root_tag ORDER BY tag_id, root_item_id",
+        "tag memberships",
+    )?;
+    write_bitmap_map(transaction, BitmapDomain::Tag, tags)?;
+    let folders = collect_pair_bitmaps(
+        transaction,
+        "SELECT folder_id, item_id FROM folder_item ORDER BY folder_id, item_id",
+        "folder memberships",
+    )?;
+    write_bitmap_map(transaction, BitmapDomain::Folder, folders)?;
+
+    let groups = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT collection_id, media_item_id
+                 FROM collection_member
+                 ORDER BY collection_id, position_rank, media_item_id",
+            )
+            .map_err(|error| format!("cannot read group ordering: {error}"))?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|error| format!("cannot read group ordering: {error}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("cannot read group ordering: {error}"))?;
+        rows
+    };
+    let mut ordered_groups = BTreeMap::<i64, Vec<u32>>::new();
+    for (group_id, media_id) in groups {
+        ordered_groups
+            .entry(group_id)
+            .or_default()
+            .push(bitmap_id(media_id)?);
+    }
+    for (group_id, order) in ordered_groups {
+        replace_ordered_membership(transaction, "group", group_id, 1, &order)
+            .map_err(|error| format!("cannot store group {group_id}: {error}"))?;
+    }
+
+    let root_kinds = collect_text_root_facts(
+        transaction,
+        "SELECT item.kind, root.item_id
+         FROM library_root root JOIN library_item item ON item.item_id = root.item_id",
+        "root kinds",
+    )?;
+    write_dictionary_bitmaps(transaction, BitmapDomain::RootKind, root_kinds)?;
+    let mime = collect_text_root_facts(
+        transaction,
+        "SELECT file.mime_type, COALESCE(member.collection_id, asset.item_id)
+         FROM media_asset asset
+         JOIN media_file file ON file.file_id = asset.file_id
+         LEFT JOIN collection_member member ON member.media_item_id = asset.item_id",
+        "MIME memberships",
+    )?;
+    let mut mime_families = BTreeMap::<String, RoaringBitmap>::new();
+    for (mime_type, roots) in &mime {
+        let family = mime_type
+            .split_once('/')
+            .map_or(mime_type.as_str(), |value| value.0);
+        *mime_families.entry(family.to_string()).or_default() |= roots;
+    }
+    write_dictionary_bitmaps(transaction, BitmapDomain::Mime, mime)?;
+    write_dictionary_bitmaps(transaction, BitmapDomain::MimeFamily, mime_families)?;
+    Ok(())
+}
+
+fn collect_pair_bitmaps(
+    transaction: &rusqlite::Transaction<'_>,
+    sql: &str,
+    label: &str,
+) -> Result<BTreeMap<i64, RoaringBitmap>, String> {
+    let mut statement = transaction
+        .prepare(sql)
+        .map_err(|error| format!("cannot read {label}: {error}"))?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|error| format!("cannot read {label}: {error}"))?;
+    let mut bitmaps = BTreeMap::<i64, RoaringBitmap>::new();
+    for row in rows {
+        let (key_id, root_id) = row.map_err(|error| format!("cannot read {label}: {error}"))?;
+        bitmaps
+            .entry(key_id)
+            .or_default()
+            .insert(bitmap_id(root_id)?);
+    }
+    Ok(bitmaps)
+}
+
+fn collect_text_root_facts(
+    transaction: &rusqlite::Transaction<'_>,
+    sql: &str,
+    label: &str,
+) -> Result<BTreeMap<String, RoaringBitmap>, String> {
+    let mut statement = transaction
+        .prepare(sql)
+        .map_err(|error| format!("cannot read {label}: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| format!("cannot read {label}: {error}"))?;
+    let mut bitmaps = BTreeMap::<String, RoaringBitmap>::new();
+    for row in rows {
+        let (value, root_id) = row.map_err(|error| format!("cannot read {label}: {error}"))?;
+        bitmaps
+            .entry(value)
+            .or_default()
+            .insert(bitmap_id(root_id)?);
+    }
+    Ok(bitmaps)
+}
+
+fn write_bitmap_map(
+    transaction: &rusqlite::Transaction<'_>,
+    domain: BitmapDomain,
+    bitmaps: BTreeMap<i64, RoaringBitmap>,
+) -> Result<(), String> {
+    for (key_id, bitmap) in bitmaps {
+        replace_bitmap(transaction, domain, key_id, 1, &bitmap)
+            .map_err(|error| format!("cannot store {domain:?} bitmap {key_id}: {error}"))?;
+    }
+    Ok(())
+}
+
+fn write_dictionary_bitmaps(
+    transaction: &rusqlite::Transaction<'_>,
+    domain: BitmapDomain,
+    bitmaps: BTreeMap<String, RoaringBitmap>,
+) -> Result<(), String> {
+    for (value, bitmap) in bitmaps {
+        let key_id = intern_key(transaction, domain, &value)
+            .map_err(|error| format!("cannot intern {domain:?} key {value}: {error}"))?;
+        replace_bitmap(transaction, domain, i64::from(key_id), 1, &bitmap)
+            .map_err(|error| format!("cannot store {domain:?} bitmap {value}: {error}"))?;
+    }
+    Ok(())
+}
+
+fn bitmap_id(value: i64) -> Result<u32, String> {
+    u32::try_from(value).map_err(|_| format!("local ID {value} is outside canonical u32 range"))
 }
 
 fn write_manifest(root: &Path, source: &Path, counts: &Counts) -> Result<(), String> {
