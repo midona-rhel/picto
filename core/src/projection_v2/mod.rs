@@ -90,7 +90,39 @@ impl PreparedProjection {
             }
         }
 
+        let mut tag_summary_statement = (!self.dirty.tags.is_empty())
+            .then(|| {
+                transaction.prepare_cached(
+                    "INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(tag_id) DO UPDATE SET
+                         visible_root_count = excluded.visible_root_count,
+                         assignment_count = excluded.assignment_count",
+                )
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
         for tag_id in &self.dirty.tags {
+            let exists = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tag WHERE tag_id = ?1)",
+                    [tag_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !exists {
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_bitmap
+                         WHERE domain = ?1 AND key_id = ?2",
+                        rusqlite::params![BitmapDomain::Tag.as_i64(), tag_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute("DELETE FROM tag_summary WHERE tag_id = ?1", [tag_id])
+                    .map_err(|error| error.to_string())?;
+                continue;
+            }
             let bitmap = self
                 .state
                 .direct_tag_bitmaps
@@ -105,6 +137,16 @@ impl PreparedProjection {
                 &bitmap,
             )
             .map_err(|error| error.to_string())?;
+            let active = &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)];
+            tag_summary_statement
+                .as_mut()
+                .expect("dirty tags require a summary statement")
+                .execute(rusqlite::params![
+                    tag_id,
+                    bitmap.intersection_len(active) as i64,
+                    bitmap.len() as i64,
+                ])
+                .map_err(|error| error.to_string())?;
         }
 
         for folder_id in &self.dirty.folders {
@@ -1595,6 +1637,26 @@ impl ProjectionStore {
             .unwrap_or_default()
     }
 
+    /// Return every exact root/tag intersection for a root selection. This is
+    /// the reverse view used by mutations and in-memory history; no SQL
+    /// relationship expansion is required.
+    pub(crate) fn tag_memberships_for_roots(
+        &self,
+        roots: &RoaringBitmap,
+    ) -> Vec<(i64, RoaringBitmap)> {
+        let state = self.state.load();
+        let mut memberships = state
+            .direct_tag_bitmaps
+            .iter()
+            .filter_map(|(tag_id, tagged)| {
+                let matching = roots & &**tagged;
+                (!matching.is_empty()).then_some((*tag_id, matching))
+            })
+            .collect::<Vec<_>>();
+        memberships.sort_unstable_by_key(|(tag_id, _)| *tag_id);
+        memberships
+    }
+
     /// Return active roots containing at least one member with this exact MIME.
     pub fn mime_bitmap(&self, mime_type: &str) -> RoaringBitmap {
         let state = self.state.load();
@@ -2179,8 +2241,67 @@ impl ProjectionStore {
         Ok(())
     }
 
-    /// Compatibility entry point: canonical tags are owned by the visible
-    /// root, so a member ID resolves to its root before publication.
+    /// Replace the organization tags for a root set with one shared immutable
+    /// tag vector. Detach and ungroup use this path because every new root
+    /// inherits the same group-owned organization; expanding that into
+    /// `roots × tags` reverse-map edits is unnecessary.
+    pub fn apply_shared_root_tag_set(
+        &self,
+        root_ids: &RoaringBitmap,
+        tag_ids: &[i64],
+    ) -> Result<(), String> {
+        if root_ids.is_empty() {
+            return Ok(());
+        }
+        for tag_id in tag_ids {
+            validate_id(*tag_id)?;
+        }
+        let mut normalized = tag_ids.to_vec();
+        normalized.sort_unstable();
+        normalized.dedup();
+
+        let mut state = self.write_state();
+        let visible_roots = state
+            .lifecycle_bitmaps
+            .iter()
+            .fold(RoaringBitmap::new(), |roots, bitmap| roots | bitmap);
+        let invalid = root_ids - &visible_roots;
+        if let Some(root_id) = invalid.min() {
+            return Err(format!("item {root_id} is not a projection root"));
+        }
+
+        let mut previous_tags = HashSet::new();
+        for root_id in root_ids.iter().map(i64::from) {
+            if let Some(tags) = state.root_owned_tags.get(&root_id) {
+                previous_tags.extend(tags.iter().copied());
+            }
+        }
+        for tag_id in previous_tags {
+            if let Some(bitmap) = state.direct_tag_bitmaps.get_mut(&tag_id) {
+                *bitmap -= root_ids;
+            }
+        }
+        for tag_id in &normalized {
+            *state.direct_tag_bitmaps.entry(*tag_id).or_default() |= root_ids;
+        }
+
+        *state.tagged_roots -= root_ids;
+        if normalized.is_empty() {
+            for root_id in root_ids.iter().map(i64::from) {
+                state.root_owned_tags.remove(&root_id);
+            }
+        } else {
+            *state.tagged_roots |= root_ids;
+            let shared = Shared::from(normalized);
+            for root_id in root_ids.iter().map(i64::from) {
+                state.root_owned_tags.insert(root_id, shared.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonical tags are owned by the visible root, so a member ID resolves
+    /// to its root before publication.
     pub fn apply_tag_delta(&self, media_id: i64, tag_id: i64, present: bool) -> Result<(), String> {
         let root_id = self
             .root_for_media(media_id)
@@ -3333,6 +3454,36 @@ mod tests {
             projection.direct_tag_bitmap(101),
             RoaringBitmap::from_iter([20])
         );
+    }
+
+    #[test]
+    fn shared_root_tag_set_replaces_previous_memberships_exactly() {
+        let (_connection, projection) = fixture();
+        let roots = RoaringBitmap::from_iter([11, 12]);
+
+        projection
+            .apply_root_tag_bitmap(101, &RoaringBitmap::from_iter([11]), true)
+            .unwrap();
+        projection
+            .apply_shared_root_tag_set(&roots, &[100])
+            .unwrap();
+
+        assert_eq!(
+            projection.direct_tag_bitmap(100),
+            RoaringBitmap::from_iter([11, 12, 20])
+        );
+        assert!(projection.direct_tag_bitmap(101).is_empty());
+        assert_eq!(
+            projection.tag_memberships_for_roots(&roots),
+            vec![(100, roots.clone())]
+        );
+
+        projection.apply_shared_root_tag_set(&roots, &[]).unwrap();
+        assert_eq!(
+            projection.direct_tag_bitmap(100),
+            RoaringBitmap::from_iter([20])
+        );
+        assert!(projection.tag_memberships_for_roots(&roots).is_empty());
     }
 
     #[test]

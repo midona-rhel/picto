@@ -45,6 +45,7 @@ struct BulkLifecycleProjectionDelta {
 struct GroupProjectionDelta {
     structure: StructureProjectionDelta,
     tag_changes: Vec<SemanticMembershipDelta>,
+    shared_tag_sets: Vec<(RoaringBitmap, Vec<i64>)>,
     rating_changes: SemanticRatingDelta,
 }
 
@@ -435,7 +436,12 @@ impl Application {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
                 stage_root_ids(transaction, &item_ids)?;
                 let before_universe = group_history_universe(transaction, &item_ids)?;
-                let before = capture_group_state_compact(transaction, &before_universe)?;
+                let before = capture_group_state_from_projection(
+                    transaction,
+                    &before_universe,
+                    self.projections(),
+                    false,
+                )?;
                 trace_bulk_stage("groups.organize", "capture_before", stage_started);
                 stage_started = Instant::now();
                 let (selected_count, media_count, collection_count): (i64, i64, i64) = transaction
@@ -863,6 +869,7 @@ impl Application {
                     GroupProjectionDelta {
                         structure: delta,
                         tag_changes: forward.tag_changes,
+                        shared_tag_sets: Vec::new(),
                         rating_changes: forward.rating_changes,
                     },
                     history,
@@ -901,7 +908,12 @@ impl Application {
                 let mut seeds = media_ids.clone();
                 seeds.push(input.collection_id.0);
                 let before_universe = group_history_universe(transaction, &seeds)?;
-                let before = capture_group_state(transaction, &before_universe)?;
+                let before = capture_group_state_from_projection(
+                    transaction,
+                    &before_universe,
+                    self.projections(),
+                    true,
+                )?;
                 let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
                 let detached_lifecycle = input.target_lifecycle.unwrap_or(projected_lifecycle);
@@ -1030,7 +1042,15 @@ impl Application {
                     affected,
                     GroupProjectionDelta {
                         structure: delta,
-                        tag_changes: forward.tag_changes,
+                        tag_changes: Vec::new(),
+                        shared_tag_sets: vec![(
+                            detached_roots,
+                            before
+                                .roots
+                                .get(&input.collection_id.0)
+                                .map(|root| root.tags.iter().map(|tag| tag.tag_id).collect())
+                                .unwrap_or_default(),
+                        )],
                         rating_changes: forward.rating_changes,
                     },
                     history,
@@ -1061,7 +1081,12 @@ impl Application {
                 let operation_started = Instant::now();
                 let mut stage_started = operation_started;
                 let before_universe = group_history_universe(transaction, &[collection_id.0])?;
-                let before = capture_group_state(transaction, &before_universe)?;
+                let before = capture_group_state_from_projection(
+                    transaction,
+                    &before_universe,
+                    self.projections(),
+                    true,
+                )?;
                 trace_bulk_stage("groups.ungroup", "capture_before", stage_started);
                 stage_started = Instant::now();
                 let lifecycle = require_collection_root(transaction, collection_id.0)?;
@@ -1127,7 +1152,15 @@ impl Application {
                     affected,
                     GroupProjectionDelta {
                         structure: delta,
-                        tag_changes: forward.tag_changes,
+                        tag_changes: Vec::new(),
+                        shared_tag_sets: vec![(
+                            detached_roots,
+                            before
+                                .roots
+                                .get(&collection_id.0)
+                                .map(|root| root.tags.iter().map(|tag| tag.tag_id).collect())
+                                .unwrap_or_default(),
+                        )],
                         rating_changes: forward.rating_changes,
                     },
                     history,
@@ -2021,13 +2054,6 @@ fn root_tag_delta_between(
         .collect())
 }
 
-fn capture_group_state(
-    transaction: &Transaction<'_>,
-    universe_ids: &[i64],
-) -> rusqlite::Result<CapturedGroupState> {
-    capture_group_state_internal(transaction, universe_ids, true, true)
-}
-
 fn capture_group_state_compact(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
@@ -2040,6 +2066,27 @@ fn capture_group_state_without_tags(
     universe_ids: &[i64],
 ) -> rusqlite::Result<CapturedGroupState> {
     capture_group_state_internal(transaction, universe_ids, false, false)
+}
+
+fn capture_group_state_from_projection(
+    transaction: &Transaction<'_>,
+    universe_ids: &[i64],
+    projections: &crate::projection_v2::ProjectionStore,
+    include_root_tags: bool,
+) -> rusqlite::Result<CapturedGroupState> {
+    let mut state = capture_group_state_internal(transaction, universe_ids, false, false)?;
+    let roots = bitmap_from_i64s(universe_ids.iter().copied())?;
+    for (tag_id, tagged_roots) in projections.tag_memberships_for_roots(&roots) {
+        if include_root_tags {
+            for root_id in tagged_roots.iter().map(i64::from) {
+                if let Some(root) = state.roots.get_mut(&root_id) {
+                    root.tags.push(SemanticGroupTag { tag_id });
+                }
+            }
+        }
+        state.tag_sets.insert(tag_id, tagged_roots);
+    }
+    Ok(state)
 }
 
 fn capture_group_state_internal(
@@ -2865,6 +2912,9 @@ fn apply_group_projection_delta(
     delta: GroupProjectionDelta,
 ) -> Result<(), String> {
     projections.apply_structure_delta(delta.structure)?;
+    for (roots, tag_ids) in delta.shared_tag_sets {
+        projections.apply_shared_root_tag_set(&roots, &tag_ids)?;
+    }
     for change in delta.tag_changes {
         projections.apply_root_tag_bitmap(change.relation_id, &change.remove, false)?;
         projections.apply_root_tag_bitmap(change.relation_id, &change.add, true)?;
@@ -3237,6 +3287,12 @@ fn finish_group_create_summary_batch(
     transaction: &Transaction<'_>,
     collection_id: i64,
 ) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
+         VALUES (?1, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+         ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms",
+        [collection_id],
+    )?;
     transaction.execute(
         "INSERT INTO root_summary (
              root_item_id, lifecycle, kind, cover_media_item_id, media_count,
@@ -5154,6 +5210,13 @@ mod tests {
                     load_bitmap(connection, BitmapDomain::Tag, tag_id)?,
                     RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
                 );
+                let tag_summary: (i64, i64) = connection.query_row(
+                    "SELECT visible_root_count, assignment_count
+                     FROM tag_summary WHERE tag_id = ?1",
+                    [tag_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(tag_summary, (1, 1));
                 assert_eq!(
                     load_bitmap(connection, BitmapDomain::Folder, 1)?,
                     RoaringBitmap::from_iter([grouped.collection_id.0 as u32, ids[2].0 as u32])

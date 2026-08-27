@@ -943,7 +943,9 @@ AFTER UPDATE OF name ON media_asset BEGIN
     ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
 END;
 
-CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member BEGIN
+CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member
+WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
+BEGIN
     INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
     VALUES (NEW.collection_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
     ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
