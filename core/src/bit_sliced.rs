@@ -160,6 +160,30 @@ impl BitSlicedU64 {
         matches
     }
 
+    /// Return identifiers whose stored values fall inside the inclusive
+    /// bounds. Comparison cost depends on integer width, not row count.
+    pub fn range_bitmap(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        if minimum
+            .zip(maximum)
+            .is_some_and(|(minimum, maximum)| minimum > maximum)
+        {
+            return RoaringBitmap::new();
+        }
+        let mut matches = &self.present & universe;
+        if let Some(maximum) = maximum {
+            matches &= self.less_than_or_equal_bitmap(maximum, universe);
+        }
+        if let Some(minimum) = minimum.filter(|minimum| *minimum > 0) {
+            matches -= self.less_than_or_equal_bitmap(minimum - 1, universe);
+        }
+        matches
+    }
+
     pub fn present_bitmap(&self) -> RoaringBitmap {
         self.present.clone()
     }
@@ -246,6 +270,29 @@ impl BitSlicedU64 {
         while self.slices.last().is_some_and(RoaringBitmap::is_empty) {
             self.slices.pop();
         }
+    }
+
+    fn less_than_or_equal_bitmap(&self, maximum: u64, universe: &RoaringBitmap) -> RoaringBitmap {
+        let mut equal = &self.present & universe;
+        let mut less = RoaringBitmap::new();
+        let width = self.slices.len().max(bit_width(maximum));
+        for bit in (0..width).rev() {
+            let one_values = self.slices.get(bit);
+            if maximum & (1_u64 << bit) != 0 {
+                let zero_values = one_values
+                    .map(|slice| &equal - slice)
+                    .unwrap_or_else(|| equal.clone());
+                less |= zero_values;
+                if let Some(slice) = one_values {
+                    equal &= slice;
+                } else {
+                    equal.clear();
+                }
+            } else if let Some(slice) = one_values {
+                equal -= slice;
+            }
+        }
+        less | equal
     }
 }
 
@@ -382,5 +429,28 @@ mod tests {
         assert_eq!(ratings.get(10), Some(4));
         assert_eq!(ratings.get(20), None);
         assert_eq!(ratings.filtered_count(&roots), 1);
+    }
+
+    #[test]
+    fn range_bitmap_compares_values_without_scanning_identifiers() {
+        let mut index = BitSlicedU64::new();
+        for (item_id, value) in [(1, 0), (2, 4), (3, 5), (4, 9), (5, 64)] {
+            index.set(item_id, value);
+        }
+        let universe = RoaringBitmap::from_iter([1, 2, 3, 4, 5, 99]);
+
+        assert_eq!(
+            index.range_bitmap(Some(5), Some(9), &universe),
+            RoaringBitmap::from_iter([3, 4])
+        );
+        assert_eq!(
+            index.range_bitmap(None, Some(4), &universe),
+            RoaringBitmap::from_iter([1, 2])
+        );
+        assert_eq!(
+            index.range_bitmap(Some(10), None, &universe),
+            RoaringBitmap::from_iter([5])
+        );
+        assert!(index.range_bitmap(Some(10), Some(2), &universe).is_empty());
     }
 }

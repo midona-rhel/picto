@@ -47,6 +47,7 @@ pub(crate) fn compile_item_query(
 
     apply_folder_filters(projection, &query.filters, &mut roots);
     apply_rating_filters(projection, &query.filters, &mut roots);
+    apply_size_filters(projection, &query.filters, &mut roots);
     apply_mime_filters(projection, &query.filters, &mut roots);
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
     Ok(Some(roots))
@@ -91,6 +92,26 @@ fn apply_rating_filters(
         true,
     );
     *roots &= selected;
+}
+
+fn apply_size_filters(
+    projection: &ProjectionSelectionSnapshot,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) {
+    if filters.min_size_bytes.is_none() && filters.max_size_bytes.is_none() {
+        return;
+    }
+    if filters.max_size_bytes.is_some_and(|maximum| maximum < 0) {
+        roots.clear();
+        return;
+    }
+    let minimum = filters
+        .min_size_bytes
+        .filter(|minimum| *minimum > 0)
+        .map(|minimum| minimum as u64);
+    let maximum = filters.max_size_bytes.map(|maximum| maximum as u64);
+    *roots = projection.total_size_range_bitmap(minimum, maximum, roots);
 }
 
 fn apply_mime_filters(
@@ -194,8 +215,6 @@ fn has_sql_only_filters(filters: &ItemFilters) -> bool {
         || filters.modified_before.is_some()
         || filters.min_duration_ms.is_some()
         || filters.max_duration_ms.is_some()
-        || filters.min_size_bytes.is_some()
-        || filters.max_size_bytes.is_some()
         || filters.min_width.is_some()
         || filters.max_width.is_some()
         || filters.min_height.is_some()

@@ -4566,6 +4566,21 @@ mod tests {
             non_video_summary.selected_count, 1,
             "a group is excluded when any member matches the excluded MIME"
         );
+
+        let mut large = query_for(ItemScope::All);
+        large.filters.min_size_bytes = Some(80);
+        large.filters.max_size_bytes = Some(100);
+        let large_grid =
+            query_for_application(&application, &large, ItemPageRequest::default()).unwrap();
+        assert_eq!(
+            large_grid
+                .items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(10)]
+        );
+        assert_eq!(large_grid.total_size_bytes, Some(90));
     }
 
     #[test]

@@ -919,6 +919,18 @@ impl ProjectionSelectionSnapshot {
             .unwrap_or_default()
     }
 
+    pub(crate) fn total_size_range_bitmap(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state
+            .numeric
+            .total_size_bytes
+            .range_bitmap(minimum, maximum, universe)
+    }
+
     pub(crate) fn untagged_bitmap(&self) -> RoaringBitmap {
         &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
             - &*self.state.tagged_roots
