@@ -51,6 +51,10 @@ impl PreparedProjection {
     fn persist(&mut self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
         let revision = i64::try_from(revision)
             .map_err(|_| "Library revision exceeds SQLite range".to_string())?;
+        let capture_membership =
+            crate::cloud::capture::canonical_membership_capture_enabled(transaction)
+                .map_err(|error| error.to_string())?;
+        let mut membership_changes = crate::cloud::capture::CanonicalMembershipChanges::default();
         self.settle_tag_smart_folders(transaction)?;
         self.absorb_smart_folder_changes(transaction)?;
         if self.dirty.lifecycle {
@@ -113,7 +117,20 @@ impl PreparedProjection {
                     |row| row.get::<_, bool>(0),
                 )
                 .map_err(|error| error.to_string())?;
+            let previous = capture_membership
+                .then(|| canonical_bitmap::load_bitmap(transaction, BitmapDomain::Tag, *tag_id))
+                .transpose()
+                .map_err(|error| error.to_string())?;
             if !exists {
+                if let Some(previous) = previous.filter(|previous| !previous.is_empty()) {
+                    membership_changes
+                        .tags
+                        .push(crate::cloud::capture::CanonicalTagChange {
+                            tag_id: *tag_id,
+                            added: Vec::new(),
+                            removed: previous.iter().collect(),
+                        });
+                }
                 transaction
                     .execute(
                         "DELETE FROM canonical_bitmap
@@ -132,6 +149,19 @@ impl PreparedProjection {
                 .get(tag_id)
                 .map(|value| (**value).clone())
                 .unwrap_or_default();
+            if let Some(previous) = previous {
+                let added = &bitmap - &previous;
+                let removed = &previous - &bitmap;
+                if !added.is_empty() || !removed.is_empty() {
+                    membership_changes
+                        .tags
+                        .push(crate::cloud::capture::CanonicalTagChange {
+                            tag_id: *tag_id,
+                            added: added.iter().collect(),
+                            removed: removed.iter().collect(),
+                        });
+                }
+            }
             canonical_bitmap::replace_bitmap(
                 transaction,
                 BitmapDomain::Tag,
@@ -203,6 +233,25 @@ impl PreparedProjection {
                 .get(folder_id)
                 .map(|value| (**value).clone())
                 .unwrap_or_default();
+            if capture_membership {
+                let previous =
+                    canonical_bitmap::load_bitmap(transaction, BitmapDomain::Folder, *folder_id)
+                        .map_err(|error| error.to_string())?;
+                let added = &bitmap - &previous;
+                let removed = &previous - &bitmap;
+                if !added.is_empty() || !removed.is_empty() {
+                    membership_changes
+                        .folders
+                        .push(crate::cloud::capture::CanonicalFolderChange {
+                            folder_id: *folder_id,
+                            added: added.iter().collect(),
+                            removed: removed.iter().collect(),
+                            order: self.state.folder_orders.get(folder_id).map(|order| {
+                                order.iter().map(|item_id| *item_id as u32).collect()
+                            }),
+                        });
+                }
+            }
             canonical_bitmap::replace_bitmap(
                 transaction,
                 BitmapDomain::Folder,
@@ -264,7 +313,21 @@ impl PreparedProjection {
                     |row| row.get::<_, bool>(0),
                 )
                 .map_err(|error| error.to_string())?;
+            let previous_order = capture_membership
+                .then(|| canonical_bitmap::load_order(transaction, "group", *group_id))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .flatten();
             if !exists {
+                if let Some(previous) = previous_order.filter(|previous| !previous.is_empty()) {
+                    membership_changes
+                        .groups
+                        .push(crate::cloud::capture::CanonicalGroupChange {
+                            collection_id: *group_id,
+                            previous,
+                            next: None,
+                        });
+                }
                 transaction
                     .execute(
                         "DELETE FROM canonical_bitmap
@@ -306,6 +369,18 @@ impl PreparedProjection {
                     "canonical group {group_id} membership and order differ"
                 ));
             }
+            if capture_membership {
+                let previous = previous_order.unwrap_or_default();
+                if previous != order_u32 {
+                    membership_changes
+                        .groups
+                        .push(crate::cloud::capture::CanonicalGroupChange {
+                            collection_id: *group_id,
+                            previous,
+                            next: Some(order_u32.clone()),
+                        });
+                }
+            }
             canonical_bitmap::replace_ordered_membership(
                 transaction,
                 "group",
@@ -314,6 +389,10 @@ impl PreparedProjection {
                 &order_u32,
             )
             .map_err(|error| error.to_string())?;
+        }
+        if capture_membership {
+            crate::cloud::capture::record_canonical_membership(transaction, &membership_changes)
+                .map_err(|error| error.to_string())?;
         }
         for smart_folder_id in &self.dirty.smart_folders {
             let exists = transaction

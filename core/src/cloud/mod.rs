@@ -17,7 +17,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemKind, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    timestamp_ms, FolderProjectionChange, ItemProjectionChange,
+    timestamp_ms, FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
     MediaClassificationProjectionChange, MembershipProjectionChange, ProjectionStore,
     RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
     TagProjectionChange,
@@ -1167,6 +1167,7 @@ struct CloudProjectionState {
     folders: BTreeSet<(i64, i64)>,
     tags: BTreeSet<(i64, i64)>,
     memberships: BTreeSet<(i64, i64)>,
+    group_orders: BTreeMap<i64, Vec<u32>>,
     summaries: BTreeMap<i64, RootSummaryProjectionChange>,
     image_media_ids: BTreeSet<i64>,
     mime_types: BTreeMap<i64, String>,
@@ -1196,34 +1197,47 @@ impl CloudProjectionState {
 
         let folder_keys = serde_json::to_string(&footprint.folder_keys).map_err(json_sql_error)?;
         let mut statement = transaction.prepare(
-            "SELECT fi.item_id
+            "SELECT f.folder_id
              FROM folder f
-             JOIN folder_item fi ON fi.folder_id = f.folder_id
              WHERE f.folder_key IN (SELECT value FROM json_each(?1))",
         )?;
-        let folder_item_ids = statement
+        let folder_ids = statement
             .query_map([folder_keys], |row| row.get::<_, i64>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        state.ids.extend(folder_item_ids);
+        for folder_id in folder_ids {
+            let members = crate::canonical_bitmap::load_bitmap(
+                transaction,
+                crate::canonical_bitmap::BitmapDomain::Folder,
+                folder_id,
+            )?;
+            state.ids.extend(members.iter().map(i64::from));
+        }
 
         if state.ids.is_empty() {
             return Ok(state);
         }
 
-        let ids = serde_json::to_string(&state.ids).map_err(json_sql_error)?;
-        let mut statement = transaction.prepare(
-            "SELECT collection_id, media_item_id
-             FROM collection_member
-             WHERE collection_id IN (SELECT value FROM json_each(?1))
-                OR media_item_id IN (SELECT value FROM json_each(?1))",
-        )?;
-        let memberships = statement
-            .query_map([ids], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for membership in memberships {
-            state.ids.insert(membership.0);
-            state.ids.insert(membership.1);
-            state.memberships.insert(membership);
+        for (collection_id, members) in crate::canonical_bitmap::load_domain(
+            transaction,
+            crate::canonical_bitmap::BitmapDomain::GroupMember,
+        )? {
+            let touches_scope = state.ids.contains(&collection_id)
+                || members
+                    .iter()
+                    .any(|media| state.ids.contains(&i64::from(media)));
+            if !touches_scope {
+                continue;
+            }
+            state.ids.insert(collection_id);
+            for media in members.iter().map(i64::from) {
+                state.ids.insert(media);
+                state.memberships.insert((collection_id, media));
+            }
+            if let Some(order) =
+                crate::canonical_bitmap::load_order(transaction, "group", collection_id)?
+            {
+                state.group_orders.insert(collection_id, order);
+            }
         }
 
         let ids = serde_json::to_string(&state.ids).map_err(json_sql_error)?;
@@ -1265,25 +1279,27 @@ impl CloudProjectionState {
             state.mime_types.insert(media_id, mime_type);
         }
 
-        let mut statement = transaction.prepare(
-            "SELECT folder_id, item_id FROM folder_item
-             WHERE item_id IN (SELECT value FROM json_each(?1))",
-        )?;
-        state.folders.extend(
-            statement
-                .query_map([ids.clone()], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-        );
+        for (folder_id, members) in crate::canonical_bitmap::load_domain(
+            transaction,
+            crate::canonical_bitmap::BitmapDomain::Folder,
+        )? {
+            for media in members.iter().map(i64::from) {
+                if state.ids.contains(&media) {
+                    state.folders.insert((folder_id, media));
+                }
+            }
+        }
 
-        let mut statement = transaction.prepare(
-            "SELECT root_item_id, tag_id FROM root_tag
-             WHERE root_item_id IN (SELECT value FROM json_each(?1))",
-        )?;
-        state.tags.extend(
-            statement
-                .query_map([ids.clone()], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-        );
+        for (tag_id, members) in crate::canonical_bitmap::load_domain(
+            transaction,
+            crate::canonical_bitmap::BitmapDomain::Tag,
+        )? {
+            for root in members.iter().map(i64::from) {
+                if state.ids.contains(&root) {
+                    state.tags.insert((root, tag_id));
+                }
+            }
+        }
 
         let mut statement = transaction.prepare(
             "SELECT summary.root_item_id, summary.total_size_bytes,
@@ -1458,6 +1474,14 @@ impl CloudProjectionDelta {
                     present: true,
                 }),
         );
+        for (collection_id, order) in &after.group_orders {
+            if before.group_orders.get(collection_id) != Some(order) {
+                structure.group_orders.push(GroupOrderProjectionChange {
+                    collection_id: *collection_id,
+                    media_ids: order.iter().map(|media| i64::from(*media)).collect(),
+                });
+            }
+        }
 
         let summaries = after.summaries.into_values().collect::<Vec<_>>();
         let summary_ids = summaries
@@ -1787,23 +1811,21 @@ fn apply_operation(
                      ON CONFLICT(namespace, subtag) DO NOTHING",
                     params![namespace, subtag],
                 )?;
-                let tag_id: i64 = transaction.query_row(
+            }
+            let tag_id: Option<i64> = transaction
+                .query_row(
                     "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
                     params![namespace, subtag],
                     |row| row.get(0),
-                )?;
-                transaction.execute(
-                    "INSERT INTO root_tag(root_item_id, tag_id)
-                     VALUES (?1, ?2)
-                     ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-                    params![item_id, tag_id],
-                )?;
-            } else {
-                transaction.execute(
-                    "DELETE FROM root_tag WHERE root_item_id = ?1 AND tag_id IN (
-                         SELECT tag_id FROM tag WHERE namespace = ?2 AND subtag = ?3
-                     )",
-                    params![item_id, namespace, subtag],
+                )
+                .optional()?;
+            if let Some(tag_id) = tag_id {
+                update_membership_bitmap(
+                    transaction,
+                    crate::canonical_bitmap::BitmapDomain::Tag,
+                    tag_id,
+                    item_id,
+                    *present,
                 )?;
             }
             write_membership_clock(
@@ -1847,17 +1869,33 @@ fn apply_operation(
             )? {
                 return Ok(ApplyOutcome::Ignored);
             }
-            if *present {
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(folder_id, item_id) DO UPDATE SET
-                         position_rank = excluded.position_rank",
-                    params![folder_id, item_id, position_rank],
-                )?;
-            } else {
-                transaction.execute(
-                    "DELETE FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
-                    params![folder_id, item_id],
+            update_membership_bitmap(
+                transaction,
+                crate::canonical_bitmap::BitmapDomain::Folder,
+                folder_id,
+                item_id,
+                *present,
+            )?;
+            // Manual folder ordering exists only when the folder has a
+            // canonical order vector; splice the member into it.
+            if let Some(mut order) =
+                crate::canonical_bitmap::load_order(transaction, "folder", folder_id)?
+            {
+                let member = membership_id(item_id)?;
+                order.retain(|entry| *entry != member);
+                if *present {
+                    let index = position_rank
+                        .and_then(|rank| usize::try_from(rank).ok())
+                        .unwrap_or(order.len())
+                        .min(order.len());
+                    order.insert(index, member);
+                }
+                crate::canonical_bitmap::replace_order(
+                    transaction,
+                    "folder",
+                    folder_id,
+                    next_revision(transaction)?,
+                    &order,
                 )?;
             }
             write_membership_clock(
@@ -1959,12 +1997,17 @@ fn apply_operation(
             )? {
                 return Ok(ApplyOutcome::Ignored);
             }
-            let changed = transaction.execute(
-                "UPDATE collection_member SET position_rank = ?1
-                 WHERE collection_id = ?2 AND media_item_id = ?3",
-                params![position_rank, collection_id, media_id],
-            )?;
-            if changed == 0 {
+            let in_group = crate::canonical_bitmap::load_order(
+                transaction,
+                "group",
+                collection_id,
+            )?
+            .is_some_and(|order| {
+                u32::try_from(media_id)
+                    .ok()
+                    .is_some_and(|media| order.contains(&media))
+            });
+            if !in_group {
                 quarantine(
                     transaction,
                     mutation,
@@ -1972,6 +2015,13 @@ fn apply_operation(
                 )?;
                 return Ok(ApplyOutcome::Quarantined);
             }
+            splice_group_member(
+                transaction,
+                collection_id,
+                media_id,
+                usize::try_from(*position_rank).ok(),
+                true,
+            )?;
             write_field_clock(
                 transaction,
                 "item",
@@ -1979,7 +2029,6 @@ fn apply_operation(
                 "position_rank",
                 mutation,
             )?;
-            normalize_ranks(transaction, collection_id)?;
             Ok(ApplyOutcome::Applied(Some(collection_id)))
         }
         CloudOperation::DeleteItem { item_key } => {
@@ -3342,10 +3391,9 @@ fn apply_group_assignment(
     if !scalar_wins(transaction, "item", media_item_key, "collection", mutation)? {
         return Ok(ApplyOutcome::Ignored);
     }
-    transaction.execute(
-        "DELETE FROM collection_member WHERE media_item_id = ?1",
-        [media_id],
-    )?;
+    if let Some(previous_group) = owning_group(transaction, media_id)? {
+        splice_group_member(transaction, previous_group, media_id, None, false)?;
+    }
     if let Some(collection_key) = collection_item_key {
         let collection: Option<(i64, String)> = transaction
             .query_row(
@@ -3363,12 +3411,13 @@ fn apply_group_assignment(
             return Ok(ApplyOutcome::Quarantined);
         }
         transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media_id])?;
-        transaction.execute(
-            "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-             VALUES (?1, ?2, ?3)",
-            params![collection_id, media_id, position_rank.unwrap_or(i64::MAX)],
+        splice_group_member(
+            transaction,
+            collection_id,
+            media_id,
+            position_rank.and_then(|rank| usize::try_from(rank).ok()),
+            true,
         )?;
-        normalize_ranks(transaction, collection_id)?;
     } else {
         transaction.execute(
             "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')
@@ -3508,19 +3557,94 @@ fn create_item(
     Ok(ApplyOutcome::Applied(Some(item_id)))
 }
 
-fn normalize_ranks(transaction: &Transaction<'_>, collection_id: i64) -> rusqlite::Result<()> {
-    transaction.execute(
-        "WITH ordered AS (
-             SELECT media_item_id,
-                    (ROW_NUMBER() OVER (ORDER BY position_rank, media_item_id) - 1) * 1024 AS rank
-             FROM collection_member WHERE collection_id = ?1
-         )
-         UPDATE collection_member SET position_rank = (
-             SELECT rank FROM ordered WHERE ordered.media_item_id = collection_member.media_item_id
-         ) WHERE collection_id = ?1",
-        [collection_id],
+fn next_revision(transaction: &Transaction<'_>) -> rusqlite::Result<i64> {
+    transaction.query_row(
+        "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn membership_id(value: i64) -> rusqlite::Result<u32> {
+    u32::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
+}
+
+/// Set or clear one root in a canonical membership bitmap domain.
+fn update_membership_bitmap(
+    transaction: &Transaction<'_>,
+    domain: crate::canonical_bitmap::BitmapDomain,
+    key_id: i64,
+    item_id: i64,
+    present: bool,
+) -> rusqlite::Result<()> {
+    let mut members = crate::canonical_bitmap::load_bitmap(transaction, domain, key_id)?;
+    let item = membership_id(item_id)?;
+    let changed = if present {
+        members.insert(item)
+    } else {
+        members.remove(item)
+    };
+    if !changed {
+        return Ok(());
+    }
+    crate::canonical_bitmap::replace_bitmap(
+        transaction,
+        domain,
+        key_id,
+        next_revision(transaction)?,
+        &members,
+    )
+}
+
+/// Splice one member into (or out of) a canonical group order and its
+/// membership bitmap. `position` is the target vector index.
+fn splice_group_member(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    media_id: i64,
+    position: Option<usize>,
+    present: bool,
+) -> rusqlite::Result<bool> {
+    let mut order = crate::canonical_bitmap::load_order(transaction, "group", collection_id)?
+        .unwrap_or_default();
+    let media = membership_id(media_id)?;
+    let existing = order.iter().position(|entry| *entry == media);
+    if !present {
+        let Some(index) = existing else {
+            return Ok(false);
+        };
+        order.remove(index);
+    } else {
+        if let Some(index) = existing {
+            order.remove(index);
+        }
+        let index = position
+            .unwrap_or(order.len())
+            .min(order.len());
+        order.insert(index, media);
+    }
+    crate::canonical_bitmap::replace_ordered_membership(
+        transaction,
+        "group",
+        collection_id,
+        next_revision(transaction)?,
+        &order,
     )?;
-    Ok(())
+    Ok(true)
+}
+
+/// The group that canonically owns a media item, if any.
+fn owning_group(transaction: &Transaction<'_>, media_id: i64) -> rusqlite::Result<Option<i64>> {
+    let media = membership_id(media_id)?;
+    for (group_id, members) in crate::canonical_bitmap::load_domain(
+        transaction,
+        crate::canonical_bitmap::BitmapDomain::GroupMember,
+    )? {
+        if members.contains(media) {
+            return Ok(Some(group_id));
+        }
+    }
+    Ok(None)
 }
 
 fn scalar_wins(
@@ -4619,18 +4743,32 @@ mod tests {
             "an ordinary present relation must not be duplicated in a clock row",
         );
 
-        apply_downloaded(&application, &[remove]).unwrap();
-        assert_eq!(
+        let blue_members = |application: &Application| -> u64 {
             application
                 .store()
-                .read(|connection| connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag",
-                    [],
-                    |row| row.get::<_, i64>(0)
-                ))
-                .unwrap(),
-            0
-        );
+                .read(|connection| {
+                    let tag_id: Option<i64> = connection
+                        .query_row(
+                            "SELECT tag_id FROM tag
+                             WHERE namespace = 'general' AND subtag = 'blue'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    Ok(match tag_id {
+                        Some(tag_id) => crate::canonical_bitmap::load_bitmap(
+                            connection,
+                            crate::canonical_bitmap::BitmapDomain::Tag,
+                            tag_id,
+                        )?
+                        .len(),
+                        None => 0,
+                    })
+                })
+                .unwrap()
+        };
+        apply_downloaded(&application, &[remove]).unwrap();
+        assert_eq!(blue_members(&application), 0);
         assert_eq!(
             application
                 .store()
@@ -4662,17 +4800,7 @@ mod tests {
             },
         );
         apply_downloaded(&application, &[later_add]).unwrap();
-        assert_eq!(
-            application
-                .store()
-                .read(|connection| connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag",
-                    [],
-                    |row| row.get::<_, i64>(0)
-                ))
-                .unwrap(),
-            1
-        );
+        assert_eq!(blue_members(&application), 1);
         assert_eq!(
             application
                 .store()
@@ -4841,7 +4969,7 @@ mod tests {
         let sender = application();
         enable_capture(&sender);
         let item_id = add_media(&sender, "item-a");
-        sender
+        let (child_id, _) = sender
             .store()
             .transaction(|transaction| {
                 transaction.execute(
@@ -4859,22 +4987,17 @@ mod tests {
                 )?;
                 let child_id = transaction.last_insert_rowid();
                 transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                     VALUES (?1, ?2, 4096)",
-                    params![child_id, item_id],
-                )?;
-                transaction.execute(
                     "INSERT INTO smart_folder
                          (smart_folder_key, name, predicate_json, created_at, updated_at)
                      VALUES ('smart-a', 'Smart', '{\"groups\":[]}', 'now', 'now')",
                     [],
                 )?;
-                Ok(())
+                Ok(child_id)
             })
             .unwrap();
 
-        let operation = latest_operation(&sender);
-        let CloudOperation::Batch { operations } = &operation else {
+        let structure_operation = latest_operation(&sender);
+        let CloudOperation::Batch { operations } = &structure_operation else {
             panic!("capture must create one semantic batch");
         };
         let parent_index = operations
@@ -4885,15 +5008,33 @@ mod tests {
             .iter()
             .position(|operation| matches!(operation, CloudOperation::UpsertFolder { folder, .. } if folder.folder_key == "folder-child"))
             .unwrap();
-        let membership_index = operations
-            .iter()
-            .position(|operation| matches!(operation, CloudOperation::FolderMembership { folder_key, .. } if folder_key == "folder-child"))
+        assert!(parent_index < child_index);
+
+        sender
+            .set_folder_membership(
+                &crate::app::ItemTarget::Explicit {
+                    item_ids: vec![crate::app::ItemId(item_id)],
+                },
+                child_id,
+                true,
+            )
             .unwrap();
-        assert!(parent_index < child_index && child_index < membership_index);
+        let membership_operation = latest_operation(&sender);
+        let CloudOperation::Batch {
+            operations: membership_operations,
+        } = &membership_operation
+        else {
+            panic!("canonical membership must record one semantic batch");
+        };
+        assert!(membership_operations.iter().any(|operation| matches!(
+            operation,
+            CloudOperation::FolderMembership { folder_key, item_key, present: true, .. }
+                if folder_key == "folder-child" && item_key == "item-a"
+        )));
 
         let receiver = application();
         add_media(&receiver, "item-a");
-        let mutation = remote_mutation(
+        let structure_mutation = remote_mutation(
             &receiver,
             "sender",
             HybridTimestamp {
@@ -4901,43 +5042,66 @@ mod tests {
                 logical: 0,
             },
             CausalFrontier::new(),
-            operation,
+            structure_operation,
         );
-        let (summary, receipt) = apply_downloaded(&receiver, &[mutation]).unwrap();
+        let membership_mutation = remote_mutation(
+            &receiver,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 101,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            membership_operation,
+        );
+        let (summary, receipt) =
+            apply_downloaded(&receiver, &[structure_mutation, membership_mutation]).unwrap();
         assert_eq!(summary.quarantined, 0);
         assert!(receipt
             .resources
             .contains(&resources::SMART_FOLDERS.to_string()));
 
-        let replicated: (String, Option<String>, Option<i64>, Option<String>, i64) = receiver
+        let (child_name, parent_name, watch_path, smart_count, member_count): (
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+            u64,
+        ) = receiver
             .store()
             .read(|connection| {
-                connection.query_row(
-                    "SELECT child.name, parent.name, fi.position_rank, parent.watch_path,
-                            (SELECT COUNT(*) FROM smart_folder WHERE smart_folder_key = 'smart-a')
-                     FROM folder child
-                     JOIN folder parent ON parent.folder_id = child.parent_id
-                     JOIN folder_item fi ON fi.folder_id = child.folder_id
-                     JOIN library_item li ON li.item_id = fi.item_id
-                     WHERE child.folder_key = 'folder-child' AND li.item_key = 'item-a'",
-                    [],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
-                )
+                let (child_name, parent_name, watch_path, folder_id, smart_count) = connection
+                    .query_row(
+                        "SELECT child.name, parent.name, parent.watch_path, child.folder_id,
+                                (SELECT COUNT(*) FROM smart_folder
+                                 WHERE smart_folder_key = 'smart-a')
+                         FROM folder child
+                         JOIN folder parent ON parent.folder_id = child.parent_id
+                         WHERE child.folder_key = 'folder-child'",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, i64>(3)?,
+                                row.get::<_, i64>(4)?,
+                            ))
+                        },
+                    )?;
+                let members = crate::canonical_bitmap::load_bitmap(
+                    connection,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    folder_id,
+                )?;
+                Ok((child_name, parent_name, watch_path, smart_count, members.len()))
             })
             .unwrap();
-        assert_eq!(replicated.0, "Child");
-        assert_eq!(replicated.1.as_deref(), Some("Parent"));
-        assert_eq!(replicated.2, Some(4096));
-        assert_eq!(replicated.3, None, "watch paths are device-local");
-        assert_eq!(replicated.4, 1);
+        assert_eq!(child_name, "Child");
+        assert_eq!(parent_name.as_deref(), Some("Parent"));
+        assert_eq!(watch_path, None, "watch paths are device-local");
+        assert_eq!(smart_count, 1);
+        assert_eq!(member_count, 1);
     }
 
     #[test]

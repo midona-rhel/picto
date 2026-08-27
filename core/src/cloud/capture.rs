@@ -18,11 +18,8 @@ const CAPTURED_TABLES: &[&str] = &[
     "library_root",
     "root_metadata",
     "media_asset",
-    "root_tag",
     "folder",
-    "folder_item",
     "smart_folder",
-    "collection_member",
 ];
 
 /// Converts locally observed row changes into one typed cloud envelope. The
@@ -67,6 +64,182 @@ impl<'connection> SemanticCapture<'connection> {
     }
 }
 
+/// Canonical membership deltas computed by projection persistence against the
+/// previously durable bitmaps, inside the same mutation transaction.
+#[derive(Default)]
+pub(crate) struct CanonicalMembershipChanges {
+    pub tags: Vec<CanonicalTagChange>,
+    pub folders: Vec<CanonicalFolderChange>,
+    pub groups: Vec<CanonicalGroupChange>,
+}
+
+pub(crate) struct CanonicalTagChange {
+    pub tag_id: i64,
+    pub added: Vec<u32>,
+    pub removed: Vec<u32>,
+}
+
+pub(crate) struct CanonicalFolderChange {
+    pub folder_id: i64,
+    pub added: Vec<u32>,
+    pub removed: Vec<u32>,
+    pub order: Option<Vec<u32>>,
+}
+
+pub(crate) struct CanonicalGroupChange {
+    pub collection_id: i64,
+    pub previous: Vec<u32>,
+    pub next: Option<Vec<u32>>,
+}
+
+impl CanonicalMembershipChanges {
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty() && self.folders.is_empty() && self.groups.is_empty()
+    }
+}
+
+/// Whether canonical membership changes should be captured for replication.
+pub(crate) fn canonical_membership_capture_enabled(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<bool> {
+    transaction.query_row(
+        "SELECT provider IS NOT NULL FROM cloud_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn capture_item_key(
+    transaction: &Transaction<'_>,
+    item_id: i64,
+) -> rusqlite::Result<Option<String>> {
+    transaction
+        .query_row(
+            "SELECT item_key FROM library_item WHERE item_id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
+/// Record one replication batch for canonical tag, folder, and group
+/// membership deltas. Items or tags already deleted in this transaction are
+/// skipped; their own tombstone operations carry the removal.
+pub(crate) fn record_canonical_membership(
+    transaction: &Transaction<'_>,
+    changes: &CanonicalMembershipChanges,
+) -> rusqlite::Result<usize> {
+    if changes.is_empty() {
+        return Ok(0);
+    }
+    let mut operations = Vec::new();
+    for change in &changes.tags {
+        let Some((namespace, subtag)) = transaction
+            .query_row(
+                "SELECT namespace, subtag FROM tag WHERE tag_id = ?1",
+                [change.tag_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
+            continue;
+        };
+        for (roots, present) in [(&change.added, true), (&change.removed, false)] {
+            for root_id in roots.iter().map(|root| i64::from(*root)) {
+                if let Some(item_key) = capture_item_key(transaction, root_id)? {
+                    operations.push(CloudOperation::TagMembership {
+                        item_key,
+                        namespace: namespace.clone(),
+                        subtag: subtag.clone(),
+                        present,
+                    });
+                }
+            }
+        }
+    }
+    for change in &changes.folders {
+        let Some(folder_key) = transaction
+            .query_row(
+                "SELECT folder_key FROM folder WHERE folder_id = ?1",
+                [change.folder_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            continue;
+        };
+        for (roots, present) in [(&change.added, true), (&change.removed, false)] {
+            for root in roots {
+                let root_id = i64::from(*root);
+                if let Some(item_key) = capture_item_key(transaction, root_id)? {
+                    let position_rank = change
+                        .order
+                        .as_ref()
+                        .and_then(|order| order.iter().position(|entry| entry == root))
+                        .and_then(|index| i64::try_from(index).ok());
+                    operations.push(CloudOperation::FolderMembership {
+                        item_key,
+                        folder_key: folder_key.clone(),
+                        present,
+                        position_rank,
+                    });
+                }
+            }
+        }
+    }
+    for change in &changes.groups {
+        let collection_key = capture_item_key(transaction, change.collection_id)?;
+        let next = change.next.as_deref().unwrap_or(&[]);
+        let previous_positions = change
+            .previous
+            .iter()
+            .enumerate()
+            .map(|(index, media)| (*media, index))
+            .collect::<BTreeMap<_, _>>();
+        if let Some(collection_key) = &collection_key {
+            for (index, media) in next.iter().enumerate() {
+                let Some(media_key) = capture_item_key(transaction, i64::from(*media))? else {
+                    continue;
+                };
+                match previous_positions.get(media) {
+                    None => operations.push(CloudOperation::GroupAssignment {
+                        media_item_key: media_key,
+                        collection_item_key: Some(collection_key.clone()),
+                        position_rank: i64::try_from(index).ok(),
+                    }),
+                    Some(previous_index) if *previous_index != index => {
+                        operations.push(CloudOperation::ReorderMember {
+                            collection_item_key: collection_key.clone(),
+                            media_item_key: media_key,
+                            position_rank: i64::try_from(index).unwrap_or(i64::MAX),
+                        })
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        for media in &change.previous {
+            if next.contains(media) {
+                continue;
+            }
+            // A removed member that still exists became a standalone root.
+            if let Some(media_key) = capture_item_key(transaction, i64::from(*media))? {
+                operations.push(CloudOperation::GroupAssignment {
+                    media_item_key: media_key,
+                    collection_item_key: None,
+                    position_rank: None,
+                });
+            }
+        }
+    }
+    if operations.is_empty() {
+        return Ok(0);
+    }
+    let count = operations.len();
+    record_local(transaction, CloudOperation::Batch { operations })?;
+    Ok(count)
+}
+
 pub(crate) fn begin_explicit_capture(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS cloud_capture_operation (
@@ -104,13 +277,10 @@ fn finish_captured(
     let mut lifecycle_ids = BTreeSet::new();
     let mut inserted_item_ids = BTreeSet::new();
     let mut deleted_item_keys = BTreeSet::new();
-    let mut tag_changes = BTreeMap::new();
-    let mut folder_changes = BTreeMap::new();
     let mut changed_folders = BTreeSet::new();
     let mut deleted_folder_keys = BTreeSet::new();
     let mut changed_smart_folders = BTreeSet::new();
     let mut deleted_smart_folder_keys = BTreeSet::new();
-    let mut group_changes = BTreeSet::new();
     let explicit_folder_keys = staged
         .iter()
         .flat_map(flatten_operation)
@@ -166,24 +336,6 @@ fn finish_captured(
                         item_field_ids.insert(item_id);
                     }
                 }
-                "root_tag" => {
-                    let root_id = row_integer(change, 0, operation.code())?;
-                    let tag_id = row_integer(change, 1, operation.code())?;
-                    if let (Some(root_id), Some(tag_id)) = (root_id, tag_id) {
-                        tag_changes
-                            .insert((root_id, tag_id), operation.code() != Action::SQLITE_DELETE);
-                    }
-                }
-                "folder_item" => {
-                    let folder_id = row_integer(change, 0, operation.code())?;
-                    let item_id = row_integer(change, 1, operation.code())?;
-                    if let (Some(folder_id), Some(item_id)) = (folder_id, item_id) {
-                        folder_changes.insert(
-                            (folder_id, item_id),
-                            operation.code() != Action::SQLITE_DELETE,
-                        );
-                    }
-                }
                 "folder" => {
                     if has_explicit_folders {
                         continue;
@@ -207,11 +359,6 @@ fn finish_captured(
                     } else if let Some(smart_folder_id) = row_integer(change, 0, operation.code())?
                     {
                         changed_smart_folders.insert(smart_folder_id);
-                    }
-                }
-                "collection_member" => {
-                    if let Some(media_id) = row_integer(change, 1, operation.code())? {
-                        group_changes.insert(media_id);
                     }
                 }
                 _ => {}
@@ -287,68 +434,6 @@ fn finish_captured(
     lifecycle_ids.retain(|item_id| !inserted_item_ids.contains(item_id));
     operations.extend(item_field_states(transaction, &item_field_ids)?);
     operations.extend(lifecycle_states(transaction, &lifecycle_ids)?);
-    if !tag_changes.is_empty() {
-        let changes = serde_json::to_string(
-            &tag_changes
-                .into_iter()
-                .map(|((root_id, tag_id), present)| (root_id, tag_id, present))
-                .collect::<Vec<_>>(),
-        )
-        .map_err(json_sql_error)?;
-        let memberships = transaction
-            .prepare(
-                "SELECT li.item_key, t.namespace, t.subtag,
-                        CAST(json_extract(change.value, '$[2]') AS INTEGER)
-                 FROM json_each(?1) change
-                 JOIN library_item li
-                   ON li.item_id = CAST(json_extract(change.value, '$[0]') AS INTEGER)
-                 JOIN tag t
-                   ON t.tag_id = CAST(json_extract(change.value, '$[1]') AS INTEGER)",
-            )?
-            .query_map([changes], |row| {
-                Ok(CloudOperation::TagMembership {
-                    item_key: row.get(0)?,
-                    namespace: row.get(1)?,
-                    subtag: row.get(2)?,
-                    present: row.get::<_, i64>(3)? != 0,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        operations.extend(memberships);
-    }
-    if !folder_changes.is_empty() {
-        let changes = serde_json::to_string(
-            &folder_changes
-                .into_iter()
-                .map(|((folder_id, item_id), present)| (folder_id, item_id, present))
-                .collect::<Vec<_>>(),
-        )
-        .map_err(json_sql_error)?;
-        let memberships = transaction
-            .prepare(
-                "SELECT li.item_key, f.folder_key,
-                        CAST(json_extract(change.value, '$[2]') AS INTEGER),
-                        fi.position_rank
-                 FROM json_each(?1) change
-                 JOIN folder f
-                   ON f.folder_id = CAST(json_extract(change.value, '$[0]') AS INTEGER)
-                 JOIN library_item li
-                   ON li.item_id = CAST(json_extract(change.value, '$[1]') AS INTEGER)
-                 LEFT JOIN folder_item fi
-                   ON fi.folder_id = f.folder_id AND fi.item_id = li.item_id",
-            )?
-            .query_map([changes], |row| {
-                Ok(CloudOperation::FolderMembership {
-                    item_key: row.get(0)?,
-                    folder_key: row.get(1)?,
-                    present: row.get::<_, i64>(2)? != 0,
-                    position_rank: row.get(3)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        operations.extend(memberships);
-    }
-    operations.extend(group_states(transaction, &group_changes)?);
     // Source links may reference items created in this transaction, so they
     // follow item creation and group assignment in the same envelope.
     operations.append(&mut source_operations);
@@ -1179,31 +1264,6 @@ fn lifecycle_states(
         .collect()
 }
 
-fn group_states(
-    transaction: &Transaction<'_>,
-    media_ids: &BTreeSet<i64>,
-) -> rusqlite::Result<Vec<CloudOperation>> {
-    if !stage_capture_item_ids(transaction, media_ids)? {
-        return Ok(Vec::new());
-    }
-    transaction
-        .prepare(
-            "SELECT media.item_key, collection.item_key, member.position_rank
-             FROM cloud_capture_item_id capture
-             JOIN library_item media ON media.item_id = capture.item_id
-             LEFT JOIN collection_member member ON member.media_item_id = media.item_id
-             LEFT JOIN library_item collection ON collection.item_id = member.collection_id
-             ORDER BY capture.item_id",
-        )?
-        .query_map([], |row| {
-            Ok(CloudOperation::GroupAssignment {
-                media_item_key: row.get(0)?,
-                collection_item_key: row.get(1)?,
-                position_rank: row.get(2)?,
-            })
-        })?
-        .collect()
-}
 
 #[cfg(test)]
 fn restored_item_state(
@@ -1373,7 +1433,6 @@ mod tests {
     #[test]
     fn item_fields_keep_protocol_label_but_derive_it_canonically() {
         assert!(CAPTURED_TABLES.contains(&"root_metadata"));
-        assert!(CAPTURED_TABLES.contains(&"root_tag"));
         assert!(!CAPTURED_TABLES.contains(&"media_tag"));
         let mut connection = canonical_item_fixture();
         let transaction = connection.transaction().unwrap();
