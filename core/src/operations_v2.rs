@@ -13,7 +13,7 @@ use crate::app::{resources, Application, ItemId, ItemTarget, Lifecycle, Mutation
 use crate::projection_v2::{
     FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
     LifecycleSummaryDelta, MembershipProjectionChange, RootProjectionChange,
-    StructureProjectionDelta,
+    RootSummaryProjectionChange, StructureProjectionDelta,
 };
 use crate::store::history::{
     HistoryDescriptor, SemanticGroupDelta, SemanticGroupFolder, SemanticGroupMember,
@@ -45,6 +45,7 @@ struct BulkLifecycleProjectionDelta {
 #[derive(Default)]
 struct GroupProjectionDelta {
     structure: StructureProjectionDelta,
+    summaries: Vec<RootSummaryProjectionChange>,
     tag_changes: Vec<SemanticMembershipDelta>,
     shared_tag_sets: Vec<(RoaringBitmap, Vec<i64>)>,
     rating_changes: SemanticRatingDelta,
@@ -837,12 +838,14 @@ impl Application {
                     after.tag_sets.insert(*tag_id, collection_root.clone());
                 }
                 let (history, forward) = group_history_record(&before, &after)?;
+                let summaries = root_summary_changes_for_roots(transaction, &after_universe)?;
                 trace_bulk_stage("groups.organize", "capture_after_history", stage_started);
                 trace_bulk_stage("groups.organize", "closure_total", operation_started);
                 Ok((
                     (collection_id, affected),
                     GroupProjectionDelta {
                         structure: delta,
+                        summaries,
                         tag_changes: Vec::new(),
                         shared_tag_sets: vec![(collection_root, inherited_tag_ids)],
                         rating_changes: forward.rating_changes,
@@ -1014,10 +1017,12 @@ impl Application {
                     folder_changes,
                     tag_changes,
                 )?;
+                let summaries = root_summary_changes_for_roots(transaction, &after_universe)?;
                 Ok((
                     affected,
                     GroupProjectionDelta {
                         structure: delta,
+                        summaries,
                         tag_changes: Vec::new(),
                         shared_tag_sets: vec![(
                             detached_roots,
@@ -1130,12 +1135,14 @@ impl Application {
                     folder_changes,
                     tag_changes,
                 )?;
+                let summaries = root_summary_changes_for_roots(transaction, &after_universe)?;
                 trace_bulk_stage("groups.ungroup", "capture_after_history", stage_started);
                 trace_bulk_stage("groups.ungroup", "closure_total", operation_started);
                 Ok((
                     affected,
                     GroupProjectionDelta {
                         structure: delta,
+                        summaries,
                         tag_changes: Vec::new(),
                         shared_tag_sets: vec![(
                             detached_roots,
@@ -2742,6 +2749,7 @@ fn apply_group_projection_delta(
     delta: GroupProjectionDelta,
 ) -> Result<(), String> {
     projections.apply_structure_delta(delta.structure)?;
+    projections.apply_root_summary_changes(&delta.summaries, &RoaringBitmap::new())?;
     for (roots, tag_ids) in delta.shared_tag_sets {
         projections.apply_shared_root_tag_set(&roots, &tag_ids)?;
     }
@@ -2760,6 +2768,43 @@ fn apply_group_projection_delta(
         )?;
     }
     Ok(())
+}
+
+fn root_summary_changes_for_roots(
+    transaction: &Transaction<'_>,
+    root_ids: &[i64],
+) -> rusqlite::Result<Vec<RootSummaryProjectionChange>> {
+    if root_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let encoded = serde_json::to_string(root_ids)
+        .map_err(|error| invalid(format!("Could not encode summary roots: {error}")))?;
+    transaction
+        .prepare(
+            "SELECT summary.root_item_id, summary.total_size_bytes,
+                    summary.media_count, summary.sort_rating
+             FROM root_summary summary
+             JOIN json_each(?1) selected
+               ON CAST(selected.value AS INTEGER) = summary.root_item_id",
+        )?
+        .query_map([encoded], |row| {
+            let total_size_bytes = u64::try_from(row.get::<_, i64>(1)?)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, 0))?;
+            let media_count = u64::try_from(row.get::<_, i64>(2)?)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, 0))?;
+            let rating = row
+                .get::<_, Option<i64>>(3)?
+                .map(u8::try_from)
+                .transpose()
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, 0))?;
+            Ok(RootSummaryProjectionChange {
+                item_id: row.get(0)?,
+                total_size_bytes,
+                media_count,
+                rating,
+            })
+        })?
+        .collect()
 }
 
 fn limited_staged_hints(

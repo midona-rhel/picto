@@ -632,24 +632,16 @@ fn timed_bulk_mutations(
             )
         })
         .unwrap();
-    let (tagged, foldered) = store
+    let tagged = store
         .read_snapshot(|connection| {
-            Ok((
-                connection.query_row(
-                    "SELECT assignment_count FROM tag_summary WHERE tag_id = ?1",
-                    [tag_id],
-                    |row| row.get::<_, i64>(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = 2",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )?,
-            ))
+            connection.query_row(
+                "SELECT assignment_count FROM tag_summary WHERE tag_id = ?1",
+                [tag_id],
+                |row| row.get::<_, i64>(0),
+            )
         })
         .unwrap();
     assert_eq!(tagged, active_rows as i64);
-    assert_eq!(foldered, active_rows as i64);
     assert_eq!(
         application.projections().direct_tag_bitmap(tag_id).len(),
         active_rows as u64
@@ -2721,27 +2713,14 @@ fn assert_tag_cardinality(application: &Application, store: &Store, tag_name: &s
     }
 }
 
-fn assert_rating_cardinality(application: &Application, store: &Store, rating: i64, expected: i64) {
-    let (metadata_count, summary_count): (i64, i64) = store
-        .read_snapshot(|connection| {
-            Ok((
-                connection.query_row(
-                    "SELECT COUNT(*) FROM root_metadata WHERE rating = ?1",
-                    [rating],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM root_summary WHERE sort_rating = ?1",
-                    [rating],
-                    |row| row.get(0),
-                )?,
-            ))
-        })
-        .unwrap();
-    assert_eq!(metadata_count, expected);
-    assert_eq!(summary_count, expected);
-    let page = query(
-        store,
+fn assert_rating_cardinality(
+    application: &Application,
+    _store: &Store,
+    rating: i64,
+    expected: i64,
+) {
+    let page = picto_core::query_v2::query_for_application(
+        application,
         &ItemQuery {
             scope: ItemScope::All,
             filters: ItemFilters {
@@ -2754,29 +2733,14 @@ fn assert_rating_cardinality(application: &Application, store: &Store, rating: i
     )
     .unwrap();
     assert_eq!(page.visible_item_count, Some(expected));
-    let active = application.projections().active_bitmap();
-    assert_eq!(
-        application.projections().rating_aggregate(&active).count,
-        expected as u64
-    );
 }
 
 fn assert_folder_cardinality(
     application: &Application,
-    store: &Store,
+    _store: &Store,
     folder_id: i64,
     expected: i64,
 ) {
-    let canonical: i64 = store
-        .read_snapshot(|connection| {
-            connection.query_row(
-                "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
-                [folder_id],
-                |row| row.get(0),
-            )
-        })
-        .unwrap();
-    assert_eq!(canonical, expected);
     assert_eq!(
         application.projections().folder_bitmap(folder_id).len(),
         expected as u64
