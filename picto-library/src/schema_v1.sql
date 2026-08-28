@@ -511,5 +511,9 @@ CREATE INDEX idx_source_post_root ON source_post(root_item_id, source_post_id);
 CREATE INDEX idx_source_item_media ON source_item(media_item_id, source_item_id);
 CREATE INDEX idx_ingest_job_ready ON ingest_job(status, available_at, ingest_job_id);
 CREATE INDEX idx_work_item_ready ON work_item(status, priority, available_at, work_id);
+CREATE UNIQUE INDEX idx_work_item_file_kind ON work_item(file_id, work_type)
+    WHERE file_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_work_item_media_kind ON work_item(media_item_id, work_type)
+    WHERE media_item_id IS NOT NULL;
 CREATE INDEX idx_subscription_issue_open ON subscription_issue(status, last_seen_at, issue_id);
 CREATE INDEX idx_cloud_outbox_pending ON cloud_outbox(published_at, created_at, mutation_id);

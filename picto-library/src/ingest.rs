@@ -94,6 +94,31 @@ pub(crate) fn insert_one(
         "INSERT INTO media_item(media_id, media_name, file_id) VALUES (?1, ?2, ?3)",
         params![media_id.0, input.media_name, file_id],
     )?;
+    enqueue_file_work(
+        transaction,
+        file_id,
+        &input.facts.content_hash,
+        "thumbnail",
+        input.imported_at_ms,
+    )?;
+    if input.facts.palette.is_empty() {
+        enqueue_file_work(
+            transaction,
+            file_id,
+            &input.facts.content_hash,
+            "dominant_colors",
+            input.imported_at_ms,
+        )?;
+    }
+    if input.facts.perceptual_hash.is_none() {
+        enqueue_file_work(
+            transaction,
+            file_id,
+            &input.facts.content_hash,
+            "perceptual_hash",
+            input.imported_at_ms,
+        )?;
+    }
     transaction.execute(
         "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
@@ -276,6 +301,24 @@ pub(crate) fn insert_one(
         bitmap_keys,
         folder_ids: input.folders.clone(),
     })
+}
+
+fn enqueue_file_work(
+    transaction: &Transaction<'_>,
+    file_id: u32,
+    content_hash: &str,
+    work_type: &str,
+    now_ms: i64,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO work_item
+             (file_id, file_hash, work_type, status, priority, attempt_count,
+              available_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'pending', 0, 0, ?4, ?4, ?4)
+         ON CONFLICT DO NOTHING",
+        params![file_id, content_hash, work_type, now_ms.to_string()],
+    )?;
+    Ok(())
 }
 
 fn existing_root(

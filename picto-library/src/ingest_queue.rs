@@ -8,6 +8,27 @@ use crate::{Library, LibraryError, Result};
 const INGEST_RESOURCE: &str = "ingest";
 
 impl Library {
+    pub fn reset_running_ingest_jobs(&self, now: &str) -> Result<Option<MutationReceipt>> {
+        let Some(((), receipt)) = self.auxiliary_write_if_changed(
+            WorkPriority::CorrectnessRecovery,
+            [INGEST_RESOURCE.to_owned()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE ingest_job
+                     SET status = 'pending', available_at = ?1, updated_at = ?1
+                     WHERE status = 'running'",
+                    [now],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(receipt))
+    }
+
     pub fn enqueue_ingest_job(
         &self,
         job: &PreparedIngestJob,
