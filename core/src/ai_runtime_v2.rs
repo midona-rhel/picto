@@ -126,17 +126,35 @@ struct PredictionOriginal {
 /// starting inference sessions.
 pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, String> {
     let settings = crate::settings_v2::application_settings(application)?.value;
+    model_status_for(application, settings).await
+}
+
+pub async fn model_status_library(
+    application: &crate::library_application::LibraryApplication,
+) -> Result<AiRuntimeStatus, String> {
+    let settings = application.application_settings()?.value;
+    model_status_for(application, settings).await
+}
+
+async fn model_status_for(
+    application: &(impl crate::ai_models_v2::AiModelHost + ?Sized),
+    settings: serde_json::Value,
+) -> Result<AiRuntimeStatus, String> {
     let models_root = crate::ai_models_v2::models_root(application);
     let configured_model_slugs = configured_models(&settings)
         .iter()
         .map(|model| model.slug.clone())
         .collect::<Vec<_>>();
 
-    let sessions = application.ai_sessions().lock().await;
+    let sessions = crate::ai_models_v2::AiModelHost::ai_sessions(application)
+        .lock()
+        .await;
     let cached_backend = sessions
         .values()
         .find_map(|session| session.lock().ok().map(|session| session.gpu_backend()));
-    let downloads = application.ai_model_downloads().lock().await;
+    let downloads = crate::ai_models_v2::AiModelHost::ai_model_downloads(application)
+        .lock()
+        .await;
     let models = models::known_models()
         .into_iter()
         .map(|model| {

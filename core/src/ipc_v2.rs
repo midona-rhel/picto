@@ -452,6 +452,27 @@ pub async fn dispatch_library_async(
 ) -> Result<Option<String>, String> {
     let output = match command {
         "diagnostics.snapshot" => read(crate::diagnostics_v2::snapshot_library(application)?),
+        "ai.status" => read(crate::ai_runtime_v2::model_status_library(application).await?),
+        "ai.models.download" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::download(application, &input.slug).await?;
+            read(crate::ai_runtime_v2::model_status_library(application).await?)
+        }
+        "ai.models.cancel" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::cancel_download(application, &input.slug).await?;
+            read(EmptyOutput {})
+        }
+        "ai.models.delete" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::delete(application, &input.slug).await?;
+            read(crate::ai_runtime_v2::model_status_library(application).await?)
+        }
+        "ai.models.optimize" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::optimize(application, &input.slug).await?;
+            read(crate::ai_runtime_v2::model_status_library(application).await?)
+        }
         "media.request_thumbnail" => {
             let input: FileHashInput = parse(args_json)?;
             read(crate::media_io_v2::request_thumbnail_library(

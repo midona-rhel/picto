@@ -8,7 +8,59 @@ use tokio_util::sync::CancellationToken;
 use crate::ai_tagger::models::{self, ModelInfo};
 use crate::app::{AiModelDownload, Application};
 
-pub async fn download(application: &Application, slug: &str) -> Result<(), String> {
+pub(crate) trait AiModelHost {
+    fn library_root(&self) -> &Path;
+    fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions;
+    fn ai_model_downloads(
+        &self,
+    ) -> &tokio::sync::Mutex<std::collections::HashMap<String, AiModelDownload>>;
+    fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()>;
+}
+
+impl AiModelHost for Application {
+    fn library_root(&self) -> &Path {
+        self.store().library_root()
+    }
+
+    fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
+        self.ai_sessions()
+    }
+
+    fn ai_model_downloads(
+        &self,
+    ) -> &tokio::sync::Mutex<std::collections::HashMap<String, AiModelDownload>> {
+        self.ai_model_downloads()
+    }
+
+    fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()> {
+        self.ai_model_lifecycle()
+    }
+}
+
+impl AiModelHost for crate::library_application::LibraryApplication {
+    fn library_root(&self) -> &Path {
+        self.root()
+    }
+
+    fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
+        self.ai_sessions()
+    }
+
+    fn ai_model_downloads(
+        &self,
+    ) -> &tokio::sync::Mutex<std::collections::HashMap<String, AiModelDownload>> {
+        self.ai_model_downloads()
+    }
+
+    fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()> {
+        self.ai_model_lifecycle()
+    }
+}
+
+pub(crate) async fn download(
+    application: &(impl AiModelHost + ?Sized),
+    slug: &str,
+) -> Result<(), String> {
     let model = require_model(slug)?;
     let token = CancellationToken::new();
     let downloaded_bytes = Arc::new(AtomicU64::new(0));
@@ -50,7 +102,10 @@ pub async fn download(application: &Application, slug: &str) -> Result<(), Strin
     result
 }
 
-pub async fn cancel_download(application: &Application, slug: &str) -> Result<(), String> {
+pub(crate) async fn cancel_download(
+    application: &(impl AiModelHost + ?Sized),
+    slug: &str,
+) -> Result<(), String> {
     let model = require_model(slug)?;
     if let Some(token) = application
         .ai_model_downloads()
@@ -63,7 +118,10 @@ pub async fn cancel_download(application: &Application, slug: &str) -> Result<()
     Ok(())
 }
 
-pub async fn delete(application: &Application, slug: &str) -> Result<(), String> {
+pub(crate) async fn delete(
+    application: &(impl AiModelHost + ?Sized),
+    slug: &str,
+) -> Result<(), String> {
     let model = require_model(slug)?;
     if application
         .ai_model_downloads()
@@ -86,7 +144,10 @@ pub async fn delete(application: &Application, slug: &str) -> Result<(), String>
     Ok(())
 }
 
-pub async fn optimize(application: &Application, slug: &str) -> Result<(), String> {
+pub(crate) async fn optimize(
+    application: &(impl AiModelHost + ?Sized),
+    slug: &str,
+) -> Result<(), String> {
     let model = require_model(slug)?;
     let models_root = models_root(application);
     if !models::is_model_downloaded(&models_root, slug) {
@@ -173,23 +234,24 @@ pub async fn optimize(application: &Application, slug: &str) -> Result<(), Strin
     Err("Model optimization is only required on macOS".into())
 }
 
-pub fn models_root(application: &Application) -> PathBuf {
+pub(crate) fn models_root(application: &(impl AiModelHost + ?Sized)) -> PathBuf {
     if let Some(root) = crate::state_v2::application_data_root() {
         return root.join("models");
     }
     legacy_models_root(application)
 }
 
-fn legacy_models_root(application: &Application) -> PathBuf {
+fn legacy_models_root(application: &(impl AiModelHost + ?Sized)) -> PathBuf {
     application
-        .store()
         .library_root()
         .parent()
-        .unwrap_or_else(|| application.store().library_root())
+        .unwrap_or_else(|| application.library_root())
         .join("models")
 }
 
-pub fn migrate_legacy_storage(application: &Application) -> Result<(), String> {
+pub(crate) fn migrate_legacy_storage(
+    application: &(impl AiModelHost + ?Sized),
+) -> Result<(), String> {
     let source = legacy_models_root(application);
     let target = models_root(application);
     if source == target || target.exists() || !source.exists() {
@@ -205,7 +267,9 @@ pub fn migrate_legacy_storage(application: &Application) -> Result<(), String> {
     })
 }
 
-pub fn storage_bytes(application: &Application) -> Result<u64, String> {
+pub(crate) fn storage_bytes(
+    application: &(impl AiModelHost + ?Sized),
+) -> Result<u64, String> {
     directory_bytes(&models_root(application))
 }
 
@@ -254,6 +318,18 @@ mod tests {
         assert!(cancel_download(&application, "unknown").await.is_err());
         assert!(delete(&application, "unknown").await.is_err());
         assert!(optimize(&application, "unknown").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn canonical_application_owns_model_lifecycle_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let application =
+            crate::library_application::LibraryApplication::create(directory.path()).unwrap();
+
+        assert!(cancel_download(&application, "unknown").await.is_err());
+        assert!(delete(&application, "unknown").await.is_err());
+        assert!(optimize(&application, "unknown").await.is_err());
+        assert!(!models_root(&application).as_os_str().is_empty());
     }
 
     #[tokio::test]

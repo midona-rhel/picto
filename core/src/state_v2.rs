@@ -107,7 +107,7 @@ async fn open_library_inner(
 
     let store = Arc::new(Store::open(&library_root)?);
     let application = Arc::new(Application::try_new(store)?);
-    if let Err(error) = crate::ai_models_v2::migrate_legacy_storage(&application) {
+    if let Err(error) = crate::ai_models_v2::migrate_legacy_storage(application.as_ref()) {
         tracing::warn!(%error, "Could not migrate legacy AI model storage");
     }
     let cancel = CancellationToken::new();
