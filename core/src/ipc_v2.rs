@@ -36,15 +36,15 @@ pub fn dispatch_library(
 ) -> Result<Option<String>, String> {
     let output = match command {
         "items.query" => {
-            let input: QueryItemsInput = parse(args_json)?;
+            let input: LibraryQueryItemsInput = parse(args_json)?;
             read(application.query(&input.query, input.page)?)
         }
         "items.details" => {
-            let input: ItemInput = parse(args_json)?;
-            read(application.details(input.item_id.0)?)
+            let input: LibraryRootInput = parse(args_json)?;
+            read(application.details(input.root_id)?)
         }
         "items.selection_summary" => {
-            let input: TargetInput = parse(args_json)?;
+            let input: LibraryTargetInput = parse(args_json)?;
             read(application.selection_summary(&input.target)?)
         }
         "sidebar.counts" => read(application.sidebar_counts()?),
@@ -1321,6 +1321,19 @@ struct LibraryUpdateSmartFolderInput {
     smart_folder_id: picto_library::SmartFolderId,
     value: picto_library::SmartFolderInput,
 }
+#[derive(Deserialize)]
+struct LibraryQueryItemsInput {
+    query: picto_library::query::RootQuery,
+    page: picto_library::query::PageRequest,
+}
+#[derive(Deserialize)]
+struct LibraryRootInput {
+    root_id: picto_library::RootId,
+}
+#[derive(Deserialize)]
+struct LibraryTargetInput {
+    target: picto_library::selection::SelectionTarget,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1657,8 +1670,32 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let page: ItemPage = serde_json::from_str(&output).unwrap();
-        assert_eq!(page.items[0].item_id.0, i64::from(root_id.0));
+        let page: picto_library::query::RootPage = serde_json::from_str(&output).unwrap();
+        assert_eq!(page.items[0].root_id, root_id);
+
+        let details = dispatch_library(
+            &application,
+            "items.details",
+            &format!(r#"{{"root_id":{}}}"#, root_id.0),
+        )
+        .unwrap()
+        .unwrap();
+        let details: picto_library::RootDetails = serde_json::from_str(&details).unwrap();
+        assert_eq!(details.root.root_id, root_id);
+
+        let summary = dispatch_library(
+            &application,
+            "items.selection_summary",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}}}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let summary: picto_library::selection::SelectionSummary =
+            serde_json::from_str(&summary).unwrap();
+        assert_eq!(summary.selected_count, 1);
 
         let revision = application.library().database().revision().unwrap();
         let tags = dispatch_library(

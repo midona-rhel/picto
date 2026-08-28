@@ -12,9 +12,8 @@ use picto_library::{Library, RootId};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::{ItemQuery, ItemTarget, LibraryChanged, LIBRARY_CHANGED_EVENT};
+use crate::app::{ItemTarget, LibraryChanged, LIBRARY_CHANGED_EVENT};
 use crate::blob_store::BlobStore;
-use crate::query_v2::{ItemDetails, ItemPage, ItemPageRequest, SelectionSummary};
 
 const DATABASE_FILE: &str = "library.sqlite";
 
@@ -93,36 +92,32 @@ impl LibraryApplication {
         &self.blobs
     }
 
-    pub fn query(&self, query: &ItemQuery, page: ItemPageRequest) -> Result<ItemPage, String> {
-        let query = crate::library_v1::query(&self.library, query)?;
-        let page = PageRequest {
-            limit: usize::try_from(page.limit.clamp(1, 500))
-                .expect("positive page limit fits usize"),
-            cursor: page.cursor,
-        };
-        crate::library_v1::page(
-            self.library
-                .query(&query, &page)
-                .map_err(|error| error.to_string())?,
-        )
+    pub fn query(
+        &self,
+        query: &picto_library::query::RootQuery,
+        mut page: picto_library::query::PageRequest,
+    ) -> Result<picto_library::query::RootPage, String> {
+        page.limit = page.limit.clamp(1, 500);
+        self.library
+            .query(query, &page)
+            .map_err(|error| error.to_string())
     }
 
-    pub fn details(&self, item_id: i64) -> Result<ItemDetails, String> {
-        let root_id = checked_root_id(item_id)?;
-        let details = self
+    pub fn details(&self, root_id: RootId) -> Result<picto_library::RootDetails, String> {
+        self
             .library
             .details(root_id)
-            .map_err(|error| error.to_string())?;
-        crate::library_v1::details(&self.library, details)
+            .map_err(|error| error.to_string())
     }
 
-    pub fn selection_summary(&self, target: &ItemTarget) -> Result<SelectionSummary, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
-        let summary = self
+    pub fn selection_summary(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<picto_library::selection::SelectionSummary, String> {
+        self
             .library
-            .selection_summary(&target)
-            .map_err(|error| error.to_string())?;
-        crate::library_v1::selection_summary(&self.library, summary)
+            .selection_summary(target)
+            .map_err(|error| error.to_string())
     }
 
     pub fn record_recent_view(&self, item_id: i64) -> Result<crate::app::MutationReceipt, String> {
@@ -1022,19 +1017,21 @@ mod tests {
         let (root_id, _) = application.library().ingest(&input()).unwrap();
         let page = application
             .query(
-                &ItemQuery {
-                    scope: crate::app::ItemScope::All,
-                    filters: crate::app::ItemFilters::default(),
-                    sort: crate::app::ItemSort::default(),
+                &picto_library::query::RootQuery {
+                    scope: picto_library::query::ItemScope::All,
+                    view: Default::default(),
                 },
-                ItemPageRequest::new(None, 100),
+                picto_library::query::PageRequest {
+                    cursor: None,
+                    limit: 100,
+                },
             )
             .unwrap();
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].item_id.0, i64::from(root_id.0));
+        assert_eq!(page.items[0].root_id, root_id);
         assert_eq!(
-            application.details(i64::from(root_id.0)).unwrap().item_id.0,
-            i64::from(root_id.0)
+            application.details(root_id).unwrap().root.root_id,
+            root_id
         );
         assert_eq!(
             application.library().database().path(),
