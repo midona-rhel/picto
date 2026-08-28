@@ -57,6 +57,7 @@ impl Default for PageRequest {
 pub struct RootSummary {
     pub root_id: RootId,
     pub kind: RootKind,
+    pub lifecycle: Lifecycle,
     pub name: String,
     pub cover_media_id: crate::MediaId,
     pub content_hash: String,
@@ -79,6 +80,8 @@ pub struct RootPage {
     pub items: Vec<RootSummary>,
     pub next_cursor: Option<String>,
     pub total: u64,
+    pub media_count: u128,
+    pub total_size_bytes: u128,
     pub revision: u64,
 }
 
@@ -363,6 +366,8 @@ pub fn page(
         items,
         next_cursor,
         total: matches.len(),
+        media_count: snapshot.media_count.sum(&matches),
+        total_size_bytes: snapshot.total_bytes.sum(&matches),
         revision: snapshot.revision,
     })
 }
@@ -813,6 +818,7 @@ fn load_summaries(
                 } else {
                     RootKind::Collection
                 },
+                lifecycle: lifecycle_for(snapshot, id),
                 name: row.get(2)?,
                 cover_media_id: crate::MediaId(row.get(3)?),
                 content_hash: row.get(4)?,
@@ -845,6 +851,13 @@ fn rating_for(snapshot: &ProjectionSnapshot, root_id: u32) -> Rating {
         .into_iter()
         .find(|rating| snapshot.rating(*rating).contains(root_id))
         .unwrap_or(Rating::Unrated)
+}
+
+fn lifecycle_for(snapshot: &ProjectionSnapshot, root_id: u32) -> Lifecycle {
+    Lifecycle::ALL
+        .into_iter()
+        .find(|lifecycle| snapshot.lifecycle(*lifecycle).contains(root_id))
+        .unwrap_or(Lifecycle::Active)
 }
 
 fn integer_cursor_sql(

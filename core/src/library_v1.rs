@@ -81,6 +81,54 @@ pub fn receipt(value: picto_library::MutationReceipt) -> MutationReceipt {
     }
 }
 
+pub fn page(value: picto_library::query::RootPage) -> Result<crate::query_v2::ItemPage, String> {
+    Ok(crate::query_v2::ItemPage {
+        items: value
+            .items
+            .into_iter()
+            .map(|item| {
+                Ok(crate::query_v2::ItemSummary {
+                    item_id: crate::app::ItemId(i64::from(item.root_id.0)),
+                    kind: match item.kind {
+                        picto_library::RootKind::Media => crate::app::ItemKind::Media,
+                        picto_library::RootKind::Collection => crate::app::ItemKind::Collection,
+                    },
+                    lifecycle: match item.lifecycle {
+                        picto_library::Lifecycle::Active => crate::app::Lifecycle::Active,
+                        picto_library::Lifecycle::Inbox => crate::app::Lifecycle::Inbox,
+                        picto_library::Lifecycle::Trash => crate::app::Lifecycle::Trash,
+                    },
+                    name: Some(item.name),
+                    display_file_hash: crate::app::FileHash(item.content_hash),
+                    display_mime_type: item.mime,
+                    pixel_width: item.width.map(i64::from),
+                    pixel_height: item.height.map(i64::from),
+                    duration_ms: item
+                        .duration_ms
+                        .map(|value| checked_i64(u128::from(value)))
+                        .transpose()?,
+                    frame_count: item.frame_count.map(i64::from),
+                    dominant_color_hex: item.palette.first().map(lab_hex),
+                    rating: match item.rating {
+                        Rating::Unrated => None,
+                        Rating::One => Some(1),
+                        Rating::Two => Some(2),
+                        Rating::Three => Some(3),
+                        Rating::Four => Some(4),
+                        Rating::Five => Some(5),
+                    },
+                    media_count: i64::from(item.media_count),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        next_cursor: value.next_cursor,
+        revision: value.revision,
+        visible_item_count: Some(checked_i64(u128::from(value.total))?),
+        visible_media_count: Some(checked_i64(value.media_count)?),
+        total_size_bytes: Some(checked_i64(value.total_size_bytes)?),
+    })
+}
+
 fn scope(value: &AppScope) -> Result<ItemScope, String> {
     Ok(match value {
         AppScope::All => ItemScope::All,
@@ -359,6 +407,21 @@ fn timestamp(value: Option<&str>) -> Result<Option<u64>, String> {
         .transpose()
 }
 
+fn checked_i64(value: u128) -> Result<i64, String> {
+    i64::try_from(value).map_err(|_| format!("value {value} exceeds the renderer integer domain"))
+}
+
+fn lab_hex(value: &LabColor) -> String {
+    use palette::{IntoColor, Lab, LinSrgb, Srgb};
+
+    let linear: LinSrgb = Lab::new(value.l, value.a, value.b).into_color();
+    let encoded: Srgb<u8> = Srgb::<f32>::from_linear(linear).into_format();
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        encoded.red, encoded.green, encoded.blue
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +470,49 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("outside the local ID domain"));
+    }
+
+    #[test]
+    fn grid_page_preserves_scope_lifecycle_and_bitmap_aggregates() {
+        let converted = page(picto_library::query::RootPage {
+            items: vec![picto_library::query::RootSummary {
+                root_id: RootId(7),
+                kind: picto_library::RootKind::Collection,
+                lifecycle: picto_library::Lifecycle::Inbox,
+                name: "Post".into(),
+                cover_media_id: picto_library::MediaId(8),
+                content_hash: "abc".into(),
+                mime: "image/png".into(),
+                width: Some(100),
+                height: Some(200),
+                duration_ms: None,
+                frame_count: Some(1),
+                palette: vec![LabColor {
+                    l: 50.0,
+                    a: 0.0,
+                    b: 0.0,
+                    weight: 1.0,
+                }],
+                imported_at_ms: 10,
+                captured_at_ms: None,
+                modified_at_ms: 11,
+                media_count: 4,
+                total_size_bytes: 99,
+                rating: Rating::Three,
+            }],
+            next_cursor: Some("next".into()),
+            total: 12,
+            media_count: 30,
+            total_size_bytes: 999,
+            revision: 4,
+        })
+        .unwrap();
+
+        assert_eq!(converted.items[0].lifecycle, crate::app::Lifecycle::Inbox);
+        assert_eq!(converted.items[0].media_count, 4);
+        assert_eq!(converted.visible_item_count, Some(12));
+        assert_eq!(converted.visible_media_count, Some(30));
+        assert_eq!(converted.total_size_bytes, Some(999));
+        assert_eq!(converted.revision, 4);
     }
 }
