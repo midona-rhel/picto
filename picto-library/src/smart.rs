@@ -101,6 +101,35 @@ pub(crate) fn remove(snapshot: &mut ProjectionSnapshot, smart_folder_id: SmartFo
     Arc::make_mut(&mut snapshot.smart_results).remove(&smart_folder_id.0);
 }
 
+pub(crate) fn rewrite_tag_references(
+    connection: &Connection,
+    snapshot: &mut ProjectionSnapshot,
+    source: crate::TagId,
+    destination: Option<crate::TagId>,
+) -> Result<Vec<crate::history::SavedQueryChange>> {
+    let queries = snapshot.smart_queries.clone();
+    let mut changes = Vec::new();
+    for (smart_folder_id, before) in queries.iter() {
+        let after = predicate::rewrite_tag_reference(before, source, destination);
+        if after == *before {
+            continue;
+        }
+        let smart_folder_id = SmartFolderId(*smart_folder_id);
+        connection.execute(
+            "UPDATE smart_folder_definition SET view_query_json = ?2
+             WHERE smart_folder_id = ?1",
+            rusqlite::params![smart_folder_id.0, serde_json::to_string(&after)?],
+        )?;
+        replace_query(connection, snapshot, smart_folder_id, after.clone())?;
+        changes.push(crate::history::SavedQueryChange {
+            smart_folder_id,
+            before: before.clone(),
+            after,
+        });
+    }
+    Ok(changes)
+}
+
 pub fn list(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,

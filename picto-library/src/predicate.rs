@@ -194,6 +194,60 @@ pub(crate) fn depends_on(expression: &FilterExpr, change: DependencyChange) -> b
     }
 }
 
+pub(crate) fn rewrite_tag_reference(
+    view: &ViewQuerySpec,
+    source: TagId,
+    destination: Option<TagId>,
+) -> ViewQuerySpec {
+    ViewQuerySpec {
+        filter: rewrite_tag_expression(&view.filter, source, destination).unwrap_or_default(),
+        sort: view.sort.clone(),
+    }
+}
+
+fn rewrite_tag_expression(
+    expression: &FilterExpr,
+    source: TagId,
+    destination: Option<TagId>,
+) -> Option<FilterExpr> {
+    match expression {
+        FilterExpr::All(children) => Some(FilterExpr::All(
+            children
+                .iter()
+                .filter_map(|child| rewrite_tag_expression(child, source, destination))
+                .collect(),
+        )),
+        FilterExpr::Any(children) => {
+            let children = children
+                .iter()
+                .filter_map(|child| rewrite_tag_expression(child, source, destination))
+                .collect::<Vec<_>>();
+            (!children.is_empty()).then_some(FilterExpr::Any(children))
+        }
+        FilterExpr::Not(child) => rewrite_tag_expression(child, source, destination)
+            .map(|child| FilterExpr::Not(Box::new(child))),
+        FilterExpr::Clause(FilterClause::Tags { tag_ids, mode }) => {
+            let mut tag_ids = tag_ids
+                .iter()
+                .filter_map(|tag_id| {
+                    if *tag_id == source {
+                        destination
+                    } else {
+                        Some(*tag_id)
+                    }
+                })
+                .collect::<Vec<_>>();
+            tag_ids.sort_unstable();
+            tag_ids.dedup();
+            (!tag_ids.is_empty()).then_some(FilterExpr::Clause(FilterClause::Tags {
+                tag_ids,
+                mode: *mode,
+            }))
+        }
+        FilterExpr::Clause(clause) => Some(FilterExpr::Clause(clause.clone())),
+    }
+}
+
 pub fn evaluate(
     expression: &FilterExpr,
     universe: &RoaringBitmap,
@@ -419,5 +473,33 @@ mod tests {
         assert!(!depends_on(&expression, DependencyChange::Folder(folder)));
         assert!(depends_on(&expression, DependencyChange::CoverFacts));
         assert!(depends_on(&expression, DependencyChange::Lifecycle));
+    }
+
+    #[test]
+    fn tag_rewrites_keep_saved_filters_valid() {
+        let source = TagId(1);
+        let destination = TagId(2);
+        let view = ViewQuerySpec {
+            filter: FilterExpr::All(vec![FilterExpr::Clause(FilterClause::Tags {
+                tag_ids: vec![source, destination],
+                mode: SetMatchMode::All,
+            })]),
+            sort: ItemSort::default(),
+        };
+        let merged = rewrite_tag_reference(&view, source, Some(destination));
+        assert_eq!(
+            merged.filter,
+            FilterExpr::All(vec![FilterExpr::Clause(FilterClause::Tags {
+                tag_ids: vec![destination],
+                mode: SetMatchMode::All,
+            })])
+        );
+        assert_eq!(
+            rewrite_tag_reference(&view, source, None).filter,
+            FilterExpr::All(vec![FilterExpr::Clause(FilterClause::Tags {
+                tag_ids: vec![destination],
+                mode: SetMatchMode::All,
+            })])
+        );
     }
 }

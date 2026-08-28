@@ -226,6 +226,88 @@ fn tag_rename_changes_only_the_dictionary() {
 }
 
 #[test]
+fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported("first-tag", Lifecycle::Active, &["source"]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported(
+            "second-tag",
+            Lifecycle::Active,
+            &["source", "destination"],
+        ))
+        .unwrap();
+    let snapshot = library.projections().snapshot();
+    let source = snapshot.tag_ids_by_name["source"];
+    let destination = snapshot.tag_ids_by_name["destination"];
+    let (smart_folder, _) = library
+        .create_smart_folder(
+            "Source",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Tags {
+                    tag_ids: vec![source],
+                    mode: SetMatchMode::All,
+                }),
+                sort: ItemSort::default(),
+            },
+        )
+        .unwrap();
+    let smart_query = RootQuery {
+        scope: ItemScope::SmartFolder {
+            smart_folder_id: smart_folder,
+        },
+        view: ViewQuerySpec::default(),
+    };
+
+    library
+        .merge_tags(source, destination, 1_700_000_000_700)
+        .unwrap();
+    let merged = library.projections().snapshot();
+    assert!(!merged.tags.contains_key(&source));
+    assert_eq!(merged.tags[&destination].len(), 2);
+    assert_eq!(root_tag_count(&library, first), 1);
+    assert_eq!(root_tag_count(&library, second), 1);
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+
+    library.undo().unwrap().unwrap();
+    let restored = library.projections().snapshot();
+    assert_eq!(restored.tags[&source].len(), 2);
+    assert_eq!(restored.tags[&destination].len(), 1);
+    assert_eq!(root_tag_count(&library, first), 1);
+    assert_eq!(root_tag_count(&library, second), 2);
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+    library.redo().unwrap().unwrap();
+
+    library.delete_tag(destination, 1_700_000_000_800).unwrap();
+    assert_eq!(root_tag_count(&library, first), 0);
+    assert_eq!(root_tag_count(&library, second), 0);
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.projections().snapshot().tags[&destination].len(), 2);
+}
+
+#[test]
 fn undo_and_redo_are_process_memory_only_and_restore_bitmap_state() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("library.sqlite");

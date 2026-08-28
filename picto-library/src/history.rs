@@ -9,6 +9,21 @@ use crate::bitmap::BitmapKey;
 use crate::model::{MediaId, RootId};
 use crate::ordering::OrderOwnerKind;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagDefinitionState {
+    pub tag_id: crate::TagId,
+    pub stable_key: String,
+    pub namespace_id: u32,
+    pub full_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedQueryChange {
+    pub smart_folder_id: crate::SmartFolderId,
+    pub before: crate::predicate::ViewQuerySpec,
+    pub after: crate::predicate::ViewQuerySpec,
+}
+
 pub const HISTORY_ENTRY_LIMIT: usize = 100;
 pub const HISTORY_BYTE_LIMIT: usize = 1024 * 1024 * 1024;
 
@@ -48,6 +63,13 @@ pub enum SemanticChange {
         before: String,
         after: String,
     },
+    TagDefinition {
+        before: Option<TagDefinitionState>,
+        after: Option<TagDefinitionState>,
+        before_members: Arc<RoaringBitmap>,
+        after_members: Arc<RoaringBitmap>,
+        queries: Arc<Vec<SavedQueryChange>>,
+    },
     Compound(Vec<SemanticChange>),
 }
 
@@ -70,6 +92,30 @@ impl SemanticChange {
                 .sum(),
             Self::CollectionCover { .. } => 64,
             Self::TagName { before, after, .. } => before.len() + after.len() + 32,
+            Self::TagDefinition {
+                before,
+                after,
+                before_members,
+                after_members,
+                queries,
+            } => {
+                let definitions = before
+                    .iter()
+                    .chain(after.iter())
+                    .map(|state| state.stable_key.len() + state.full_name.len() + 32)
+                    .sum::<usize>();
+                definitions
+                    + before_members.serialized_size()
+                    + after_members.serialized_size()
+                    + queries
+                        .iter()
+                        .map(|change| {
+                            serde_json::to_vec(&change.before).map_or(0, |value| value.len())
+                                + serde_json::to_vec(&change.after).map_or(0, |value| value.len())
+                                + 16
+                        })
+                        .sum::<usize>()
+            }
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }

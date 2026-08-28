@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
-use crate::history::{HistoryEntry, SemanticChange, SessionHistory};
+use crate::history::{HistoryEntry, SemanticChange, SessionHistory, TagDefinitionState};
 use crate::ingest;
 use crate::model::{
     FolderId, GroupRequest, Lifecycle, MediaId, PreparedImport, Rating, RootId, SmartFolderId,
@@ -565,6 +565,24 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok(receipt)
+    }
+
+    pub fn delete_tag(&self, tag_id: crate::TagId, changed_at_ms: i64) -> Result<MutationReceipt> {
+        self.remove_tag_definition(tag_id, None, changed_at_ms)
+    }
+
+    pub fn merge_tags(
+        &self,
+        source: crate::TagId,
+        destination: crate::TagId,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if source == destination {
+            return Err(LibraryError::InvalidInput(
+                "source and destination tags are identical".into(),
+            ));
+        }
+        self.remove_tag_definition(source, Some(destination), changed_at_ms)
     }
 
     pub fn create_folder(
@@ -1153,6 +1171,157 @@ impl Library {
             },
         )?;
         Ok((receipt, cleanup))
+    }
+
+    fn remove_tag_definition(
+        &self,
+        source: crate::TagId,
+        destination: Option<crate::TagId>,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let source_state = load_tag_definition(transaction, source)?
+                    .ok_or_else(|| LibraryError::NotFound(format!("tag {}", source.0)))?;
+                if let Some(destination) = destination {
+                    if load_tag_definition(transaction, destination)?.is_none() {
+                        return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
+                    }
+                }
+                let source_members = snapshot.tags.get(&source).cloned().unwrap_or_default();
+                let mut next = (*snapshot).clone();
+
+                let mut history_changes = Vec::new();
+                if let Some(destination) = destination {
+                    let before = next.tags.get(&destination).cloned().unwrap_or_default();
+                    let mut after = before.clone();
+                    after |= &source_members;
+                    if before != after {
+                        bitmap::replace(
+                            transaction,
+                            revision,
+                            BitmapKey {
+                                domain: BitmapDomain::Tag,
+                                key_id: destination.0,
+                            },
+                            &after,
+                        )?;
+                        Arc::make_mut(&mut next.tags).insert(destination, after.clone());
+                        history_changes.push(SemanticChange::Bitmap {
+                            key: BitmapKey {
+                                domain: BitmapDomain::Tag,
+                                key_id: destination.0,
+                            },
+                            before: Arc::new(before),
+                            after: Arc::new(after),
+                        });
+                    }
+                }
+
+                bitmap::replace(
+                    transaction,
+                    revision,
+                    BitmapKey {
+                        domain: BitmapDomain::Tag,
+                        key_id: source.0,
+                    },
+                    &RoaringBitmap::new(),
+                )?;
+                transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [source.0])?;
+                Arc::make_mut(&mut next.tags).remove(&source);
+                Arc::make_mut(&mut next.tag_ids_by_name).remove(&source_state.full_name);
+
+                let destination_members = destination
+                    .and_then(|tag_id| next.tags.get(&tag_id))
+                    .cloned()
+                    .unwrap_or_default();
+                let counts = Arc::make_mut(&mut next.tag_count);
+                for root_id in &source_members {
+                    let loses_assignment = destination.is_none()
+                        || destination_members.contains(root_id)
+                            && snapshot
+                                .tags
+                                .get(&destination.unwrap())
+                                .is_some_and(|members| members.contains(root_id));
+                    if loses_assignment {
+                        let current = counts.value(root_id).unwrap_or(0);
+                        counts.insert(root_id, current.saturating_sub(1));
+                    }
+                }
+                let query_changes = crate::smart::rewrite_tag_references(
+                    transaction,
+                    &mut next,
+                    source,
+                    destination,
+                )?;
+
+                history_changes.insert(
+                    0,
+                    SemanticChange::TagDefinition {
+                        before: Some(source_state),
+                        after: None,
+                        before_members: Arc::new(source_members.clone()),
+                        after_members: Arc::new(RoaringBitmap::new()),
+                        queries: Arc::new(query_changes),
+                    },
+                );
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        revision as i64,
+                        if destination.is_some() {
+                            "tag.merge"
+                        } else {
+                            "tag.delete"
+                        },
+                        crate::bitmap::encode(&source_members)?,
+                        serde_json::json!({
+                            "source_tag_id": source.0,
+                            "destination_tag_id": destination.map(|tag| tag.0),
+                        })
+                        .to_string(),
+                        changed_at_ms
+                    ],
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "roots".into(),
+                        "tags".into(),
+                        "navigation".into(),
+                        "smart-folders".into(),
+                    ],
+                    source_members.iter().map(RootId),
+                );
+                let label = if destination.is_some() {
+                    "Merge tags"
+                } else {
+                    "Delete tag"
+                };
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::new(
+                            label,
+                            SemanticChange::Compound(history_changes),
+                        )),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     fn tag_mutation(
@@ -1916,17 +2085,160 @@ fn apply_semantic_change(
             resources.insert("navigation".into());
             resources.insert("smart-folders".into());
         }
-        SemanticChange::Compound(changes) => {
-            for change in changes {
-                apply_semantic_change(
-                    transaction,
-                    revision,
-                    snapshot,
-                    change,
-                    use_after,
-                    affected,
-                    resources,
+        SemanticChange::TagDefinition {
+            before,
+            after,
+            before_members,
+            after_members,
+            queries,
+        } => {
+            let (expected, replacement, expected_members, replacement_members) = if use_after {
+                (
+                    before,
+                    after,
+                    before_members.as_ref(),
+                    after_members.as_ref(),
+                )
+            } else {
+                (
+                    after,
+                    before,
+                    after_members.as_ref(),
+                    before_members.as_ref(),
+                )
+            };
+            let tag_id = expected
+                .as_ref()
+                .or(replacement.as_ref())
+                .expect("tag definition history has one state")
+                .tag_id;
+            if load_tag_definition(transaction, tag_id)? != *expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because tag {} definition changed",
+                    tag_id.0
+                )));
+            }
+            let current_members = snapshot.tags.get(&tag_id).cloned().unwrap_or_default();
+            if &current_members != expected_members {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because tag {} membership changed",
+                    tag_id.0
+                )));
+            }
+            for query in queries.iter() {
+                let expected_query = if use_after {
+                    &query.before
+                } else {
+                    &query.after
+                };
+                if snapshot.smart_queries.get(&query.smart_folder_id.0) != Some(expected_query) {
+                    return Err(LibraryError::InvalidState(format!(
+                        "cannot replay history because smart folder {} changed",
+                        query.smart_folder_id.0
+                    )));
+                }
+            }
+
+            if let Some(state) = replacement {
+                transaction.execute(
+                    "INSERT INTO tag_definition
+                         (tag_id, stable_key, namespace_id, subname)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(tag_id) DO UPDATE SET
+                         stable_key = excluded.stable_key,
+                         namespace_id = excluded.namespace_id,
+                         subname = excluded.subname",
+                    rusqlite::params![
+                        state.tag_id.0,
+                        state.stable_key,
+                        state.namespace_id,
+                        tag_subname(&state.full_name)
+                    ],
                 )?;
+            } else {
+                transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [tag_id.0])?;
+            }
+            bitmap::replace(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                },
+                replacement_members,
+            )?;
+            let names = Arc::make_mut(&mut snapshot.tag_ids_by_name);
+            names.retain(|_, id| *id != tag_id);
+            if let Some(state) = replacement {
+                names.insert(state.full_name.clone(), tag_id);
+                Arc::make_mut(&mut snapshot.tags).insert(tag_id, replacement_members.clone());
+            } else {
+                Arc::make_mut(&mut snapshot.tags).remove(&tag_id);
+            }
+            let changed = expected_members ^ replacement_members;
+            let counts = Arc::make_mut(&mut snapshot.tag_count);
+            for root_id in &changed {
+                let current = counts.value(root_id).unwrap_or(0);
+                counts.insert(
+                    root_id,
+                    if replacement_members.contains(root_id) {
+                        current + 1
+                    } else {
+                        current.saturating_sub(1)
+                    },
+                );
+            }
+            for query in queries.iter() {
+                let replacement_query = if use_after {
+                    &query.after
+                } else {
+                    &query.before
+                };
+                transaction.execute(
+                    "UPDATE smart_folder_definition SET view_query_json = ?2
+                     WHERE smart_folder_id = ?1",
+                    rusqlite::params![
+                        query.smart_folder_id.0,
+                        serde_json::to_string(replacement_query)?
+                    ],
+                )?;
+                Arc::make_mut(&mut snapshot.smart_queries)
+                    .insert(query.smart_folder_id.0, replacement_query.clone());
+            }
+            *affected |= &changed;
+            if !queries.is_empty() {
+                *affected |= snapshot.active();
+            }
+            resources.insert("roots".into());
+            resources.insert("tags".into());
+            resources.insert("navigation".into());
+            resources.insert("smart-folders".into());
+        }
+        SemanticChange::Compound(changes) => {
+            if use_after {
+                for change in changes {
+                    apply_semantic_change(
+                        transaction,
+                        revision,
+                        snapshot,
+                        change,
+                        use_after,
+                        affected,
+                        resources,
+                    )?;
+                }
+            } else {
+                for change in changes.iter().rev() {
+                    apply_semantic_change(
+                        transaction,
+                        revision,
+                        snapshot,
+                        change,
+                        use_after,
+                        affected,
+                        resources,
+                    )?;
+                }
             }
         }
     }
@@ -2026,6 +2338,42 @@ fn rename_tag_definition(
     names.remove(&old_name);
     names.insert(name.to_owned(), tag_id);
     Ok(())
+}
+
+fn load_tag_definition(
+    transaction: &rusqlite::Transaction<'_>,
+    tag_id: crate::TagId,
+) -> Result<Option<TagDefinitionState>> {
+    use rusqlite::OptionalExtension;
+
+    transaction
+        .query_row(
+            "SELECT tag.stable_key, tag.namespace_id, namespace.display_name, tag.subname
+             FROM tag_definition tag
+             JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id
+             WHERE tag.tag_id = ?1",
+            [tag_id.0],
+            |row| {
+                let namespace = row.get::<_, String>(2)?;
+                let subname = row.get::<_, String>(3)?;
+                Ok(TagDefinitionState {
+                    tag_id,
+                    stable_key: row.get(0)?,
+                    namespace_id: row.get(1)?,
+                    full_name: if namespace.is_empty() {
+                        subname
+                    } else {
+                        format!("{namespace}:{subname}")
+                    },
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn tag_subname(name: &str) -> &str {
+    name.split_once(':').map_or(name, |(_, subname)| subname)
 }
 
 fn required_name(kind: &str, name: &str) -> Result<String> {
