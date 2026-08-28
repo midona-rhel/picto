@@ -190,10 +190,55 @@ pub struct TagRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagPage {
+    pub tags: Vec<TagRecord>,
+    pub next_cursor: Option<String>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDeleteResult {
     pub deleted_folder_ids: Vec<FolderId>,
     pub fallback_folder_id: Option<FolderId>,
     pub receipt: crate::MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateFolderInput {
+    pub name: String,
+    pub parent_id: Option<FolderId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedFolder {
+    pub folder_id: FolderId,
+    pub receipt: crate::MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderMetadataInput {
+    pub folder_id: FolderId,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderAutoTagsInput {
+    pub folder_id: FolderId,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReorderFolderChildrenInput {
+    pub parent_id: Option<FolderId>,
+    pub folder_ids: Vec<FolderId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReorderFolderRootsInput {
+    pub folder_id: FolderId,
+    pub root_ids: Vec<RootId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

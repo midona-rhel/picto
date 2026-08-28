@@ -118,44 +118,43 @@ pub fn dispatch_library(
             read(application.reorder_collection(input)?)
         }
         "folders.create" => {
-            let input: crate::folders_v2::CreateFolderInput = parse(args_json)?;
-            let (folder_id, receipt) = application.create_folder(&input)?;
-            read(CreatedFolder { folder_id, receipt })
+            let input: picto_library::CreateFolderInput = parse(args_json)?;
+            read(application.create_folder(input)?)
         }
         "folders.rename" => {
-            let input: RenameFolderInput = parse(args_json)?;
+            let input: LibraryRenameFolderInput = parse(args_json)?;
             read(application.rename_folder(input.folder_id, &input.name)?)
         }
         "folders.metadata.set" => {
-            let input: FolderMetadataInput = parse(args_json)?;
+            let input: picto_library::FolderMetadataInput = parse(args_json)?;
             read(application.set_folder_metadata(&input)?)
         }
         "folders.auto_tags.get" => {
-            let input: FolderInput = parse(args_json)?;
+            let input: LibraryFolderInput = parse(args_json)?;
             read(application.folder_auto_tags(input.folder_id)?)
         }
         "folders.auto_tags.set" => {
-            let input: SetFolderAutoTagsInput = parse(args_json)?;
+            let input: picto_library::FolderAutoTagsInput = parse(args_json)?;
             read(application.set_folder_auto_tags(&input)?)
         }
         "folders.move" => {
-            let input: MoveFolderInput = parse(args_json)?;
+            let input: LibraryMoveFolderInput = parse(args_json)?;
             read(application.move_folder(input.folder_id, input.parent_id)?)
         }
         "folders.reorder" => {
-            let input: crate::folders_v2::ReorderFolderChildrenInput = parse(args_json)?;
+            let input: picto_library::ReorderFolderChildrenInput = parse(args_json)?;
             read(application.reorder_folder_children(&input)?)
         }
         "folders.items.reorder" => {
-            let input: ReorderFolderItemsInput = parse(args_json)?;
+            let input: picto_library::ReorderFolderRootsInput = parse(args_json)?;
             read(application.reorder_folder_items(&input)?)
         }
         "folders.items.sort_name" => {
-            let input: FolderInput = parse(args_json)?;
+            let input: LibraryFolderInput = parse(args_json)?;
             read(application.sort_folder_items_by_name(input.folder_id)?)
         }
         "folders.delete" => {
-            let input: FolderIdsInput = parse(args_json)?;
+            let input: LibraryFolderIdsInput = parse(args_json)?;
             read(application.delete_folders(&input.folder_ids)?)
         }
         "smart_folders.create" => {
@@ -182,11 +181,11 @@ pub fn dispatch_library(
             read(application.delete_smart_folder(input.smart_folder_id)?)
         }
         "tags.rename_or_merge" => {
-            let input: RenameTagInput = parse(args_json)?;
+            let input: LibraryRenameTagInput = parse(args_json)?;
             read(application.rename_or_merge_tag(input.tag_id, &input.name)?)
         }
         "tags.delete" => {
-            let input: TagInput = parse(args_json)?;
+            let input: LibraryTagInput = parse(args_json)?;
             read(application.delete_tag(input.tag_id)?)
         }
         "duplicates.resolve" => {
@@ -1369,6 +1368,33 @@ struct LibraryPatchMetadataInput {
 struct LibraryCollectionInput {
     collection_id: picto_library::RootId,
 }
+#[derive(Deserialize)]
+struct LibraryFolderInput {
+    folder_id: picto_library::FolderId,
+}
+#[derive(Deserialize)]
+struct LibraryRenameFolderInput {
+    folder_id: picto_library::FolderId,
+    name: String,
+}
+#[derive(Deserialize)]
+struct LibraryMoveFolderInput {
+    folder_id: picto_library::FolderId,
+    parent_id: Option<picto_library::FolderId>,
+}
+#[derive(Deserialize)]
+struct LibraryFolderIdsInput {
+    folder_ids: Vec<picto_library::FolderId>,
+}
+#[derive(Deserialize)]
+struct LibraryTagInput {
+    tag_id: picto_library::TagId,
+}
+#[derive(Deserialize)]
+struct LibraryRenameTagInput {
+    tag_id: picto_library::TagId,
+    name: String,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1985,12 +2011,12 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let page: crate::tags_v2::TagPage = serde_json::from_str(&page).unwrap();
+        let page: picto_library::TagPage = serde_json::from_str(&page).unwrap();
         assert_eq!(page.tags.len(), 2);
         let source = page
             .tags
             .iter()
-            .find(|tag| tag.subtag == "one")
+            .find(|tag| tag.subname == "one")
             .unwrap()
             .tag_id;
         dispatch_library(
@@ -2007,9 +2033,9 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let page: crate::tags_v2::TagPage = serde_json::from_str(&page).unwrap();
+        let page: picto_library::TagPage = serde_json::from_str(&page).unwrap();
         assert_eq!(page.tags.len(), 1);
-        assert_eq!(page.tags[0].root_count, 1);
+        assert_eq!(page.tags[0].active_count, 1);
         assert_eq!(
             dispatch_library(&application, "tags.namespace_counts", "{}")
                 .unwrap()
