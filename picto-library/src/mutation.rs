@@ -147,6 +147,14 @@ impl Library {
         )
     }
 
+    pub fn ordered_selection(&self, target: &SelectionTarget) -> Result<Vec<RootId>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| crate::selection::resolve_ordered(connection, &snapshot, target),
+        )
+    }
+
     pub fn record_recent_view(
         &self,
         root_id: RootId,

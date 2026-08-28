@@ -81,6 +81,18 @@ pub fn dispatch_library(
             let input: PatchMetadataInput = parse(args_json)?;
             read(application.patch_metadata(&input.target, &input.patch)?)
         }
+        "items.organize_into_collection" => {
+            let input: crate::operations_v2::OrganizeIntoCollectionInput = parse(args_json)?;
+            read(application.organize_into_collection(&input)?)
+        }
+        "items.ungroup" => {
+            let input: ItemInput = parse(args_json)?;
+            read(application.ungroup_collection(input.item_id.0)?)
+        }
+        "items.reorder_collection" => {
+            let input: crate::operations_v2::ReorderCollectionInput = parse(args_json)?;
+            read(application.reorder_collection(&input)?)
+        }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
@@ -1486,10 +1498,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let application =
             crate::library_application::LibraryApplication::create(directory.path()).unwrap();
-        let input = picto_library::PreparedImport {
-            stable_key: "greenfield-ipc-root".into(),
-            media_name: "Greenfield IPC".into(),
-            file_path: "/tmp/greenfield-ipc.png".into(),
+        let (root_id, _) = application
+            .library()
+            .ingest(&greenfield_input("greenfield-ipc-root"))
+            .unwrap();
+        (directory, application, root_id)
+    }
+
+    fn greenfield_input(key: &str) -> picto_library::PreparedImport {
+        picto_library::PreparedImport {
+            stable_key: key.into(),
+            media_name: format!("{key}.png"),
+            file_path: format!("/tmp/{key}.png"),
             facts: picto_library::ImmutableMediaFacts {
                 mime: "image/png".into(),
                 size_bytes: 12,
@@ -1497,7 +1517,7 @@ mod tests {
                 height: Some(20),
                 duration_ms: None,
                 frame_count: Some(1),
-                content_hash: "greenfield-ipc-hash".into(),
+                content_hash: format!("hash-{key}"),
                 perceptual_hash: None,
                 palette: Vec::new(),
             },
@@ -1509,9 +1529,7 @@ mod tests {
             source_identity: None,
             imported_at_ms: 1_700_000_000_000,
             captured_at_ms: None,
-        };
-        let (root_id, _) = application.library().ingest(&input).unwrap();
-        (directory, application, root_id)
+        }
     }
 
     #[test]
@@ -1584,6 +1602,34 @@ mod tests {
         assert!(dispatch_library(&application, "legacy.magic", "{}")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn greenfield_dispatch_groups_roots_as_one_collection() {
+        let (_directory, application, first) = greenfield_fixture();
+        let (second, _) = application
+            .library()
+            .ingest(&greenfield_input("greenfield-ipc-second"))
+            .unwrap();
+        let output = dispatch_library(
+            &application,
+            "items.organize_into_collection",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{},{}]}},"label":"Grouped","winning_collection_id":null}}"#,
+                first.0, second.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let output: crate::operations_v2::OrganizeIntoCollectionResult =
+            serde_json::from_str(&output).unwrap();
+        let details = application
+            .library()
+            .details(picto_library::RootId(output.collection_id.0 as u32))
+            .unwrap();
+        assert_eq!(details.root.kind, picto_library::RootKind::Collection);
+        assert_eq!(details.root.name, "Grouped");
+        assert_eq!(details.media.len(), 2);
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {
