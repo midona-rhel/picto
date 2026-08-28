@@ -74,6 +74,40 @@ fn fresh_schema_reopens_and_rejects_unrelated_sqlite_files() {
 }
 
 #[test]
+fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported("checkpoint", Lifecycle::Active, &[]))
+        .unwrap();
+    let checkpoint_revision = library.database().revision().unwrap();
+    assert!(library.write_projection_checkpoint().unwrap() > 0);
+    assert_eq!(library.database().revision().unwrap(), checkpoint_revision);
+    drop(library);
+
+    let library = Library::open(&path).unwrap();
+    assert_eq!(
+        library.projections().snapshot().revision,
+        checkpoint_revision
+    );
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            "checkpoint:stale",
+        )
+        .unwrap();
+    let newer_revision = library.database().revision().unwrap();
+    drop(library);
+
+    let rebuilt = Library::open(&path).unwrap();
+    assert_eq!(rebuilt.projections().snapshot().revision, newer_revision);
+    assert_eq!(root_tag_count(&rebuilt, root), 1);
+}
+
+#[test]
 fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

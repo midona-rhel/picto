@@ -1,10 +1,110 @@
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
+use crate::predicate::ViewQuerySpec;
+use crate::projection::{NumericIndex, ProjectionSnapshot};
 use crate::schema::SCHEMA_FINGERPRINT;
-use crate::Result;
+use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v1";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v2";
+
+#[derive(Serialize, Deserialize)]
+struct CheckpointData {
+    lifecycle: std::collections::HashMap<Lifecycle, roaring::RoaringBitmap>,
+    ratings: std::collections::HashMap<Rating, roaring::RoaringBitmap>,
+    tags: std::collections::HashMap<TagId, roaring::RoaringBitmap>,
+    tag_ids_by_name: std::collections::HashMap<String, TagId>,
+    folder_orders: std::collections::HashMap<FolderId, std::sync::Arc<Vec<RootId>>>,
+    folders: std::collections::HashMap<FolderId, roaring::RoaringBitmap>,
+    collection_orders: std::collections::HashMap<RootId, std::sync::Arc<Vec<MediaId>>>,
+    media_owner: Vec<Option<RootId>>,
+    root_kinds: std::collections::HashMap<RootKind, roaring::RoaringBitmap>,
+    mime: std::collections::HashMap<String, roaring::RoaringBitmap>,
+    mime_family: std::collections::HashMap<String, roaring::RoaringBitmap>,
+    color_cells: std::collections::HashMap<u32, roaring::RoaringBitmap>,
+    cover_palettes: std::collections::HashMap<RootId, std::sync::Arc<Vec<LabColor>>>,
+    tag_count: NumericIndex,
+    folder_count: NumericIndex,
+    total_bytes: NumericIndex,
+    media_count: NumericIndex,
+    width: NumericIndex,
+    height: NumericIndex,
+    duration: NumericIndex,
+    imported_at: NumericIndex,
+    modified_at: NumericIndex,
+    notes_present: roaring::RoaringBitmap,
+    urls_present: roaring::RoaringBitmap,
+    smart_results: std::collections::HashMap<u32, roaring::RoaringBitmap>,
+    smart_queries: std::collections::HashMap<u32, ViewQuerySpec>,
+}
+
+pub fn encode(snapshot: &ProjectionSnapshot) -> Result<Vec<u8>> {
+    let data = CheckpointData {
+        lifecycle: (*snapshot.lifecycle).clone(),
+        ratings: (*snapshot.ratings).clone(),
+        tags: (*snapshot.tags).clone(),
+        tag_ids_by_name: (*snapshot.tag_ids_by_name).clone(),
+        folder_orders: (*snapshot.folder_orders).clone(),
+        folders: (*snapshot.folders).clone(),
+        collection_orders: (*snapshot.collection_orders).clone(),
+        media_owner: (*snapshot.media_owner).clone(),
+        root_kinds: (*snapshot.root_kinds).clone(),
+        mime: (*snapshot.mime).clone(),
+        mime_family: (*snapshot.mime_family).clone(),
+        color_cells: (*snapshot.color_cells).clone(),
+        cover_palettes: (*snapshot.cover_palettes).clone(),
+        tag_count: (*snapshot.tag_count).clone(),
+        folder_count: (*snapshot.folder_count).clone(),
+        total_bytes: (*snapshot.total_bytes).clone(),
+        media_count: (*snapshot.media_count).clone(),
+        width: (*snapshot.width).clone(),
+        height: (*snapshot.height).clone(),
+        duration: (*snapshot.duration).clone(),
+        imported_at: (*snapshot.imported_at).clone(),
+        modified_at: (*snapshot.modified_at).clone(),
+        notes_present: (*snapshot.notes_present).clone(),
+        urls_present: (*snapshot.urls_present).clone(),
+        smart_results: (*snapshot.smart_results).clone(),
+        smart_queries: (*snapshot.smart_queries).clone(),
+    };
+    bincode::serialize(&data).map_err(|error| LibraryError::Checkpoint(error.to_string()))
+}
+
+pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
+    let data: CheckpointData = bincode::deserialize(payload)
+        .map_err(|error| LibraryError::Checkpoint(error.to_string()))?;
+    Ok(ProjectionSnapshot {
+        revision,
+        lifecycle: std::sync::Arc::new(data.lifecycle),
+        ratings: std::sync::Arc::new(data.ratings),
+        tags: std::sync::Arc::new(data.tags),
+        tag_ids_by_name: std::sync::Arc::new(data.tag_ids_by_name),
+        folder_orders: std::sync::Arc::new(data.folder_orders),
+        folders: std::sync::Arc::new(data.folders),
+        collection_orders: std::sync::Arc::new(data.collection_orders),
+        media_owner: std::sync::Arc::new(data.media_owner),
+        root_kinds: std::sync::Arc::new(data.root_kinds),
+        mime: std::sync::Arc::new(data.mime),
+        mime_family: std::sync::Arc::new(data.mime_family),
+        color_cells: std::sync::Arc::new(data.color_cells),
+        cover_palettes: std::sync::Arc::new(data.cover_palettes),
+        tag_count: std::sync::Arc::new(data.tag_count),
+        folder_count: std::sync::Arc::new(data.folder_count),
+        total_bytes: std::sync::Arc::new(data.total_bytes),
+        media_count: std::sync::Arc::new(data.media_count),
+        width: std::sync::Arc::new(data.width),
+        height: std::sync::Arc::new(data.height),
+        duration: std::sync::Arc::new(data.duration),
+        imported_at: std::sync::Arc::new(data.imported_at),
+        modified_at: std::sync::Arc::new(data.modified_at),
+        notes_present: std::sync::Arc::new(data.notes_present),
+        urls_present: std::sync::Arc::new(data.urls_present),
+        smart_results: std::sync::Arc::new(data.smart_results),
+        smart_queries: std::sync::Arc::new(data.smart_queries),
+    })
+}
 
 pub fn write(connection: &Connection, revision: u64, payload: &[u8]) -> Result<()> {
     let digest: [u8; 32] = Sha256::digest(payload).into();

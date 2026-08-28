@@ -270,6 +270,19 @@ impl LibraryDatabase {
         self.scheduler.has_higher_priority_waiter(priority)
     }
 
+    pub fn maintenance_write<T>(
+        &self,
+        priority: WorkPriority,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let _scheduler_lease = self.scheduler.acquire(priority);
+        let mut writer = self.writer.lock();
+        let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let output = operation(&transaction)?;
+        transaction.commit()?;
+        Ok(output)
+    }
+
     pub fn allocate_id(transaction: &Transaction<'_>) -> Result<u32> {
         let next = transaction.query_row(
             "SELECT next_local_id FROM library_meta WHERE singleton = 1",

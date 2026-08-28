@@ -108,22 +108,45 @@ pub fn load(connection: &Connection, key: BitmapKey) -> Result<RoaringBitmap> {
 }
 
 pub fn load_all(connection: &Connection) -> Result<HashMap<BitmapKey, RoaringBitmap>> {
-    let mut keys = connection.prepare_cached(
-        "SELECT DISTINCT domain, key_id FROM canonical_bitmap ORDER BY domain, key_id",
+    let mut statement = connection.prepare(
+        "SELECT domain, key_id, high_bits, checksum, payload, cardinality, format_version
+         FROM canonical_bitmap ORDER BY domain, key_id, high_bits",
     )?;
-    let values = keys
-        .query_map([], |row| Ok((row.get::<_, u8>(0)?, row.get::<_, u32>(1)?)))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    values
-        .into_iter()
-        .map(|(domain, key_id)| {
-            let key = BitmapKey {
-                domain: domain.try_into()?,
-                key_id,
-            };
-            Ok((key, load(connection, key)?))
-        })
-        .collect()
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, u8>(0)?,
+            row.get::<_, u32>(1)?,
+            row.get::<_, u16>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+            row.get::<_, i64>(5)? as u64,
+            row.get::<_, u32>(6)?,
+        ))
+    })?;
+    let mut bitmaps = HashMap::new();
+    for row in rows {
+        let (domain, key_id, high, expected_checksum, payload, cardinality, version) = row?;
+        if version != BITMAP_FORMAT_VERSION {
+            return Err(LibraryError::InvalidState(format!(
+                "unsupported bitmap format {version}"
+            )));
+        }
+        let shard = decode(&payload, &expected_checksum)?;
+        if shard.len() != cardinality {
+            return Err(LibraryError::InvalidState(
+                "bitmap cardinality mismatch".into(),
+            ));
+        }
+        let key = BitmapKey {
+            domain: domain.try_into()?,
+            key_id,
+        };
+        let bitmap = bitmaps.entry(key).or_insert_with(RoaringBitmap::new);
+        for low in shard {
+            bitmap.insert(((high as u32) << 16) | low);
+        }
+    }
+    Ok(bitmaps)
 }
 
 pub fn replace(

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
@@ -11,7 +12,7 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::predicate::ViewQuerySpec;
 use crate::{LibraryDatabase, Result};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumericIndex {
     present: RoaringBitmap,
     slices: Vec<RoaringBitmap>,
@@ -156,7 +157,17 @@ pub struct ProjectionStore {
 
 impl ProjectionStore {
     pub fn load(database: &LibraryDatabase) -> Result<Self> {
-        let snapshot = database.read(crate::database::WorkPriority::CorrectnessRecovery, load)?;
+        let snapshot = database.read(
+            crate::database::WorkPriority::CorrectnessRecovery,
+            |connection| {
+                let revision = crate::schema::validate(connection)?;
+                if let Some(payload) = crate::checkpoint::read(connection, revision)? {
+                    crate::checkpoint::decode(&payload, revision)
+                } else {
+                    load(connection)
+                }
+            },
+        )?;
         Ok(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
         })

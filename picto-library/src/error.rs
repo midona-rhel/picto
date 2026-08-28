@@ -6,6 +6,8 @@ pub enum LibraryError {
     Database(#[from] rusqlite::Error),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("checkpoint error: {0}")]
+    Checkpoint(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("incompatible library: {0}")]

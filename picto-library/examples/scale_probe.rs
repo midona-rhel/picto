@@ -118,6 +118,30 @@ fn main() -> picto_library::Result<()> {
     println!("selection_count={}", summary.selected_count);
     println!("add_tag_all_ms={:.3}", millis(tag_elapsed));
     println!("lifecycle_all_ms={:.3}", millis(lifecycle_elapsed));
+    let checkpoint_started = Instant::now();
+    let checkpoint_bytes = library.write_projection_checkpoint()?;
+    println!(
+        "checkpoint_write_ms={:.3}",
+        millis(checkpoint_started.elapsed())
+    );
+    println!("checkpoint_bytes={checkpoint_bytes}");
+    drop(library);
+    let reopen_started = Instant::now();
+    let reopened = Library::open(directory.path().join("scale.sqlite"))?;
+    let reopen_elapsed = reopen_started.elapsed();
+    println!("checkpoint_reopen_ms={:.3}", millis(reopen_elapsed));
+    println!(
+        "cold_reopen_roots={}",
+        reopened
+            .query(
+                &RootQuery {
+                    scope: ItemScope::Trash,
+                    view: ViewQuerySpec::default(),
+                },
+                &PageRequest::default(),
+            )?
+            .total
+    );
     Ok(())
 }
 

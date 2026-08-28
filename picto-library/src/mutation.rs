@@ -395,6 +395,24 @@ impl Library {
         Ok((!receipt.resources.is_empty()).then_some(receipt))
     }
 
+    pub fn write_projection_checkpoint(&self) -> Result<usize> {
+        let snapshot = self.projections.snapshot();
+        let revision = self.database.revision()?;
+        if snapshot.revision != revision {
+            return Err(LibraryError::InvalidState(format!(
+                "cannot checkpoint database revision {revision} with projection revision {}",
+                snapshot.revision
+            )));
+        }
+        let payload = crate::checkpoint::encode(&snapshot)?;
+        let size = payload.len();
+        self.database
+            .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                crate::checkpoint::write(transaction, revision, &payload)
+            })?;
+        Ok(size)
+    }
+
     pub fn set_lifecycle(
         &self,
         target: &SelectionTarget,
