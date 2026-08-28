@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, FileHash, ItemTarget, MutationReceipt};
 use crate::blob_store::{mime_to_extension, BlobStore};
+use crate::library_application::LibraryApplication;
 use crate::media_processing_v2;
 use crate::store::Store;
 use crate::workers_v2::WorkKind;
@@ -65,6 +66,113 @@ pub fn resolve_file_paths(
             let extension = mime_to_extension(&mime_type);
             let path = blobs
                 .find_original(&file_hash, Some(extension))
+                .map_err(|error| format!("Failed to resolve {file_hash}: {error}"))?
+                .map(|(path, _)| path)
+                .ok_or_else(|| format!("Original blob is missing for physical file {file_hash}"))?;
+            Ok(ResolvedFilePath {
+                file_hash: FileHash(file_hash),
+                path,
+            })
+        })
+        .collect()
+}
+
+pub fn resolve_file_paths_library(
+    application: &LibraryApplication,
+    file_hashes: &[FileHash],
+) -> Result<Vec<ResolvedFilePath>, String> {
+    let hashes = serde_json::to_string(
+        &file_hashes
+            .iter()
+            .map(|file_hash| file_hash.0.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| format!("Could not encode physical file selection: {error}"))?;
+    let metadata = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT CAST(input.value AS TEXT), file.mime
+                     FROM json_each(?1) input
+                     LEFT JOIN media_file file
+                       ON file.content_hash = CAST(input.value AS TEXT)
+                     ORDER BY CAST(input.key AS INTEGER)",
+                )?;
+                let rows = statement
+                    .query_map([hashes], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(Into::into);
+                rows
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    resolve_metadata_paths(application.blobs(), metadata)
+}
+
+pub fn resolve_target_file_paths_library(
+    application: &LibraryApplication,
+    target: &picto_library::selection::SelectionTarget,
+) -> Result<Vec<ResolvedFilePath>, String> {
+    let metadata = application
+        .library()
+        .auxiliary_read_consistent(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection, projection| {
+                let roots = picto_library::selection::resolve_ordered(
+                    connection,
+                    projection,
+                    target,
+                )?;
+                let media_ids = roots
+                    .iter()
+                    .flat_map(|root_id| {
+                        projection
+                            .collection_orders
+                            .get(root_id)
+                            .map(|members| members.iter().map(|member| member.0).collect())
+                            .unwrap_or_else(|| vec![root_id.0])
+                    })
+                    .collect::<Vec<_>>();
+                let encoded = serde_json::to_string(&media_ids)?;
+                let mut statement = connection.prepare(
+                    "WITH ordered_media(media_id, position) AS (
+                         SELECT CAST(value AS INTEGER), CAST(key AS INTEGER)
+                         FROM json_each(?1)
+                     )
+                     SELECT file.content_hash, file.mime
+                     FROM ordered_media
+                     JOIN media_item media ON media.media_id = ordered_media.media_id
+                     JOIN media_file file ON file.file_id = media.file_id
+                     ORDER BY ordered_media.position",
+                )?;
+                let rows = statement
+                    .query_map([encoded], |row| {
+                        Ok((row.get::<_, String>(0)?, Some(row.get::<_, String>(1)?)))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(Into::into);
+                rows
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    resolve_metadata_paths(application.blobs(), metadata)
+}
+
+fn resolve_metadata_paths(
+    blobs: &BlobStore,
+    metadata: Vec<(String, Option<String>)>,
+) -> Result<Vec<ResolvedFilePath>, String> {
+    metadata
+        .into_iter()
+        .map(|(file_hash, mime_type)| {
+            let mime_type =
+                mime_type.ok_or_else(|| format!("Physical file not found: {file_hash}"))?;
+            let path = blobs
+                .find_original(&file_hash, Some(mime_to_extension(&mime_type)))
                 .map_err(|error| format!("Failed to resolve {file_hash}: {error}"))?
                 .map(|(path, _)| path)
                 .ok_or_else(|| format!("Original blob is missing for physical file {file_hash}"))?;
@@ -224,6 +332,34 @@ pub struct ThumbnailQueueResult {
     pub enqueued: usize,
     pub already_queued: usize,
     pub receipt: MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryThumbnailQueueResult {
+    pub requested: usize,
+    pub enqueued: usize,
+    pub already_queued: usize,
+    pub receipt: picto_library::MutationReceipt,
+}
+
+pub fn enqueue_thumbnail_regeneration_library(
+    application: &LibraryApplication,
+    file_hashes: &[FileHash],
+) -> Result<LibraryThumbnailQueueResult, String> {
+    let hashes = file_hashes
+        .iter()
+        .map(|file_hash| file_hash.0.clone())
+        .collect::<Vec<_>>();
+    let (requested, enqueued, receipt) = application
+        .library()
+        .enqueue_thumbnail_work(&hashes, &Utc::now().to_rfc3339())
+        .map_err(|error| error.to_string())?;
+    Ok(LibraryThumbnailQueueResult {
+        requested,
+        enqueued,
+        already_queued: requested - enqueued,
+        receipt,
+    })
 }
 
 /// Queue thumbnail regeneration without performing it inline. Queue identity

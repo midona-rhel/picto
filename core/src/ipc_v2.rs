@@ -194,6 +194,27 @@ pub fn dispatch_library(
             let input: SubscriptionInput = parse(args_json)?;
             read(application.cancel_subscription_run_library(input.subscription_id, &now())?)
         }
+        "media.resolve_paths" => {
+            let input: FileHashesInput = parse(args_json)?;
+            read(crate::media_io_v2::resolve_file_paths_library(
+                application,
+                &input.file_hashes,
+            )?)
+        }
+        "media.resolve_target_paths" => {
+            let input: LibraryTargetInput = parse(args_json)?;
+            read(crate::media_io_v2::resolve_target_file_paths_library(
+                application,
+                &input.target,
+            )?)
+        }
+        "media.regenerate_thumbnails" => {
+            let input: FileHashesInput = parse(args_json)?;
+            read(crate::media_io_v2::enqueue_thumbnail_regeneration_library(
+                application,
+                &input.file_hashes,
+            )?)
+        }
         "sources.list" => read(crate::auth_v2::sources()),
         "auth.credentials.list" => read(crate::auth_v2::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth_v2::list_library_health(application)?),
@@ -2179,6 +2200,61 @@ mod tests {
                 "subscriptions.cancel".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn greenfield_media_paths_and_thumbnail_queue_use_canonical_selection() {
+        let (_directory, application, root_id) = greenfield_fixture();
+        use sha2::{Digest, Sha256};
+        let bytes = b"not decoded by this test";
+        let hash = hex::encode(Sha256::digest(bytes));
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["items".to_string()],
+                [root_id],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE media_file SET content_hash = ?1
+                         WHERE content_hash = 'hash-greenfield-ipc-root'",
+                        [&hash],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        application
+            .blobs()
+            .write_original(&hash, bytes, Some("png"))
+            .unwrap();
+
+        let output = dispatch_library(
+            &application,
+            "media.resolve_target_paths",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}}}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let paths: Vec<crate::media_io_v2::ResolvedFilePath> =
+            serde_json::from_str(&output).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].file_hash.0, hash);
+
+        let first = dispatch_library(
+            &application,
+            "media.regenerate_thumbnails",
+            &format!(r#"{{"file_hashes":["{hash}"]}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let first: crate::media_io_v2::LibraryThumbnailQueueResult =
+            serde_json::from_str(&first).unwrap();
+        assert_eq!((first.requested, first.enqueued), (1, 0));
+        assert_eq!(first.already_queued, 1);
     }
 
     #[test]

@@ -10,6 +10,66 @@ const TASKS_RESOURCE: &str = "tasks";
 const MAX_ATTEMPTS: u32 = 8;
 
 impl Library {
+    pub fn enqueue_thumbnail_work(
+        &self,
+        content_hashes: &[String],
+        now: &str,
+    ) -> Result<(usize, usize, MutationReceipt)> {
+        let mut unique = content_hashes.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        let encoded = serde_json::to_string(&unique)?;
+        let published = self.auxiliary_write_if_changed(
+            WorkPriority::ForegroundMutation,
+            [TASKS_RESOURCE.to_owned()],
+            [],
+            |transaction, _| {
+                let known: usize = transaction
+                    .query_row(
+                        "SELECT COUNT(*) FROM media_file
+                         WHERE content_hash IN (
+                             SELECT CAST(value AS TEXT) FROM json_each(?1)
+                         )",
+                        [&encoded],
+                        |row| row.get::<_, i64>(0),
+                    )?
+                    .try_into()
+                    .map_err(|_| LibraryError::InvalidState("negative file count".into()))?;
+                if known != unique.len() {
+                    return Err(LibraryError::InvalidInput(
+                        "a thumbnail target is not a physical file".into(),
+                    ));
+                }
+                let enqueued = transaction.execute(
+                    "INSERT INTO work_item (
+                         file_id, work_type, status, priority, attempt_count,
+                         available_at, created_at, updated_at
+                     )
+                     SELECT file.file_id, 'thumbnail', 'pending', ?2, 0, ?3, ?3, ?3
+                     FROM json_each(?1) target
+                     JOIN media_file file
+                       ON file.content_hash = CAST(target.value AS TEXT)
+                     ON CONFLICT(file_id, work_type) WHERE file_id IS NOT NULL
+                     DO NOTHING",
+                    params![encoded, MediaWorkKind::Thumbnail.priority(), now],
+                )?;
+                Ok((enqueued != 0).then_some((known, enqueued)))
+            },
+        )?;
+        if let Some(((known, enqueued), receipt)) = published {
+            return Ok((known, enqueued, receipt));
+        }
+        Ok((
+            unique.len(),
+            0,
+            MutationReceipt {
+                revision: self.database().revision()?,
+                resources: vec![TASKS_RESOURCE.to_owned()],
+                item_ids: Vec::new(),
+            },
+        ))
+    }
+
     pub fn reset_running_media_work(&self, now: &str) -> Result<Option<MutationReceipt>> {
         let Some(((), receipt)) = self.auxiliary_write_if_changed(
             WorkPriority::CorrectnessRecovery,
