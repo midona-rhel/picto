@@ -14,10 +14,10 @@ use crate::history::{
 use crate::ingest;
 use crate::model::{
     DuplicatePair, DuplicateResolutionChoice, DuplicateResolutionResult, DuplicateStatus, FileId,
-    FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
-    PendingBlobCleanup, PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind,
-    RootTagAssignment, SmartFolderDeleteResult, SmartFolderId, SmartFolderInput, TagNamespaceId,
-    TagRecord,
+    FolderDeleteResult, FolderId, FolderRecord, GroupRequest, LibraryStatistics, Lifecycle,
+    MediaFactsUpdate, MediaId, PendingBlobCleanup, PreparedCollectionImport, PreparedImport, Rating,
+    RootId, RootKind, RootTagAssignment, SmartFolderDeleteResult, SmartFolderId, SmartFolderInput,
+    TagNamespaceId, TagRecord,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -359,6 +359,77 @@ impl Library {
                     folders,
                     smart_folders,
                     revision: counts.revision,
+                })
+            },
+        )
+    }
+
+    pub fn library_statistics(&self) -> Result<LibraryStatistics> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let values = connection.query_row(
+                    "SELECT
+                         (SELECT COUNT(*) FROM media_item),
+                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
+                          ON file.file_id = media.file_id WHERE file.mime LIKE 'image/%'),
+                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
+                          ON file.file_id = media.file_id WHERE file.mime LIKE 'video/%'),
+                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
+                          ON file.file_id = media.file_id WHERE file.mime LIKE 'audio/%'),
+                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
+                          ON file.file_id = media.file_id
+                          WHERE file.mime NOT LIKE 'image/%'
+                            AND file.mime NOT LIKE 'video/%'
+                            AND file.mime NOT LIKE 'audio/%'),
+                         (SELECT COUNT(*) FROM media_file),
+                         (SELECT COALESCE(SUM(size_bytes), 0) FROM media_file),
+                         (SELECT COUNT(*) FROM tag_definition),
+                         (SELECT COUNT(*) FROM folder_definition),
+                         (SELECT COUNT(*) FROM smart_folder_definition),
+                         (SELECT COUNT(*) FROM subscription)",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                            row.get::<_, i64>(9)?,
+                            row.get::<_, i64>(10)?,
+                        ))
+                    },
+                )?;
+                Ok(LibraryStatistics {
+                    active_items: snapshot.lifecycle(Lifecycle::Active).len() as i64,
+                    inbox_items: snapshot.lifecycle(Lifecycle::Inbox).len() as i64,
+                    trash_items: snapshot.lifecycle(Lifecycle::Trash).len() as i64,
+                    standalone_items: snapshot
+                        .root_kinds
+                        .get(&RootKind::Media)
+                        .map_or(0, |roots| roots.len()) as i64,
+                    collections: snapshot
+                        .root_kinds
+                        .get(&RootKind::Collection)
+                        .map_or(0, |roots| roots.len()) as i64,
+                    media_assets: values.0,
+                    image_assets: values.1,
+                    video_assets: values.2,
+                    audio_assets: values.3,
+                    other_assets: values.4,
+                    physical_files: values.5,
+                    original_bytes: values.6,
+                    tags: values.7,
+                    folders: values.8,
+                    smart_folders: values.9,
+                    subscriptions: values.10,
+                    revision: snapshot.revision,
                 })
             },
         )

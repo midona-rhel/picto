@@ -48,6 +48,7 @@ pub fn dispatch_library(
             read(application.selection_summary(&input.target)?)
         }
         "sidebar.counts" => read(application.sidebar_counts()?),
+        "library.stats" => read(application.library_statistics()?),
         "navigation.get" => read(application.navigation()?),
         "tags.list" => {
             let input: ListTagsInput = parse(args_json)?;

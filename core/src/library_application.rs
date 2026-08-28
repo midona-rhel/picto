@@ -854,6 +854,12 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn library_statistics(&self) -> Result<picto_library::LibraryStatistics, String> {
+        self.library
+            .library_statistics()
+            .map_err(|error| error.to_string())
+    }
+
     pub fn history_state(&self) -> LibraryHistoryState {
         map_history_state(self.library.history().state())
     }

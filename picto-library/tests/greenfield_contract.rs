@@ -303,6 +303,13 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
     assert_eq!(counts.all, 1);
     assert_eq!(counts.inbox, 1);
     assert_eq!(counts.tags.values().copied().sum::<u64>(), 1);
+    let statistics = library.library_statistics().unwrap();
+    assert_eq!(statistics.active_items, 1);
+    assert_eq!(statistics.inbox_items, 1);
+    assert_eq!(statistics.media_assets, 2);
+    assert_eq!(statistics.image_assets, 2);
+    assert_eq!(statistics.physical_files, 2);
+    assert_eq!(statistics.revision, counts.revision);
 
     library
         .add_tag(

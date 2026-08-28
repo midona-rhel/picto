@@ -251,6 +251,27 @@ pub struct SidebarCounts {
     pub revision: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryStatistics {
+    pub active_items: i64,
+    pub inbox_items: i64,
+    pub trash_items: i64,
+    pub standalone_items: i64,
+    pub collections: i64,
+    pub media_assets: i64,
+    pub image_assets: i64,
+    pub video_assets: i64,
+    pub audio_assets: i64,
+    pub other_assets: i64,
+    pub physical_files: i64,
+    pub original_bytes: i64,
+    pub tags: i64,
+    pub folders: i64,
+    pub smart_folders: i64,
+    pub subscriptions: i64,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDeleteResult {
     pub deleted_folder_ids: Vec<FolderId>,
