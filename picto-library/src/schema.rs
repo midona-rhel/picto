@@ -44,9 +44,8 @@ pub fn validate(connection: &Connection) -> Result<u64> {
             ))
         },
     );
-    let (generation, fingerprint, revision) = row.map_err(|_| {
-        LibraryError::Incompatible("missing schema-generation-1 metadata".into())
-    })?;
+    let (generation, fingerprint, revision) =
+        row.map_err(|_| LibraryError::Incompatible("missing schema-generation-1 metadata".into()))?;
     if generation != SCHEMA_GENERATION || fingerprint != SCHEMA_FINGERPRINT {
         return Err(LibraryError::Incompatible(format!(
             "expected generation {SCHEMA_GENERATION} ({SCHEMA_FINGERPRINT}), found {generation} ({fingerprint})"

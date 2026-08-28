@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
 use crate::ordering::{self, OrderOwnerKind};
+use crate::predicate::ViewQuerySpec;
 use crate::{LibraryDatabase, Result};
 
 #[derive(Debug, Clone, Default)]
@@ -125,6 +126,7 @@ pub struct ProjectionSnapshot {
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
     pub smart_results: Arc<HashMap<u32, RoaringBitmap>>,
+    pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
 }
 
 impl ProjectionSnapshot {
@@ -397,7 +399,11 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         folder_count.insert(root_id, folder_counts.get(&root_id).copied().unwrap_or(0));
     }
 
-    Ok(ProjectionSnapshot {
+    let every_root = all_roots(&root_kinds);
+    validate_partition_coverage("lifecycle", lifecycle.values(), &every_root)?;
+    validate_partition_coverage("rating", ratings.values(), &every_root)?;
+
+    let mut snapshot = ProjectionSnapshot {
         revision,
         lifecycle: Arc::new(lifecycle),
         ratings: Arc::new(ratings),
@@ -423,7 +429,10 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         notes_present: Arc::new(notes_present),
         urls_present: Arc::new(urls_present),
         smart_results: Arc::new(HashMap::new()),
-    })
+        smart_queries: Arc::new(HashMap::new()),
+    };
+    crate::smart::load(connection, &mut snapshot)?;
+    Ok(snapshot)
 }
 
 fn validate_partitions<'a>(
@@ -438,6 +447,23 @@ fn validate_partitions<'a>(
             )));
         }
         seen |= partition;
+    }
+    Ok(())
+}
+
+fn validate_partition_coverage<'a>(
+    name: &str,
+    partitions: impl Iterator<Item = &'a RoaringBitmap>,
+    expected: &RoaringBitmap,
+) -> Result<()> {
+    let actual = partitions.fold(RoaringBitmap::new(), |mut result, values| {
+        result |= values;
+        result
+    });
+    if &actual != expected {
+        return Err(crate::LibraryError::InvalidState(format!(
+            "{name} partitions do not cover every root"
+        )));
     }
     Ok(())
 }

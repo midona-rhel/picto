@@ -18,6 +18,7 @@ pub struct RootTextState {
     pub name: String,
     pub notes: Option<String>,
     pub source_urls: Vec<String>,
+    pub modified_at_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +55,7 @@ impl SemanticChange {
                     state.name.len()
                         + state.notes.as_deref().map(str::len).unwrap_or(0)
                         + state.source_urls.iter().map(String::len).sum::<usize>()
-                        + 32
+                        + 40
                 })
                 .sum(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
@@ -108,7 +109,12 @@ impl SessionHistory {
             return false;
         }
         let mut stacks = self.stacks.lock();
-        stacks.redo.clear();
+        let redo_bytes = stacks
+            .redo
+            .drain(..)
+            .map(|entry| entry.estimated_bytes)
+            .sum::<usize>();
+        stacks.bytes = stacks.bytes.saturating_sub(redo_bytes);
         stacks.bytes += entry.estimated_bytes;
         stacks.undo.push_back(entry);
         while stacks.undo.len() > HISTORY_ENTRY_LIMIT || stacks.bytes > HISTORY_BYTE_LIMIT {
@@ -160,3 +166,38 @@ impl SessionHistory {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bitmap::{BitmapDomain, BitmapKey};
+
+    fn entry(label: &str, value: u32) -> HistoryEntry {
+        HistoryEntry::new(
+            label,
+            SemanticChange::Bitmap {
+                key: BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: value,
+                },
+                before: Arc::new(RoaringBitmap::new()),
+                after: Arc::new([value].into_iter().collect()),
+            },
+        )
+    }
+
+    #[test]
+    fn new_action_discards_redo_memory() {
+        let history = SessionHistory::default();
+        history.push(entry("one", 1));
+        let first = history.take_undo().unwrap();
+        history.complete_undo(first);
+        let redo_bytes = history.state().bytes;
+        assert!(redo_bytes > 0);
+
+        history.push(entry("two", 2));
+        let state = history.state();
+        assert!(!state.can_redo);
+        assert_eq!(state.entries, 1);
+        assert!(state.bytes <= redo_bytes);
+    }
+}

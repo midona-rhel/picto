@@ -138,6 +138,15 @@ pub struct ViewQuerySpec {
     pub sort: ItemSort,
 }
 
+pub fn contains_text(expression: &FilterExpr) -> bool {
+    match expression {
+        FilterExpr::All(children) | FilterExpr::Any(children) => children.iter().any(contains_text),
+        FilterExpr::Not(child) => contains_text(child),
+        FilterExpr::Clause(FilterClause::Text { .. }) => true,
+        FilterExpr::Clause(_) => false,
+    }
+}
+
 pub fn evaluate(
     expression: &FilterExpr,
     universe: &RoaringBitmap,
@@ -197,13 +206,14 @@ fn evaluate_clause(
             &snapshot.folder_count,
             folder_ids.len() as u64,
         ),
-        FilterClause::Ratings { ratings } => ratings.iter().fold(
-            RoaringBitmap::new(),
-            |mut values, rating| {
-                values |= snapshot.rating(*rating);
-                values
-            },
-        ),
+        FilterClause::Ratings { ratings } => {
+            ratings
+                .iter()
+                .fold(RoaringBitmap::new(), |mut values, rating| {
+                    values |= snapshot.rating(*rating);
+                    values
+                })
+        }
         FilterClause::Mime { values, families } => {
             let mut matches = RoaringBitmap::new();
             for value in values {
@@ -218,30 +228,30 @@ fn evaluate_clause(
             }
             matches
         }
-        FilterClause::ImportedAt { minimum_ms, maximum_ms } => {
-            snapshot.imported_at.between(*minimum_ms, *maximum_ms)
-        }
-        FilterClause::ModifiedAt { minimum_ms, maximum_ms } => {
-            snapshot.modified_at.between(*minimum_ms, *maximum_ms)
-        }
+        FilterClause::ImportedAt {
+            minimum_ms,
+            maximum_ms,
+        } => snapshot.imported_at.between(*minimum_ms, *maximum_ms),
+        FilterClause::ModifiedAt {
+            minimum_ms,
+            maximum_ms,
+        } => snapshot.modified_at.between(*minimum_ms, *maximum_ms),
         FilterClause::Width { minimum, maximum } => snapshot.width.between(*minimum, *maximum),
         FilterClause::Height { minimum, maximum } => snapshot.height.between(*minimum, *maximum),
-        FilterClause::Duration { minimum_ms, maximum_ms } => {
-            snapshot.duration.between(*minimum_ms, *maximum_ms)
+        FilterClause::Duration {
+            minimum_ms,
+            maximum_ms,
+        } => snapshot.duration.between(*minimum_ms, *maximum_ms),
+        FilterClause::TotalSize {
+            minimum_bytes,
+            maximum_bytes,
+        } => snapshot.total_bytes.between(*minimum_bytes, *maximum_bytes),
+        FilterClause::NotesPresent { present } => {
+            presence(universe, &snapshot.notes_present, *present)
         }
-        FilterClause::TotalSize { minimum_bytes, maximum_bytes } => {
-            snapshot.total_bytes.between(*minimum_bytes, *maximum_bytes)
+        FilterClause::SourceUrlsPresent { present } => {
+            presence(universe, &snapshot.urls_present, *present)
         }
-        FilterClause::NotesPresent { present } => presence(
-            universe,
-            &snapshot.notes_present,
-            *present,
-        ),
-        FilterClause::SourceUrlsPresent { present } => presence(
-            universe,
-            &snapshot.urls_present,
-            *present,
-        ),
         FilterClause::Color { color, delta_e } => color_matches(snapshot, color, *delta_e),
         FilterClause::Text { field, query } => text(*field, query)?,
     };
@@ -258,7 +268,11 @@ fn set_match(
 ) -> RoaringBitmap {
     let values = values.collect::<Vec<_>>();
     if values.is_empty() {
-        return universe.clone();
+        return if mode == SetMatchMode::Exact {
+            universe & &counts.between(Some(0), Some(0))
+        } else {
+            universe.clone()
+        };
     }
     let mut result = match mode {
         SetMatchMode::Any => values
@@ -305,10 +319,9 @@ fn color_matches(
     let mut candidates = RoaringBitmap::new();
     for (cell, roots) in snapshot.color_cells.iter() {
         let (l, a, b) = cell_center(*cell);
-        let distance = ((l - requested.l).powi(2)
-            + (a - requested.a).powi(2)
-            + (b - requested.b).powi(2))
-        .sqrt();
+        let distance =
+            ((l - requested.l).powi(2) + (a - requested.a).powi(2) + (b - requested.b).powi(2))
+                .sqrt();
         if distance <= delta_e + cell_radius {
             candidates |= roots;
         }

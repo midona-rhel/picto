@@ -226,7 +226,11 @@ fn scan_integer(
     let mut scan_cursor = match cursor {
         Some(Cursor::Integer { value, root_id }) => Some((value, root_id)),
         None => None,
-        _ => return Err(LibraryError::InvalidInput("cursor does not match sort".into())),
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
     let mut output = Vec::with_capacity(limit);
     loop {
@@ -279,7 +283,11 @@ fn scan_text(
     let mut scan_cursor = match cursor {
         Some(Cursor::Text { value, root_id }) => Some((value, root_id)),
         None => None,
-        _ => return Err(LibraryError::InvalidInput("cursor does not match sort".into())),
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
     let mut output = Vec::with_capacity(limit);
     loop {
@@ -349,7 +357,11 @@ fn page_rating(
     let (cursor_rating, cursor_root) = match cursor {
         Some(Cursor::Rating { value, root_id }) => (Some(value), Some(root_id)),
         None => (None, None),
-        _ => return Err(LibraryError::InvalidInput("cursor does not match sort".into())),
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
     let mut output = Vec::with_capacity(limit);
     let mut started = cursor_rating.is_none();
@@ -362,7 +374,9 @@ fn page_rating(
                 continue;
             }
         }
-        let mut roots = (snapshot.rating(rating) & matches).iter().collect::<Vec<_>>();
+        let mut roots = (snapshot.rating(rating) & matches)
+            .iter()
+            .collect::<Vec<_>>();
         if sort.direction == SortDirection::Descending {
             roots.reverse();
         }
@@ -400,7 +414,11 @@ fn page_random(
     let cursor = match cursor {
         Some(Cursor::Random { key, root_id }) => Some((key, root_id)),
         None => None,
-        _ => return Err(LibraryError::InvalidInput("cursor does not match sort".into())),
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
     let mut values = matches
         .iter()
@@ -412,10 +430,12 @@ fn page_random(
     }
     let values = values
         .into_iter()
-        .filter(|value| cursor.is_none_or(|cursor| match sort.direction {
-            SortDirection::Ascending => *value > cursor,
-            SortDirection::Descending => *value < cursor,
-        }))
+        .filter(|value| {
+            cursor.is_none_or(|cursor| match sort.direction {
+                SortDirection::Ascending => *value > cursor,
+                SortDirection::Descending => *value < cursor,
+            })
+        })
         .take(limit)
         .collect::<Vec<_>>();
     let next = (values.len() == limit)
@@ -424,7 +444,10 @@ fn page_random(
         .map(|(key, root_id)| serde_json::to_string(&Cursor::Random { key, root_id }))
         .transpose()?;
     Ok((
-        values.into_iter().map(|(_, root_id)| RootId(root_id)).collect(),
+        values
+            .into_iter()
+            .map(|(_, root_id)| RootId(root_id))
+            .collect(),
         next,
     ))
 }
@@ -444,7 +467,11 @@ fn page_folder_order(
     let start = match cursor {
         Some(Cursor::Vector { index }) => index,
         None => 0,
-        _ => return Err(LibraryError::InvalidInput("cursor does not match sort".into())),
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
     let order = snapshot
         .folder_orders

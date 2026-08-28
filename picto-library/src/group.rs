@@ -56,7 +56,9 @@ pub(crate) fn ungroup(
         .collection_orders
         .get(&collection_id)
         .cloned()
-        .ok_or_else(|| LibraryError::InvalidInput(format!("root {collection_id} is not a collection")))?;
+        .ok_or_else(|| {
+            LibraryError::InvalidInput(format!("root {collection_id} is not a collection"))
+        })?;
     let collection = load_roots(transaction, &[collection_id])?
         .into_iter()
         .next()
@@ -73,8 +75,14 @@ pub(crate) fn ungroup(
         .iter()
         .filter_map(|(folder_id, roots)| roots.contains(collection_id.0).then_some(*folder_id))
         .collect::<Vec<_>>();
-    let new_roots = members.iter().map(|media| RootId(media.0)).collect::<Vec<_>>();
-    let new_bitmap = new_roots.iter().map(|root| root.0).collect::<RoaringBitmap>();
+    let new_roots = members
+        .iter()
+        .map(|media| RootId(media.0))
+        .collect::<Vec<_>>();
+    let new_bitmap = new_roots
+        .iter()
+        .map(|root| root.0)
+        .collect::<RoaringBitmap>();
 
     let mut media_rows = Vec::with_capacity(members.len());
     let mut statement = transaction.prepare_cached(
@@ -102,9 +110,15 @@ pub(crate) fn ungroup(
     drop(statement);
 
     transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [collection_id.0])?;
-    transaction.execute("DELETE FROM library_root WHERE root_id = ?1", [collection_id.0])?;
+    transaction.execute(
+        "DELETE FROM library_root WHERE root_id = ?1",
+        [collection_id.0],
+    )?;
     ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
-    transaction.execute("DELETE FROM library_item WHERE local_id = ?1", [collection_id.0])?;
+    transaction.execute(
+        "DELETE FROM library_item WHERE local_id = ?1",
+        [collection_id.0],
+    )?;
     for (media_id, media_name, facts) in &media_rows {
         transaction.execute(
             "INSERT INTO library_root
@@ -119,14 +133,18 @@ pub(crate) fn ungroup(
                 collection.imported_at_ms,
                 collection.captured_at_ms,
                 modified_at_ms,
-                i64::try_from(facts.size_bytes).map_err(|_| LibraryError::InvalidState("media size exceeds SQLite range".into()))?
+                i64::try_from(facts.size_bytes).map_err(|_| LibraryError::InvalidState(
+                    "media size exceeds SQLite range".into()
+                ))?
             ],
         )?;
         crate::fts::mark_one(transaction, RootId(media_id.0), modified_at_ms)?;
     }
 
     for value in Lifecycle::ALL {
-        let members = Arc::make_mut(&mut snapshot.lifecycle).entry(value).or_default();
+        let members = Arc::make_mut(&mut snapshot.lifecycle)
+            .entry(value)
+            .or_default();
         members.remove(collection_id.0);
         if value == lifecycle {
             *members |= &new_bitmap;
@@ -134,12 +152,17 @@ pub(crate) fn ungroup(
         bitmap::replace(
             transaction,
             revision,
-            BitmapKey { domain: BitmapDomain::Lifecycle, key_id: value.bitmap_key() },
+            BitmapKey {
+                domain: BitmapDomain::Lifecycle,
+                key_id: value.bitmap_key(),
+            },
             members,
         )?;
     }
     for value in Rating::ALL {
-        let members = Arc::make_mut(&mut snapshot.ratings).entry(value).or_default();
+        let members = Arc::make_mut(&mut snapshot.ratings)
+            .entry(value)
+            .or_default();
         members.remove(collection_id.0);
         if value == rating {
             *members |= &new_bitmap;
@@ -147,18 +170,26 @@ pub(crate) fn ungroup(
         bitmap::replace(
             transaction,
             revision,
-            BitmapKey { domain: BitmapDomain::Rating, key_id: value.bitmap_key() },
+            BitmapKey {
+                domain: BitmapDomain::Rating,
+                key_id: value.bitmap_key(),
+            },
             members,
         )?;
     }
     for tag_id in &inherited_tags {
-        let roots = Arc::make_mut(&mut snapshot.tags).entry(*tag_id).or_default();
+        let roots = Arc::make_mut(&mut snapshot.tags)
+            .entry(*tag_id)
+            .or_default();
         roots.remove(collection_id.0);
         *roots |= &new_bitmap;
         bitmap::replace(
             transaction,
             revision,
-            BitmapKey { domain: BitmapDomain::Tag, key_id: tag_id.0 },
+            BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            },
             roots,
         )?;
     }
@@ -167,10 +198,12 @@ pub(crate) fn ungroup(
         let position = before
             .iter()
             .position(|root| *root == collection_id)
-            .ok_or_else(|| LibraryError::InvalidState(format!(
-                "folder {} bitmap and order disagree",
-                folder_id.0
-            )))?;
+            .ok_or_else(|| {
+                LibraryError::InvalidState(format!(
+                    "folder {} bitmap and order disagree",
+                    folder_id.0
+                ))
+            })?;
         let mut after = before.clone();
         after.splice(position..=position, new_roots.iter().copied());
         ordering::replace(
@@ -186,10 +219,7 @@ pub(crate) fn ungroup(
     }
 
     Arc::make_mut(&mut snapshot.collection_orders).remove(&collection_id);
-    remove_root_projections(
-        &mut snapshot,
-        &[collection_id.0].into_iter().collect(),
-    );
+    remove_root_projections(&mut snapshot, &[collection_id.0].into_iter().collect());
     let owners = Arc::make_mut(&mut snapshot.media_owner);
     for (media_id, _, _) in &media_rows {
         if owners.len() <= media_id.0 as usize {
@@ -261,7 +291,10 @@ pub(crate) fn organize(
         }
     }
 
-    let selected = ordered_roots.iter().map(|root| root.0).collect::<RoaringBitmap>();
+    let selected = ordered_roots
+        .iter()
+        .map(|root| root.0)
+        .collect::<RoaringBitmap>();
     let lifecycle = common_lifecycle(&snapshot, &selected)?;
     let roots = load_roots(transaction, &ordered_roots)?;
     let cover = roots
@@ -342,10 +375,16 @@ pub(crate) fn organize(
     for root in &roots {
         if root.root_id != collection_id {
             transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root.root_id.0])?;
-            transaction.execute("DELETE FROM library_root WHERE root_id = ?1", [root.root_id.0])?;
+            transaction.execute(
+                "DELETE FROM library_root WHERE root_id = ?1",
+                [root.root_id.0],
+            )?;
             if root.kind == RootKind::Collection {
                 ordering::delete(transaction, OrderOwnerKind::Collection, root.root_id.0)?;
-                transaction.execute("DELETE FROM library_item WHERE local_id = ?1", [root.root_id.0])?;
+                transaction.execute(
+                    "DELETE FROM library_item WHERE local_id = ?1",
+                    [root.root_id.0],
+                )?;
             }
         }
     }
@@ -374,7 +413,9 @@ pub(crate) fn organize(
             cover.captured_at_ms,
             request.modified_at_ms,
             members.len() as i64,
-            i64::try_from(total_size).map_err(|_| LibraryError::InvalidState("collection size exceeds SQLite range".into()))?
+            i64::try_from(total_size).map_err(|_| LibraryError::InvalidState(
+                "collection size exceeds SQLite range".into()
+            ))?
         ],
     )?;
     ordering::replace(
@@ -394,7 +435,13 @@ pub(crate) fn organize(
         lifecycle,
         cover_rating,
     )?;
-    let tag_count = settle_tags(transaction, revision, &mut snapshot, &selected, collection_id)?;
+    let tag_count = settle_tags(
+        transaction,
+        revision,
+        &mut snapshot,
+        &selected,
+        collection_id,
+    )?;
     let folder_count = settle_folders(
         transaction,
         revision,
@@ -512,9 +559,7 @@ fn common_lifecycle(snapshot: &ProjectionSnapshot, selected: &RoaringBitmap) -> 
     Lifecycle::ALL
         .into_iter()
         .find(|value| (snapshot.lifecycle(*value) & selected).len() == selected.len())
-        .ok_or_else(|| {
-            LibraryError::InvalidInput("selected roots must share one lifecycle".into())
-        })
+        .ok_or_else(|| LibraryError::InvalidInput("selected roots must share one lifecycle".into()))
 }
 
 fn rating_for(snapshot: &ProjectionSnapshot, root_id: RootId) -> Result<Rating> {
@@ -543,7 +588,10 @@ fn settle_partitions(
         bitmap::replace(
             transaction,
             revision,
-            BitmapKey { domain: BitmapDomain::Lifecycle, key_id: value.bitmap_key() },
+            BitmapKey {
+                domain: BitmapDomain::Lifecycle,
+                key_id: value.bitmap_key(),
+            },
             members,
         )?;
     }
@@ -557,7 +605,10 @@ fn settle_partitions(
         bitmap::replace(
             transaction,
             revision,
-            BitmapKey { domain: BitmapDomain::Rating, key_id: value.bitmap_key() },
+            BitmapKey {
+                domain: BitmapDomain::Rating,
+                key_id: value.bitmap_key(),
+            },
             members,
         )?;
     }
@@ -580,7 +631,10 @@ fn settle_tags(
             bitmap::replace(
                 transaction,
                 revision,
-                BitmapKey { domain: BitmapDomain::Tag, key_id: tag_id.0 },
+                BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                },
                 members,
             )?;
         }
@@ -698,7 +752,8 @@ fn add_collection_projection(
             .or_default()
             .insert(id);
     }
-    Arc::make_mut(&mut snapshot.cover_palettes).insert(collection_id, Arc::new(cover.palette.clone()));
+    Arc::make_mut(&mut snapshot.cover_palettes)
+        .insert(collection_id, Arc::new(cover.palette.clone()));
     Arc::make_mut(&mut snapshot.tag_count).insert(id, tag_count);
     Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, total_size);

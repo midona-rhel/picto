@@ -84,8 +84,16 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
         .ingest(&imported("inbox", Lifecycle::Inbox, &["creator:alice"]))
         .unwrap();
 
-    let all = library.query(&query(ItemScope::All), &PageRequest::default()).unwrap();
-    assert_eq!(all.items.iter().map(|item| item.root_id).collect::<Vec<_>>(), vec![active]);
+    let all = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(
+        all.items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![active]
+    );
     assert_eq!(all.total, 1);
 
     let inbox_page = library
@@ -118,7 +126,13 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
             sort: ItemSort::default(),
         },
     };
-    assert_eq!(library.query(&tagged, &PageRequest::default()).unwrap().total, 1);
+    assert_eq!(
+        library
+            .query(&tagged, &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
 
     library
         .set_lifecycle(
@@ -128,16 +142,92 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
             Lifecycle::Trash,
         )
         .unwrap();
-    assert_eq!(library.query(&query(ItemScope::All), &PageRequest::default()).unwrap().total, 0);
-    assert_eq!(library.query(&query(ItemScope::Trash), &PageRequest::default()).unwrap().total, 1);
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::Trash), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[test]
+fn undo_and_redo_are_process_memory_only_and_restore_bitmap_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported("one", Lifecycle::Active, &[]))
+        .unwrap();
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![root],
+    };
+
+    library.add_tag(&target, "character:one").unwrap();
+    assert_eq!(library.history().state().entries, 1);
+    assert_eq!(root_tag_count(&library, root), 1);
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, root), 0);
+    assert!(library.history().state().can_redo);
+
+    library.redo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, root), 1);
+
+    library
+        .rename_root(root, "Renamed", 1_700_000_000_010)
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .items[0]
+            .name,
+        "Renamed"
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .items[0]
+            .name,
+        "one.png"
+    );
+
+    drop(library);
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(root_tag_count(&reopened, root), 1);
+    assert_eq!(reopened.history().state().entries, 0);
+}
+
+fn root_tag_count(library: &Library, root_id: picto_library::RootId) -> usize {
+    library
+        .projections()
+        .snapshot()
+        .tags
+        .values()
+        .filter(|roots| roots.contains(root_id.0))
+        .count()
 }
 
 #[test]
 fn folder_vector_is_the_only_folder_membership_authority() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let (first, _) = library.ingest(&imported("one", Lifecycle::Active, &[])).unwrap();
-    let (second, _) = library.ingest(&imported("two", Lifecycle::Active, &[])).unwrap();
+    let (first, _) = library
+        .ingest(&imported("one", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("two", Lifecycle::Active, &[]))
+        .unwrap();
     let (folder, _) = library.create_folder("Reference", None).unwrap();
     library
         .add_to_folder(
@@ -158,8 +248,16 @@ fn folder_vector_is_the_only_folder_membership_authority() {
             },
         },
     };
-    let page = library.query(&folder_query, &PageRequest::default()).unwrap();
-    assert_eq!(page.items.iter().map(|item| item.root_id).collect::<Vec<_>>(), vec![first, second]);
+    let page = library
+        .query(&folder_query, &PageRequest::default())
+        .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
     assert_eq!(library.projections().snapshot().folders[&folder].len(), 2);
 }
 
@@ -167,8 +265,12 @@ fn folder_vector_is_the_only_folder_membership_authority() {
 fn explicit_and_query_selections_have_identical_summaries() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let (first, _) = library.ingest(&imported("one", Lifecycle::Active, &[])).unwrap();
-    let (second, _) = library.ingest(&imported("two", Lifecycle::Active, &[])).unwrap();
+    let (first, _) = library
+        .ingest(&imported("one", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("two", Lifecycle::Active, &[]))
+        .unwrap();
     let explicit = library
         .selection_summary(&SelectionTarget::Explicit {
             root_ids: vec![first, second],
@@ -187,6 +289,135 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported("first", Lifecycle::Active, &["character:alice"]))
+        .unwrap();
+    let tag_id = *library.projections().snapshot().tags.keys().next().unwrap();
+    let view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::Tags {
+            tag_ids: vec![tag_id],
+            mode: SetMatchMode::All,
+        }),
+        sort: ItemSort::default(),
+    };
+    let (smart_folder_id, _) = library
+        .create_smart_folder("Alice", None, view.clone())
+        .unwrap();
+    let smart_query = RootQuery {
+        scope: ItemScope::SmartFolder { smart_folder_id },
+        view: ViewQuerySpec::default(),
+    };
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+
+    let (second, _) = library
+        .ingest(&imported("second", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![second],
+            },
+            "character:alice",
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+
+    let direct_query = RootQuery {
+        scope: ItemScope::All,
+        view,
+    };
+    assert_eq!(
+        library
+            .query(&direct_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+
+    library
+        .set_lifecycle(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first],
+            },
+            Lifecycle::Inbox,
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&smart_query, &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+}
+
+#[test]
+fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let before = library.database().revision().unwrap();
+    let values = vec![
+        imported("searchable-active", Lifecycle::Active, &[]),
+        imported("searchable-inbox", Lifecycle::Inbox, &[]),
+    ];
+    let outputs = library.ingest_batch(&values).unwrap();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].1.revision, outputs[1].1.revision);
+    assert_eq!(outputs[0].1.revision, before + 1);
+
+    assert!(library.settle_fts(64).unwrap().is_some());
+    let text_view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::Text {
+            field: picto_library::predicate::TextField::Global,
+            query: "searchable".into(),
+        }),
+        sort: ItemSort::default(),
+    };
+    assert_eq!(
+        library
+            .query(
+                &RootQuery {
+                    scope: ItemScope::All,
+                    view: text_view.clone(),
+                },
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(
+                &RootQuery {
+                    scope: ItemScope::Inbox,
+                    view: text_view,
+                },
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[test]
 fn collections_are_one_root_and_media_filters_use_only_the_cover() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -194,14 +425,24 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
         .ingest(&imported_as(
             "image",
             "image/png",
-            LabColor { l: 50.0, a: 60.0, b: 40.0, weight: 1.0 },
+            LabColor {
+                l: 50.0,
+                a: 60.0,
+                b: 40.0,
+                weight: 1.0,
+            },
         ))
         .unwrap();
     let (video, _) = library
         .ingest(&imported_as(
             "video",
             "video/mp4",
-            LabColor { l: 30.0, a: 10.0, b: -70.0, weight: 1.0 },
+            LabColor {
+                l: 30.0,
+                a: 10.0,
+                b: -70.0,
+                weight: 1.0,
+            },
         ))
         .unwrap();
     let (collection, _) = library
@@ -216,7 +457,9 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
         })
         .unwrap();
 
-    let all = library.query(&query(ItemScope::All), &PageRequest::default()).unwrap();
+    let all = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
     assert_eq!(all.total, 1);
     assert_eq!(all.items[0].root_id, collection);
     assert_eq!(all.items[0].kind, RootKind::Collection);
@@ -233,24 +476,52 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             sort: ItemSort::default(),
         },
     };
-    assert_eq!(library.query(&mime_query("image/png"), &PageRequest::default()).unwrap().total, 1);
-    assert_eq!(library.query(&mime_query("video/mp4"), &PageRequest::default()).unwrap().total, 0);
+    assert_eq!(
+        library
+            .query(&mime_query("image/png"), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(&mime_query("video/mp4"), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
 
     library
         .database()
-        .read(picto_library::database::WorkPriority::VisibleRead, |connection| {
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get::<_, i64>(0))?, 1);
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row.get::<_, i64>(0))?, 2);
-            Ok(())
-        })
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
+                        .get::<_, i64>(0))?,
+                    2
+                );
+                Ok(())
+            },
+        )
         .unwrap();
-    assert_eq!(library.projections().snapshot().collection_orders[&collection].len(), 2);
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection].len(),
+        2
+    );
 
     let (roots, _) = library
         .ungroup_collection(collection, 1_700_000_000_200)
         .unwrap();
     assert_eq!(roots, vec![image, video]);
-    let all = library.query(&query(ItemScope::All), &PageRequest::default()).unwrap();
+    let all = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
     assert_eq!(all.total, 2);
     assert_eq!(
         all.items
@@ -261,10 +532,21 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
     );
     library
         .database()
-        .read(picto_library::database::WorkPriority::VisibleRead, |connection| {
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get::<_, i64>(0))?, 2);
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row.get::<_, i64>(0))?, 2);
-            Ok(())
-        })
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row
+                        .get::<_, i64>(0))?,
+                    2
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
+                        .get::<_, i64>(0))?,
+                    2
+                );
+                Ok(())
+            },
+        )
         .unwrap();
 }

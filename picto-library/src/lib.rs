@@ -21,10 +21,11 @@ pub mod publication;
 pub mod query;
 pub mod schema;
 pub mod selection;
+pub mod smart;
 
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
-pub use mutation::Library;
 pub use model::*;
+pub use mutation::Library;
 pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};

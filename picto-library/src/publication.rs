@@ -55,7 +55,10 @@ impl PublicationCoordinator {
         resources: impl IntoIterator<Item = String>,
         roots: impl IntoIterator<Item = RootId>,
     ) -> MutationReceipt {
-        let mut item_ids = roots.into_iter().take(MAX_RECEIPT_IDS + 1).collect::<Vec<_>>();
+        let mut item_ids = roots
+            .into_iter()
+            .take(MAX_RECEIPT_IDS + 1)
+            .collect::<Vec<_>>();
         if item_ids.len() > MAX_RECEIPT_IDS {
             item_ids.clear();
         }
@@ -117,4 +120,3 @@ impl PublicationCoordinator {
         self.subscribers.lock().remove(&id);
     }
 }
-

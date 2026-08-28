@@ -47,7 +47,11 @@ pub(crate) fn insert_one(
                 sqlite_i64(input.facts.size_bytes, "file size")?,
                 input.facts.width,
                 input.facts.height,
-                input.facts.duration_ms.map(|value| sqlite_i64(value, "duration")).transpose()?,
+                input
+                    .facts
+                    .duration_ms
+                    .map(|value| sqlite_i64(value, "duration"))
+                    .transpose()?,
                 input.facts.frame_count,
                 input.facts.perceptual_hash,
                 serde_json::to_string(&input.facts.palette)?,
@@ -87,7 +91,10 @@ pub(crate) fn insert_one(
         key_id: input.lifecycle.bitmap_key(),
     };
     let lifecycle = Arc::make_mut(&mut snapshot.lifecycle);
-    lifecycle.entry(input.lifecycle).or_default().insert(root_id.0);
+    lifecycle
+        .entry(input.lifecycle)
+        .or_default()
+        .insert(root_id.0);
     bitmap::replace(
         transaction,
         revision,
@@ -192,10 +199,8 @@ pub(crate) fn insert_one(
     Arc::make_mut(&mut snapshot.folder_count).insert(root_id.0, assigned_folders);
     Arc::make_mut(&mut snapshot.total_bytes).insert(root_id.0, input.facts.size_bytes);
     Arc::make_mut(&mut snapshot.media_count).insert(root_id.0, 1);
-    Arc::make_mut(&mut snapshot.imported_at)
-        .insert(root_id.0, input.imported_at_ms.max(0) as u64);
-    Arc::make_mut(&mut snapshot.modified_at)
-        .insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    Arc::make_mut(&mut snapshot.imported_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
     if let Some(value) = input.facts.width {
         Arc::make_mut(&mut snapshot.width).insert(root_id.0, value as u64);
     }
@@ -274,6 +279,21 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
         params![tag_id, Uuid::new_v4().to_string(), namespace_id, subname],
     )?;
     Ok(TagId(tag_id))
+}
+
+pub(crate) fn find_tag(transaction: &Transaction<'_>, name: &str) -> Result<Option<TagId>> {
+    let (namespace, subname) = name.split_once(':').unwrap_or(("", name));
+    transaction
+        .query_row(
+            "SELECT tag.tag_id
+             FROM tag_definition tag
+             JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id
+             WHERE namespace.display_name = ?1 AND tag.subname = ?2",
+            params![namespace, subname],
+            |row| row.get::<_, u32>(0).map(TagId),
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 fn mime_family(mime: &str) -> &str {

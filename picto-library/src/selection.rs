@@ -43,13 +43,14 @@ pub fn resolve(
     snapshot: &ProjectionSnapshot,
     target: &SelectionTarget,
 ) -> Result<RoaringBitmap> {
-    let all_roots = snapshot
-        .root_kinds
-        .values()
-        .fold(RoaringBitmap::new(), |mut result, values| {
-            result |= values;
-            result
-        });
+    let all_roots =
+        snapshot
+            .root_kinds
+            .values()
+            .fold(RoaringBitmap::new(), |mut result, values| {
+                result |= values;
+                result
+            });
     Ok(match target {
         SelectionTarget::Explicit { root_ids } => {
             let mut selected = root_ids.iter().map(|id| id.0).collect::<RoaringBitmap>();
@@ -76,7 +77,9 @@ pub fn resolve(
             let anchor = ordered
                 .iter()
                 .position(|id| id == anchor_root_id)
-                .ok_or_else(|| LibraryError::InvalidInput("range anchor is outside query".into()))?;
+                .ok_or_else(|| {
+                    LibraryError::InvalidInput("range anchor is outside query".into())
+                })?;
             let focus = ordered
                 .iter()
                 .position(|id| id == focus_root_id)
@@ -86,10 +89,7 @@ pub fn resolve(
             } else {
                 (focus, anchor)
             };
-            ordered[start..=end]
-                .iter()
-                .map(|id| id.0)
-                .collect()
+            ordered[start..=end].iter().map(|id| id.0).collect()
         }
     })
 }
@@ -174,9 +174,8 @@ fn shared_text(
     connection: &Connection,
     selection: &RoaringBitmap,
 ) -> Result<(Option<String>, Option<Vec<String>>)> {
-    let mut statement = connection.prepare_cached(
-        "SELECT notes, source_urls_json FROM library_root WHERE root_id = ?1",
-    )?;
+    let mut statement = connection
+        .prepare_cached("SELECT notes, source_urls_json FROM library_root WHERE root_id = ?1")?;
     let mut notes: Option<Option<String>> = None;
     let mut urls: Option<Vec<String>> = None;
     let mut notes_match = true;

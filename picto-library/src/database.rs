@@ -20,6 +20,60 @@ pub enum WorkPriority {
     Cloud = 7,
 }
 
+impl WorkPriority {
+    const COUNT: usize = 7;
+
+    const fn index(self) -> usize {
+        self as usize - 1
+    }
+}
+
+#[derive(Default)]
+struct SchedulerState {
+    active: bool,
+    waiting: [usize; WorkPriority::COUNT],
+}
+
+#[derive(Default)]
+struct WriterScheduler {
+    state: Mutex<SchedulerState>,
+    available: Condvar,
+}
+
+impl WriterScheduler {
+    fn acquire(self: &Arc<Self>, priority: WorkPriority) -> WriterLease {
+        let index = priority.index();
+        let mut state = self.state.lock();
+        state.waiting[index] += 1;
+        while state.active || state.waiting[..index].iter().any(|count| *count > 0) {
+            self.available.wait(&mut state);
+        }
+        state.waiting[index] -= 1;
+        state.active = true;
+        WriterLease {
+            scheduler: self.clone(),
+        }
+    }
+
+    fn has_higher_priority_waiter(&self, priority: WorkPriority) -> bool {
+        self.state.lock().waiting[..priority.index()]
+            .iter()
+            .any(|count| *count > 0)
+    }
+}
+
+struct WriterLease {
+    scheduler: Arc<WriterScheduler>,
+}
+
+impl Drop for WriterLease {
+    fn drop(&mut self) {
+        let mut state = self.scheduler.state.lock();
+        state.active = false;
+        self.scheduler.available.notify_all();
+    }
+}
+
 struct ReadPool {
     path: PathBuf,
     idle: Mutex<Vec<Connection>>,
@@ -76,6 +130,7 @@ pub struct LibraryDatabase {
     writer: Mutex<Connection>,
     readers: Arc<ReadPool>,
     publication_gate: RwLock<()>,
+    scheduler: Arc<WriterScheduler>,
 }
 
 impl LibraryDatabase {
@@ -111,6 +166,7 @@ impl LibraryDatabase {
                 maximum: DEFAULT_READERS,
             }),
             publication_gate: RwLock::new(()),
+            scheduler: Arc::new(WriterScheduler::default()),
         })
     }
 
@@ -182,11 +238,12 @@ impl LibraryDatabase {
 
     pub fn published_write<P, T, D, A>(
         &self,
-        _priority: WorkPriority,
+        priority: WorkPriority,
         capture: impl FnOnce(u64) -> Result<P>,
         operation: impl FnOnce(&Transaction<'_>, u64, u64, P) -> Result<(T, D)>,
         publish: impl FnOnce(u64, D) -> A,
     ) -> Result<(T, u64, A)> {
+        let _scheduler_lease = self.scheduler.acquire(priority);
         let mut writer = self.writer.lock();
         let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let base_revision = transaction.query_row(
@@ -207,6 +264,10 @@ impl LibraryDatabase {
             publish(revision, delta)
         };
         Ok((output, revision, after_publication))
+    }
+
+    pub fn has_higher_priority_waiter(&self, priority: WorkPriority) -> bool {
+        self.scheduler.has_higher_priority_waiter(priority)
     }
 
     pub fn allocate_id(transaction: &Transaction<'_>) -> Result<u32> {

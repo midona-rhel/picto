@@ -15,9 +15,8 @@ pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<
     } else {
         format!("{column}:({query})")
     };
-    let mut statement = connection.prepare_cached(
-        "SELECT CAST(root_id AS INTEGER) FROM root_fts WHERE root_fts MATCH ?1",
-    )?;
+    let mut statement = connection
+        .prepare_cached("SELECT CAST(root_id AS INTEGER) FROM root_fts WHERE root_fts MATCH ?1")?;
     let rows = statement.query_map([expression], |row| row.get::<_, u32>(0))?;
     Ok(rows.collect::<std::result::Result<RoaringBitmap, _>>()?)
 }
@@ -39,8 +38,7 @@ pub fn mark_dirty(
     Ok(())
 }
 
-pub fn settle_batch(connection: &mut Connection, limit: usize) -> Result<usize> {
-    let transaction = connection.transaction()?;
+pub fn settle_batch(transaction: &Transaction<'_>, limit: usize) -> Result<RoaringBitmap> {
     let roots = {
         let mut statement = transaction.prepare(
             "SELECT root_id FROM fts_dirty
@@ -51,7 +49,7 @@ pub fn settle_batch(connection: &mut Connection, limit: usize) -> Result<usize> 
             .collect::<std::result::Result<Vec<_>, _>>()?;
         values
     };
-    let mut unique = roots.into_iter().collect::<std::collections::BTreeSet<_>>();
+    let unique = roots.into_iter().collect::<std::collections::BTreeSet<_>>();
     for root_id in &unique {
         let content = transaction.query_row(
             "SELECT root.root_id, root.name, COALESCE(root.notes, ''), root.source_urls_json,
@@ -82,18 +80,13 @@ pub fn settle_batch(connection: &mut Connection, limit: usize) -> Result<usize> 
         }
         transaction.execute("DELETE FROM fts_dirty WHERE root_id = ?1", [root_id])?;
     }
-    let settled = unique.len();
-    unique.clear();
-    transaction.commit()?;
-    Ok(settled)
+    Ok(unique.into_iter().collect())
 }
 
 pub fn dirty_age_ms(connection: &Connection, now_ms: i64) -> Result<Option<u64>> {
-    let queued = connection.query_row(
-        "SELECT MIN(queued_at_ms) FROM fts_dirty",
-        [],
-        |row| row.get::<_, Option<i64>>(0),
-    )?;
+    let queued = connection.query_row("SELECT MIN(queued_at_ms) FROM fts_dirty", [], |row| {
+        row.get::<_, Option<i64>>(0)
+    })?;
     Ok(queued.map(|value| now_ms.saturating_sub(value) as u64))
 }
 
