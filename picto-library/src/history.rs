@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::bitmap::BitmapKey;
-use crate::model::RootId;
+use crate::model::{MediaId, RootId};
 use crate::ordering::OrderOwnerKind;
 
 pub const HISTORY_ENTRY_LIMIT: usize = 100;
@@ -38,6 +38,11 @@ pub enum SemanticChange {
         before: Arc<Vec<RootTextState>>,
         after: Arc<Vec<RootTextState>>,
     },
+    CollectionCover {
+        root_id: RootId,
+        before: MediaId,
+        after: MediaId,
+    },
     Compound(Vec<SemanticChange>),
 }
 
@@ -58,6 +63,7 @@ impl SemanticChange {
                         + 40
                 })
                 .sum(),
+            Self::CollectionCover { .. } => 64,
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }

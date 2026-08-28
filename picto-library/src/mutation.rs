@@ -9,7 +9,7 @@ use crate::database::WorkPriority;
 use crate::history::{HistoryEntry, SemanticChange, SessionHistory};
 use crate::ingest;
 use crate::model::{
-    FolderId, GroupRequest, Lifecycle, PreparedImport, Rating, RootId, SmartFolderId,
+    FolderId, GroupRequest, Lifecycle, MediaId, PreparedImport, Rating, RootId, SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -743,6 +743,168 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok((roots, receipt))
+    }
+
+    pub fn reorder_collection(
+        &self,
+        collection_id: RootId,
+        ordered_media_ids: Vec<MediaId>,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = snapshot
+                    .collection_orders
+                    .get(&collection_id)
+                    .ok_or_else(|| {
+                        LibraryError::InvalidInput(format!(
+                            "root {collection_id} is not a collection"
+                        ))
+                    })?
+                    .iter()
+                    .map(|media| media.0)
+                    .collect::<Vec<_>>();
+                let after = ordered_media_ids
+                    .iter()
+                    .map(|media| media.0)
+                    .collect::<Vec<_>>();
+                let before_members = before.iter().copied().collect::<RoaringBitmap>();
+                let after_members = after.iter().copied().collect::<RoaringBitmap>();
+                if before.len() != after.len() || before_members != after_members {
+                    return Err(LibraryError::InvalidInput(
+                        "collection order must contain every member exactly once".into(),
+                    ));
+                }
+                let mut next = (*snapshot).clone();
+                let history_entry = if before == after {
+                    None
+                } else {
+                    ordering::replace(
+                        transaction,
+                        revision,
+                        OrderOwnerKind::Collection,
+                        collection_id.0,
+                        &after,
+                    )?;
+                    Arc::make_mut(&mut next.collection_orders)
+                        .insert(collection_id, Arc::new(ordered_media_ids.clone()));
+                    transaction.execute(
+                        "INSERT INTO cloud_journal
+                             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                         VALUES (?1, 'collection.reorder', ?2, '{}', ?3)",
+                        rusqlite::params![
+                            revision as i64,
+                            crate::bitmap::encode(&[collection_id.0].into_iter().collect())?,
+                            changed_at_ms
+                        ],
+                    )?;
+                    Some(HistoryEntry::new(
+                        "Reorder collection",
+                        SemanticChange::Order {
+                            owner_kind: OrderOwnerKind::Collection,
+                            owner_id: collection_id.0,
+                            before: Arc::new(before),
+                            after: Arc::new(after),
+                        },
+                    ))
+                };
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["roots".into(), "collections".into()],
+                    [collection_id],
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: history_entry,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn set_collection_cover(
+        &self,
+        collection_id: RootId,
+        cover_media_id: MediaId,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = transaction
+                    .query_row(
+                        "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                        [collection_id.0],
+                        |row| row.get::<_, u32>(0).map(MediaId),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            LibraryError::NotFound(format!("collection {collection_id}"))
+                        }
+                        error => error.into(),
+                    })?;
+                let mut next = (*snapshot).clone();
+                let history_entry = if before == cover_media_id {
+                    None
+                } else {
+                    crate::group::set_cover(transaction, &mut next, collection_id, cover_media_id)?;
+                    let affected = [collection_id.0].into_iter().collect();
+                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                    transaction.execute(
+                        "INSERT INTO cloud_journal
+                             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                         VALUES (?1, 'collection.cover', ?2, ?3, ?4)",
+                        rusqlite::params![
+                            revision as i64,
+                            crate::bitmap::encode(&affected)?,
+                            serde_json::json!({"cover_media_id": cover_media_id.0}).to_string(),
+                            changed_at_ms
+                        ],
+                    )?;
+                    Some(HistoryEntry::new(
+                        "Set collection cover",
+                        SemanticChange::CollectionCover {
+                            root_id: collection_id,
+                            before,
+                            after: cover_media_id,
+                        },
+                    ))
+                };
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["roots".into(), "collections".into(), "smart-folders".into()],
+                    [collection_id],
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: history_entry,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     pub fn permanently_delete(
@@ -1660,6 +1822,38 @@ fn apply_semantic_change(
             }
             resources.insert("roots".into());
             resources.insert("search".into());
+        }
+        SemanticChange::CollectionCover {
+            root_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (*before, *after)
+            } else {
+                (*after, *before)
+            };
+            let current = transaction
+                .query_row(
+                    "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                    [root_id.0],
+                    |row| row.get::<_, u32>(0).map(MediaId),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("collection {root_id}"))
+                    }
+                    error => error.into(),
+                })?;
+            if current != expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because collection {root_id} cover changed"
+                )));
+            }
+            crate::group::set_cover(transaction, snapshot, *root_id, replacement)?;
+            affected.insert(root_id.0);
+            resources.insert("roots".into());
+            resources.insert("collections".into());
         }
         SemanticChange::Compound(changes) => {
             for change in changes {

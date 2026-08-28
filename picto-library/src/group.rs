@@ -24,6 +24,33 @@ pub(crate) struct UngroupResult {
     pub snapshot: ProjectionSnapshot,
 }
 
+pub(crate) fn set_cover(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    collection_id: RootId,
+    cover_media_id: MediaId,
+) -> Result<()> {
+    let members = snapshot
+        .collection_orders
+        .get(&collection_id)
+        .ok_or_else(|| {
+            LibraryError::InvalidInput(format!("root {collection_id} is not a collection"))
+        })?;
+    if !members.contains(&cover_media_id) {
+        return Err(LibraryError::InvalidInput(format!(
+            "media {cover_media_id} is not a member of collection {collection_id}"
+        )));
+    }
+    transaction.execute(
+        "UPDATE library_root SET cover_media_id = ?2 WHERE root_id = ?1",
+        params![collection_id.0, cover_media_id.0],
+    )?;
+    let facts = load_cover_facts(transaction, cover_media_id)?;
+    remove_cover_projection(snapshot, collection_id);
+    add_cover_projection(snapshot, collection_id, &facts);
+    Ok(())
+}
+
 struct RootInput {
     root_id: RootId,
     kind: RootKind,
@@ -732,6 +759,39 @@ fn add_collection_projection(
         .entry(RootKind::Collection)
         .or_default()
         .insert(id);
+    add_cover_projection(snapshot, collection_id, cover);
+    Arc::make_mut(&mut snapshot.tag_count).insert(id, tag_count);
+    Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
+    Arc::make_mut(&mut snapshot.total_bytes).insert(id, total_size);
+    Arc::make_mut(&mut snapshot.media_count).insert(id, media_count);
+    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
+    Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
+    if has_notes {
+        Arc::make_mut(&mut snapshot.notes_present).insert(id);
+    }
+    if has_urls {
+        Arc::make_mut(&mut snapshot.urls_present).insert(id);
+    }
+}
+
+fn remove_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId) {
+    for roots in Arc::make_mut(&mut snapshot.mime).values_mut() {
+        roots.remove(root_id.0);
+    }
+    for roots in Arc::make_mut(&mut snapshot.mime_family).values_mut() {
+        roots.remove(root_id.0);
+    }
+    for roots in Arc::make_mut(&mut snapshot.color_cells).values_mut() {
+        roots.remove(root_id.0);
+    }
+    Arc::make_mut(&mut snapshot.cover_palettes).remove(&root_id);
+    Arc::make_mut(&mut snapshot.width).remove(root_id.0);
+    Arc::make_mut(&mut snapshot.height).remove(root_id.0);
+    Arc::make_mut(&mut snapshot.duration).remove(root_id.0);
+}
+
+fn add_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId, cover: &CoverFacts) {
+    let id = root_id.0;
     Arc::make_mut(&mut snapshot.mime)
         .entry(cover.mime.clone())
         .or_default()
@@ -752,14 +812,7 @@ fn add_collection_projection(
             .or_default()
             .insert(id);
     }
-    Arc::make_mut(&mut snapshot.cover_palettes)
-        .insert(collection_id, Arc::new(cover.palette.clone()));
-    Arc::make_mut(&mut snapshot.tag_count).insert(id, tag_count);
-    Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
-    Arc::make_mut(&mut snapshot.total_bytes).insert(id, total_size);
-    Arc::make_mut(&mut snapshot.media_count).insert(id, media_count);
-    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
-    Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
+    Arc::make_mut(&mut snapshot.cover_palettes).insert(root_id, Arc::new(cover.palette.clone()));
     if let Some(value) = cover.width {
         Arc::make_mut(&mut snapshot.width).insert(id, value as u64);
     }
@@ -768,12 +821,6 @@ fn add_collection_projection(
     }
     if let Some(value) = cover.duration_ms {
         Arc::make_mut(&mut snapshot.duration).insert(id, value);
-    }
-    if has_notes {
-        Arc::make_mut(&mut snapshot.notes_present).insert(id);
-    }
-    if has_urls {
-        Arc::make_mut(&mut snapshot.urls_present).insert(id);
     }
 }
 

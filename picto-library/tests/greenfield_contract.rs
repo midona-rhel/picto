@@ -572,6 +572,64 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
         2
     );
 
+    library
+        .reorder_collection(
+            collection,
+            vec![
+                picto_library::MediaId(video.0),
+                picto_library::MediaId(image.0),
+            ],
+            1_700_000_000_150,
+        )
+        .unwrap();
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .map(|media| media.0)
+            .collect::<Vec<_>>(),
+        vec![video.0, image.0]
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .map(|media| media.0)
+            .collect::<Vec<_>>(),
+        vec![image.0, video.0]
+    );
+    library.redo().unwrap().unwrap();
+    library.undo().unwrap().unwrap();
+
+    library
+        .set_collection_cover(
+            collection,
+            picto_library::MediaId(video.0),
+            1_700_000_000_175,
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&mime_query("video/mp4"), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(&mime_query("image/png"), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&mime_query("image/png"), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+
     let (roots, _) = library
         .ungroup_collection(collection, 1_700_000_000_200)
         .unwrap();
