@@ -2692,6 +2692,7 @@ dependencies = [
  "ort",
  "palette",
  "parking_lot",
+ "picto_library",
  "rand 0.8.5",
  "regex",
  "reqwest",
