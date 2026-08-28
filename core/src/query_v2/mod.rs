@@ -192,7 +192,6 @@ pub struct SelectionSummary {
     pub selected_count: i64,
     pub sample_hashes: Vec<FileHash>,
     pub shared_tags: Vec<SelectionTagCount>,
-    pub top_tags: Vec<SelectionTagCount>,
     pub shared_folders: Vec<SelectionFolderInfo>,
     pub selected_collection_candidates: Vec<SelectionCollectionCandidate>,
     pub shared_notes: Option<String>,
@@ -456,7 +455,7 @@ fn selection_summary_connection(
     )?;
     let full_active_library =
         selected_active_count == selected_count && selected_count == active_count;
-    let (shared_tags, top_tags) = if full_active_library {
+    let shared_tags = if full_active_library {
         selection_tag_counts_full_library(connection, selected_count)?
     } else {
         selection_tag_counts_projected(connection, projection, &selected_roots, selected_count)?
@@ -492,7 +491,6 @@ fn selection_summary_connection(
         selected_count,
         sample_hashes,
         shared_tags,
-        top_tags,
         shared_folders,
         selected_collection_candidates,
         shared_notes,
@@ -709,9 +707,9 @@ impl Drop for MaterializedSelection<'_> {
 fn selection_tag_counts_full_library(
     connection: &Connection,
     selected_count: i64,
-) -> rusqlite::Result<(Vec<SelectionTagCount>, Vec<SelectionTagCount>)> {
+) -> rusqlite::Result<Vec<SelectionTagCount>> {
     if selected_count == 0 {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
     let mut statement = connection.prepare_cached(
         "SELECT CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
@@ -719,28 +717,18 @@ fn selection_tag_counts_full_library(
                 summary.visible_root_count
          FROM tag_summary summary
          JOIN tag ON tag.tag_id = summary.tag_id
-         WHERE summary.visible_root_count > 0
-         ORDER BY summary.visible_root_count DESC, tag.namespace, tag.subtag",
+         WHERE summary.visible_root_count = ?1
+         ORDER BY tag.namespace, tag.subtag",
     )?;
-    let rows = statement.query_map([], |row| {
-        Ok(SelectionTagCount {
-            tag: row.get(0)?,
-            count: row.get(1)?,
-        })
-    })?;
-    let mut shared = Vec::new();
-    let mut top = Vec::with_capacity(20);
-    for row in rows {
-        let row = row?;
-        if row.count == selected_count {
-            shared.push(row.clone());
-        }
-        if top.len() < 20 {
-            top.push(row);
-        }
-    }
-    shared.sort_by(|left, right| left.tag.cmp(&right.tag));
-    Ok((shared, top))
+    let shared = statement
+        .query_map([selected_count], |row| {
+            Ok(SelectionTagCount {
+                tag: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect();
+    shared
 }
 
 fn selection_tag_counts_projected(
@@ -748,18 +736,23 @@ fn selection_tag_counts_projected(
     projection: &ProjectionSelectionSnapshot,
     roots: &roaring::RoaringBitmap,
     selected_count: i64,
-) -> rusqlite::Result<(Vec<SelectionTagCount>, Vec<SelectionTagCount>)> {
+) -> rusqlite::Result<Vec<SelectionTagCount>> {
     if selected_count == 0 {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
-
-    let counts = projection.direct_tag_counts(roots);
-    if counts.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+    let Some(first_root) = roots.iter().next() else {
+        return Ok(Vec::new());
+    };
+    let tag_ids = projection
+        .tag_ids_for_root(i64::from(first_root))
+        .into_iter()
+        .filter(|tag_id| (roots - &projection.tag_bitmap(*tag_id)).is_empty())
+        .collect::<Vec<_>>();
+    if tag_ids.is_empty() {
+        return Ok(Vec::new());
     }
-    let encoded_ids =
-        serde_json::to_string(&counts.iter().map(|(tag_id, _)| *tag_id).collect::<Vec<_>>())
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let encoded_ids = serde_json::to_string(&tag_ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let names = connection
         .prepare_cached(
             "SELECT tag.tag_id,
@@ -774,29 +767,16 @@ fn selection_tag_counts_projected(
         })?
         .collect::<rusqlite::Result<HashMap<_, _>>>()?;
 
-    let mut rows = counts
+    let mut rows = tag_ids
         .into_iter()
-        .filter_map(|(tag_id, count)| {
-            names
-                .get(&tag_id)
-                .cloned()
-                .map(|tag| SelectionTagCount { tag, count })
+        .filter_map(|tag_id| names.get(&tag_id).cloned())
+        .map(|tag| SelectionTagCount {
+            tag,
+            count: selected_count,
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        right
-            .count
-            .cmp(&left.count)
-            .then_with(|| left.tag.cmp(&right.tag))
-    });
-    let mut shared = rows
-        .iter()
-        .filter(|row| row.count == selected_count)
-        .cloned()
-        .collect::<Vec<_>>();
-    shared.sort_by(|left, right| left.tag.cmp(&right.tag));
-    rows.truncate(20);
-    Ok((shared, rows))
+    rows.sort_by(|left, right| left.tag.cmp(&right.tag));
+    Ok(rows)
 }
 
 fn selection_shared_folders_projected(
@@ -3861,7 +3841,6 @@ mod tests {
 
         assert_eq!(explicit.selected_count, query.selected_count);
         assert_eq!(explicit.shared_tags, query.shared_tags);
-        assert_eq!(explicit.top_tags, query.top_tags);
         assert_eq!(explicit.shared_folders, query.shared_folders);
         assert_eq!(explicit.shared_notes, query.shared_notes);
         assert_eq!(explicit.shared_source_urls, query.shared_source_urls);
@@ -3969,8 +3948,6 @@ mod tests {
         assert!(!summary.stats.all_media_are_images);
         assert_eq!(summary.stats.total_size_bytes, Some(100));
         assert!(summary.shared_tags.is_empty());
-        assert_eq!(summary.top_tags[0].tag, "member-tag");
-        assert_eq!(summary.top_tags[0].count, 1);
         assert_eq!(summary.stats.rating_stats.min, Some(2));
         assert_eq!(summary.stats.rating_stats.max, Some(5));
         assert_eq!(summary.stats.rating_stats.shared, None);

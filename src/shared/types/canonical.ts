@@ -213,7 +213,6 @@ export interface SelectionSummary {
   selected_count: number;
   sample_hashes: string[];
   shared_tags: SelectionTagCount[];
-  top_tags: SelectionTagCount[];
   shared_folders: SelectionFolderInfo[];
   shared_notes: string | null;
   has_notes: boolean;

@@ -67,7 +67,6 @@ const summary = {
   selected_count: 2,
   sample_hashes: ['file-1', 'file-2'],
   shared_tags: [],
-  top_tags: [],
   shared_folders: [],
   shared_notes: null,
   has_notes: false,
