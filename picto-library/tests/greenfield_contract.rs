@@ -818,6 +818,105 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
 }
 
 #[test]
+fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (cover, _) = library
+        .ingest(&imported_as(
+            "derivative-cover",
+            "image/png",
+            LabColor {
+                l: 50.0,
+                a: 10.0,
+                b: 10.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (member, _) = library
+        .ingest(&imported_as(
+            "derivative-member",
+            "video/mp4",
+            LabColor {
+                l: 20.0,
+                a: -10.0,
+                b: -10.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![cover, member],
+            },
+            cover_root_id: cover,
+            winning_collection_id: None,
+            name: None,
+            modified_at_ms: 1_700_000_001_000,
+        })
+        .unwrap();
+    let mime_query = |mime: &str| RootQuery {
+        scope: ItemScope::All,
+        view: ViewQuerySpec {
+            filter: FilterExpr::Clause(FilterClause::Mime {
+                values: vec![mime.into()],
+                families: Vec::new(),
+            }),
+            sort: ItemSort::default(),
+        },
+    };
+
+    library
+        .update_media_facts(
+            picto_library::MediaId(member.0),
+            &picto_library::MediaFactsUpdate {
+                mime: Some("audio/mpeg".into()),
+                ..Default::default()
+            },
+            1_700_000_001_100,
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&mime_query("image/png"), &PageRequest::default())
+            .unwrap()
+            .items[0]
+            .root_id,
+        collection
+    );
+    assert_eq!(
+        library
+            .query(&mime_query("audio/mpeg"), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+
+    library
+        .update_media_facts(
+            picto_library::MediaId(cover.0),
+            &picto_library::MediaFactsUpdate {
+                mime: Some("application/pdf".into()),
+                width: Some(None),
+                height: Some(None),
+                ..Default::default()
+            },
+            1_700_000_001_200,
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&mime_query("application/pdf"), &PageRequest::default())
+            .unwrap()
+            .items[0]
+            .root_id,
+        collection
+    );
+    assert_eq!(library.history().state().entries, 0);
+}
+
+#[test]
 fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");

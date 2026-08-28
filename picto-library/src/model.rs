@@ -161,3 +161,14 @@ pub struct PendingBlobCleanup {
     pub file_id: FileId,
     pub file_path: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MediaFactsUpdate {
+    pub mime: Option<String>,
+    pub width: Option<Option<u32>>,
+    pub height: Option<Option<u32>>,
+    pub duration_ms: Option<Option<u64>>,
+    pub frame_count: Option<Option<u32>>,
+    pub perceptual_hash: Option<Option<String>>,
+    pub palette: Option<Vec<LabColor>>,
+}

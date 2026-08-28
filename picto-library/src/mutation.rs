@@ -9,7 +9,8 @@ use crate::database::WorkPriority;
 use crate::history::{HistoryEntry, SemanticChange, SessionHistory, TagDefinitionState};
 use crate::ingest;
 use crate::model::{
-    FolderId, GroupRequest, Lifecycle, MediaId, PreparedImport, Rating, RootId, SmartFolderId,
+    FolderId, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId, PreparedImport, Rating, RootId,
+    SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -424,6 +425,162 @@ impl Library {
                 crate::checkpoint::write(transaction, revision, &payload)
             })?;
         Ok(size)
+    }
+
+    pub fn update_media_facts(
+        &self,
+        media_id: MediaId,
+        update: &MediaFactsUpdate,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if update == &MediaFactsUpdate::default() {
+            return Err(LibraryError::InvalidInput(
+                "media facts update contains no changes".into(),
+            ));
+        }
+        let update = update.clone();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let (receipt, _, ()) = self.database.published_write(
+            WorkPriority::Maintenance,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let (
+                    file_id,
+                    mut mime,
+                    mut width,
+                    mut height,
+                    mut duration_ms,
+                    mut frame_count,
+                    mut perceptual_hash,
+                    mut palette,
+                ) = transaction
+                    .query_row(
+                        "SELECT file.file_id, file.mime, file.width, file.height,
+                                file.duration_ms, file.frame_count, file.perceptual_hash,
+                                file.palette_json
+                         FROM media_item media
+                         JOIN media_file file ON file.file_id = media.file_id
+                         WHERE media.media_id = ?1",
+                        [media_id.0],
+                        |row| {
+                            Ok((
+                                row.get::<_, u32>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, Option<u32>>(2)?,
+                                row.get::<_, Option<u32>>(3)?,
+                                row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                                row.get::<_, Option<u32>>(5)?,
+                                row.get::<_, Option<String>>(6)?,
+                                serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                            ))
+                        },
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            LibraryError::NotFound(format!("media {media_id}"))
+                        }
+                        error => error.into(),
+                    })?;
+                if let Some(value) = update.mime {
+                    if value.trim().is_empty() {
+                        return Err(LibraryError::InvalidInput("MIME is empty".into()));
+                    }
+                    mime = value;
+                }
+                if let Some(value) = update.width {
+                    width = value;
+                }
+                if let Some(value) = update.height {
+                    height = value;
+                }
+                if let Some(value) = update.duration_ms {
+                    duration_ms = value;
+                }
+                if let Some(value) = update.frame_count {
+                    frame_count = value;
+                }
+                if let Some(value) = update.perceptual_hash {
+                    perceptual_hash = value;
+                }
+                if let Some(value) = update.palette {
+                    palette = value;
+                }
+                transaction.execute(
+                    "UPDATE media_file
+                     SET mime = ?2, width = ?3, height = ?4, duration_ms = ?5,
+                         frame_count = ?6, perceptual_hash = ?7, palette_json = ?8
+                     WHERE file_id = ?1",
+                    rusqlite::params![
+                        file_id,
+                        mime,
+                        width,
+                        height,
+                        duration_ms.map(i64::try_from).transpose().map_err(|_| {
+                            LibraryError::InvalidInput("duration exceeds SQLite range".into())
+                        })?,
+                        frame_count,
+                        perceptual_hash,
+                        serde_json::to_string(&palette)?
+                    ],
+                )?;
+                let affected = {
+                    let mut statement = transaction.prepare_cached(
+                        "SELECT root.root_id
+                         FROM library_root root
+                         JOIN media_item media ON media.media_id = root.cover_media_id
+                         WHERE media.file_id = ?1",
+                    )?;
+                    let roots = statement
+                        .query_map([file_id], |row| row.get::<_, u32>(0))?
+                        .collect::<std::result::Result<RoaringBitmap, _>>()?;
+                    roots
+                };
+                let mut next = (*snapshot).clone();
+                for root_id in &affected {
+                    crate::group::refresh_cover_projection(
+                        transaction,
+                        &mut next,
+                        RootId(root_id),
+                    )?;
+                }
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &affected,
+                    crate::predicate::DependencyChange::CoverFacts,
+                )?;
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, 'media.facts', ?2, ?3, ?4)",
+                    rusqlite::params![
+                        revision as i64,
+                        crate::bitmap::encode(&affected)?,
+                        serde_json::json!({"media_id": media_id.0, "file_id": file_id}).to_string(),
+                        changed_at_ms
+                    ],
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["media".into(), "roots".into(), "smart-folders".into()],
+                    affected.iter().map(RootId),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok(receipt)
     }
 
     pub fn set_lifecycle(

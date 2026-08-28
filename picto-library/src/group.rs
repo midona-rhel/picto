@@ -51,6 +51,29 @@ pub(crate) fn set_cover(
     Ok(())
 }
 
+pub(crate) fn refresh_cover_projection(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    root_id: RootId,
+) -> Result<()> {
+    let cover_media_id = transaction
+        .query_row(
+            "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+            [root_id.0],
+            |row| row.get::<_, u32>(0).map(MediaId),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => {
+                LibraryError::NotFound(format!("root {root_id}"))
+            }
+            error => error.into(),
+        })?;
+    let facts = load_cover_facts(transaction, cover_media_id)?;
+    remove_cover_projection(snapshot, root_id);
+    add_cover_projection(snapshot, root_id, &facts);
+    Ok(())
+}
+
 struct RootInput {
     root_id: RootId,
     kind: RootKind,
