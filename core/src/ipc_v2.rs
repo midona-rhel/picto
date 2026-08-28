@@ -65,6 +65,7 @@ pub fn dispatch_library(
             let input: LimitInput = parse(args_json)?;
             read(application.duplicate_candidates(input.limit)?)
         }
+        "subscriptions.list" => read(crate::subscription_catalog_v2::list_library(application)?),
         "sources.list" => read(crate::auth_v2::sources()),
         "auth.credentials.list" => read(crate::auth_v2::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth_v2::list_library_health(application)?),
@@ -1903,6 +1904,60 @@ mod tests {
         assert!(dispatch_library(&application, "legacy.magic", "{}")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn greenfield_dispatch_reads_subscription_dtos_directly_from_schema_one() {
+        let (_directory, application, _) = greenfield_fixture();
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["subscriptions".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO subscription (
+                             subscription_id, subscription_key, name, schedule, paused,
+                             initial_post_limit, periodic_post_limit, created_at
+                         ) VALUES (7, 'subscription-7', 'Artists', 'manual', 0, 50, 25, 'now')",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO subscription_query (
+                             query_id, query_key, subscription_id, site_id, domain_key,
+                             query_kind, query_text, group_posts
+                         ) VALUES (
+                             9, 'query-9', 7, 'deviantart', 'deviantart',
+                             'search', 'artist:test', 1
+                         )",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO setting (key, value_json)
+                         VALUES ('subscription.7.destination',
+                                 '{\"target_folder_ids\":[],\"automatic_tags\":[\"creator:test\"]}')",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let output = dispatch_library(&application, "subscriptions.list", "{}")
+            .unwrap()
+            .unwrap();
+        let list: crate::subscription_catalog_v2::SubscriptionList =
+            serde_json::from_str(&output).unwrap();
+        assert_eq!(list.subscriptions.len(), 1);
+        let subscription = &list.subscriptions[0];
+        assert_eq!(subscription.subscription_id, 7);
+        assert_eq!(subscription.queries[0].query_id, 9);
+        assert_eq!(
+            subscription.destination.automatic_tags,
+            vec!["creator:test".to_string()]
+        );
+        assert_eq!(list.revision, application.library().database().revision().unwrap());
     }
 
     #[test]

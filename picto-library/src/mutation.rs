@@ -89,6 +89,18 @@ impl Library {
         self.database.read(priority, operation)
     }
 
+    pub fn auxiliary_read_consistent<T>(
+        &self,
+        priority: WorkPriority,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>, &ProjectionSnapshot) -> Result<T>,
+    ) -> Result<T> {
+        self.database.read_consistent(
+            priority,
+            |revision| self.capture_revision(revision),
+            |transaction, snapshot| operation(transaction, &snapshot),
+        )
+    }
+
     pub fn auxiliary_write<T>(
         &self,
         priority: WorkPriority,

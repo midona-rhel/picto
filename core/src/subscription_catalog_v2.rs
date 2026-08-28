@@ -11,6 +11,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::blob_store::{mime_to_extension, BlobStore};
+use crate::library_application::LibraryApplication;
 use crate::projection_v2::ProjectionSelectionSnapshot;
 use crate::subscriptions::gallery_dl_runner::{build_url, site_by_id};
 use crate::subscriptions::source_adapter::{
@@ -204,6 +205,166 @@ pub struct SubscriptionList {
     pub subscriptions: Vec<SubscriptionView>,
     #[ts(type = "number")]
     pub revision: u64,
+}
+
+pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList, String> {
+    application
+        .library()
+        .auxiliary_read_consistent(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection, projection| {
+                let mut subscriptions = query_subscription_views(connection)?;
+                let mut queries = query_views_by_subscription(connection)?;
+                let (mut destinations, mut covers) = subscription_settings_by_id_library(
+                    connection,
+                    application.blobs(),
+                    projection,
+                )?;
+                for subscription in &mut subscriptions {
+                    subscription.queries = queries
+                        .remove(&subscription.subscription_id)
+                        .unwrap_or_default();
+                    subscription.destination = destinations
+                        .remove(&subscription.subscription_id)
+                        .unwrap_or_default();
+                    if let Some(cover) = covers.remove(&subscription.subscription_id) {
+                        if let Some((selection, file_hash)) = cover {
+                            subscription.cover_file_hash = Some(file_hash);
+                            subscription.cover_focus_x = selection.focus_x;
+                            subscription.cover_focus_y = selection.focus_y;
+                            subscription.cover_zoom_percent = selection.zoom_percent;
+                        }
+                    }
+                }
+                Ok(SubscriptionList {
+                    subscriptions,
+                    revision: projection.revision,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn query_subscription_views(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<Vec<SubscriptionView>> {
+    connection
+        .prepare(
+            "WITH active_runs AS (
+                 SELECT *
+                 FROM subscription_run
+                 WHERE status IN ('pending', 'running')
+             ),
+             latest_run_ids AS (
+                 SELECT subscription_id, MAX(run_id) AS run_id
+                 FROM subscription_run
+                 GROUP BY subscription_id
+             ),
+             media_totals AS (
+                 SELECT ssp.subscription_id,
+                        COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                            THEN si.media_item_id END) AS media_count
+                 FROM subscription_source_post ssp
+                 JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                 GROUP BY ssp.subscription_id
+             ),
+             issue_totals AS (
+                 SELECT subscription_id, COUNT(*) AS issue_count
+                 FROM subscription_issue
+                 WHERE status = 'open'
+                 GROUP BY subscription_id
+             ),
+             traversed_posts AS (
+                 SELECT srq.run_id,
+                        COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+                 FROM active_runs active
+                 JOIN subscription_run_query srq ON srq.run_id = active.run_id
+                 JOIN subscription_source_post ssp
+                   ON ssp.query_id = srq.query_id
+                  AND ssp.last_seen_run_id = srq.run_id
+                 GROUP BY srq.run_id
+             ),
+             item_progress AS (
+                 SELECT srq.run_id,
+                        COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                            THEN si.source_post_id END) AS posts_added,
+                        COUNT(DISTINCT rsi.source_item_id) AS discovered,
+                        COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
+                                            THEN rsi.source_item_id END) AS downloaded,
+                        COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                            THEN rsi.source_item_id END) AS ingested,
+                        COUNT(DISTINCT CASE WHEN si.state = 'failed'
+                                            THEN rsi.source_item_id END) AS failed,
+                        COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+                                            THEN rsi.source_item_id END) AS deleted
+                 FROM active_runs active
+                 JOIN subscription_run_query srq ON srq.run_id = active.run_id
+                 LEFT JOIN subscription_run_source_item rsi
+                   ON rsi.run_query_id = srq.run_query_id
+                 LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
+                 GROUP BY srq.run_id
+             )
+             SELECT s.subscription_id, s.name, s.schedule, s.paused,
+                    s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
+                    active.run_id,
+                    CASE
+                        WHEN active.status = 'pending'
+                         AND active.failure_kind IN ('paused', 'inbox_full')
+                        THEN active.failure_kind
+                        ELSE COALESCE(active.status, latest.status)
+                    END,
+                    COALESCE(media_totals.media_count, 0),
+                    COALESCE(issue_totals.issue_count, 0),
+                    COALESCE(traversed_posts.posts_traversed, 0),
+                    COALESCE(item_progress.posts_added, 0),
+                    COALESCE(item_progress.discovered, 0),
+                    COALESCE(item_progress.downloaded, 0),
+                    COALESCE(item_progress.ingested, 0),
+                    COALESCE(item_progress.failed, 0),
+                    COALESCE(item_progress.deleted, 0)
+             FROM subscription s
+             LEFT JOIN active_runs active
+               ON active.subscription_id = s.subscription_id
+             LEFT JOIN latest_run_ids latest_id
+               ON latest_id.subscription_id = s.subscription_id
+             LEFT JOIN subscription_run latest ON latest.run_id = latest_id.run_id
+             LEFT JOIN media_totals USING (subscription_id)
+             LEFT JOIN issue_totals USING (subscription_id)
+             LEFT JOIN traversed_posts ON traversed_posts.run_id = active.run_id
+             LEFT JOIN item_progress ON item_progress.run_id = active.run_id
+             ORDER BY s.name, s.subscription_id",
+        )?
+        .query_map([], |row| {
+            Ok(SubscriptionView {
+                subscription_id: row.get(0)?,
+                name: row.get(1)?,
+                schedule: row.get(2)?,
+                paused: row.get(3)?,
+                initial_post_limit: row.get(4)?,
+                periodic_post_limit: row.get(5)?,
+                next_run_at: row.get(6)?,
+                active_run_id: row.get(7)?,
+                status: row.get(8)?,
+                media_count: row.get(9)?,
+                open_issue_count: row.get(10)?,
+                cover_file_hash: None,
+                cover_focus_x: 500,
+                cover_focus_y: 500,
+                cover_zoom_percent: 100,
+                progress: SubscriptionProgress {
+                    posts_traversed: row.get(11)?,
+                    posts_added: row.get(12)?,
+                    discovered: row.get(13)?,
+                    downloaded: row.get(14)?,
+                    ingested: row.get(15)?,
+                    failed: row.get(16)?,
+                    deleted: row.get(17)?,
+                },
+                destination: SubscriptionDestinationPolicy::default(),
+                queries: Vec::new(),
+            })
+        })?
+        .collect()
 }
 
 pub fn list(application: &Application) -> Result<SubscriptionList, String> {
@@ -1334,6 +1495,83 @@ fn subscription_destination_from_connection(
 }
 
 type SubscriptionCoverOverride = Option<(SubscriptionCoverSelection, String)>;
+
+fn subscription_settings_by_id_library(
+    connection: &rusqlite::Connection,
+    blobs: &BlobStore,
+    projection: &picto_library::ProjectionSnapshot,
+) -> rusqlite::Result<(
+    HashMap<i64, SubscriptionDestinationPolicy>,
+    HashMap<i64, SubscriptionCoverOverride>,
+)> {
+    let mut statement = connection.prepare(
+        "SELECT s.subscription_id, destination.value_json, cover.value_json,
+                CASE WHEN json_valid(cover.value_json)
+                     THEN CAST(json_extract(cover.value_json, '$.media_item_id') AS INTEGER)
+                END,
+                (
+                    SELECT file.content_hash
+                    FROM subscription_source_post ssp
+                    JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                    JOIN media_item media ON media.media_id = si.media_item_id
+                    JOIN media_file file ON file.file_id = media.file_id
+                    WHERE ssp.subscription_id = s.subscription_id
+                      AND si.media_item_id = CASE
+                          WHEN json_valid(cover.value_json)
+                          THEN CAST(json_extract(cover.value_json, '$.media_item_id') AS INTEGER)
+                      END
+                      AND si.state = 'ingested'
+                    LIMIT 1
+                )
+         FROM subscription s
+         LEFT JOIN setting destination
+           ON destination.key = 'subscription.' || s.subscription_id || '.destination'
+         LEFT JOIN setting cover
+           ON cover.key = 'subscription.' || s.subscription_id || '.cover'
+         ORDER BY s.subscription_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })?;
+    let mut destinations = HashMap::new();
+    let mut covers = HashMap::new();
+    for row in rows {
+        let (subscription_id, destination_json, cover_json, media_item_id, mut source_file_hash) =
+            row?;
+        let destination = destination_json
+            .map(|json| {
+                let policy = serde_json::from_str(&json).map_err(|error| {
+                    invalid(format!("invalid subscription destination: {error}"))
+                })?;
+                normalize_destination_policy(&policy).map_err(invalid)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        destinations.insert(subscription_id, destination);
+        if let Some(json) = cover_json {
+            let is_active = media_item_id
+                .and_then(|media_item_id| u32::try_from(media_item_id).ok())
+                .and_then(|media_item_id| projection.media_owner.get(media_item_id))
+                .is_some_and(|root_id| projection.active().contains(root_id.0));
+            if !is_active {
+                source_file_hash = None;
+            }
+            let stored: StoredSubscriptionCover = serde_json::from_str(&json)
+                .map_err(|error| invalid(format!("invalid subscription cover: {error}")))?;
+            covers.insert(
+                subscription_id,
+                resolve_stored_cover(blobs, stored, source_file_hash)?,
+            );
+        }
+    }
+    Ok((destinations, covers))
+}
 
 fn subscription_settings_by_id(
     connection: &rusqlite::Connection,
