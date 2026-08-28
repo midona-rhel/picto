@@ -142,6 +142,77 @@ impl Library {
         )
     }
 
+    pub fn pending_cloud_journal(&self, limit: usize) -> Result<Vec<crate::CloudJournalRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.database.read(WorkPriority::Cloud, |connection| {
+            let mut statement = connection.prepare(
+                "SELECT journal_id, revision, operation_kind, target_bitmap,
+                        payload_json, created_at_ms
+                 FROM cloud_journal
+                 WHERE expanded_at_ms IS NULL
+                 ORDER BY journal_id
+                 LIMIT ?1",
+            )?;
+            let rows = statement
+                .query_map([limit.min(1000) as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as u64,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<Vec<u8>>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(
+                    |(journal_id, revision, operation_kind, targets, payload, created_at_ms)| {
+                        let target_root_ids = targets
+                            .map(|payload| {
+                                RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload))
+                            })
+                            .transpose()?;
+                        Ok(crate::CloudJournalRecord {
+                            journal_id,
+                            revision,
+                            operation_kind,
+                            target_root_ids,
+                            payload: serde_json::from_str(&payload)?,
+                            created_at_ms,
+                        })
+                    },
+                )
+                .collect()
+        })
+    }
+
+    pub fn mark_cloud_journal_expanded(
+        &self,
+        journal_ids: &[u64],
+        expanded_at_ms: i64,
+    ) -> Result<()> {
+        if journal_ids.is_empty() {
+            return Ok(());
+        }
+        self.database
+            .maintenance_write(WorkPriority::Cloud, |transaction| {
+                let mut statement = transaction.prepare_cached(
+                    "UPDATE cloud_journal SET expanded_at_ms = ?2
+                     WHERE journal_id = ?1 AND expanded_at_ms IS NULL",
+                )?;
+                for journal_id in journal_ids {
+                    let journal_id = i64::try_from(*journal_id).map_err(|_| {
+                        LibraryError::InvalidInput("cloud journal ID exceeds SQLite range".into())
+                    })?;
+                    statement.execute(rusqlite::params![journal_id, expanded_at_ms])?;
+                }
+                Ok(())
+            })
+    }
+
     pub fn create_smart_folder(
         &self,
         name: &str,
@@ -149,6 +220,7 @@ impl Library {
         view: crate::predicate::ViewQuerySpec,
     ) -> Result<(SmartFolderId, MutationReceipt)> {
         let name = required_name("smart folder", name)?;
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let ((smart_folder_id, receipt), _, ()) = self.database.published_write(
@@ -175,6 +247,14 @@ impl Library {
                         serde_json::to_string(&view)?,
                         display_order
                     ],
+                )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "smart_folder.create",
+                    None,
+                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
+                    changed_at_ms,
                 )?;
                 let mut next = (*snapshot).clone();
                 crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
@@ -205,6 +285,7 @@ impl Library {
         view: crate::predicate::ViewQuerySpec,
     ) -> Result<MutationReceipt> {
         let name = required_name("smart folder", name)?;
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let (receipt, _, ()) = self.database.published_write(
@@ -229,6 +310,14 @@ impl Library {
                         smart_folder_id.0
                     )));
                 }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "smart_folder.update",
+                    None,
+                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
+                    changed_at_ms,
+                )?;
                 let mut next = (*snapshot).clone();
                 crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
                 next.revision = revision;
@@ -254,6 +343,7 @@ impl Library {
     }
 
     pub fn delete_smart_folder(&self, smart_folder_id: SmartFolderId) -> Result<MutationReceipt> {
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let (receipt, _, ()) = self.database.published_write(
@@ -280,6 +370,14 @@ impl Library {
                         smart_folder_id.0
                     )));
                 }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "smart_folder.delete",
+                    None,
+                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
+                    changed_at_ms,
+                )?;
                 let mut next = (*snapshot).clone();
                 crate::smart::remove(&mut next, smart_folder_id);
                 next.revision = revision;
@@ -344,6 +442,18 @@ impl Library {
                 ingest::persist_touched(transaction, revision, &next, bitmap_keys, folder_ids)?;
                 let affected = root_ids.iter().map(|root| root.0).collect();
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "root.ingest",
+                    Some(&affected),
+                    serde_json::json!({"count": root_ids.len()}),
+                    inputs
+                        .iter()
+                        .map(|input| input.imported_at_ms)
+                        .max()
+                        .unwrap_or_else(now_ms),
+                )?;
                 let receipt =
                     PublicationCoordinator::receipt(revision, resources, root_ids.iter().copied());
                 let outputs = root_ids
@@ -753,6 +863,7 @@ impl Library {
 
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
         let name = required_name("tag", name)?;
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -776,6 +887,14 @@ impl Library {
                 }
                 let mut next = (*snapshot).clone();
                 rename_tag_definition(transaction, &mut next, tag_id, &name)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "tag.rename",
+                    None,
+                    serde_json::json!({"tag_id": tag_id.0, "name": name}),
+                    changed_at_ms,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -833,6 +952,7 @@ impl Library {
             return Err(LibraryError::InvalidInput("folder name is empty".into()));
         }
         let name = name.trim().to_owned();
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -872,6 +992,18 @@ impl Library {
                         display_order
                     ],
                 )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.create",
+                    None,
+                    serde_json::json!({
+                        "folder_id": folder_id.0,
+                        "parent_id": parent_id.map(|id| id.0),
+                        "name": name,
+                    }),
+                    changed_at_ms,
+                )?;
                 let mut next = (*snapshot).clone();
                 Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
                 Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new());
@@ -894,6 +1026,68 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok((folder_id, receipt))
+    }
+
+    pub fn rename_folder(&self, folder_id: FolderId, name: &str) -> Result<MutationReceipt> {
+        let name = required_name("folder", name)?;
+        let changed_at_ms = now_ms();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = transaction
+                    .query_row(
+                        "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                        [folder_id.0],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            LibraryError::NotFound(format!("folder {}", folder_id.0))
+                        }
+                        error => error.into(),
+                    })?;
+                rename_folder_definition(transaction, folder_id, &name)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.rename",
+                    None,
+                    serde_json::json!({"folder_id": folder_id.0, "name": name}),
+                    changed_at_ms,
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (before != name).then(|| {
+                            HistoryEntry::new(
+                                "Rename folder",
+                                SemanticChange::FolderName {
+                                    folder_id,
+                                    before,
+                                    after: name.clone(),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     pub fn set_folder_auto_tags(
@@ -1719,6 +1913,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let target = target.clone();
         let name = name.to_owned();
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -1799,6 +1994,14 @@ impl Library {
                     &changed,
                     crate::predicate::DependencyChange::Tag(tag_id),
                 )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    if add { "tag.add" } else { "tag.remove" },
+                    Some(&changed),
+                    serde_json::json!({"tag_id": tag_id.0}),
+                    changed_at_ms,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1839,6 +2042,11 @@ impl Library {
         modified_at_ms: i64,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
+        let operation_kind = match &mutation {
+            TextMutation::Rename(_) => "root.rename",
+            TextMutation::Notes(_) => "root.notes",
+            TextMutation::SourceUrls(_) => "root.source_urls",
+        };
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -1926,6 +2134,14 @@ impl Library {
                     &selection,
                     crate::predicate::DependencyChange::RootText,
                 )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    operation_kind,
+                    Some(&selection),
+                    serde_json::json!({}),
+                    modified_at_ms,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1961,6 +2177,7 @@ impl Library {
         add: bool,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -2080,6 +2297,14 @@ impl Library {
                         crate::predicate::DependencyChange::Folder(folder_id),
                     )?;
                 }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    if add { "folder.add" } else { "folder.remove" },
+                    Some(&changed),
+                    serde_json::json!({"folder_id": folder_id.0}),
+                    changed_at_ms,
+                )?;
                 next.revision = revision;
                 let mut resources = vec!["roots".into(), "folders".into(), "sidebar".into()];
                 if auto_tagged {
@@ -2125,6 +2350,7 @@ impl Library {
         resources: Vec<String>,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -2170,6 +2396,20 @@ impl Library {
                     &selection,
                     smart_change,
                 )?;
+                if !changes.is_empty() {
+                    insert_cloud_journal(
+                        transaction,
+                        revision,
+                        match domain {
+                            BitmapDomain::Lifecycle => "root.lifecycle",
+                            BitmapDomain::Rating => "root.rating",
+                            BitmapDomain::Tag => "tag.partition",
+                        },
+                        Some(&selection),
+                        serde_json::json!({"destination": destination}),
+                        changed_at_ms,
+                    )?;
+                }
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -2195,6 +2435,7 @@ impl Library {
 
     fn replay_history(&self, entry: &HistoryEntry, use_after: bool) -> Result<MutationReceipt> {
         let change = entry.change.clone();
+        let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let (receipt, _, ()) = self.database.published_write(
@@ -2214,6 +2455,18 @@ impl Library {
                     &mut resources,
                 )?;
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    if use_after {
+                        "history.redo"
+                    } else {
+                        "history.undo"
+                    },
+                    (!affected.is_empty()).then_some(&affected),
+                    serde_json::json!({"label": entry.label}),
+                    changed_at_ms,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -2671,6 +2924,38 @@ fn apply_semantic_change(
             )?;
             resources.insert("folders".into());
         }
+        SemanticChange::FolderName {
+            folder_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let current = transaction
+                .query_row(
+                    "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("folder {}", folder_id.0))
+                    }
+                    error => error.into(),
+                })?;
+            if &current != expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because folder {} was renamed",
+                    folder_id.0
+                )));
+            }
+            rename_folder_definition(transaction, *folder_id, replacement)?;
+            resources.insert("folders".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::Compound(changes) => {
             if use_after {
                 for change in changes {
@@ -2833,6 +3118,38 @@ fn tag_subname(name: &str) -> &str {
     name.split_once(':').map_or(name, |(_, subname)| subname)
 }
 
+fn rename_folder_definition(
+    transaction: &rusqlite::Transaction<'_>,
+    folder_id: FolderId,
+    name: &str,
+) -> Result<()> {
+    let duplicate = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM folder_definition candidate
+             JOIN folder_definition current ON current.folder_id = ?1
+             WHERE candidate.parent_id IS current.parent_id
+               AND candidate.name = ?2
+               AND candidate.folder_id != current.folder_id
+         )",
+        rusqlite::params![folder_id.0, name],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if duplicate {
+        return Err(LibraryError::InvalidInput(format!(
+            "a sibling folder named {name} already exists"
+        )));
+    }
+    if transaction.execute(
+        "UPDATE folder_definition SET name = ?2 WHERE folder_id = ?1",
+        rusqlite::params![folder_id.0, name],
+    )? == 0
+    {
+        return Err(LibraryError::NotFound(format!("folder {}", folder_id.0)));
+    }
+    Ok(())
+}
+
 fn required_name(kind: &str, name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
@@ -2921,4 +3238,34 @@ fn stage_delete_ids(
         insert.execute([id])?;
     }
     Ok(())
+}
+
+fn insert_cloud_journal(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    operation_kind: &str,
+    targets: Option<&RoaringBitmap>,
+    payload: serde_json::Value,
+    created_at_ms: i64,
+) -> Result<()> {
+    let target_bitmap = targets.map(crate::bitmap::encode).transpose()?;
+    transaction.execute(
+        "INSERT INTO cloud_journal
+             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            revision as i64,
+            operation_kind,
+            target_bitmap,
+            payload.to_string(),
+            created_at_ms
+        ],
+    )?;
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as i64)
 }

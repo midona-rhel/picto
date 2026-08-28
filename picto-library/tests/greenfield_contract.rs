@@ -386,6 +386,41 @@ fn undo_and_redo_are_process_memory_only_and_restore_bitmap_state() {
     assert_eq!(reopened.history().state().entries, 0);
 }
 
+#[test]
+fn cloud_reads_compact_semantic_journal_without_advancing_library_revision() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("cloud-journal", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            "cloud:tag",
+        )
+        .unwrap();
+    let revision = library.database().revision().unwrap();
+    let pending = library.pending_cloud_journal(10).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|record| record.operation_kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root.ingest", "tag.add"]
+    );
+    assert!(pending[1]
+        .target_root_ids
+        .as_ref()
+        .is_some_and(|roots| roots.contains(root.0)));
+    library
+        .mark_cloud_journal_expanded(&[pending[0].journal_id], 1_700_000_005_000)
+        .unwrap();
+    assert_eq!(library.database().revision().unwrap(), revision);
+    assert_eq!(library.pending_cloud_journal(10).unwrap().len(), 1);
+}
+
 fn root_tag_count(library: &Library, root_id: picto_library::RootId) -> usize {
     library
         .projections()
@@ -418,6 +453,24 @@ fn folder_auto_tags(library: &Library, folder_id: picto_library::FolderId) -> Ve
         .unwrap()
 }
 
+fn folder_name(library: &Library, folder_id: picto_library::FolderId) -> String {
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                        [folder_id.0],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            },
+        )
+        .unwrap()
+}
+
 #[test]
 fn folder_vector_is_the_only_folder_membership_authority() {
     let directory = TempDir::new().unwrap();
@@ -429,6 +482,10 @@ fn folder_vector_is_the_only_folder_membership_authority() {
         .ingest(&imported("two", Lifecycle::Active, &[]))
         .unwrap();
     let (folder, _) = library.create_folder("Reference", None).unwrap();
+    library.rename_folder(folder, "Renamed reference").unwrap();
+    assert_eq!(folder_name(&library, folder), "Renamed reference");
+    library.undo().unwrap().unwrap();
+    assert_eq!(folder_name(&library, folder), "Reference");
     library
         .add_to_folder(
             &SelectionTarget::Explicit {
@@ -620,6 +677,21 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
         .iter()
         .all(|(_, receipt)| receipt.revision == outputs[0].1.revision));
     assert_eq!(outputs[0].1.revision, before + 1);
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM cloud_journal", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    1
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
 
     assert!(library.settle_fts(64).unwrap().is_some());
     let text_view = ViewQuerySpec {
@@ -743,6 +815,12 @@ fn prepared_collection_import_never_publishes_standalone_members() {
                         [],
                         |row| row.get::<_, i64>(0),
                     )?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM cloud_journal", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
                     1
                 );
                 Ok(())

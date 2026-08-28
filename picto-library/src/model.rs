@@ -189,3 +189,13 @@ pub struct MediaFactsUpdate {
     pub perceptual_hash: Option<Option<String>>,
     pub palette: Option<Vec<LabColor>>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloudJournalRecord {
+    pub journal_id: u64,
+    pub revision: u64,
+    pub operation_kind: String,
+    pub target_root_ids: Option<roaring::RoaringBitmap>,
+    pub payload: serde_json::Value,
+    pub created_at_ms: i64,
+}

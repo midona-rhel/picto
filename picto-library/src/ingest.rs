@@ -230,16 +230,6 @@ pub(crate) fn insert_one(
     }
 
     fts::mark_one(transaction, root_id, input.imported_at_ms)?;
-    transaction.execute(
-        "INSERT INTO cloud_journal
-             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-         VALUES (?1, 'root.ingest', NULL, ?2, ?3)",
-        params![
-            revision as i64,
-            serde_json::json!({"root_id": root_id.0, "stable_key": input.stable_key}).to_string(),
-            input.imported_at_ms
-        ],
-    )?;
     snapshot.revision = revision;
     Ok(IngestResult {
         root_id,

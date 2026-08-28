@@ -75,6 +75,11 @@ pub enum SemanticChange {
         before: Arc<RoaringBitmap>,
         after: Arc<RoaringBitmap>,
     },
+    FolderName {
+        folder_id: crate::FolderId,
+        before: String,
+        after: String,
+    },
     Compound(Vec<SemanticChange>),
 }
 
@@ -124,6 +129,7 @@ impl SemanticChange {
             Self::FolderAutoTags { before, after, .. } => {
                 before.serialized_size() + after.serialized_size() + 32
             }
+            Self::FolderName { before, after, .. } => before.len() + after.len() + 32,
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }
