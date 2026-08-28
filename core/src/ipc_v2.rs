@@ -69,6 +69,14 @@ pub fn dispatch_library(
             let input: ApplyTagsInput = parse(args_json)?;
             read(application.apply_tags(&input.target, &input.tags, input.add)?)
         }
+        "items.rename" => {
+            let input: ItemNameInput = parse(args_json)?;
+            read(application.rename_item(input.item_id.0, &input.name)?)
+        }
+        "items.patch_metadata" => {
+            let input: PatchMetadataInput = parse(args_json)?;
+            read(application.patch_metadata(&input.target, &input.patch)?)
+        }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
@@ -1537,6 +1545,23 @@ mod tests {
                 .len(),
             2
         );
+
+        let revision = application.library().database().revision().unwrap();
+        let metadata = dispatch_library(
+            &application,
+            "items.patch_metadata",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"patch":{{"rating":5,"notes":"IPC note","source_urls":["https://example.test/ipc"]}}}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let receipt: MutationReceipt = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(receipt.revision, revision + 1);
+        let details = application.library().details(root_id).unwrap();
+        assert_eq!(details.rating, picto_library::Rating::Five);
+        assert_eq!(details.root.notes.as_deref(), Some("IPC note"));
 
         dispatch_library(
             &application,

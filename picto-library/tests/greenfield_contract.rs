@@ -265,6 +265,55 @@ fn multiple_manual_tags_use_one_atomic_publication_and_one_inverse() {
 }
 
 #[test]
+fn compound_metadata_patch_settles_once_and_undoes_as_one_action() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported("metadata-one", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("metadata-two", Lifecycle::Active, &[]))
+        .unwrap();
+    let before_revision = library.database().revision().unwrap();
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![first, second],
+    };
+
+    let receipt = library
+        .patch_metadata(
+            &target,
+            Some(Rating::Five),
+            Some(Some("shared note".into())),
+            Some(vec!["https://example.test/shared".into()]),
+            1_800_000_000_000,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.revision, before_revision + 1);
+    assert_eq!(library.history().state().entries, 1);
+    for root in [first, second] {
+        let details = library.details(root).unwrap();
+        assert_eq!(details.rating, Rating::Five);
+        assert_eq!(details.root.notes.as_deref(), Some("shared note"));
+        assert_eq!(details.root.source_urls, ["https://example.test/shared"]);
+    }
+
+    library.undo().unwrap();
+    for root in [first, second] {
+        let details = library.details(root).unwrap();
+        assert_eq!(details.rating, Rating::Unrated);
+        assert_eq!(details.root.notes, None);
+        assert_eq!(
+            details.root.source_urls,
+            [format!(
+                "https://example.test/{}",
+                details.root.name.trim_end_matches(".png")
+            )]
+        );
+    }
+}
+
+#[test]
 fn tag_rename_changes_only_the_dictionary() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

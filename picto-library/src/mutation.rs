@@ -1358,6 +1358,159 @@ impl Library {
         )
     }
 
+    pub fn patch_metadata(
+        &self,
+        target: &SelectionTarget,
+        rating: Option<Rating>,
+        notes: Option<Option<String>>,
+        source_urls: Option<Vec<String>>,
+        modified_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if rating.is_none() && notes.is_none() && source_urls.is_none() {
+            return Err(LibraryError::InvalidInput(
+                "metadata patch does not change a supported field".into(),
+            ));
+        }
+        let target = target.clone();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+                let mut next = (*snapshot).clone();
+                let mut changes = Vec::new();
+                let mut resources = BTreeSet::from(["roots".to_string()]);
+
+                if let Some(rating) = rating {
+                    for value in Rating::ALL {
+                        let key = BitmapKey {
+                            domain: BitmapDomain::Rating,
+                            key_id: value.bitmap_key(),
+                        };
+                        let before = projection_bitmap(&next, key);
+                        let mut after = before.clone();
+                        if value == rating {
+                            after |= &selection;
+                        } else {
+                            after -= &selection;
+                        }
+                        if before == after {
+                            continue;
+                        }
+                        set_projection_bitmap(&mut next, key, after.clone());
+                        bitmap::replace(transaction, revision, key, &after)?;
+                        changes.push(SemanticChange::Bitmap {
+                            key,
+                            before: Arc::new(before),
+                            after: Arc::new(after),
+                        });
+                    }
+                    resources.insert("ratings".into());
+                }
+
+                if notes.is_some() || source_urls.is_some() {
+                    let before = load_root_text(transaction, &selection)?;
+                    let mut after = before.clone();
+                    for state in &mut after {
+                        if let Some(notes) = &notes {
+                            state.notes.clone_from(notes);
+                        }
+                        if let Some(source_urls) = &source_urls {
+                            state.source_urls.clone_from(source_urls);
+                        }
+                        state.modified_at_ms = modified_at_ms;
+                    }
+                    if before != after {
+                        let mut update = transaction.prepare_cached(
+                            "UPDATE library_root
+                             SET notes = ?2, source_urls_json = ?3, modified_at_ms = ?4
+                             WHERE root_id = ?1",
+                        )?;
+                        for state in &after {
+                            update.execute(rusqlite::params![
+                                state.root_id.0,
+                                state.notes,
+                                serde_json::to_string(&state.source_urls)?,
+                                state.modified_at_ms,
+                            ])?;
+                            Arc::make_mut(&mut next.modified_at)
+                                .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
+                            if state.notes.is_some() {
+                                Arc::make_mut(&mut next.notes_present).insert(state.root_id.0);
+                            } else {
+                                Arc::make_mut(&mut next.notes_present).remove(state.root_id.0);
+                            }
+                            if state.source_urls.is_empty() {
+                                Arc::make_mut(&mut next.urls_present).remove(state.root_id.0);
+                            } else {
+                                Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
+                            }
+                        }
+                        drop(update);
+                        crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;
+                        changes.push(SemanticChange::RootText {
+                            before: Arc::new(before),
+                            after: Arc::new(after),
+                        });
+                        resources.insert("search".into());
+                    }
+                }
+
+                if changes.is_empty() {
+                    next.revision = revision;
+                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                    return Ok((
+                        receipt.clone(),
+                        PublishedDelta {
+                            snapshot: next,
+                            receipt,
+                            history: None,
+                        },
+                    ));
+                }
+                crate::smart::settle_affected(transaction, &mut next, &selection)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "root.metadata.patch",
+                    Some(&selection),
+                    serde_json::json!({
+                        "rating": rating.map(|value| value.bitmap_key()),
+                        "notes": notes.is_some(),
+                        "source_urls": source_urls.is_some(),
+                    }),
+                    modified_at_ms,
+                )?;
+                resources.insert("smart-folders".into());
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    resources,
+                    selection.iter().map(RootId),
+                );
+                let history = HistoryEntry::for_command(
+                    "items.patch_metadata",
+                    "Change metadata",
+                    SemanticChange::Compound(changes),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(history),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
     pub fn rename_root(
         &self,
         root_id: RootId,

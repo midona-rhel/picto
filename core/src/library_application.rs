@@ -172,6 +172,43 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn rename_item(
+        &self,
+        item_id: i64,
+        name: &str,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        self.library
+            .rename_root(
+                checked_root_id(item_id)?,
+                name,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn patch_metadata(
+        &self,
+        target: &ItemTarget,
+        patch: &crate::operations_v2::MediaMetadataPatch,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let target = crate::library_v1::target(&self.library, target)?;
+        let rating = patch
+            .rating
+            .map(|value| value.map_or(Ok(picto_library::Rating::Unrated), checked_rating))
+            .transpose()?;
+        self.library
+            .patch_metadata(
+                &target,
+                rating,
+                patch.notes.clone(),
+                patch.source_urls.clone(),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self
@@ -332,6 +369,17 @@ fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
 
 fn checked_count(value: u64) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("count {value} exceeds the renderer integer domain"))
+}
+
+fn checked_rating(value: i64) -> Result<picto_library::Rating, String> {
+    match value {
+        1 => Ok(picto_library::Rating::One),
+        2 => Ok(picto_library::Rating::Two),
+        3 => Ok(picto_library::Rating::Three),
+        4 => Ok(picto_library::Rating::Four),
+        5 => Ok(picto_library::Rating::Five),
+        _ => Err(format!("rating {value} is outside the supported range")),
+    }
 }
 
 fn map_history_state(value: picto_library::history::HistoryState) -> LibraryHistoryState {
