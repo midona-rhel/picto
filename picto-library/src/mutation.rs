@@ -81,6 +81,48 @@ impl Library {
         &self.history
     }
 
+    pub fn auxiliary_read<T>(
+        &self,
+        priority: WorkPriority,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        self.database.read(priority, operation)
+    }
+
+    pub fn auxiliary_write<T>(
+        &self,
+        priority: WorkPriority,
+        resources: impl IntoIterator<Item = String>,
+        item_ids: impl IntoIterator<Item = RootId>,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>, u64) -> Result<T>,
+    ) -> Result<(T, MutationReceipt)> {
+        let resources = resources.into_iter().collect::<Vec<_>>();
+        let item_ids = item_ids.into_iter().collect::<Vec<_>>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let ((output, receipt), _, _) = self.database.published_write(
+            priority,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let output = operation(transaction, revision)?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt =
+                    PublicationCoordinator::receipt(revision, resources, item_ids);
+                Ok((
+                    (output, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        Ok((output, receipt))
+    }
+
     pub fn undo(&self) -> Result<Option<MutationReceipt>> {
         let Some(entry) = self.history.take_undo() else {
             return Ok(None);

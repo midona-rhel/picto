@@ -938,4 +938,44 @@ mod tests {
         assert_eq!(reopened.history_state().undo, None);
         assert_eq!(reopened.history_state().redo, None);
     }
+
+    #[test]
+    fn auxiliary_writes_share_revision_and_publication_without_root_translation() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path()).unwrap();
+        let before = application.library().database().revision().unwrap();
+        let (_, receipt) = application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["settings".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO setting(key, value_json) VALUES ('application', '{}')",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.revision, before + 1);
+        assert_eq!(application.library().projections().snapshot().revision, receipt.revision);
+        assert_eq!(
+            application
+                .library()
+                .auxiliary_read(
+                    picto_library::database::WorkPriority::VisibleRead,
+                    |connection| connection
+                        .query_row(
+                            "SELECT value_json FROM setting WHERE key = 'application'",
+                            [],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .map_err(Into::into),
+                )
+                .unwrap(),
+            "{}"
+        );
+    }
 }
