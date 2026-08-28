@@ -848,6 +848,20 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn resolve_duplicate_automatically(
+        &self,
+        file_id_a: picto_library::FileId,
+        file_id_b: picto_library::FileId,
+    ) -> Result<Option<picto_library::DuplicateResolutionResult>, String> {
+        self.library
+            .resolve_duplicate_automatically(
+                file_id_a,
+                file_id_b,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())
+    }
+
     pub fn sidebar_counts(&self) -> Result<picto_library::SidebarCounts, String> {
         self.library
             .sidebar_counts()

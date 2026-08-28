@@ -399,6 +399,10 @@ pub fn dispatch_library(
                 input.choice,
             )?)
         }
+        "duplicates.resolve_automatically" => {
+            let input: LibraryAutomaticDuplicateInput = parse(args_json)?;
+            read(application.resolve_duplicate_automatically(input.file_id_a, input.file_id_b)?)
+        }
         "settings.get" => read(application.application_settings()?),
         "settings.view.get" => {
             let input: ScopeInput = parse(args_json)?;
@@ -1566,6 +1570,11 @@ struct LibraryResolveDuplicateInput {
     file_id_a: picto_library::FileId,
     file_id_b: picto_library::FileId,
     choice: picto_library::DuplicateResolutionChoice,
+}
+#[derive(Deserialize)]
+struct LibraryAutomaticDuplicateInput {
+    file_id_a: picto_library::FileId,
+    file_id_b: picto_library::FileId,
 }
 #[derive(Deserialize)]
 struct LibraryUpdateSmartFolderInput {
@@ -2777,6 +2786,30 @@ mod tests {
         let candidates: Vec<picto_library::DuplicateCandidate> =
             serde_json::from_str(&output).unwrap();
         assert!(candidates.is_empty());
+        assert_eq!(application.sidebar_counts().unwrap().duplicates, 0);
+
+        let (third_root, _) = application
+            .library()
+            .ingest(&greenfield_input("greenfield-duplicate-third"))
+            .unwrap();
+        let third_file = application.library().details(third_root).unwrap().media[0].file_id;
+        application
+            .library()
+            .record_duplicate_pair(first_file, third_file, 1, 1_700_000_000_200)
+            .unwrap();
+        let output = dispatch_library(
+            &application,
+            "duplicates.resolve_automatically",
+            &format!(
+                r#"{{"file_id_a":{},"file_id_b":{}}}"#,
+                first_file.0, third_file.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let resolution: Option<picto_library::DuplicateResolutionResult> =
+            serde_json::from_str(&output).unwrap();
+        assert!(resolution.is_some());
         assert_eq!(application.sidebar_counts().unwrap().duplicates, 0);
     }
 

@@ -1450,6 +1450,40 @@ impl Library {
         )
     }
 
+    pub fn resolve_duplicate_automatically(
+        &self,
+        file_id_a: FileId,
+        file_id_b: FileId,
+        decided_at_ms: i64,
+    ) -> Result<Option<DuplicateResolutionResult>> {
+        let candidate = self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                crate::duplicate::candidate_for_pair(
+                    connection,
+                    &snapshot,
+                    file_id_a,
+                    file_id_b,
+                )
+            },
+        )?;
+        let winner_file_id = match candidate.map(|candidate| candidate.decision) {
+            Some(crate::DuplicateQualityDecision::LeftBetter)
+            | Some(crate::DuplicateQualityDecision::AutoTieLeft) => file_id_a,
+            Some(crate::DuplicateQualityDecision::RightBetter)
+            | Some(crate::DuplicateQualityDecision::AutoTieRight) => file_id_b,
+            Some(crate::DuplicateQualityDecision::NeedsChoice) | None => return Ok(None),
+        };
+        self.resolve_duplicate(
+            file_id_a,
+            file_id_b,
+            DuplicateResolutionChoice::KeepFile { winner_file_id },
+            decided_at_ms,
+        )
+        .map(Some)
+    }
+
     pub fn resolve_duplicate(
         &self,
         file_id_a: FileId,

@@ -154,6 +154,35 @@ pub(crate) fn list_candidates(
     Ok(candidates)
 }
 
+pub(crate) fn candidate_for_pair(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    file_id_a: FileId,
+    file_id_b: FileId,
+) -> Result<Option<DuplicateCandidate>> {
+    let (file_id_a, file_id_b) = normalize_pair(file_id_a, file_id_b)?;
+    let Some(pair) = load_pair(connection, file_id_a, file_id_b)? else {
+        return Ok(None);
+    };
+    if pair.status != DuplicateStatus::Detected {
+        return Ok(None);
+    }
+    let Some(left) = candidate_side(connection, snapshot, pair.file_id_a)? else {
+        return Ok(None);
+    };
+    let Some(right) = candidate_side(connection, snapshot, pair.file_id_b)? else {
+        return Ok(None);
+    };
+    Ok(Some(DuplicateCandidate {
+        file_id_a: pair.file_id_a,
+        file_id_b: pair.file_id_b,
+        distance: pair.distance,
+        decision: compare_candidate_quality(&left.file, &right.file, pair.distance),
+        left,
+        right,
+    }))
+}
+
 pub(crate) fn count_visible_candidates(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
