@@ -830,12 +830,6 @@ impl Library {
                 "a collection import requires at least two media members".into(),
             ));
         }
-        if input.members.len() > ingest::MAX_INGEST_BATCH {
-            return Err(LibraryError::InvalidInput(format!(
-                "one atomic collection batch may contain at most {} members",
-                ingest::MAX_INGEST_BATCH
-            )));
-        }
         if input.cover_index >= input.members.len() {
             return Err(LibraryError::InvalidInput(
                 "collection cover index is outside the member list".into(),
@@ -892,7 +886,7 @@ impl Library {
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     resources,
-                    output.affected.iter().map(RootId),
+                    std::iter::once(output.collection_id),
                 );
                 Ok((
                     (output.collection_id, receipt.clone()),

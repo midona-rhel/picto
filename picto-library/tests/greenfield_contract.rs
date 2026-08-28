@@ -1270,6 +1270,37 @@ fn prepared_collection_import_never_publishes_standalone_members() {
 }
 
 #[test]
+fn large_prepared_collection_publishes_as_one_coherent_root() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let members = (0..100)
+        .map(|index| imported(&format!("atomic-member-{index}"), Lifecycle::Inbox, &[]))
+        .collect::<Vec<_>>();
+
+    let (collection, receipt) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members,
+            cover_index: 50,
+            name: Some("Large atomic source".into()),
+            modified_at_ms: 1_700_000_003_000,
+        })
+        .unwrap();
+
+    assert_eq!(receipt.item_ids, vec![collection]);
+    let inbox = library
+        .query(&query(ItemScope::Inbox), &PageRequest::default())
+        .unwrap();
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.media_count, 100);
+    assert_eq!(inbox.items[0].root_id, collection);
+    assert_eq!(inbox.items[0].media_count, 100);
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection].len(),
+        100
+    );
+}
+
+#[test]
 fn fts_settlement_interleaves_dirty_categories() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

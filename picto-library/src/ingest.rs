@@ -11,7 +11,7 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
 
-pub const MAX_INGEST_BATCH: usize = 40;
+pub const MAX_INGEST_BATCH: usize = 64;
 
 pub(crate) struct IngestResult {
     pub root_id: RootId,
