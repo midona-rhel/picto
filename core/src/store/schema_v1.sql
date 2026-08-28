@@ -582,6 +582,11 @@ CREATE VIRTUAL TABLE source_text_fts USING fts5(
 
 CREATE INDEX idx_library_root_lifecycle ON library_root(lifecycle, item_id);
 
+-- Cover FKs are ON DELETE SET NULL; without these, every parent-row delete
+-- scans the whole child table inside the FK action (O(deleted x table)).
+CREATE INDEX idx_library_item_cover ON library_item(cover_media_item_id)
+    WHERE cover_media_item_id IS NOT NULL;
+
 CREATE INDEX idx_media_asset_file ON media_asset(file_id, item_id);
 
 CREATE INDEX idx_media_view_recent ON media_view(viewed_at DESC, item_id);
@@ -726,6 +731,9 @@ CREATE INDEX idx_root_summary_name_desc
 
 CREATE INDEX idx_root_summary_kind
     ON root_summary(kind, root_item_id);
+
+CREATE INDEX idx_root_summary_cover ON root_summary(cover_media_item_id)
+    WHERE cover_media_item_id IS NOT NULL;
 
 CREATE INDEX idx_smart_folder_dependency_lookup
     ON smart_folder_dependency(dependency_kind, dependency_key, smart_folder_id);

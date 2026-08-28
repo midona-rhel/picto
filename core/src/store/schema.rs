@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use crate::canonical_bitmap;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 1;
-pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v2";
+pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v3";
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 5;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 const SCHEMA_V1_DDL: &str = include_str!("schema_v1.sql");

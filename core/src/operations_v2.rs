@@ -2008,8 +2008,19 @@ fn apply_structure_to_captured_group_state(
                 .retain(|(collection_id, _), _| *collection_id != change.item_id);
         }
     }
+    // Collections that carry an explicit order below get every membership
+    // replaced there; computing append ranks for them first is O(members^2)
+    // of discarded work.
+    let explicitly_ordered = structure
+        .group_orders
+        .iter()
+        .map(|order| order.collection_id)
+        .collect::<std::collections::HashSet<_>>();
     for change in &structure.memberships {
         if change.present {
+            if explicitly_ordered.contains(&change.collection_id) {
+                continue;
+            }
             let next_rank = state
                 .members
                 .range((change.collection_id, i64::MIN)..=(change.collection_id, i64::MAX))

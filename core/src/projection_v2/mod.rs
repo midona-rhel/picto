@@ -1834,15 +1834,31 @@ impl ProjectionStore {
         &self,
         update: impl FnOnce(&ProjectionStore) -> Result<(), String>,
     ) -> Result<PreparedProjection, String> {
+        let total_started = std::time::Instant::now();
         let before = self.state.load();
         let candidate = Self {
             state: RcuCell::new(Arc::clone(&before)),
             writer: Mutex::new(()),
         };
         update(&candidate)?;
+        let update_elapsed = total_started.elapsed();
+        let validate_started = std::time::Instant::now();
         let state = candidate.state.load();
         validate_bitmap_ids(&state)?;
+        let validate_elapsed = validate_started.elapsed();
+        let diff_started = std::time::Instant::now();
         let dirty = canonical_diff(&before, &state);
+        if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some()
+            && total_started.elapsed() >= std::time::Duration::from_millis(100)
+        {
+            eprintln!(
+                "projection_prepare_stages total_ms={:.2} update_ms={:.2} validate_ms={:.2} diff_ms={:.2}",
+                total_started.elapsed().as_secs_f64() * 1_000.0,
+                update_elapsed.as_secs_f64() * 1_000.0,
+                validate_elapsed.as_secs_f64() * 1_000.0,
+                diff_started.elapsed().as_secs_f64() * 1_000.0,
+            );
+        }
         Ok(PreparedProjection { state, dirty })
     }
 
@@ -2515,7 +2531,25 @@ impl ProjectionStore {
             .iter()
             .map(|change| change.collection_id)
             .collect::<HashSet<_>>();
+        let structure_trace = std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some();
+        let structure_total_started = std::time::Instant::now();
+        let mut structure_section_started = std::time::Instant::now();
+        let mut structure_sections: Vec<(&'static str, std::time::Duration)> = Vec::new();
+        let mut structure_mark =
+            move |label: &'static str,
+                  started: &mut std::time::Instant,
+                  sections: &mut Vec<(&'static str, std::time::Duration)>| {
+                if structure_trace {
+                    sections.push((label, started.elapsed()));
+                    *started = std::time::Instant::now();
+                }
+            };
         let mut state = self.write_state();
+        structure_mark(
+            "clone_state",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         let mut touched_media = HashSet::new();
         let mut touched_roots = HashSet::new();
 
@@ -2563,6 +2597,11 @@ impl ProjectionStore {
             }
         }
 
+        structure_mark(
+            "items",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for change in &delta.roots {
             touched_roots.insert(change.item_id);
             if let Some(lifecycle) = change.lifecycle {
@@ -2577,6 +2616,11 @@ impl ProjectionStore {
             }
         }
 
+        structure_mark(
+            "roots",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for change in &delta.memberships {
             if change.present {
                 if let Some(previous_root) = state.media_to_root.get(&change.media_id).copied() {
@@ -2641,6 +2685,11 @@ impl ProjectionStore {
             touched_media.insert(change.media_id);
         }
 
+        structure_mark(
+            "memberships",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for change in delta.group_orders {
             validate_id(change.collection_id)?;
             let mut ordered = RoaringBitmap::new();
@@ -2671,6 +2720,11 @@ impl ProjectionStore {
                 .insert(change.collection_id, change.media_ids.into());
         }
 
+        structure_mark(
+            "group_orders",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for media_id in touched_media {
             if !state.media_to_root.contains_key(&media_id)
                 && has_root(&state, media_id)
@@ -2690,12 +2744,22 @@ impl ProjectionStore {
             }
         }
 
+        structure_mark(
+            "touched_media",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for root_id in touched_roots {
             sync_all_image_root(&mut state, root_id);
             sync_mime_root(&mut state, root_id);
             sync_color_root(&mut state, root_id);
         }
 
+        structure_mark(
+            "root_syncs",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         for change in delta.folders {
             let is_root = is_visible_root(&state, change.item_id);
             if change.present {
@@ -2768,6 +2832,11 @@ impl ProjectionStore {
                 .insert(change.folder_id, change.item_ids.into());
         }
 
+        structure_mark(
+            "folders_and_orders",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
         let mut tag_changes_by_root: HashMap<(i64, bool), RoaringBitmap> = HashMap::new();
         for change in delta.tags {
             tag_changes_by_root
@@ -2787,6 +2856,26 @@ impl ProjectionStore {
         }
         for ((tag_id, present), roots) in tag_changes_by_root {
             apply_root_tag_changes_state(&mut state, tag_id, &roots, present)?;
+        }
+        structure_mark(
+            "tags",
+            &mut structure_section_started,
+            &mut structure_sections,
+        );
+        if structure_trace
+            && structure_total_started.elapsed() >= std::time::Duration::from_millis(100)
+        {
+            let mut line = format!(
+                "structure_delta_stages total_ms={:.2}",
+                structure_total_started.elapsed().as_secs_f64() * 1_000.0
+            );
+            for (label, elapsed) in &structure_sections {
+                line.push_str(&format!(
+                    " {label}_ms={:.2}",
+                    elapsed.as_secs_f64() * 1_000.0
+                ));
+            }
+            eprintln!("{line}");
         }
         Ok(())
     }

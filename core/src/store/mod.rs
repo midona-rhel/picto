@@ -577,19 +577,45 @@ impl Store {
         let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
             .map_err(|error| error.to_string())?;
         let captured = capture();
+        let total_started = std::time::Instant::now();
         let (value, delta) =
             operation(&transaction, captured).map_err(|error| error.to_string())?;
+        let operation_elapsed = total_started.elapsed();
+        let read_models_started = std::time::Instant::now();
         schema::refresh_read_models(&transaction).map_err(|error| error.to_string())?;
+        let read_models_elapsed = read_models_started.elapsed();
+        let cloud_started = std::time::Instant::now();
         cloud_capture
             .finish(&transaction)
             .map_err(|error| error.to_string())?;
+        let cloud_elapsed = cloud_started.elapsed();
         let revision =
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
+        let prepare_started = std::time::Instant::now();
         let mut prepared = prepare(delta)?;
+        let prepare_elapsed = prepare_started.elapsed();
+        let persist_started = std::time::Instant::now();
         prepared.persist(&transaction, revision)?;
+        let persist_elapsed = persist_started.elapsed();
+        let commit_started = std::time::Instant::now();
         let _publication = self.consistency_write(std::panic::Location::caller())?;
         transaction.commit().map_err(|error| error.to_string())?;
+        let commit_elapsed = commit_started.elapsed();
         publish(prepared);
+        if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some()
+            && total_started.elapsed() >= std::time::Duration::from_millis(100)
+        {
+            eprintln!(
+                "settled_store_stages total_ms={:.2} operation_ms={:.2} read_models_ms={:.2} cloud_ms={:.2} prepare_ms={:.2} persist_ms={:.2} commit_ms={:.2}",
+                total_started.elapsed().as_secs_f64() * 1_000.0,
+                operation_elapsed.as_secs_f64() * 1_000.0,
+                read_models_elapsed.as_secs_f64() * 1_000.0,
+                cloud_elapsed.as_secs_f64() * 1_000.0,
+                prepare_elapsed.as_secs_f64() * 1_000.0,
+                persist_elapsed.as_secs_f64() * 1_000.0,
+                commit_elapsed.as_secs_f64() * 1_000.0,
+            );
+        }
         Ok((value, revision))
     }
 
@@ -671,8 +697,13 @@ impl Store {
             .then(|| crate::cloud::capture::SemanticCapture::start(&transaction))
             .transpose()
             .map_err(|error| error.to_string())?;
+        let total_started = std::time::Instant::now();
         let (value, delta, changed) = operation(&transaction).map_err(|error| error.to_string())?;
+        let operation_elapsed = total_started.elapsed();
+        let read_models_started = std::time::Instant::now();
         schema::refresh_read_models(&transaction).map_err(|error| error.to_string())?;
+        let read_models_elapsed = read_models_started.elapsed();
+        let cloud_started = std::time::Instant::now();
         let revision = if changed {
             if let Some(cloud_capture) = cloud_capture.take() {
                 cloud_capture
@@ -684,14 +715,35 @@ impl Store {
             schema::revision(&transaction).map_err(|error| error.to_string())?
         };
         drop(cloud_capture);
+        let cloud_elapsed = cloud_started.elapsed();
+        let prepare_started = std::time::Instant::now();
         let mut prepared = changed.then(|| prepare(delta)).transpose()?;
+        let prepare_elapsed = prepare_started.elapsed();
+        let persist_started = std::time::Instant::now();
         if let Some(prepared) = prepared.as_mut() {
             prepared.persist(&transaction, revision)?;
         }
+        let persist_elapsed = persist_started.elapsed();
+        let commit_started = std::time::Instant::now();
         let _publication = self.consistency_write(std::panic::Location::caller())?;
         transaction.commit().map_err(|error| error.to_string())?;
+        let commit_elapsed = commit_started.elapsed();
         if let Some(prepared) = prepared {
             publish(prepared);
+        }
+        if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some()
+            && total_started.elapsed() >= std::time::Duration::from_millis(100)
+        {
+            eprintln!(
+                "settled_store_stages total_ms={:.2} operation_ms={:.2} read_models_ms={:.2} cloud_ms={:.2} prepare_ms={:.2} persist_ms={:.2} commit_ms={:.2}",
+                total_started.elapsed().as_secs_f64() * 1_000.0,
+                operation_elapsed.as_secs_f64() * 1_000.0,
+                read_models_elapsed.as_secs_f64() * 1_000.0,
+                cloud_elapsed.as_secs_f64() * 1_000.0,
+                prepare_elapsed.as_secs_f64() * 1_000.0,
+                persist_elapsed.as_secs_f64() * 1_000.0,
+                commit_elapsed.as_secs_f64() * 1_000.0,
+            );
         }
         Ok((value, revision, changed))
     }
