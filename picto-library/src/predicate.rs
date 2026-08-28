@@ -147,12 +147,62 @@ pub fn contains_text(expression: &FilterExpr) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DependencyChange {
+    All,
+    Lifecycle,
+    Rating,
+    Tag(TagId),
+    Folder(FolderId),
+    RootText,
+    CoverFacts,
+}
+
+pub(crate) fn depends_on(expression: &FilterExpr, change: DependencyChange) -> bool {
+    if matches!(change, DependencyChange::All | DependencyChange::Lifecycle) {
+        return true;
+    }
+    match expression {
+        FilterExpr::All(children) | FilterExpr::Any(children) => {
+            children.iter().any(|child| depends_on(child, change))
+        }
+        FilterExpr::Not(child) => depends_on(child, change),
+        FilterExpr::Clause(clause) => match (clause, change) {
+            (FilterClause::Tags { tag_ids, .. }, DependencyChange::Tag(tag_id)) => {
+                tag_ids.contains(&tag_id)
+            }
+            (FilterClause::Folders { folder_ids, .. }, DependencyChange::Folder(folder_id)) => {
+                folder_ids.contains(&folder_id)
+            }
+            (FilterClause::Ratings { .. }, DependencyChange::Rating) => true,
+            (
+                FilterClause::NotesPresent { .. }
+                | FilterClause::SourceUrlsPresent { .. }
+                | FilterClause::Text { .. },
+                DependencyChange::RootText,
+            ) => true,
+            (
+                FilterClause::Mime { .. }
+                | FilterClause::Width { .. }
+                | FilterClause::Height { .. }
+                | FilterClause::Duration { .. }
+                | FilterClause::Color { .. },
+                DependencyChange::CoverFacts,
+            ) => true,
+            _ => false,
+        },
+    }
+}
+
 pub fn evaluate(
     expression: &FilterExpr,
     universe: &RoaringBitmap,
     snapshot: &ProjectionSnapshot,
     text: &mut impl FnMut(TextField, &str) -> Result<RoaringBitmap>,
 ) -> Result<RoaringBitmap> {
+    if universe.is_empty() {
+        return Ok(RoaringBitmap::new());
+    }
     match expression {
         FilterExpr::All(children) => {
             let mut result = universe.clone();
@@ -343,4 +393,31 @@ fn color_matches(
                 })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smart_dependencies_are_derived_from_the_shared_filter_expression() {
+        let tag = TagId(10);
+        let other_tag = TagId(11);
+        let folder = FolderId(20);
+        let expression = FilterExpr::All(vec![
+            FilterExpr::Clause(FilterClause::Tags {
+                tag_ids: vec![tag],
+                mode: SetMatchMode::All,
+            }),
+            FilterExpr::Clause(FilterClause::Mime {
+                values: vec!["image/png".into()],
+                families: Vec::new(),
+            }),
+        ]);
+        assert!(depends_on(&expression, DependencyChange::Tag(tag)));
+        assert!(!depends_on(&expression, DependencyChange::Tag(other_tag)));
+        assert!(!depends_on(&expression, DependencyChange::Folder(folder)));
+        assert!(depends_on(&expression, DependencyChange::CoverFacts));
+        assert!(depends_on(&expression, DependencyChange::Lifecycle));
+    }
 }

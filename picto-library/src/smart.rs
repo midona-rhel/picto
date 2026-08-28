@@ -48,6 +48,20 @@ pub(crate) fn settle_affected(
     snapshot: &mut ProjectionSnapshot,
     affected: &RoaringBitmap,
 ) -> Result<()> {
+    settle_affected_for(
+        connection,
+        snapshot,
+        affected,
+        predicate::DependencyChange::All,
+    )
+}
+
+pub(crate) fn settle_affected_for(
+    connection: &Connection,
+    snapshot: &mut ProjectionSnapshot,
+    affected: &RoaringBitmap,
+    change: predicate::DependencyChange,
+) -> Result<()> {
     if affected.is_empty() || snapshot.smart_queries.is_empty() {
         return Ok(());
     }
@@ -55,6 +69,9 @@ pub(crate) fn settle_affected(
     let queries = snapshot.smart_queries.clone();
     let mut replacements = Vec::with_capacity(queries.len());
     for (smart_folder_id, view) in queries.iter() {
+        if !predicate::depends_on(&view.filter, change) {
+            continue;
+        }
         let matches = evaluate(connection, snapshot, view, &universe)?;
         replacements.push((*smart_folder_id, matches));
     }

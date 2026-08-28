@@ -375,7 +375,12 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let settled = crate::fts::settle_batch(transaction, limit)?;
                 let mut next = (*snapshot).clone();
-                crate::smart::settle_affected(transaction, &mut next, &settled)?;
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &settled,
+                    crate::predicate::DependencyChange::RootText,
+                )?;
                 next.revision = revision;
                 let resources = if settled.is_empty() {
                     Vec::new()
@@ -865,7 +870,12 @@ impl Library {
                 } else {
                     crate::group::set_cover(transaction, &mut next, collection_id, cover_media_id)?;
                     let affected = [collection_id.0].into_iter().collect();
-                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                    crate::smart::settle_affected_for(
+                        transaction,
+                        &mut next,
+                        &affected,
+                        crate::predicate::DependencyChange::CoverFacts,
+                    )?;
                     transaction.execute(
                         "INSERT INTO cloud_journal
                              (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
@@ -1229,7 +1239,12 @@ impl Library {
                         },
                     );
                 }
-                crate::smart::settle_affected(transaction, &mut next, &changed)?;
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &changed,
+                    crate::predicate::DependencyChange::Tag(tag_id),
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1351,7 +1366,12 @@ impl Library {
                         Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
                     }
                 }
-                crate::smart::settle_affected(transaction, &mut next, &selection)?;
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &selection,
+                    crate::predicate::DependencyChange::RootText,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1452,7 +1472,12 @@ impl Library {
                         },
                     );
                 }
-                crate::smart::settle_affected(transaction, &mut next, &changed)?;
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &changed,
+                    crate::predicate::DependencyChange::Folder(folder_id),
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1531,7 +1556,19 @@ impl Library {
                         });
                     }
                 }
-                crate::smart::settle_affected(transaction, &mut next, &selection)?;
+                let smart_change = match domain {
+                    BitmapDomain::Lifecycle => crate::predicate::DependencyChange::Lifecycle,
+                    BitmapDomain::Rating => crate::predicate::DependencyChange::Rating,
+                    BitmapDomain::Tag => {
+                        crate::predicate::DependencyChange::Tag(crate::TagId(destination))
+                    }
+                };
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &selection,
+                    smart_change,
+                )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
