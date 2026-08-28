@@ -1443,6 +1443,92 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
 }
 
 #[test]
+fn details_keep_collection_organization_on_the_root_and_media_in_vector_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported_as(
+            "details-first",
+            "image/png",
+            LabColor {
+                l: 40.0,
+                a: 10.0,
+                b: 5.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (cover, _) = library
+        .ingest(&imported_as(
+            "details-cover",
+            "video/mp4",
+            LabColor {
+                l: 60.0,
+                a: -5.0,
+                b: 15.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    library
+        .set_rating(
+            &SelectionTarget::Explicit {
+                root_ids: vec![cover],
+            },
+            Rating::Four,
+        )
+        .unwrap();
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first],
+            },
+            "character:alice",
+        )
+        .unwrap();
+    let (folder_id, _) = library.create_folder("Details", None).unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![cover],
+            },
+            folder_id,
+        )
+        .unwrap();
+
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![first, cover],
+            },
+            cover_root_id: cover,
+            winning_collection_id: None,
+            name: Some("Details collection".into()),
+            modified_at_ms: 500,
+        })
+        .unwrap();
+    let details = library.details(collection).unwrap();
+
+    assert_eq!(details.root.kind, picto_library::RootKind::Collection);
+    assert_eq!(details.root.name, "Details collection");
+    assert_eq!(details.root.cover_media_id, picto_library::MediaId(cover.0));
+    assert_eq!(details.lifecycle, Lifecycle::Active);
+    assert_eq!(details.rating, Rating::Four);
+    assert_eq!(details.folder_ids, vec![folder_id]);
+    assert_eq!(details.tag_ids.len(), 1);
+    assert_eq!(
+        details
+            .media
+            .iter()
+            .map(|media| media.media_id.0)
+            .collect::<Vec<_>>(),
+        vec![first.0, cover.0]
+    );
+    assert_eq!(details.media[0].media_name, "details-first.png");
+    assert_eq!(details.media[1].media_name, "details-cover.png");
+}
+
+#[test]
 fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

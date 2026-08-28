@@ -119,6 +119,14 @@ impl Library {
         )
     }
 
+    pub fn details(&self, root_id: RootId) -> Result<crate::RootDetails> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| crate::query::details(connection, &snapshot, root_id),
+        )
+    }
+
     pub fn counts(&self) -> Result<LibraryCounts> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,

@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::fts;
-use crate::model::{FolderId, Lifecycle, Rating, RootId, RootKind, SmartFolderId};
+use crate::model::{
+    FileId, FolderId, ImmutableMediaFacts, LabColor, Lifecycle, MediaId, MediaRecord, Rating,
+    RootDetails, RootId, RootKind, RootRecord, SmartFolderId,
+};
+use crate::ordering::OrderOwnerKind;
 use crate::predicate::{self, ItemSort, SortDirection, SortField, ViewQuerySpec};
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
@@ -116,6 +120,173 @@ pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
         uncategorized: (active & &snapshot.folder_count.between(Some(0), Some(0))).len(),
         revision: snapshot.revision,
     }
+}
+
+pub fn details(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    root_id: RootId,
+) -> Result<RootDetails> {
+    let root = connection
+        .query_row(
+            "SELECT item.stable_key, item.item_kind, root.name, root.notes,
+                    root.source_urls_json, root.cover_media_id, root.imported_at_ms,
+                    root.captured_at_ms, root.modified_at_ms, root.media_count,
+                    root.total_size_bytes
+             FROM library_root root
+             JOIN library_item item ON item.local_id = root.root_id
+             WHERE root.root_id = ?1",
+            [root_id.0],
+            |row| {
+                let kind = match row.get::<_, i64>(1)? {
+                    1 => RootKind::Media,
+                    2 => RootKind::Collection,
+                    value => {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Integer,
+                            format!("invalid root kind {value}").into(),
+                        ))
+                    }
+                };
+                let source_urls_json = row.get::<_, String>(4)?;
+                let source_urls = serde_json::from_str(&source_urls_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(RootRecord {
+                    root_id,
+                    stable_key: row.get(0)?,
+                    kind,
+                    name: row.get(2)?,
+                    notes: row.get(3)?,
+                    source_urls,
+                    cover_media_id: MediaId(row.get(5)?),
+                    imported_at_ms: row.get(6)?,
+                    captured_at_ms: row.get(7)?,
+                    modified_at_ms: row.get(8)?,
+                    media_count: row.get(9)?,
+                    total_size_bytes: row.get::<_, i64>(10)? as u64,
+                })
+            },
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => {
+                LibraryError::NotFound(format!("root {root_id}"))
+            }
+            other => other.into(),
+        })?;
+
+    let lifecycle = Lifecycle::ALL
+        .into_iter()
+        .find(|value| snapshot.lifecycle(*value).contains(root_id.0))
+        .ok_or_else(|| {
+            LibraryError::InvalidState(format!("root {root_id} has no lifecycle partition"))
+        })?;
+    let rating = Rating::ALL
+        .into_iter()
+        .find(|value| snapshot.rating(*value).contains(root_id.0))
+        .ok_or_else(|| {
+            LibraryError::InvalidState(format!("root {root_id} has no rating partition"))
+        })?;
+    let mut folder_ids = snapshot
+        .folders
+        .iter()
+        .filter_map(|(folder_id, roots)| roots.contains(root_id.0).then_some(*folder_id))
+        .collect::<Vec<_>>();
+    folder_ids.sort_unstable();
+    let mut tag_ids = snapshot
+        .tags
+        .iter()
+        .filter_map(|(tag_id, roots)| roots.contains(root_id.0).then_some(*tag_id))
+        .collect::<Vec<_>>();
+    tag_ids.sort_unstable();
+
+    let media_ids = match root.kind {
+        RootKind::Media => vec![MediaId(root_id.0)],
+        RootKind::Collection => {
+            crate::ordering::load(connection, OrderOwnerKind::Collection, root_id.0)?
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!("collection {root_id} has no member order"))
+                })?
+                .into_iter()
+                .map(MediaId)
+                .collect()
+        }
+    };
+    if media_ids.len() != root.media_count as usize {
+        return Err(LibraryError::InvalidState(format!(
+            "root {root_id} reports {} media but stores {} members",
+            root.media_count,
+            media_ids.len()
+        )));
+    }
+    let media = load_media(connection, &media_ids)?;
+
+    Ok(RootDetails {
+        root,
+        lifecycle,
+        rating,
+        folder_ids,
+        tag_ids,
+        media,
+        revision: snapshot.revision,
+    })
+}
+
+fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<MediaRecord>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT media.media_name, file.file_id, file.file_path, file.mime,
+                file.size_bytes, file.width, file.height, file.duration_ms,
+                file.frame_count, file.content_hash, file.perceptual_hash,
+                file.palette_json
+         FROM media_item media
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE media.media_id = ?1",
+    )?;
+    media_ids
+        .iter()
+        .map(|media_id| {
+            statement
+                .query_row([media_id.0], |row| {
+                    let palette_json = row.get::<_, String>(11)?;
+                    let palette =
+                        serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                11,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?;
+                    Ok(MediaRecord {
+                        media_id: *media_id,
+                        media_name: row.get(0)?,
+                        file_id: FileId(row.get(1)?),
+                        file_path: row.get(2)?,
+                        facts: ImmutableMediaFacts {
+                            mime: row.get(3)?,
+                            size_bytes: row.get::<_, i64>(4)? as u64,
+                            width: row.get(5)?,
+                            height: row.get(6)?,
+                            duration_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+                            frame_count: row.get(8)?,
+                            content_hash: row.get(9)?,
+                            perceptual_hash: row.get(10)?,
+                            palette,
+                        },
+                    })
+                })
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::InvalidState(format!("missing media {media_id}"))
+                    }
+                    other => other.into(),
+                })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

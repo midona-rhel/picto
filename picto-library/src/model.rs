@@ -146,6 +146,26 @@ pub struct RootRecord {
     pub total_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaRecord {
+    pub media_id: MediaId,
+    pub media_name: String,
+    pub file_id: FileId,
+    pub file_path: String,
+    pub facts: ImmutableMediaFacts,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RootDetails {
+    pub root: RootRecord,
+    pub lifecycle: Lifecycle,
+    pub rating: Rating,
+    pub folder_ids: Vec<FolderId>,
+    pub tag_ids: Vec<TagId>,
+    pub media: Vec<MediaRecord>,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderRecord {
     pub folder_id: FolderId,
