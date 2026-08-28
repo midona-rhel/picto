@@ -186,6 +186,11 @@ fn prepared(index: usize) -> PreparedImport {
         tags,
         folders: Vec::new(),
         source_urls: vec![format!("https://fixture.invalid/{index}")],
+        source_identity: Some(picto_library::SourceIdentity {
+            source_key: "scale".into(),
+            source_item_key: index.to_string(),
+            source_text: Some(format!("fixture source {index}")),
+        }),
         imported_at_ms: 1_700_000_000_000 + index as i64,
         captured_at_ms: Some(1_600_000_000_000 + index as i64),
     }

@@ -35,6 +35,11 @@ fn imported(key: &str, lifecycle: Lifecycle, tags: &[&str]) -> PreparedImport {
         tags: tags.iter().map(|value| (*value).to_owned()).collect(),
         folders: Vec::new(),
         source_urls: vec![format!("https://example.test/{key}")],
+        source_identity: Some(picto_library::SourceIdentity {
+            source_key: "fixture".into(),
+            source_item_key: key.into(),
+            source_text: Some(format!("source metadata for {key}")),
+        }),
         imported_at_ms: 1_700_000_000_000,
         captured_at_ms: Some(1_600_000_000_000),
     }
@@ -662,6 +667,26 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
                         }),
                         sort: ItemSort::default(),
                     },
+                },
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+    let source_text_view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::Text {
+            field: picto_library::predicate::TextField::Global,
+            query: "metadata".into(),
+        }),
+        sort: ItemSort::default(),
+    };
+    assert_eq!(
+        library
+            .query(
+                &RootQuery {
+                    scope: ItemScope::Inbox,
+                    view: source_text_view,
                 },
                 &PageRequest::default(),
             )

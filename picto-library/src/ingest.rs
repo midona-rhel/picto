@@ -89,6 +89,19 @@ pub(crate) fn insert_one(
             sqlite_i64(input.facts.size_bytes, "root size")?,
         ],
     )?;
+    if let Some(source) = &input.source_identity {
+        transaction.execute(
+            "INSERT INTO source_provenance
+                 (source_key, source_item_key, media_id, source_text)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                source.source_key,
+                source.source_item_key,
+                media_id.0,
+                source.source_text
+            ],
+        )?;
+    }
 
     let lifecycle_key = BitmapKey {
         domain: BitmapDomain::Lifecycle,

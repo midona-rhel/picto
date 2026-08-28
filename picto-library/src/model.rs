@@ -129,6 +129,13 @@ pub struct RootRecord {
     pub total_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceIdentity {
+    pub source_key: String,
+    pub source_item_key: String,
+    pub source_text: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreparedImport {
     pub stable_key: String,
@@ -143,6 +150,8 @@ pub struct PreparedImport {
     pub folders: Vec<FolderId>,
     #[serde(default)]
     pub source_urls: Vec<String>,
+    #[serde(default)]
+    pub source_identity: Option<SourceIdentity>,
     pub imported_at_ms: i64,
     pub captured_at_ms: Option<i64>,
 }
