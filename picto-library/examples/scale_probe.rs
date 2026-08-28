@@ -40,6 +40,7 @@ fn main() -> picto_library::Result<()> {
     };
 
     let ingest_started = Instant::now();
+    let mut interval_started = ingest_started;
     let mut batch_latencies = Vec::new();
     for start in (0..count).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
         let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(count);
@@ -47,6 +48,13 @@ fn main() -> picto_library::Result<()> {
         let batch_started = Instant::now();
         library.ingest_batch(&inputs)?;
         batch_latencies.push(batch_started.elapsed());
+        if end.is_multiple_of(100_000) || end == count {
+            println!(
+                "ingest_interval_end={end} ingest_interval_ms={:.3}",
+                millis(interval_started.elapsed())
+            );
+            interval_started = Instant::now();
+        }
     }
     let ingest_elapsed = ingest_started.elapsed();
     readers_running.store(false, Ordering::Relaxed);
@@ -143,7 +151,7 @@ fn main() -> picto_library::Result<()> {
     let reopen_elapsed = reopen_started.elapsed();
     println!("checkpoint_reopen_ms={:.3}", millis(reopen_elapsed));
     println!(
-        "cold_reopen_roots={}",
+        "checkpoint_reopen_trash_roots={}",
         reopened
             .query(
                 &RootQuery {

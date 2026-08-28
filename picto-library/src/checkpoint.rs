@@ -4,27 +4,27 @@ use sha2::{Digest, Sha256};
 
 use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
 use crate::predicate::ViewQuerySpec;
-use crate::projection::{NumericIndex, ProjectionSnapshot};
+use crate::projection::{NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBitmap};
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v2";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v5";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
-    lifecycle: std::collections::HashMap<Lifecycle, roaring::RoaringBitmap>,
-    ratings: std::collections::HashMap<Rating, roaring::RoaringBitmap>,
-    tags: std::collections::HashMap<TagId, roaring::RoaringBitmap>,
+    lifecycle: std::collections::HashMap<Lifecycle, SharedBitmap>,
+    ratings: std::collections::HashMap<Rating, SharedBitmap>,
+    tags: std::collections::HashMap<TagId, SharedBitmap>,
     tag_ids_by_name: std::collections::HashMap<String, TagId>,
     folder_orders: std::collections::HashMap<FolderId, std::sync::Arc<Vec<RootId>>>,
-    folders: std::collections::HashMap<FolderId, roaring::RoaringBitmap>,
+    folders: std::collections::HashMap<FolderId, SharedBitmap>,
     collection_orders: std::collections::HashMap<RootId, std::sync::Arc<Vec<MediaId>>>,
-    media_owner: Vec<Option<RootId>>,
-    root_kinds: std::collections::HashMap<RootKind, roaring::RoaringBitmap>,
-    mime: std::collections::HashMap<String, roaring::RoaringBitmap>,
-    mime_family: std::collections::HashMap<String, roaring::RoaringBitmap>,
-    color_cells: std::collections::HashMap<u32, roaring::RoaringBitmap>,
-    cover_palettes: std::collections::HashMap<RootId, std::sync::Arc<Vec<LabColor>>>,
+    media_owner: ShardedIdMap<RootId>,
+    root_kinds: std::collections::HashMap<RootKind, SharedBitmap>,
+    mime: std::collections::HashMap<String, SharedBitmap>,
+    mime_family: std::collections::HashMap<String, SharedBitmap>,
+    color_cells: std::collections::HashMap<u32, SharedBitmap>,
+    cover_palettes: ShardedIdMap<std::sync::Arc<Vec<LabColor>>>,
     tag_count: NumericIndex,
     folder_count: NumericIndex,
     total_bytes: NumericIndex,
@@ -36,7 +36,7 @@ struct CheckpointData {
     modified_at: NumericIndex,
     notes_present: roaring::RoaringBitmap,
     urls_present: roaring::RoaringBitmap,
-    smart_results: std::collections::HashMap<u32, roaring::RoaringBitmap>,
+    smart_results: std::collections::HashMap<u32, SharedBitmap>,
     smart_queries: std::collections::HashMap<u32, ViewQuerySpec>,
 }
 

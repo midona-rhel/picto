@@ -215,10 +215,7 @@ pub(crate) fn detach(
 
     Arc::make_mut(&mut snapshot.collection_orders).insert(collection_id, Arc::new(remaining));
     let owners = Arc::make_mut(&mut snapshot.media_owner);
-    if owners.len() <= media_id.0 as usize {
-        owners.resize(media_id.0 as usize + 1, None);
-    }
-    owners[media_id.0 as usize] = Some(RootId(media_id.0));
+    owners.insert(media_id.0, RootId(media_id.0));
     Arc::make_mut(&mut snapshot.media_count).insert(collection_id.0, members.len() as u64 - 1);
     Arc::make_mut(&mut snapshot.total_bytes).insert(collection_id.0, remaining_size);
     Arc::make_mut(&mut snapshot.modified_at).insert(collection_id.0, modified_at_ms.max(0) as u64);
@@ -505,10 +502,7 @@ pub(crate) fn ungroup(
     remove_root_projections(&mut snapshot, &[collection_id.0].into_iter().collect());
     let owners = Arc::make_mut(&mut snapshot.media_owner);
     for (media_id, _, _) in &media_rows {
-        if owners.len() <= media_id.0 as usize {
-            owners.resize(media_id.0 as usize + 1, None);
-        }
-        owners[media_id.0 as usize] = Some(RootId(media_id.0));
+        owners.insert(media_id.0, RootId(media_id.0));
     }
     for (media_id, _, facts) in &media_rows {
         add_media_root_projection(
@@ -740,10 +734,7 @@ pub(crate) fn organize(
     collection_orders.insert(collection_id, Arc::new(members.clone()));
     let owners = Arc::make_mut(&mut snapshot.media_owner);
     for media in &members {
-        if owners.len() <= media.0 as usize {
-            owners.resize(media.0 as usize + 1, None);
-        }
-        owners[media.0 as usize] = Some(collection_id);
+        owners.insert(media.0, collection_id);
     }
 
     remove_root_projections(&mut snapshot, &selected);
@@ -981,7 +972,7 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
         *members -= roots;
     }
     for root_id in roots {
-        Arc::make_mut(&mut snapshot.cover_palettes).remove(&RootId(root_id));
+        Arc::make_mut(&mut snapshot.cover_palettes).remove(root_id);
         Arc::make_mut(&mut snapshot.tag_count).remove(root_id);
         Arc::make_mut(&mut snapshot.folder_count).remove(root_id);
         Arc::make_mut(&mut snapshot.total_bytes).remove(root_id);
@@ -1040,7 +1031,7 @@ fn remove_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId) {
     for roots in Arc::make_mut(&mut snapshot.color_cells).values_mut() {
         roots.remove(root_id.0);
     }
-    Arc::make_mut(&mut snapshot.cover_palettes).remove(&root_id);
+    Arc::make_mut(&mut snapshot.cover_palettes).remove(root_id.0);
     Arc::make_mut(&mut snapshot.width).remove(root_id.0);
     Arc::make_mut(&mut snapshot.height).remove(root_id.0);
     Arc::make_mut(&mut snapshot.duration).remove(root_id.0);
@@ -1068,7 +1059,7 @@ fn add_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId, cove
             .or_default()
             .insert(id);
     }
-    Arc::make_mut(&mut snapshot.cover_palettes).insert(root_id, Arc::new(cover.palette.clone()));
+    Arc::make_mut(&mut snapshot.cover_palettes).insert(root_id.0, Arc::new(cover.palette.clone()));
     if let Some(value) = cover.width {
         Arc::make_mut(&mut snapshot.width).insert(id, value as u64);
     }
@@ -1117,7 +1108,7 @@ fn add_media_root_projection(
             .or_default()
             .insert(id);
     }
-    Arc::make_mut(&mut snapshot.cover_palettes).insert(root_id, Arc::new(facts.palette.clone()));
+    Arc::make_mut(&mut snapshot.cover_palettes).insert(root_id.0, Arc::new(facts.palette.clone()));
     Arc::make_mut(&mut snapshot.tag_count).insert(id, tag_count);
     Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, facts.size_bytes);

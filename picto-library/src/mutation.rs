@@ -439,7 +439,14 @@ impl Library {
                     bitmap_keys.extend(output.bitmap_keys);
                     folder_ids.extend(output.folder_ids);
                 }
-                ingest::persist_touched(transaction, revision, &next, bitmap_keys, folder_ids)?;
+                ingest::persist_touched(
+                    transaction,
+                    revision,
+                    &next,
+                    bitmap_keys,
+                    folder_ids,
+                    root_ids.iter().copied(),
+                )?;
                 let affected = root_ids.iter().map(|root| root.0).collect();
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
                 insert_cloud_journal(
@@ -528,7 +535,14 @@ impl Library {
                     },
                 )?;
                 let mut next = output.snapshot;
-                ingest::persist_touched(transaction, revision, &next, bitmap_keys, folder_ids)?;
+                ingest::persist_touched(
+                    transaction,
+                    revision,
+                    &next,
+                    bitmap_keys,
+                    folder_ids,
+                    root_ids.iter().copied(),
+                )?;
                 crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
                 resources.extend([
                     "collections".to_owned(),
@@ -1006,7 +1020,7 @@ impl Library {
                 )?;
                 let mut next = (*snapshot).clone();
                 Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
-                Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new());
+                Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -1679,11 +1693,7 @@ impl Library {
                     Arc::make_mut(&mut next.collection_orders).remove(collection_id);
                 }
                 for media_id in &media_ids {
-                    if let Some(owner) =
-                        Arc::make_mut(&mut next.media_owner).get_mut(media_id as usize)
-                    {
-                        *owner = None;
-                    }
+                    Arc::make_mut(&mut next.media_owner).remove(media_id);
                 }
                 crate::group::remove_root_projections(&mut next, &roots);
                 crate::smart::settle_affected(transaction, &mut next, &roots)?;
@@ -1746,7 +1756,11 @@ impl Library {
                         return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
                     }
                 }
-                let source_members = snapshot.tags.get(&source).cloned().unwrap_or_default();
+                let source_members = snapshot
+                    .tags
+                    .get(&source)
+                    .map(|members| members.to_bitmap())
+                    .unwrap_or_default();
                 let mut next = (*snapshot).clone();
 
                 let mut history_changes = Vec::new();
@@ -1779,7 +1793,11 @@ impl Library {
                     });
                 }
                 if let Some(destination) = destination {
-                    let before = next.tags.get(&destination).cloned().unwrap_or_default();
+                    let before = next
+                        .tags
+                        .get(&destination)
+                        .map(|members| members.to_bitmap())
+                        .unwrap_or_default();
                     let mut after = before.clone();
                     after |= &source_members;
                     if before != after {
@@ -1792,7 +1810,7 @@ impl Library {
                             },
                             &after,
                         )?;
-                        Arc::make_mut(&mut next.tags).insert(destination, after.clone());
+                        Arc::make_mut(&mut next.tags).insert(destination, after.clone().into());
                         history_changes.push(SemanticChange::Bitmap {
                             key: BitmapKey {
                                 domain: BitmapDomain::Tag,
@@ -1819,7 +1837,7 @@ impl Library {
 
                 let destination_members = destination
                     .and_then(|tag_id| next.tags.get(&tag_id))
-                    .cloned()
+                    .map(|members| members.to_bitmap())
                     .unwrap_or_default();
                 let counts = Arc::make_mut(&mut next.tag_count);
                 for root_id in &source_members {
@@ -1946,7 +1964,10 @@ impl Library {
                     ));
                 };
                 let tags = Arc::make_mut(&mut next.tags);
-                let before = tags.get(&tag_id).cloned().unwrap_or_default();
+                let before = tags
+                    .get(&tag_id)
+                    .map(|members| members.to_bitmap())
+                    .unwrap_or_default();
                 let mut after = before.clone();
                 if add {
                     after |= &selection;
@@ -1966,7 +1987,7 @@ impl Library {
                         },
                     ));
                 }
-                tags.insert(tag_id, after.clone());
+                tags.insert(tag_id, after.clone().into());
                 bitmap::replace(
                     transaction,
                     revision,
@@ -2231,7 +2252,7 @@ impl Library {
                 let changed = &before_bitmap ^ &after_bitmap;
                 let added = &after_bitmap - &before_bitmap;
                 Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(after.clone()));
-                Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone());
+                Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone().into());
                 let counts = Arc::make_mut(&mut next.folder_count);
                 for root_id in &changed {
                     let current = counts.value(root_id).unwrap_or(0);
@@ -2254,7 +2275,11 @@ impl Library {
                 if add && !added.is_empty() {
                     for tag_id in ingest::folder_auto_tags(transaction, folder_id)? {
                         let tag_id = crate::TagId(tag_id);
-                        let before = next.tags.get(&tag_id).cloned().unwrap_or_default();
+                        let before = next
+                            .tags
+                            .get(&tag_id)
+                            .map(|members| members.to_bitmap())
+                            .unwrap_or_default();
                         let mut after = before.clone();
                         after |= &added;
                         let tag_changed = &before ^ &after;
@@ -2270,7 +2295,7 @@ impl Library {
                             },
                             &after,
                         )?;
-                        Arc::make_mut(&mut next.tags).insert(tag_id, after.clone());
+                        Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
                         let counts = Arc::make_mut(&mut next.tag_count);
                         for root_id in &tag_changed {
                             let current = counts.value(root_id).unwrap_or(0);
@@ -2588,7 +2613,8 @@ fn apply_semantic_change(
                         folder_id,
                         Arc::new(replacement.iter().copied().map(RootId).collect()),
                     );
-                    Arc::make_mut(&mut snapshot.folders).insert(folder_id, new_bitmap.clone());
+                    Arc::make_mut(&mut snapshot.folders)
+                        .insert(folder_id, new_bitmap.clone().into());
                     let counts = Arc::make_mut(&mut snapshot.folder_count);
                     for root_id in &changed {
                         let current = counts.value(root_id).unwrap_or(0);
@@ -2805,7 +2831,11 @@ fn apply_semantic_change(
                     tag_id.0
                 )));
             }
-            let current_members = snapshot.tags.get(&tag_id).cloned().unwrap_or_default();
+            let current_members = snapshot
+                .tags
+                .get(&tag_id)
+                .map(|members| members.to_bitmap())
+                .unwrap_or_default();
             if &current_members != expected_members {
                 return Err(LibraryError::InvalidState(format!(
                     "cannot replay history because tag {} membership changed",
@@ -2858,7 +2888,8 @@ fn apply_semantic_change(
             names.retain(|_, id| *id != tag_id);
             if let Some(state) = replacement {
                 names.insert(state.full_name.clone(), tag_id);
-                Arc::make_mut(&mut snapshot.tags).insert(tag_id, replacement_members.clone());
+                Arc::make_mut(&mut snapshot.tags)
+                    .insert(tag_id, replacement_members.clone().into());
             } else {
                 Arc::make_mut(&mut snapshot.tags).remove(&tag_id);
             }
@@ -2992,17 +3023,21 @@ fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBi
         BitmapDomain::Lifecycle => snapshot
             .lifecycle
             .iter()
-            .find_map(|(value, bitmap)| (value.bitmap_key() == key.key_id).then(|| bitmap.clone()))
+            .find_map(|(value, bitmap)| {
+                (value.bitmap_key() == key.key_id).then(|| bitmap.to_bitmap())
+            })
             .unwrap_or_default(),
         BitmapDomain::Rating => snapshot
             .ratings
             .iter()
-            .find_map(|(value, bitmap)| (value.bitmap_key() == key.key_id).then(|| bitmap.clone()))
+            .find_map(|(value, bitmap)| {
+                (value.bitmap_key() == key.key_id).then(|| bitmap.to_bitmap())
+            })
             .unwrap_or_default(),
         BitmapDomain::Tag => snapshot
             .tags
             .get(&crate::TagId(key.key_id))
-            .cloned()
+            .map(|bitmap| bitmap.to_bitmap())
             .unwrap_or_default(),
     }
 }
@@ -3014,7 +3049,7 @@ fn set_projection_bitmap(snapshot: &mut ProjectionSnapshot, key: BitmapKey, bitm
                 .into_iter()
                 .find(|value| value.bitmap_key() == key.key_id)
             {
-                Arc::make_mut(&mut snapshot.lifecycle).insert(value, bitmap);
+                Arc::make_mut(&mut snapshot.lifecycle).insert(value, bitmap.into());
             }
         }
         BitmapDomain::Rating => {
@@ -3022,11 +3057,11 @@ fn set_projection_bitmap(snapshot: &mut ProjectionSnapshot, key: BitmapKey, bitm
                 .into_iter()
                 .find(|value| value.bitmap_key() == key.key_id)
             {
-                Arc::make_mut(&mut snapshot.ratings).insert(value, bitmap);
+                Arc::make_mut(&mut snapshot.ratings).insert(value, bitmap.into());
             }
         }
         BitmapDomain::Tag => {
-            Arc::make_mut(&mut snapshot.tags).insert(crate::TagId(key.key_id), bitmap);
+            Arc::make_mut(&mut snapshot.tags).insert(crate::TagId(key.key_id), bitmap.into());
         }
     }
 }

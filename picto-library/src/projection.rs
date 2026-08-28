@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::iter::FromIterator;
+use std::ops::{BitAnd, BitAndAssign, BitOrAssign, BitXor, Deref, SubAssign};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -12,21 +14,195 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::predicate::ViewQuerySpec;
 use crate::{LibraryDatabase, Result};
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SharedBitmap(Arc<RoaringBitmap>);
+
+impl SharedBitmap {
+    pub(crate) fn insert(&mut self, value: u32) -> bool {
+        Arc::make_mut(&mut self.0).insert(value)
+    }
+
+    pub(crate) fn remove(&mut self, value: u32) -> bool {
+        Arc::make_mut(&mut self.0).remove(value)
+    }
+
+    pub(crate) fn subtract(&mut self, values: &RoaringBitmap) {
+        *Arc::make_mut(&mut self.0) -= values;
+    }
+
+    pub(crate) fn union(&mut self, values: &RoaringBitmap) {
+        *Arc::make_mut(&mut self.0) |= values;
+    }
+
+    pub(crate) fn to_bitmap(&self) -> RoaringBitmap {
+        (*self.0).clone()
+    }
+}
+
+impl From<RoaringBitmap> for SharedBitmap {
+    fn from(value: RoaringBitmap) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl FromIterator<u32> for SharedBitmap {
+    fn from_iter<T: IntoIterator<Item = u32>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<RoaringBitmap>())
+    }
+}
+
+impl BitOrAssign<&RoaringBitmap> for SharedBitmap {
+    fn bitor_assign(&mut self, rhs: &RoaringBitmap) {
+        self.union(rhs);
+    }
+}
+
+impl BitOrAssign<RoaringBitmap> for SharedBitmap {
+    fn bitor_assign(&mut self, rhs: RoaringBitmap) {
+        self.union(&rhs);
+    }
+}
+
+impl BitOrAssign<&SharedBitmap> for SharedBitmap {
+    fn bitor_assign(&mut self, rhs: &SharedBitmap) {
+        self.union(rhs);
+    }
+}
+
+impl SubAssign<&RoaringBitmap> for SharedBitmap {
+    fn sub_assign(&mut self, rhs: &RoaringBitmap) {
+        self.subtract(rhs);
+    }
+}
+
+impl BitAndAssign<&RoaringBitmap> for SharedBitmap {
+    fn bitand_assign(&mut self, rhs: &RoaringBitmap) {
+        *Arc::make_mut(&mut self.0) &= rhs;
+    }
+}
+
+impl<'a> BitAnd<&'a RoaringBitmap> for &'a SharedBitmap {
+    type Output = RoaringBitmap;
+
+    fn bitand(self, rhs: &'a RoaringBitmap) -> Self::Output {
+        self.deref() & rhs
+    }
+}
+
+impl<'a> BitXor<&'a SharedBitmap> for &'a SharedBitmap {
+    type Output = RoaringBitmap;
+
+    fn bitxor(self, rhs: &'a SharedBitmap) -> Self::Output {
+        self.deref() ^ rhs.deref()
+    }
+}
+
+impl<'a> IntoIterator for &'a SharedBitmap {
+    type Item = u32;
+    type IntoIter = roaring::bitmap::Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl BitOrAssign<&SharedBitmap> for RoaringBitmap {
+    fn bitor_assign(&mut self, rhs: &SharedBitmap) {
+        *self |= rhs.deref();
+    }
+}
+
+impl Deref for SharedBitmap {
+    type Target = RoaringBitmap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+const ID_MAP_SHARD_SHIFT: u32 = 10;
+const ID_MAP_SHARD_MASK: u32 = (1 << ID_MAP_SHARD_SHIFT) - 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardedIdMap<V> {
+    shards: BTreeMap<u32, Arc<HashMap<u16, V>>>,
+}
+
+impl<V> Default for ShardedIdMap<V> {
+    fn default() -> Self {
+        Self {
+            shards: BTreeMap::new(),
+        }
+    }
+}
+
+impl<V: Clone> ShardedIdMap<V> {
+    pub fn get(&self, id: u32) -> Option<&V> {
+        self.shards
+            .get(&(id >> ID_MAP_SHARD_SHIFT))
+            .and_then(|shard| shard.get(&((id & ID_MAP_SHARD_MASK) as u16)))
+    }
+
+    pub(crate) fn insert(&mut self, id: u32, value: V) -> Option<V> {
+        Arc::make_mut(
+            self.shards
+                .entry(id >> ID_MAP_SHARD_SHIFT)
+                .or_insert_with(|| Arc::new(HashMap::new())),
+        )
+        .insert((id & ID_MAP_SHARD_MASK) as u16, value)
+    }
+
+    pub(crate) fn remove(&mut self, id: u32) -> Option<V> {
+        let high = id >> ID_MAP_SHARD_SHIFT;
+        let shard = self.shards.get_mut(&high)?;
+        let result = Arc::make_mut(shard).remove(&((id & ID_MAP_SHARD_MASK) as u16));
+        if shard.is_empty() {
+            self.shards.remove(&high);
+        }
+        result
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.shards
+            .values()
+            .map(|shard| {
+                shard.capacity()
+                    * (std::mem::size_of::<u16>()
+                        + std::mem::size_of::<V>()
+                        + 2 * std::mem::size_of::<usize>())
+            })
+            .sum::<usize>()
+            + self.shards.len()
+                * (std::mem::size_of::<u32>() + std::mem::size_of::<Arc<HashMap<u16, V>>>())
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumericIndex {
+    shards: BTreeMap<u16, Arc<NumericShard>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct NumericShard {
     present: RoaringBitmap,
     slices: Vec<RoaringBitmap>,
 }
 
 impl NumericIndex {
     pub fn insert(&mut self, id: u32, value: u64) {
-        self.remove(id);
-        self.present.insert(id);
+        let shard = Arc::make_mut(
+            self.shards
+                .entry((id >> 16) as u16)
+                .or_insert_with(|| Arc::new(NumericShard::default())),
+        );
+        shard.remove(id);
+        shard.present.insert(id);
         let bits = (64 - value.leading_zeros()).max(1) as usize;
-        if self.slices.len() < bits {
-            self.slices.resize_with(bits, RoaringBitmap::new);
+        if shard.slices.len() < bits {
+            shard.slices.resize_with(bits, RoaringBitmap::new);
         }
-        for (bit, slice) in self.slices.iter_mut().enumerate() {
+        for (bit, slice) in shard.slices.iter_mut().enumerate() {
             if value & (1u64 << bit) != 0 {
                 slice.insert(id);
             }
@@ -34,13 +210,54 @@ impl NumericIndex {
     }
 
     pub fn remove(&mut self, id: u32) {
+        let high = (id >> 16) as u16;
+        let Some(shard) = self.shards.get_mut(&high) else {
+            return;
+        };
+        let shard = Arc::make_mut(shard);
+        shard.remove(id);
+        if shard.present.is_empty() {
+            self.shards.remove(&high);
+        }
+    }
+
+    pub fn value(&self, id: u32) -> Option<u64> {
+        self.shards
+            .get(&((id >> 16) as u16))
+            .and_then(|shard| shard.value(id))
+    }
+
+    pub fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
+        let mut result = RoaringBitmap::new();
+        for shard in self.shards.values() {
+            result |= shard.between(minimum, maximum);
+        }
+        result
+    }
+
+    pub fn sum(&self, selection: &RoaringBitmap) -> u128 {
+        self.shards.values().map(|shard| shard.sum(selection)).sum()
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.shards
+            .values()
+            .map(|shard| shard.estimated_bytes())
+            .sum::<usize>()
+            + self.shards.len()
+                * (std::mem::size_of::<u16>() + std::mem::size_of::<Arc<NumericShard>>())
+    }
+}
+
+impl NumericShard {
+    fn remove(&mut self, id: u32) {
         self.present.remove(id);
         for slice in &mut self.slices {
             slice.remove(id);
         }
     }
 
-    pub fn value(&self, id: u32) -> Option<u64> {
+    fn value(&self, id: u32) -> Option<u64> {
         self.present.contains(id).then(|| {
             self.slices
                 .iter()
@@ -51,11 +268,7 @@ impl NumericIndex {
         })
     }
 
-    pub fn present(&self) -> &RoaringBitmap {
-        &self.present
-    }
-
-    pub fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
+    fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
         let mut result = self.present.clone();
         if let Some(minimum) = minimum {
             result -= &self.less_than(minimum);
@@ -66,7 +279,7 @@ impl NumericIndex {
         result
     }
 
-    pub fn sum(&self, selection: &RoaringBitmap) -> u128 {
+    fn sum(&self, selection: &RoaringBitmap) -> u128 {
         self.slices
             .iter()
             .enumerate()
@@ -113,19 +326,19 @@ impl NumericIndex {
 #[derive(Debug, Clone)]
 pub struct ProjectionSnapshot {
     pub revision: u64,
-    pub lifecycle: Arc<HashMap<Lifecycle, RoaringBitmap>>,
-    pub ratings: Arc<HashMap<Rating, RoaringBitmap>>,
-    pub tags: Arc<HashMap<TagId, RoaringBitmap>>,
+    pub lifecycle: Arc<HashMap<Lifecycle, SharedBitmap>>,
+    pub ratings: Arc<HashMap<Rating, SharedBitmap>>,
+    pub tags: Arc<HashMap<TagId, SharedBitmap>>,
     pub tag_ids_by_name: Arc<HashMap<String, TagId>>,
     pub folder_orders: Arc<HashMap<FolderId, Arc<Vec<RootId>>>>,
-    pub folders: Arc<HashMap<FolderId, RoaringBitmap>>,
+    pub folders: Arc<HashMap<FolderId, SharedBitmap>>,
     pub collection_orders: Arc<HashMap<RootId, Arc<Vec<MediaId>>>>,
-    pub media_owner: Arc<Vec<Option<RootId>>>,
-    pub root_kinds: Arc<HashMap<RootKind, RoaringBitmap>>,
-    pub mime: Arc<HashMap<String, RoaringBitmap>>,
-    pub mime_family: Arc<HashMap<String, RoaringBitmap>>,
-    pub color_cells: Arc<HashMap<u32, RoaringBitmap>>,
-    pub cover_palettes: Arc<HashMap<RootId, Arc<Vec<LabColor>>>>,
+    pub media_owner: Arc<ShardedIdMap<RootId>>,
+    pub root_kinds: Arc<HashMap<RootKind, SharedBitmap>>,
+    pub mime: Arc<HashMap<String, SharedBitmap>>,
+    pub mime_family: Arc<HashMap<String, SharedBitmap>>,
+    pub color_cells: Arc<HashMap<u32, SharedBitmap>>,
+    pub cover_palettes: Arc<ShardedIdMap<Arc<Vec<LabColor>>>>,
     pub tag_count: Arc<NumericIndex>,
     pub folder_count: Arc<NumericIndex>,
     pub total_bytes: Arc<NumericIndex>,
@@ -137,7 +350,7 @@ pub struct ProjectionSnapshot {
     pub modified_at: Arc<NumericIndex>,
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
-    pub smart_results: Arc<HashMap<u32, RoaringBitmap>>,
+    pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
 }
 
@@ -172,7 +385,7 @@ impl ProjectionSnapshot {
             + bitmap_map_estimated_bytes(&self.smart_results)
             + self.notes_present.serialized_size()
             + self.urls_present.serialized_size()
-            + self.media_owner.capacity() * std::mem::size_of::<Option<RootId>>();
+            + self.media_owner.estimated_bytes();
         bytes += self
             .tag_ids_by_name
             .keys()
@@ -188,11 +401,7 @@ impl ProjectionSnapshot {
             .values()
             .map(|values| values.capacity() * std::mem::size_of::<MediaId>())
             .sum::<usize>();
-        bytes += self
-            .cover_palettes
-            .values()
-            .map(|values| values.capacity() * std::mem::size_of::<LabColor>())
-            .sum::<usize>();
+        bytes += self.cover_palettes.estimated_bytes();
         bytes += [
             &self.tag_count,
             &self.folder_count,
@@ -216,13 +425,13 @@ impl ProjectionSnapshot {
     }
 }
 
-fn bitmap_map_estimated_bytes<K>(values: &HashMap<K, RoaringBitmap>) -> usize {
+fn bitmap_map_estimated_bytes<K>(values: &HashMap<K, SharedBitmap>) -> usize {
     values
         .values()
-        .map(RoaringBitmap::serialized_size)
+        .map(|bitmap| bitmap.serialized_size())
         .sum::<usize>()
         + values.capacity()
-            * (std::mem::size_of::<RoaringBitmap>() + 2 * std::mem::size_of::<usize>())
+            * (std::mem::size_of::<SharedBitmap>() + 2 * std::mem::size_of::<usize>())
 }
 
 pub struct ProjectionStore {
@@ -270,7 +479,8 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
                     key_id: value.bitmap_key(),
                 })
                 .cloned()
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
         );
     }
     let mut ratings = HashMap::new();
@@ -283,16 +493,17 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
                     key_id: value.bitmap_key(),
                 })
                 .cloned()
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
         );
     }
     validate_partitions("lifecycle", lifecycle.values())?;
     validate_partitions("rating", ratings.values())?;
 
-    let tags = canonical
+    let tags: HashMap<TagId, SharedBitmap> = canonical
         .iter()
         .filter(|(key, _)| key.domain == BitmapDomain::Tag)
-        .map(|(key, bitmap)| (TagId(key.key_id), bitmap.clone()))
+        .map(|(key, bitmap)| (TagId(key.key_id), bitmap.clone().into()))
         .collect::<HashMap<_, _>>();
     let mut tag_ids_by_name = HashMap::new();
     let mut tag_statement = connection.prepare(
@@ -341,8 +552,8 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
                 );
             }
             value if value == OrderOwnerKind::Folder as u8 => {
-                let bitmap = values.iter().copied().collect();
-                folders.insert(FolderId(owner_id), bitmap);
+                let bitmap = values.iter().copied().collect::<RoaringBitmap>();
+                folders.insert(FolderId(owner_id), bitmap.into());
                 folder_orders.insert(
                     FolderId(owner_id),
                     Arc::new(values.into_iter().map(RootId).collect()),
@@ -356,16 +567,16 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         }
     }
 
-    let mut root_kinds: HashMap<RootKind, RoaringBitmap> = [
-        (RootKind::Media, RoaringBitmap::new()),
-        (RootKind::Collection, RoaringBitmap::new()),
+    let mut root_kinds: HashMap<RootKind, SharedBitmap> = [
+        (RootKind::Media, SharedBitmap::default()),
+        (RootKind::Collection, SharedBitmap::default()),
     ]
     .into_iter()
     .collect();
-    let mut mime: HashMap<String, RoaringBitmap> = HashMap::new();
-    let mut mime_family: HashMap<String, RoaringBitmap> = HashMap::new();
-    let mut color_cells: HashMap<u32, RoaringBitmap> = HashMap::new();
-    let mut cover_palettes: HashMap<RootId, Arc<Vec<LabColor>>> = HashMap::new();
+    let mut mime: HashMap<String, SharedBitmap> = HashMap::new();
+    let mut mime_family: HashMap<String, SharedBitmap> = HashMap::new();
+    let mut color_cells: HashMap<u32, SharedBitmap> = HashMap::new();
+    let mut cover_palettes = ShardedIdMap::default();
     let mut total_bytes = NumericIndex::default();
     let mut media_count = NumericIndex::default();
     let mut width = NumericIndex::default();
@@ -401,7 +612,6 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             row.get::<_, String>(12)?,
         ))
     })?;
-    let mut maximum_id = 0;
     for row in rows {
         let (
             root_id,
@@ -418,7 +628,6 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             root_duration,
             palette,
         ) = row?;
-        maximum_id = maximum_id.max(root_id);
         let kind = match kind {
             1 => RootKind::Media,
             2 => RootKind::Collection,
@@ -460,26 +669,20 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
                 .or_default()
                 .insert(root_id);
         }
-        cover_palettes.insert(RootId(root_id), Arc::new(root_palette));
+        cover_palettes.insert(root_id, Arc::new(root_palette));
     }
 
-    let mut media_owner = vec![None; maximum_id as usize + 1];
+    let mut media_owner = ShardedIdMap::default();
     for media_id in root_kinds
         .get(&RootKind::Media)
         .into_iter()
         .flat_map(|bitmap| bitmap.iter())
     {
-        if media_owner.len() <= media_id as usize {
-            media_owner.resize(media_id as usize + 1, None);
-        }
-        media_owner[media_id as usize] = Some(RootId(media_id));
+        media_owner.insert(media_id, RootId(media_id));
     }
     for (root_id, members) in &collection_orders {
         for media_id in members.iter() {
-            if media_owner.len() <= media_id.0 as usize {
-                media_owner.resize(media_id.0 as usize + 1, None);
-            }
-            if media_owner[media_id.0 as usize].replace(*root_id).is_some() {
+            if media_owner.insert(media_id.0, *root_id).is_some() {
                 return Err(crate::LibraryError::InvalidState(format!(
                     "media {} has multiple owning roots",
                     media_id.0
@@ -490,7 +693,7 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
 
     let mut tag_counts: HashMap<u32, u64> = HashMap::new();
     for members in tags.values() {
-        for root_id in members {
+        for root_id in members.iter() {
             *tag_counts.entry(root_id).or_default() += 1;
         }
     }
@@ -546,11 +749,11 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
 
 fn validate_partitions<'a>(
     name: &str,
-    partitions: impl Iterator<Item = &'a RoaringBitmap>,
+    partitions: impl Iterator<Item = &'a SharedBitmap>,
 ) -> Result<()> {
     let mut seen = RoaringBitmap::new();
     for partition in partitions {
-        if !(&seen & partition).is_empty() {
+        if !(&seen & partition.deref()).is_empty() {
             return Err(crate::LibraryError::InvalidState(format!(
                 "{name} partitions overlap"
             )));
@@ -562,7 +765,7 @@ fn validate_partitions<'a>(
 
 fn validate_partition_coverage<'a>(
     name: &str,
-    partitions: impl Iterator<Item = &'a RoaringBitmap>,
+    partitions: impl Iterator<Item = &'a SharedBitmap>,
     expected: &RoaringBitmap,
 ) -> Result<()> {
     let actual = partitions.fold(RoaringBitmap::new(), |mut result, values| {
@@ -577,7 +780,7 @@ fn validate_partition_coverage<'a>(
     Ok(())
 }
 
-fn all_roots(root_kinds: &HashMap<RootKind, RoaringBitmap>) -> RoaringBitmap {
+fn all_roots(root_kinds: &HashMap<RootKind, SharedBitmap>) -> RoaringBitmap {
     root_kinds
         .values()
         .fold(RoaringBitmap::new(), |mut result, values| {

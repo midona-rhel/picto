@@ -203,12 +203,9 @@ pub(crate) fn insert_one(
             .insert(root_id.0);
     }
     Arc::make_mut(&mut snapshot.cover_palettes)
-        .insert(root_id, Arc::new(input.facts.palette.clone()));
+        .insert(root_id.0, Arc::new(input.facts.palette.clone()));
     let owners = Arc::make_mut(&mut snapshot.media_owner);
-    if owners.len() <= media_id.0 as usize {
-        owners.resize(media_id.0 as usize + 1, None);
-    }
-    owners[media_id.0 as usize] = Some(root_id);
+    owners.insert(media_id.0, root_id);
 
     Arc::make_mut(&mut snapshot.tag_count).insert(root_id.0, assigned_tags);
     Arc::make_mut(&mut snapshot.folder_count).insert(root_id.0, assigned_folders);
@@ -252,7 +249,12 @@ pub(crate) fn persist_touched(
     snapshot: &ProjectionSnapshot,
     bitmap_keys: impl IntoIterator<Item = BitmapKey>,
     folder_ids: impl IntoIterator<Item = FolderId>,
+    root_ids: impl IntoIterator<Item = RootId>,
 ) -> Result<()> {
+    let high_bits = root_ids
+        .into_iter()
+        .map(|root_id| (root_id.0 >> 16) as u16)
+        .collect::<std::collections::BTreeSet<_>>();
     for key in bitmap_keys {
         let values = match key.domain {
             BitmapDomain::Lifecycle => snapshot
@@ -271,7 +273,13 @@ pub(crate) fn persist_touched(
                 key.domain, key.key_id
             ))
         })?;
-        bitmap::replace(transaction, revision, key, values)?;
+        bitmap::replace_shards(
+            transaction,
+            revision,
+            key,
+            values,
+            high_bits.iter().copied(),
+        )?;
     }
     for folder_id in folder_ids {
         let values = snapshot.folder_orders.get(&folder_id).ok_or_else(|| {

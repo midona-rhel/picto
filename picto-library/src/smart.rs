@@ -36,7 +36,7 @@ pub(crate) fn load(connection: &Connection, snapshot: &mut ProjectionSnapshot) -
         })?;
         let result = evaluate(connection, snapshot, &view, snapshot.active())?;
         queries.insert(smart_folder_id, view);
-        results.insert(smart_folder_id, result);
+        results.insert(smart_folder_id, result.into());
     }
     snapshot.smart_queries = Arc::new(queries);
     snapshot.smart_results = Arc::new(results);
@@ -92,7 +92,7 @@ pub(crate) fn replace_query(
 ) -> Result<()> {
     let result = evaluate(connection, snapshot, &view, snapshot.active())?;
     Arc::make_mut(&mut snapshot.smart_queries).insert(smart_folder_id.0, view);
-    Arc::make_mut(&mut snapshot.smart_results).insert(smart_folder_id.0, result);
+    Arc::make_mut(&mut snapshot.smart_results).insert(smart_folder_id.0, result.into());
     Ok(())
 }
 
@@ -155,7 +155,7 @@ pub fn list(
         let count = snapshot
             .smart_results
             .get(&smart_folder_id.0)
-            .map_or(0, RoaringBitmap::len);
+            .map_or(0, |values| values.len());
         Ok(SmartFolderRecord {
             smart_folder_id,
             name,

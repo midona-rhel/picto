@@ -235,7 +235,11 @@ fn scope_bitmap(
             values
         }
         ItemScope::Folder { folder_id } => {
-            let mut values = snapshot.folders.get(folder_id).cloned().unwrap_or_default();
+            let mut values = snapshot
+                .folders
+                .get(folder_id)
+                .map(|values| values.to_bitmap())
+                .unwrap_or_default();
             values &= snapshot.active();
             values
         }
@@ -243,7 +247,7 @@ fn scope_bitmap(
             let mut values = snapshot
                 .smart_results
                 .get(&smart_folder_id.0)
-                .cloned()
+                .map(|values| values.to_bitmap())
                 .unwrap_or_default();
             values &= snapshot.active();
             values

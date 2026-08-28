@@ -293,18 +293,26 @@ fn evaluate_clause(
 ) -> Result<RoaringBitmap> {
     let mut result = match clause {
         FilterClause::Tags { tag_ids, mode } => set_match(
-            tag_ids
-                .iter()
-                .map(|id| snapshot.tags.get(id).cloned().unwrap_or_default()),
+            tag_ids.iter().map(|id| {
+                snapshot
+                    .tags
+                    .get(id)
+                    .map(|values| values.to_bitmap())
+                    .unwrap_or_default()
+            }),
             *mode,
             universe,
             &snapshot.tag_count,
             tag_ids.len() as u64,
         ),
         FilterClause::Folders { folder_ids, mode } => set_match(
-            folder_ids
-                .iter()
-                .map(|id| snapshot.folders.get(id).cloned().unwrap_or_default()),
+            folder_ids.iter().map(|id| {
+                snapshot
+                    .folders
+                    .get(id)
+                    .map(|values| values.to_bitmap())
+                    .unwrap_or_default()
+            }),
             *mode,
             universe,
             &snapshot.folder_count,
@@ -435,7 +443,7 @@ fn color_matches(
         .filter(|root_id| {
             snapshot
                 .cover_palettes
-                .get(&crate::model::RootId(*root_id))
+                .get(*root_id)
                 .is_some_and(|palette| {
                     palette.iter().any(|color| {
                         ((color.l - requested.l).powi(2)

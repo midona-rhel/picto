@@ -31,3 +31,26 @@ ingestion. FTS and derivative settlement are intentionally outside canonical ing
 The numbers are a development ledger, not a portable hardware guarantee. Release acceptance still
 requires the complete mutation matrix, smart-folder rebuilds, FTS freshness, crash injection,
 projection memory measurement, one-million-root fixtures, and packaged platform smoke tests.
+
+## 300k Settlement Scaling
+
+The same fixture at 300,000 roots verifies that canonical ingestion no longer rescans every
+persisted bitmap shard or copies complete per-root projection maps on every publication.
+
+| Measurement | Before targeted projection work | Current result |
+|---|---:|---:|
+| First 100k ingest interval | 24,824.769 ms | 19,929.768 ms |
+| Second 100k ingest interval | 53,422.801 ms | 23,934.057 ms |
+| Third 100k ingest interval | 74,604.288 ms | 28,770.039 ms |
+| Total canonical ingest | 152,851.893 ms | 72,633.916 ms |
+| Database work per item | 0.510 ms | 0.242 ms |
+| Publication batch p95 | 32.605 ms | 12.771 ms |
+| Concurrent reader p95 | 3.858 ms | 2.222 ms |
+| Concurrent reader p99 | 5.823 ms | 3.346 ms |
+| Concurrent reader maximum | 32.892 ms | 9.873 ms |
+| Projection memory estimate | 37.173 MiB | 47.103 MiB |
+| Checkpoint-backed normal reopen | 99.038 ms | 94.486 ms |
+
+The projection memory increase is the measured cost of small copy-on-write owner and palette
+shards. It remains well below the 512 MiB one-million-root target when extrapolated linearly.
+Checkpoint-backed reopen is normal startup; a full bitmap reconstruction is a recovery path only.

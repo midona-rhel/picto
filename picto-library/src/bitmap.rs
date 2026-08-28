@@ -211,6 +211,74 @@ pub fn replace(
     Ok(changed)
 }
 
+pub fn replace_shards(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    key: BitmapKey,
+    bitmap: &RoaringBitmap,
+    high_bits: impl IntoIterator<Item = u16>,
+) -> Result<usize> {
+    let mut changed = 0;
+    for high in high_bits {
+        let start = (high as u32) << 16;
+        let end = start | u16::MAX as u32;
+        let shard = bitmap
+            .range(start..=end)
+            .map(|value| value & 0xffff)
+            .collect::<RoaringBitmap>();
+        let current = transaction
+            .query_row(
+                "SELECT checksum FROM canonical_bitmap
+                 WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
+                params![key.domain as u8, key.key_id, high],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        if shard.is_empty() {
+            if current.is_some() {
+                transaction.execute(
+                    "DELETE FROM canonical_bitmap
+                     WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
+                    params![key.domain as u8, key.key_id, high],
+                )?;
+                changed += 1;
+            }
+            continue;
+        }
+        let payload = encode(&shard)?;
+        let digest = checksum(&payload);
+        if current
+            .as_ref()
+            .is_some_and(|value| value.as_slice() == digest)
+        {
+            continue;
+        }
+        transaction.execute(
+            "INSERT INTO canonical_bitmap
+                 (domain, key_id, high_bits, revision, cardinality, format_version, checksum, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(domain, key_id, high_bits) DO UPDATE SET
+                 revision = excluded.revision,
+                 cardinality = excluded.cardinality,
+                 format_version = excluded.format_version,
+                 checksum = excluded.checksum,
+                 payload = excluded.payload",
+            params![
+                key.domain as u8,
+                key.key_id,
+                high,
+                revision as i64,
+                shard.len() as i64,
+                BITMAP_FORMAT_VERSION,
+                digest.as_slice(),
+                payload
+            ],
+        )?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
 pub fn revision(transaction: &Transaction<'_>, key: BitmapKey) -> Result<Option<u64>> {
     transaction
         .query_row(
@@ -238,5 +306,24 @@ mod tests {
             }
         }
         assert_eq!(bitmap, rebuilt);
+    }
+
+    #[test]
+    fn targeted_replacement_changes_only_requested_shards() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("schema_v1.sql"))
+            .unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let key = BitmapKey {
+            domain: BitmapDomain::Tag,
+            key_id: 7,
+        };
+        let original = [1, 65_537].into_iter().collect::<RoaringBitmap>();
+        replace(&transaction, 1, key, &original).unwrap();
+        let updated = [2, 65_537].into_iter().collect::<RoaringBitmap>();
+        replace_shards(&transaction, 2, key, &updated, [0]).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(load(&connection, key).unwrap(), updated);
     }
 }
