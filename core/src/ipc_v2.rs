@@ -215,6 +215,10 @@ pub fn dispatch_library(
                 &input.file_hashes,
             )?)
         }
+        "media.export" => read(crate::media_io_v2::export_library(
+            application,
+            &parse::<crate::media_io_v2::LibraryExportRequest>(args_json)?,
+        )?),
         "sources.list" => read(crate::auth_v2::sources()),
         "auth.credentials.list" => read(crate::auth_v2::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth_v2::list_library_health(application)?),
@@ -2255,6 +2259,26 @@ mod tests {
             serde_json::from_str(&first).unwrap();
         assert_eq!((first.requested, first.enqueued), (1, 0));
         assert_eq!(first.already_queued, 1);
+
+        let export_directory = tempfile::tempdir().unwrap();
+        let export = dispatch_library(
+            &application,
+            "media.export",
+            &serde_json::json!({
+                "target": {"kind": "explicit", "root_ids": [root_id.0]},
+                "output_dir": export_directory.path(),
+                "format": "original",
+                "quality": 90,
+                "width": null,
+                "height": null,
+                "keep_aspect": true
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let export: crate::media_io_v2::ExportResult = serde_json::from_str(&export).unwrap();
+        assert_eq!((export.selected_item_count, export.exported), (1, 1));
     }
 
     #[test]

@@ -451,6 +451,17 @@ pub struct ExportRequest {
     pub keep_aspect: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryExportRequest {
+    pub target: picto_library::selection::SelectionTarget,
+    pub output_dir: PathBuf,
+    pub format: ExportFormat,
+    pub quality: u8,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub keep_aspect: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ExportResult {
@@ -492,7 +503,54 @@ pub fn export(
     };
 
     for (index, media) in media.iter().enumerate() {
-        match export_one(blobs, &request.output_dir, request, media, index) {
+        match export_one(
+            blobs,
+            &request.output_dir,
+            request.format,
+            request.quality,
+            request.width,
+            request.height,
+            request.keep_aspect,
+            media,
+            index,
+        ) {
+            Ok(()) => result.exported += 1,
+            Err(error) => {
+                result.skipped += 1;
+                result.errors.push(error);
+            }
+        }
+    }
+    Ok(result)
+}
+
+pub fn export_library(
+    application: &LibraryApplication,
+    request: &LibraryExportRequest,
+) -> Result<ExportResult, String> {
+    reject_library_path(application.root(), &request.output_dir)?;
+    fs::create_dir_all(&request.output_dir)
+        .map_err(|error| format!("Failed to create export directory: {error}"))?;
+    let (selected_item_count, media) = ordered_media_library(application, &request.target)?;
+    let mut result = ExportResult {
+        selected_item_count,
+        selected_media_count: media.len(),
+        exported: 0,
+        skipped: 0,
+        errors: Vec::new(),
+    };
+    for (index, media) in media.iter().enumerate() {
+        match export_one(
+            application.blobs(),
+            &request.output_dir,
+            request.format,
+            request.quality,
+            request.width,
+            request.height,
+            request.keep_aspect,
+            media,
+            index,
+        ) {
             Ok(()) => result.exported += 1,
             Err(error) => {
                 result.skipped += 1;
@@ -551,10 +609,67 @@ fn ordered_media(
     })
 }
 
+fn ordered_media_library(
+    application: &LibraryApplication,
+    target: &picto_library::selection::SelectionTarget,
+) -> Result<(usize, Vec<ExportMedia>), String> {
+    application
+        .library()
+        .auxiliary_read_consistent(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection, projection| {
+                let roots = picto_library::selection::resolve_ordered(
+                    connection,
+                    projection,
+                    target,
+                )?;
+                let media_ids = roots
+                    .iter()
+                    .flat_map(|root_id| {
+                        projection
+                            .collection_orders
+                            .get(root_id)
+                            .map(|members| members.iter().map(|member| member.0).collect())
+                            .unwrap_or_else(|| vec![root_id.0])
+                    })
+                    .collect::<Vec<_>>();
+                let encoded = serde_json::to_string(&media_ids)?;
+                let mut statement = connection.prepare(
+                    "WITH ordered_media(media_id, position) AS (
+                         SELECT CAST(value AS INTEGER), CAST(key AS INTEGER)
+                         FROM json_each(?1)
+                     )
+                     SELECT file.content_hash, file.mime, media.media_name,
+                            ordered_media.position
+                     FROM ordered_media
+                     JOIN media_item media ON media.media_id = ordered_media.media_id
+                     JOIN media_file file ON file.file_id = media.file_id
+                     ORDER BY ordered_media.position",
+                )?;
+                let media = statement
+                    .query_map([encoded], |row| {
+                        Ok(ExportMedia {
+                            file_hash: FileHash(row.get(0)?),
+                            mime_type: row.get(1)?,
+                            name: Some(row.get(2)?),
+                            position: row.get(3)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok((roots.len(), media))
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 fn export_one(
     blobs: &BlobStore,
     output_dir: &Path,
-    request: &ExportRequest,
+    format: ExportFormat,
+    quality: u8,
+    width: Option<u32>,
+    height: Option<u32>,
+    keep_aspect: bool,
     media: &ExportMedia,
     index: usize,
 ) -> Result<(), String> {
@@ -570,9 +685,9 @@ fn export_one(
             media.position.max(index as i64)
         ),
     );
-    let output_extension = output_extension(request.format, extension);
+    let output_extension = output_extension(format, extension);
     let output_path = unique_path(output_dir, &stem, output_extension);
-    let output = match request.format {
+    let output = match format {
         ExportFormat::Original => bytes,
         format => {
             if !media.mime_type.starts_with("image/") {
@@ -583,8 +698,8 @@ fn export_one(
             }
             let image = image::load_from_memory(&bytes)
                 .map_err(|error| format!("Failed to decode {}: {error}", media.file_hash.0))?;
-            let image = resize(image, request.width, request.height, request.keep_aspect);
-            encode(image, format, request.quality)?
+            let image = resize(image, width, height, keep_aspect);
+            encode(image, format, quality)?
         }
     };
     fs::write(&output_path, output)
