@@ -609,13 +609,10 @@ impl LibraryApplication {
         })
     }
 
-    pub fn tag_namespace_counts(&self) -> Result<Vec<(String, u64)>, String> {
-        let tags = self.library.tags().map_err(|error| error.to_string())?;
-        let mut counts = std::collections::BTreeMap::<String, u64>::new();
-        for tag in tags {
-            *counts.entry(tag.namespace).or_default() += 1;
-        }
-        Ok(counts.into_iter().collect())
+    pub fn tag_namespace_counts(&self) -> Result<Vec<picto_library::TagNamespaceRecord>, String> {
+        self.library
+            .tag_namespaces()
+            .map_err(|error| error.to_string())
     }
 
     pub fn unused_tag_count(&self) -> Result<u64, String> {
@@ -664,6 +661,24 @@ impl LibraryApplication {
     pub fn delete_unused_tags(&self) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .delete_unused_tags()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn rename_tag_namespace(
+        &self,
+        input: &picto_library::RenameTagNamespaceInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .rename_or_merge_tag_namespace(input.namespace_id, &input.name)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn delete_tag_namespace(
+        &self,
+        namespace_id: picto_library::TagNamespaceId,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .delete_tag_namespace(namespace_id)
             .map_err(|error| error.to_string())
     }
 

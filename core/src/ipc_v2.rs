@@ -213,6 +213,14 @@ pub fn dispatch_library(
             read(application.delete_tag(input.tag_id)?)
         }
         "tags.delete_unused" => read(application.delete_unused_tags()?),
+        "tags.group.rename" => {
+            let input: picto_library::RenameTagNamespaceInput = parse(args_json)?;
+            read(application.rename_tag_namespace(&input)?)
+        }
+        "tags.group.delete" => {
+            let input: picto_library::TagNamespaceInput = parse(args_json)?;
+            read(application.delete_tag_namespace(input.namespace_id)?)
+        }
         "duplicates.resolve" => {
             let input: LibraryResolveDuplicateInput = parse(args_json)?;
             read(application.resolve_duplicate(
@@ -2140,12 +2148,45 @@ mod tests {
         let page: picto_library::TagPage = serde_json::from_str(&page).unwrap();
         assert_eq!(page.tags.len(), 1);
         assert_eq!(page.tags[0].active_count, 1);
+        let namespaces = dispatch_library(&application, "tags.namespace_counts", "{}")
+            .unwrap()
+            .unwrap();
+        let namespaces: Vec<picto_library::TagNamespaceRecord> =
+            serde_json::from_str(&namespaces).unwrap();
+        assert_eq!(namespaces.len(), 1);
+        assert_eq!(namespaces[0].name, "creator");
+        assert_eq!(namespaces[0].tag_count, 1);
+        dispatch_library(
+            &application,
+            "tags.group.rename",
+            &serde_json::json!({
+                "namespace_id": namespaces[0].namespace_id,
+                "name": "people",
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
-            dispatch_library(&application, "tags.namespace_counts", "{}")
-                .unwrap()
-                .unwrap(),
-            r#"[["creator",1]]"#
+            application.library().tags().unwrap()[0].namespace,
+            "people"
         );
+        dispatch_library(
+            &application,
+            "tags.group.delete",
+            &serde_json::json!({"namespace_id": namespaces[0].namespace_id}).to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(application.library().tags().unwrap()[0].namespace, "");
+        dispatch_library(&application, "history.undo", "{}")
+            .unwrap()
+            .unwrap();
+        assert_eq!(application.library().tags().unwrap()[0].namespace, "people");
+        dispatch_library(&application, "history.redo", "{}")
+            .unwrap()
+            .unwrap();
+        assert_eq!(application.library().tags().unwrap()[0].namespace, "");
         dispatch_library(
             &application,
             "tags.delete",

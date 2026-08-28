@@ -18,6 +18,13 @@ pub struct TagDefinitionState {
     pub full_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagNamespaceDefinitionState {
+    pub namespace_id: crate::TagNamespaceId,
+    pub stable_key: String,
+    pub display_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedQueryChange {
     pub smart_folder_id: crate::SmartFolderId,
@@ -121,6 +128,10 @@ pub enum SemanticChange {
         before: String,
         after: String,
     },
+    TagNamespaceDefinition {
+        before: Option<TagNamespaceDefinitionState>,
+        after: Option<TagNamespaceDefinitionState>,
+    },
     TagDefinition {
         before: Option<TagDefinitionState>,
         after: Option<TagDefinitionState>,
@@ -181,6 +192,11 @@ impl SemanticChange {
             Self::CollectionCover { .. } => 64,
             Self::TagName { before, after, .. } => before.len() + after.len() + 32,
             Self::TagNamespaceName { before, after, .. } => before.len() + after.len() + 32,
+            Self::TagNamespaceDefinition { before, after } => before
+                .iter()
+                .chain(after.iter())
+                .map(|state| state.stable_key.len() + state.display_name.len() + 32)
+                .sum(),
             Self::TagDefinition {
                 before,
                 after,

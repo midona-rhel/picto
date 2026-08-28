@@ -9,6 +9,7 @@ use crate::database::WorkPriority;
 use crate::history::{
     FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
     SmartFolderDefinitionState, StructuralRootState, StructuralState, TagDefinitionState,
+    TagNamespaceDefinitionState,
 };
 use crate::ingest;
 use crate::model::{
@@ -352,6 +353,29 @@ impl Library {
 
     pub fn tags(&self) -> Result<Vec<TagRecord>> {
         self.tags_with_revision().map(|(tags, _)| tags)
+    }
+
+    pub fn tag_namespaces(&self) -> Result<Vec<crate::TagNamespaceRecord>> {
+        self.database.read(WorkPriority::VisibleRead, |connection| {
+            let mut statement = connection.prepare(
+                "SELECT namespace.namespace_id, namespace.display_name, COUNT(tag.tag_id)
+                 FROM tag_namespace namespace
+                 LEFT JOIN tag_definition tag ON tag.namespace_id = namespace.namespace_id
+                 GROUP BY namespace.namespace_id, namespace.display_name
+                 ORDER BY namespace.display_name COLLATE NOCASE, namespace.namespace_id",
+            )?;
+            let values = statement
+                .query_map([], |row| {
+                    Ok(crate::TagNamespaceRecord {
+                        namespace_id: TagNamespaceId(row.get(0)?),
+                        name: row.get(1)?,
+                        tag_count: row.get::<_, i64>(2)? as u64,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(LibraryError::from)?;
+            Ok(values)
+        })
     }
 
     pub fn tags_with_revision(&self) -> Result<(Vec<TagRecord>, u64)> {
@@ -2049,6 +2073,199 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok(receipt)
+    }
+
+    pub fn rename_or_merge_tag_namespace(
+        &self,
+        namespace_id: TagNamespaceId,
+        name: &str,
+    ) -> Result<MutationReceipt> {
+        let name = name.trim().to_owned();
+        if name.contains(':') {
+            return Err(LibraryError::InvalidInput(
+                "tag namespace cannot contain a colon".into(),
+            ));
+        }
+        if load_namespace_name_for_library(self, namespace_id)? == name {
+            return self.rename_tag_namespace(namespace_id, &name);
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                use rusqlite::OptionalExtension;
+
+                let source_state = load_namespace_definition(transaction, namespace_id)?
+                    .ok_or_else(|| LibraryError::NotFound(format!(
+                        "tag namespace {}",
+                        namespace_id.0
+                    )))?;
+                if source_state.display_name.is_empty() {
+                    return Err(LibraryError::InvalidInput(
+                        "the unnamespaced tag group cannot be renamed".into(),
+                    ));
+                }
+                let target_id = transaction
+                    .query_row(
+                        "SELECT namespace_id FROM tag_namespace
+                         WHERE display_name = ?1 AND namespace_id != ?2",
+                        rusqlite::params![name, namespace_id.0],
+                        |row| row.get::<_, u32>(0).map(TagNamespaceId),
+                    )
+                    .optional()?;
+                let Some(target_id) = target_id else {
+                    let mut next = (*snapshot).clone();
+                    apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
+                    insert_cloud_journal(
+                        transaction,
+                        revision,
+                        "tag.namespace.rename",
+                        None,
+                        serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
+                        now_ms(),
+                    )?;
+                    next.revision = revision;
+                    let receipt = PublicationCoordinator::receipt(
+                        revision,
+                        vec!["tags".into(), "navigation".into()],
+                        Vec::new(),
+                    );
+                    return Ok((receipt.clone(), PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::for_command(
+                            "tags.group.rename",
+                            "Rename tag namespace",
+                            SemanticChange::TagNamespaceName {
+                                namespace_id,
+                                before: source_state.display_name,
+                                after: name.clone(),
+                            },
+                        )),
+                    }));
+                };
+
+                let source_tags = transaction
+                    .prepare(
+                        "SELECT tag_id, subname FROM tag_definition
+                         WHERE namespace_id = ?1 ORDER BY tag_id",
+                    )?
+                    .query_map([namespace_id.0], |row| {
+                        Ok((crate::TagId(row.get(0)?), row.get::<_, String>(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut next = (*snapshot).clone();
+                let mut affected = RoaringBitmap::new();
+                let mut changes = Vec::new();
+                for (source_tag_id, subname) in source_tags {
+                    let destination = transaction
+                        .query_row(
+                            "SELECT tag_id FROM tag_definition
+                             WHERE namespace_id = ?1 AND subname = ?2",
+                            rusqlite::params![target_id.0, subname],
+                            |row| row.get::<_, u32>(0).map(crate::TagId),
+                        )
+                        .optional()?;
+                    if let Some(destination) = destination {
+                        let (members, tag_changes) = remove_tag_in_transaction(
+                            transaction,
+                            &mut next,
+                            source_tag_id,
+                            Some(destination),
+                            revision,
+                        )?;
+                        affected |= members;
+                        changes.extend(tag_changes);
+                    } else {
+                        let before = next
+                            .tag_ids_by_name
+                            .iter()
+                            .find_map(|(name, id)| (*id == source_tag_id).then_some(name.clone()))
+                            .ok_or_else(|| LibraryError::InvalidState(format!(
+                                "tag {} has no projection name",
+                                source_tag_id.0
+                            )))?;
+                        let after = if name.is_empty() {
+                            subname.clone()
+                        } else {
+                            format!("{name}:{subname}")
+                        };
+                        transaction.execute(
+                            "UPDATE tag_definition SET namespace_id = ?2 WHERE tag_id = ?1",
+                            rusqlite::params![source_tag_id.0, target_id.0],
+                        )?;
+                        let names = Arc::make_mut(&mut next.tag_ids_by_name);
+                        names.remove(&before);
+                        names.insert(after.clone(), source_tag_id);
+                        changes.push(SemanticChange::TagName {
+                            tag_id: source_tag_id,
+                            before,
+                            after,
+                        });
+                    }
+                }
+                transaction.execute(
+                    "DELETE FROM tag_namespace WHERE namespace_id = ?1",
+                    [namespace_id.0],
+                )?;
+                changes.push(SemanticChange::TagNamespaceDefinition {
+                    before: Some(source_state),
+                    after: None,
+                });
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "tag.namespace.merge",
+                    Some(&affected),
+                    serde_json::json!({
+                        "source_namespace_id": namespace_id.0,
+                        "destination_namespace_id": target_id.0,
+                    }),
+                    now_ms(),
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["roots".into(), "tags".into(), "navigation".into(), "smart-folders".into()],
+                    affected.iter().map(RootId),
+                );
+                Ok((receipt.clone(), PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "tags.group.rename",
+                        "Merge tag namespaces",
+                        SemanticChange::Compound(changes),
+                    )),
+                }))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn delete_tag_namespace(&self, namespace_id: TagNamespaceId) -> Result<MutationReceipt> {
+        let general_id = self.database.read(WorkPriority::VisibleRead, |connection| {
+            use rusqlite::OptionalExtension;
+            connection
+                .query_row(
+                    "SELECT namespace_id FROM tag_namespace WHERE display_name = ''",
+                    [],
+                    |row| row.get::<_, u32>(0).map(TagNamespaceId),
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        if general_id == Some(namespace_id) {
+            return Err(LibraryError::InvalidInput(
+                "the unnamespaced tag group cannot be deleted".into(),
+            ));
+        }
+        self.rename_or_merge_tag_namespace(namespace_id, "")
     }
 
     pub fn delete_tag(&self, tag_id: crate::TagId, changed_at_ms: i64) -> Result<MutationReceipt> {
@@ -4868,6 +5085,45 @@ fn apply_semantic_change(
             resources.insert("tags".into());
             resources.insert("navigation".into());
         }
+        SemanticChange::TagNamespaceDefinition { before, after } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let namespace_id = expected
+                .as_ref()
+                .or(replacement.as_ref())
+                .expect("namespace definition history has one state")
+                .namespace_id;
+            if load_namespace_definition(transaction, namespace_id)? != *expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because tag namespace {} changed",
+                    namespace_id.0
+                )));
+            }
+            if let Some(state) = replacement {
+                transaction.execute(
+                    "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(namespace_id) DO UPDATE SET
+                         stable_key = excluded.stable_key,
+                         display_name = excluded.display_name",
+                    rusqlite::params![
+                        state.namespace_id.0,
+                        state.stable_key,
+                        state.display_name,
+                    ],
+                )?;
+            } else {
+                transaction.execute(
+                    "DELETE FROM tag_namespace WHERE namespace_id = ?1",
+                    [namespace_id.0],
+                )?;
+            }
+            resources.insert("tags".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::TagDefinition {
             before,
             after,
@@ -5718,6 +5974,37 @@ fn load_namespace_name(
             }
             error => error.into(),
         })
+}
+
+fn load_namespace_name_for_library(
+    library: &Library,
+    namespace_id: TagNamespaceId,
+) -> Result<String> {
+    library.database.read(WorkPriority::VisibleRead, |connection| {
+        load_namespace_name(connection, namespace_id)
+    })
+}
+
+fn load_namespace_definition(
+    connection: &rusqlite::Connection,
+    namespace_id: TagNamespaceId,
+) -> Result<Option<TagNamespaceDefinitionState>> {
+    use rusqlite::OptionalExtension;
+
+    connection
+        .query_row(
+            "SELECT stable_key, display_name FROM tag_namespace WHERE namespace_id = ?1",
+            [namespace_id.0],
+            |row| {
+                Ok(TagNamespaceDefinitionState {
+                    namespace_id,
+                    stable_key: row.get(0)?,
+                    display_name: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 fn apply_namespace_name(

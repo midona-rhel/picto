@@ -208,6 +208,24 @@ pub struct TagPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagNamespaceRecord {
+    pub namespace_id: TagNamespaceId,
+    pub name: String,
+    pub tag_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameTagNamespaceInput {
+    pub namespace_id: TagNamespaceId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagNamespaceInput {
+    pub namespace_id: TagNamespaceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderCount {
     pub folder_id: FolderId,
     pub count: u64,
