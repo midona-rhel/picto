@@ -6,11 +6,14 @@ use roaring::RoaringBitmap;
 
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
-use crate::history::{HistoryEntry, SemanticChange, SessionHistory, TagDefinitionState};
+use crate::history::{
+    HistoryEntry, SemanticChange, SessionHistory, StructuralRootState, StructuralState,
+    TagDefinitionState,
+};
 use crate::ingest;
 use crate::model::{
     FolderId, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId, PreparedCollectionImport,
-    PreparedImport, Rating, RootId, SmartFolderId,
+    PreparedImport, Rating, RootId, RootKind, SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -1206,10 +1209,13 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                let selected = crate::selection::resolve(transaction, &snapshot, &request.target)?;
+                let before = capture_structure(transaction, &snapshot, &selected)?;
                 let output =
                     crate::group::organize(transaction, revision, (*snapshot).clone(), &request)?;
                 let mut next = output.snapshot;
                 crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+                let after = capture_structure(transaction, &next, &output.affected)?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec![
@@ -1226,7 +1232,14 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: Some(HistoryEntry::new(
+                            "Organize collection",
+                            SemanticChange::Structure {
+                                affected: Arc::new(output.affected),
+                                before,
+                                after,
+                            },
+                        )),
                     },
                 ))
             },
@@ -1248,6 +1261,19 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                let mut affected = snapshot
+                    .collection_orders
+                    .get(&collection_id)
+                    .ok_or_else(|| {
+                        LibraryError::InvalidInput(format!(
+                            "root {collection_id} is not a collection"
+                        ))
+                    })?
+                    .iter()
+                    .map(|media| media.0)
+                    .collect::<RoaringBitmap>();
+                affected.insert(collection_id.0);
+                let before = capture_structure(transaction, &snapshot, &affected)?;
                 let output = crate::group::ungroup(
                     transaction,
                     revision,
@@ -1257,6 +1283,7 @@ impl Library {
                 )?;
                 let mut next = output.snapshot;
                 crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+                let after = capture_structure(transaction, &next, &output.affected)?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec![
@@ -1273,7 +1300,14 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: Some(HistoryEntry::new(
+                            "Ungroup collection",
+                            SemanticChange::Structure {
+                                affected: Arc::new(output.affected),
+                                before,
+                                after,
+                            },
+                        )),
                     },
                 ))
             },
@@ -1291,10 +1325,15 @@ impl Library {
     ) -> Result<(RootId, MutationReceipt)> {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let ((root_id, receipt), _, ()) = self.database.published_write(
+        let history = self.history.clone();
+        let ((root_id, receipt), _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                let affected = [collection_id.0, media_id.0]
+                    .into_iter()
+                    .collect::<RoaringBitmap>();
+                let before = capture_structure(transaction, &snapshot, &affected)?;
                 let output = crate::group::detach(
                     transaction,
                     revision,
@@ -1305,6 +1344,7 @@ impl Library {
                 )?;
                 let mut next = output.snapshot;
                 crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+                let after = capture_structure(transaction, &next, &output.affected)?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec![
@@ -1322,14 +1362,20 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: Some(HistoryEntry::new(
+                            "Detach collection member",
+                            SemanticChange::Structure {
+                                affected: Arc::new(output.affected),
+                                before,
+                                after,
+                            },
+                        )),
                     },
                 ))
             },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
+        push_history(&history, history_entry);
         Ok((root_id, receipt))
     }
 
@@ -2987,6 +3033,34 @@ fn apply_semantic_change(
             resources.insert("folders".into());
             resources.insert("navigation".into());
         }
+        SemanticChange::Structure {
+            affected: changed_roots,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            restore_structure(
+                transaction,
+                revision,
+                snapshot,
+                changed_roots,
+                expected,
+                replacement,
+            )?;
+            *affected |= changed_roots.as_ref();
+            resources.extend([
+                "roots".into(),
+                "collections".into(),
+                "tags".into(),
+                "folders".into(),
+                "sidebar".into(),
+                "search".into(),
+            ]);
+        }
         SemanticChange::Compound(changes) => {
             if use_after {
                 for change in changes {
@@ -3013,6 +3087,202 @@ fn apply_semantic_change(
                     )?;
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+fn restore_structure(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    affected: &RoaringBitmap,
+    expected: &StructuralState,
+    replacement: &StructuralState,
+) -> Result<()> {
+    if load_structural_roots(transaction, affected)? != *expected.roots {
+        return Err(LibraryError::InvalidState(
+            "cannot replay history because collection structure changed".into(),
+        ));
+    }
+
+    for root_id in affected {
+        if snapshot.collection_orders.contains_key(&RootId(root_id)) {
+            ordering::delete(transaction, OrderOwnerKind::Collection, root_id)?;
+        }
+        transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root_id])?;
+        transaction.execute("DELETE FROM library_root WHERE root_id = ?1", [root_id])?;
+        transaction.execute(
+            "DELETE FROM library_item WHERE local_id = ?1 AND item_kind = 2",
+            [root_id],
+        )?;
+    }
+
+    for root in replacement.roots.iter() {
+        match root.kind {
+            RootKind::Media => {
+                let valid = transaction.query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM library_item
+                         WHERE local_id = ?1 AND item_kind = 1
+                     )",
+                    [root.root_id.0],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !valid {
+                    return Err(LibraryError::InvalidState(format!(
+                        "media {} lost its canonical item",
+                        root.root_id.0
+                    )));
+                }
+            }
+            RootKind::Collection => {
+                transaction.execute(
+                    "INSERT INTO library_item(local_id, stable_key, item_kind)
+                     VALUES (?1, ?2, 2)",
+                    rusqlite::params![root.root_id.0, root.stable_key],
+                )?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO library_root
+                 (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
+                  captured_at_ms, modified_at_ms, media_count, total_size_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                root.root_id.0,
+                root.name,
+                root.notes,
+                root.source_urls_json,
+                root.cover_media_id.0,
+                root.imported_at_ms,
+                root.captured_at_ms,
+                root.modified_at_ms,
+                root.media_count,
+                i64::try_from(root.total_size_bytes).map_err(|_| {
+                    LibraryError::InvalidState("root size exceeds SQLite range".into())
+                })?
+            ],
+        )?;
+        crate::fts::mark_one(transaction, root.root_id, root.modified_at_ms)?;
+    }
+
+    restore_structure_bitmaps(transaction, revision, snapshot, &replacement.projection)?;
+    restore_structure_orders(transaction, revision, snapshot, &replacement.projection)?;
+    *snapshot = (*replacement.projection).clone();
+    snapshot.revision = revision;
+    Ok(())
+}
+
+fn restore_structure_bitmaps(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    current: &ProjectionSnapshot,
+    replacement: &ProjectionSnapshot,
+) -> Result<()> {
+    for lifecycle in Lifecycle::ALL {
+        if current.lifecycle(lifecycle) != replacement.lifecycle(lifecycle) {
+            bitmap::replace(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Lifecycle,
+                    key_id: lifecycle.bitmap_key(),
+                },
+                replacement.lifecycle(lifecycle),
+            )?;
+        }
+    }
+    for rating in Rating::ALL {
+        if current.rating(rating) != replacement.rating(rating) {
+            bitmap::replace(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Rating,
+                    key_id: rating.bitmap_key(),
+                },
+                replacement.rating(rating),
+            )?;
+        }
+    }
+    let tag_ids = current
+        .tags
+        .keys()
+        .chain(replacement.tags.keys())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for tag_id in tag_ids {
+        let before = current.tags.get(&tag_id).map(|values| &**values);
+        let after = replacement.tags.get(&tag_id).map(|values| &**values);
+        if before != after {
+            bitmap::replace(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                },
+                after.unwrap_or(&RoaringBitmap::new()),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn restore_structure_orders(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    current: &ProjectionSnapshot,
+    replacement: &ProjectionSnapshot,
+) -> Result<()> {
+    let folders = current
+        .folder_orders
+        .keys()
+        .chain(replacement.folder_orders.keys())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for folder_id in folders {
+        let before = current.folder_orders.get(&folder_id);
+        let after = replacement.folder_orders.get(&folder_id);
+        if before == after {
+            continue;
+        }
+        if let Some(after) = after {
+            ordering::replace(
+                transaction,
+                revision,
+                OrderOwnerKind::Folder,
+                folder_id.0,
+                &after.iter().map(|root| root.0).collect::<Vec<_>>(),
+            )?;
+        } else {
+            ordering::delete(transaction, OrderOwnerKind::Folder, folder_id.0)?;
+        }
+    }
+
+    let collections = current
+        .collection_orders
+        .keys()
+        .chain(replacement.collection_orders.keys())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for root_id in collections {
+        let before = current.collection_orders.get(&root_id);
+        let after = replacement.collection_orders.get(&root_id);
+        if before == after {
+            continue;
+        }
+        if let Some(after) = after {
+            ordering::replace(
+                transaction,
+                revision,
+                OrderOwnerKind::Collection,
+                root_id.0,
+                &after.iter().map(|media| media.0).collect::<Vec<_>>(),
+            )?;
+        } else {
+            ordering::delete(transaction, OrderOwnerKind::Collection, root_id.0)?;
         }
     }
     Ok(())
@@ -3246,6 +3516,61 @@ fn load_root_text(
                 .map_err(Into::into)
         })
         .collect()
+}
+
+fn capture_structure(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    affected: &RoaringBitmap,
+) -> Result<StructuralState> {
+    Ok(StructuralState {
+        roots: Arc::new(load_structural_roots(transaction, affected)?),
+        projection: Arc::new(snapshot.clone()),
+    })
+}
+
+fn load_structural_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    affected: &RoaringBitmap,
+) -> Result<Vec<StructuralRootState>> {
+    let mut statement = transaction.prepare_cached(
+        "SELECT item.stable_key, item.item_kind, root.name, root.notes,
+                root.source_urls_json, root.cover_media_id, root.imported_at_ms,
+                root.captured_at_ms, root.modified_at_ms, root.media_count,
+                root.total_size_bytes
+         FROM library_root root
+         JOIN library_item item ON item.local_id = root.root_id
+         WHERE root.root_id = ?1",
+    )?;
+    let mut roots = Vec::new();
+    for root_id in affected {
+        let state = statement.query_row([root_id], |row| {
+            Ok(StructuralRootState {
+                root_id: RootId(root_id),
+                stable_key: row.get(0)?,
+                kind: match row.get::<_, u8>(1)? {
+                    1 => RootKind::Media,
+                    2 => RootKind::Collection,
+                    _ => unreachable!("schema constrains root kinds"),
+                },
+                name: row.get(2)?,
+                notes: row.get(3)?,
+                source_urls_json: row.get(4)?,
+                cover_media_id: MediaId(row.get(5)?),
+                imported_at_ms: row.get(6)?,
+                captured_at_ms: row.get(7)?,
+                modified_at_ms: row.get(8)?,
+                media_count: row.get(9)?,
+                total_size_bytes: row.get::<_, i64>(10)? as u64,
+            })
+        });
+        match state {
+            Ok(state) => roots.push(state),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(roots)
 }
 
 fn stage_delete_ids(

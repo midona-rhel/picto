@@ -927,7 +927,6 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             modified_at_ms: 1_700_000_000_100,
         })
         .unwrap();
-
     let all = library
         .query(&query(ItemScope::All), &PageRequest::default())
         .unwrap();
@@ -1078,6 +1077,21 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             },
         )
         .unwrap();
+    library.undo().unwrap().unwrap();
+    let regrouped = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(regrouped.total, 1);
+    assert_eq!(regrouped.items[0].root_id, collection);
+    assert_eq!(regrouped.items[0].media_count, 2);
+    library.redo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
 }
 
 #[test]
@@ -1119,6 +1133,7 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
             modified_at_ms: 1_700_000_001_000,
         })
         .unwrap();
+    let history_before_derivative = library.history().state().entries;
     let mime_query = |mime: &str| RootQuery {
         scope: ItemScope::All,
         view: ViewQuerySpec {
@@ -1176,7 +1191,7 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
             .root_id,
         collection
     );
-    assert_eq!(library.history().state().entries, 0);
+    assert_eq!(library.history().state().entries, history_before_derivative);
 }
 
 #[test]
@@ -1281,6 +1296,80 @@ fn detaching_restores_one_root_and_keeps_collection_organization_on_the_root() {
             .collect::<Vec<_>>(),
         vec!["video/mp4", "image/png"]
     );
+    library.undo().unwrap().unwrap();
+    let regrouped = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(regrouped.total, 1);
+    assert_eq!(regrouped.items[0].root_id, collection);
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .map(|media| media.0)
+            .collect::<Vec<_>>(),
+        vec![image.0, video.0]
+    );
+    library.redo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+}
+
+#[test]
+fn organizing_a_collection_is_reversible_without_persisted_history() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported(
+            "undo-group-one",
+            Lifecycle::Active,
+            &["creator:one"],
+        ))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported(
+            "undo-group-two",
+            Lifecycle::Active,
+            &["creator:two"],
+        ))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![first, second],
+            },
+            cover_root_id: first,
+            winning_collection_id: None,
+            name: Some("Undo group".into()),
+            modified_at_ms: 1_700_000_003_000,
+        })
+        .unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+
+    library.undo().unwrap().unwrap();
+    let roots = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(roots.total, 2);
+    assert!(roots.items.iter().all(|item| item.kind == RootKind::Media));
+
+    library.redo().unwrap().unwrap();
+    let regrouped = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(regrouped.total, 1);
+    assert_eq!(regrouped.items[0].root_id, collection);
+    assert_eq!(regrouped.items[0].kind, RootKind::Collection);
 }
 
 #[test]

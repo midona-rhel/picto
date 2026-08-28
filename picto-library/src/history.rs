@@ -6,8 +6,9 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::bitmap::BitmapKey;
-use crate::model::{MediaId, RootId};
+use crate::model::{MediaId, RootId, RootKind};
 use crate::ordering::OrderOwnerKind;
+use crate::projection::ProjectionSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagDefinitionState {
@@ -34,6 +35,28 @@ pub struct RootTextState {
     pub notes: Option<String>,
     pub source_urls: Vec<String>,
     pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StructuralRootState {
+    pub root_id: RootId,
+    pub stable_key: String,
+    pub kind: RootKind,
+    pub name: String,
+    pub notes: Option<String>,
+    pub source_urls_json: String,
+    pub cover_media_id: MediaId,
+    pub imported_at_ms: i64,
+    pub captured_at_ms: Option<i64>,
+    pub modified_at_ms: i64,
+    pub media_count: u32,
+    pub total_size_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructuralState {
+    pub roots: Arc<Vec<StructuralRootState>>,
+    pub projection: Arc<ProjectionSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +102,11 @@ pub enum SemanticChange {
         folder_id: crate::FolderId,
         before: String,
         after: String,
+    },
+    Structure {
+        affected: Arc<RoaringBitmap>,
+        before: StructuralState,
+        after: StructuralState,
     },
     Compound(Vec<SemanticChange>),
 }
@@ -130,6 +158,28 @@ impl SemanticChange {
                 before.serialized_size() + after.serialized_size() + 32
             }
             Self::FolderName { before, after, .. } => before.len() + after.len() + 32,
+            Self::Structure {
+                affected,
+                before,
+                after,
+            } => {
+                let roots = before
+                    .roots
+                    .iter()
+                    .chain(after.roots.iter())
+                    .map(|root| {
+                        root.stable_key.len()
+                            + root.name.len()
+                            + root.notes.as_deref().map(str::len).unwrap_or(0)
+                            + root.source_urls_json.len()
+                            + 96
+                    })
+                    .sum::<usize>();
+                roots
+                    + affected.serialized_size()
+                    + before.projection.estimated_bytes()
+                    + after.projection.estimated_bytes()
+            }
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }
