@@ -278,6 +278,8 @@ impl SemanticChange {
 
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
+    pub entry_id: u64,
+    pub command: String,
     pub label: String,
     pub change: SemanticChange,
     pub estimated_bytes: usize,
@@ -285,17 +287,44 @@ pub struct HistoryEntry {
 
 impl HistoryEntry {
     pub fn new(label: impl Into<String>, change: SemanticChange) -> Self {
+        Self::for_command("library.change", label, change)
+    }
+
+    pub fn for_command(
+        command: impl Into<String>,
+        label: impl Into<String>,
+        change: SemanticChange,
+    ) -> Self {
         let estimated_bytes = change.estimated_bytes();
         Self {
+            entry_id: 0,
+            command: command.into(),
             label: label.into(),
             change,
             estimated_bytes,
         }
     }
+
+    fn summary(&self) -> HistoryEntrySummary {
+        HistoryEntrySummary {
+            entry_id: self.entry_id,
+            command: self.command.clone(),
+            label: self.label.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntrySummary {
+    pub entry_id: u64,
+    pub command: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryState {
+    pub undo: Option<HistoryEntrySummary>,
+    pub redo: Option<HistoryEntrySummary>,
     pub can_undo: bool,
     pub can_redo: bool,
     pub undo_label: Option<String>,
@@ -304,12 +333,24 @@ pub struct HistoryState {
     pub bytes: usize,
 }
 
-#[derive(Default)]
 struct Stacks {
     undo: VecDeque<HistoryEntry>,
     redo: VecDeque<HistoryEntry>,
     bytes: usize,
     protected_cleanup_files: BTreeSet<FileId>,
+    next_entry_id: u64,
+}
+
+impl Default for Stacks {
+    fn default() -> Self {
+        Self {
+            undo: VecDeque::new(),
+            redo: VecDeque::new(),
+            bytes: 0,
+            protected_cleanup_files: BTreeSet::new(),
+            next_entry_id: 1,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -318,11 +359,13 @@ pub struct SessionHistory {
 }
 
 impl SessionHistory {
-    pub fn push(&self, entry: HistoryEntry) -> bool {
+    pub fn push(&self, mut entry: HistoryEntry) -> bool {
         if entry.estimated_bytes > HISTORY_BYTE_LIMIT {
             return false;
         }
         let mut stacks = self.stacks.lock();
+        entry.entry_id = stacks.next_entry_id;
+        stacks.next_entry_id = stacks.next_entry_id.saturating_add(1);
         let redo_bytes = stacks
             .redo
             .drain(..)
@@ -375,6 +418,8 @@ impl SessionHistory {
     pub fn state(&self) -> HistoryState {
         let stacks = self.stacks.lock();
         HistoryState {
+            undo: stacks.undo.back().map(HistoryEntry::summary),
+            redo: stacks.redo.back().map(HistoryEntry::summary),
             can_undo: !stacks.undo.is_empty(),
             can_redo: !stacks.redo.is_empty(),
             undo_label: stacks.undo.back().map(|entry| entry.label.clone()),

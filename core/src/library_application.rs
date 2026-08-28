@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use picto_library::query::PageRequest;
 use picto_library::{Library, RootId};
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::{ItemQuery, ItemTarget, LibraryChanged, LIBRARY_CHANGED_EVENT};
@@ -21,6 +22,26 @@ pub struct LibraryApplication {
     root: PathBuf,
     library: Arc<Library>,
     blobs: Arc<BlobStore>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryHistoryEntrySummary {
+    pub entry_id: u64,
+    pub command: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryHistoryState {
+    pub undo: Option<LibraryHistoryEntrySummary>,
+    pub redo: Option<LibraryHistoryEntrySummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryHistoryOperationResult {
+    pub entry: LibraryHistoryEntrySummary,
+    pub state: LibraryHistoryState,
+    pub receipt: crate::app::MutationReceipt,
 }
 
 impl LibraryApplication {
@@ -155,6 +176,44 @@ impl LibraryApplication {
         })
     }
 
+    pub fn history_state(&self) -> LibraryHistoryState {
+        map_history_state(self.library.history().state())
+    }
+
+    pub fn undo(&self) -> Result<LibraryHistoryOperationResult, String> {
+        let entry = self
+            .history_state()
+            .undo
+            .ok_or_else(|| "There is nothing to undo".to_string())?;
+        let receipt = self
+            .library
+            .undo()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "There is nothing to undo".to_string())?;
+        Ok(LibraryHistoryOperationResult {
+            entry,
+            state: self.history_state(),
+            receipt: crate::library_v1::receipt(receipt),
+        })
+    }
+
+    pub fn redo(&self) -> Result<LibraryHistoryOperationResult, String> {
+        let entry = self
+            .history_state()
+            .redo
+            .ok_or_else(|| "There is nothing to redo".to_string())?;
+        let receipt = self
+            .library
+            .redo()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "There is nothing to redo".to_string())?;
+        Ok(LibraryHistoryOperationResult {
+            entry,
+            state: self.history_state(),
+            receipt: crate::library_v1::receipt(receipt),
+        })
+    }
+
     /// Emit at most one coalesced invalidation for the current render frame.
     pub fn flush_publications(&self) -> Option<LibraryChanged> {
         let event = self.library.publication().flush()?;
@@ -210,6 +269,23 @@ fn checked_root_id(value: i64) -> Result<RootId, String> {
 
 fn checked_count(value: u64) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("count {value} exceeds the renderer integer domain"))
+}
+
+fn map_history_state(value: picto_library::history::HistoryState) -> LibraryHistoryState {
+    LibraryHistoryState {
+        undo: value.undo.map(map_history_entry),
+        redo: value.redo.map(map_history_entry),
+    }
+}
+
+fn map_history_entry(
+    value: picto_library::history::HistoryEntrySummary,
+) -> LibraryHistoryEntrySummary {
+    LibraryHistoryEntrySummary {
+        entry_id: value.entry_id,
+        command: value.command,
+        label: value.label,
+    }
 }
 
 #[cfg(test)]
@@ -285,5 +361,32 @@ mod tests {
         assert_eq!(event.item_ids.len(), 2);
         assert!(event.resources.contains(&"library".to_string()));
         assert!(application.flush_publications().is_none());
+    }
+
+    #[test]
+    fn shell_exposes_memory_only_history_with_stable_command_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path()).unwrap();
+        let (root_id, _) = application.library().ingest(&input()).unwrap();
+        application
+            .library()
+            .set_lifecycle(
+                &picto_library::selection::SelectionTarget::Explicit {
+                    root_ids: vec![root_id],
+                },
+                picto_library::Lifecycle::Trash,
+            )
+            .unwrap();
+
+        let pending = application.history_state().undo.unwrap();
+        assert_eq!(pending.command, "items.set_lifecycle");
+        let undone = application.undo().unwrap();
+        assert_eq!(undone.entry, pending);
+        assert_eq!(undone.state.redo.as_ref().unwrap(), &pending);
+
+        drop(application);
+        let reopened = LibraryApplication::open(directory.path()).unwrap();
+        assert_eq!(reopened.history_state().undo, None);
+        assert_eq!(reopened.history_state().redo, None);
     }
 }

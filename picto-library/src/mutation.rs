@@ -216,7 +216,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (!before.is_empty()).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "items.clear_recent_views",
                                 "Clear recently viewed",
                                 SemanticChange::RecentViews {
                                     before: Arc::new(before),
@@ -449,7 +450,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "smart_folders.create",
                             "Create smart folder",
                             SemanticChange::SmartFolderDefinition {
                                 smart_folder_id,
@@ -540,7 +542,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != after).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "smart_folders.update",
                                 "Update smart folder",
                                 SemanticChange::SmartFolderDefinition {
                                     smart_folder_id,
@@ -620,7 +623,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "smart_folders.delete",
                             "Delete smart folder",
                             SemanticChange::Compound(changes),
                         )),
@@ -730,7 +734,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (!changes.is_empty()).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "smart_folders.reorder",
                                 "Reorder smart folders",
                                 SemanticChange::Compound(changes),
                             )
@@ -1109,7 +1114,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: output.snapshot,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "duplicates.resolve",
                             "Resolve duplicate",
                             SemanticChange::DuplicateResolution(output.history),
                         )),
@@ -1321,6 +1327,7 @@ impl Library {
         let target = target.clone();
         self.bitmap_partition_mutation(
             WorkPriority::ForegroundMutation,
+            "items.set_lifecycle",
             "Change lifecycle",
             BitmapDomain::Lifecycle,
             lifecycle.bitmap_key(),
@@ -1341,6 +1348,7 @@ impl Library {
     pub fn set_rating(&self, target: &SelectionTarget, rating: Rating) -> Result<MutationReceipt> {
         self.bitmap_partition_mutation(
             WorkPriority::ForegroundMutation,
+            "items.patch_metadata",
             "Change rating",
             BitmapDomain::Rating,
             rating.bitmap_key(),
@@ -1361,6 +1369,7 @@ impl Library {
             &SelectionTarget::Explicit {
                 root_ids: vec![root_id],
             },
+            "items.rename",
             "Rename",
             TextMutation::Rename(name),
             modified_at_ms,
@@ -1375,6 +1384,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
+            "items.patch_metadata",
             "Change notes",
             TextMutation::Notes(notes.filter(|value| !value.is_empty())),
             modified_at_ms,
@@ -1389,6 +1399,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
+            "items.patch_metadata",
             "Change source URLs",
             TextMutation::SourceUrls(source_urls),
             modified_at_ms,
@@ -1521,8 +1532,13 @@ impl Library {
                     },
                     affected.iter().map(RootId),
                 );
-                let history = (!changes.is_empty())
-                    .then(|| HistoryEntry::new("Apply AI tags", SemanticChange::Compound(changes)));
+                let history = (!changes.is_empty()).then(|| {
+                    HistoryEntry::for_command(
+                        "items.apply_ai_tags",
+                        "Apply AI tags",
+                        SemanticChange::Compound(changes),
+                    )
+                });
                 Ok((
                     receipt.clone(),
                     PublishedDelta {
@@ -1584,7 +1600,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (old_name != name).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "tags.rename_or_merge",
                                 "Rename tag",
                                 SemanticChange::TagName {
                                     tag_id,
@@ -1643,7 +1660,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != name).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "tags.group.rename",
                                 "Rename tag namespace",
                                 SemanticChange::TagNamespaceName {
                                     namespace_id,
@@ -1760,7 +1778,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "folders.create",
                             "Create folder",
                             SemanticChange::FolderDefinition {
                                 folder_id,
@@ -1787,17 +1806,22 @@ impl Library {
         let icon = normalized_optional(icon);
         let color = normalized_optional(color);
         let notes = normalized_optional(notes);
-        self.update_folder_definition("Edit folder", folder_id, move |transaction| {
-            if transaction.execute(
-                "UPDATE folder_definition SET icon = ?2, color = ?3, notes = ?4
+        self.update_folder_definition(
+            "folders.set_metadata",
+            "Edit folder",
+            folder_id,
+            move |transaction| {
+                if transaction.execute(
+                    "UPDATE folder_definition SET icon = ?2, color = ?3, notes = ?4
                  WHERE folder_id = ?1",
-                rusqlite::params![folder_id.0, icon, color, notes],
-            )? == 0
-            {
-                return Err(LibraryError::NotFound(format!("folder {folder_id}")));
-            }
-            Ok(())
-        })
+                    rusqlite::params![folder_id.0, icon, color, notes],
+                )? == 0
+                {
+                    return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn move_folder(
@@ -1805,46 +1829,51 @@ impl Library {
         folder_id: FolderId,
         parent_id: Option<FolderId>,
     ) -> Result<MutationReceipt> {
-        self.update_folder_definition("Move folder", folder_id, move |transaction| {
-            validate_folder_parent(transaction, parent_id, Some(folder_id))?;
-            let name = transaction
-                .query_row(
-                    "SELECT name FROM folder_definition WHERE folder_id = ?1",
-                    [folder_id.0],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        LibraryError::NotFound(format!("folder {folder_id}"))
-                    }
-                    error => error.into(),
-                })?;
-            let duplicate = transaction.query_row(
-                "SELECT EXISTS(
+        self.update_folder_definition(
+            "folders.move",
+            "Move folder",
+            folder_id,
+            move |transaction| {
+                validate_folder_parent(transaction, parent_id, Some(folder_id))?;
+                let name = transaction
+                    .query_row(
+                        "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                        [folder_id.0],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            LibraryError::NotFound(format!("folder {folder_id}"))
+                        }
+                        error => error.into(),
+                    })?;
+                let duplicate = transaction.query_row(
+                    "SELECT EXISTS(
                      SELECT 1 FROM folder_definition
                      WHERE parent_id IS ?1 AND name = ?2 AND folder_id != ?3
                  )",
-                rusqlite::params![parent_id.map(|id| id.0), name, folder_id.0],
-                |row| row.get::<_, bool>(0),
-            )?;
-            if duplicate {
-                return Err(LibraryError::InvalidInput(format!(
-                    "a sibling folder named {name} already exists"
-                )));
-            }
-            let display_order = transaction.query_row(
-                "SELECT COALESCE(MAX(display_order) + 1, 0)
+                    rusqlite::params![parent_id.map(|id| id.0), name, folder_id.0],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if duplicate {
+                    return Err(LibraryError::InvalidInput(format!(
+                        "a sibling folder named {name} already exists"
+                    )));
+                }
+                let display_order = transaction.query_row(
+                    "SELECT COALESCE(MAX(display_order) + 1, 0)
                  FROM folder_definition WHERE parent_id IS ?1 AND folder_id != ?2",
-                rusqlite::params![parent_id.map(|id| id.0), folder_id.0],
-                |row| row.get::<_, i64>(0),
-            )?;
-            transaction.execute(
-                "UPDATE folder_definition SET parent_id = ?2, display_order = ?3
+                    rusqlite::params![parent_id.map(|id| id.0), folder_id.0],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                transaction.execute(
+                    "UPDATE folder_definition SET parent_id = ?2, display_order = ?3
                  WHERE folder_id = ?1",
-                rusqlite::params![folder_id.0, parent_id.map(|id| id.0), display_order],
-            )?;
-            Ok(())
-        })
+                    rusqlite::params![folder_id.0, parent_id.map(|id| id.0), display_order],
+                )?;
+                Ok(())
+            },
+        )
     }
 
     pub fn reorder_folder_children(
@@ -1944,7 +1973,11 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (!changes.is_empty()).then(|| {
-                            HistoryEntry::new("Reorder folders", SemanticChange::Compound(changes))
+                            HistoryEntry::for_command(
+                                "folders.reorder",
+                                "Reorder folders",
+                                SemanticChange::Compound(changes),
+                            )
                         }),
                     },
                 ))
@@ -2018,7 +2051,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != values).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "folders.sort_items",
                                 "Reorder folder items",
                                 SemanticChange::Order {
                                     owner_kind: OrderOwnerKind::Folder,
@@ -2217,7 +2251,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "folders.delete",
                             "Delete folders",
                             SemanticChange::Compound(history_changes),
                         )),
@@ -2232,6 +2267,7 @@ impl Library {
 
     fn update_folder_definition<F>(
         &self,
+        command: &'static str,
         label: &'static str,
         folder_id: FolderId,
         update: F,
@@ -2276,7 +2312,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != after).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                command,
                                 label,
                                 SemanticChange::FolderDefinition {
                                     folder_id,
@@ -2338,7 +2375,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != name).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "folders.rename",
                                 "Rename folder",
                                 SemanticChange::FolderName {
                                     folder_id,
@@ -2408,7 +2446,8 @@ impl Library {
                         snapshot: next,
                         receipt,
                         history: (before != after).then(|| {
-                            HistoryEntry::new(
+                            HistoryEntry::for_command(
+                                "folders.set_auto_tags",
                                 "Change folder auto-tags",
                                 SemanticChange::FolderAutoTags {
                                     folder_id,
@@ -2481,7 +2520,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "collections.organize",
                             "Organize collection",
                             SemanticChange::Structure {
                                 affected: Arc::new(output.affected),
@@ -2549,7 +2589,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "collections.ungroup",
                             "Ungroup collection",
                             SemanticChange::Structure {
                                 affected: Arc::new(output.affected),
@@ -2611,7 +2652,8 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            "collections.detach",
                             "Detach collection member",
                             SemanticChange::Structure {
                                 affected: Arc::new(output.affected),
@@ -2686,7 +2728,8 @@ impl Library {
                             changed_at_ms
                         ],
                     )?;
-                    Some(HistoryEntry::new(
+                    Some(HistoryEntry::for_command(
+                        "collections.reorder",
                         "Reorder collection",
                         SemanticChange::Order {
                             owner_kind: OrderOwnerKind::Collection,
@@ -2765,7 +2808,8 @@ impl Library {
                             changed_at_ms
                         ],
                     )?;
-                    Some(HistoryEntry::new(
+                    Some(HistoryEntry::for_command(
+                        "collections.set_cover",
                         "Set collection cover",
                         SemanticChange::CollectionCover {
                             root_id: collection_id,
@@ -3207,7 +3251,12 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
+                        history: Some(HistoryEntry::for_command(
+                            if destination.is_some() {
+                                "tags.rename_or_merge"
+                            } else {
+                                "tags.delete"
+                            },
                             label,
                             SemanticChange::Compound(history_changes),
                         )),
@@ -3326,7 +3375,8 @@ impl Library {
                     vec!["roots".into(), "tags".into(), "sidebar".into()],
                     changed.iter().map(RootId),
                 );
-                let history = HistoryEntry::new(
+                let history = HistoryEntry::for_command(
+                    "items.apply_tags",
                     if add { "Add tag" } else { "Remove tag" },
                     SemanticChange::Bitmap {
                         key: BitmapKey {
@@ -3355,6 +3405,7 @@ impl Library {
     fn text_mutation(
         &self,
         target: &SelectionTarget,
+        command: &'static str,
         label: &'static str,
         mutation: TextMutation,
         modified_at_ms: i64,
@@ -3466,7 +3517,8 @@ impl Library {
                     vec!["roots".into(), "search".into(), "smart-folders".into()],
                     selection.iter().map(RootId),
                 );
-                let history = HistoryEntry::new(
+                let history = HistoryEntry::for_command(
+                    command,
                     label,
                     SemanticChange::RootText {
                         before: Arc::new(std::mem::take(&mut before)),
@@ -3637,7 +3689,8 @@ impl Library {
                     resources,
                     changed.iter().map(RootId),
                 );
-                let history = HistoryEntry::new(
+                let history = HistoryEntry::for_command(
+                    "items.set_folder",
                     if add {
                         "Add to folder"
                     } else {
@@ -3664,6 +3717,7 @@ impl Library {
     fn bitmap_partition_mutation(
         &self,
         priority: WorkPriority,
+        command: &'static str,
         label: &'static str,
         domain: BitmapDomain,
         destination: u32,
@@ -3738,8 +3792,9 @@ impl Library {
                     resources.clone(),
                     selection.iter().map(RootId),
                 );
-                let history = (!changes.is_empty())
-                    .then(|| HistoryEntry::new(label, SemanticChange::Compound(changes)));
+                let history = (!changes.is_empty()).then(|| {
+                    HistoryEntry::for_command(command, label, SemanticChange::Compound(changes))
+                });
                 Ok((
                     receipt.clone(),
                     PublishedDelta {
