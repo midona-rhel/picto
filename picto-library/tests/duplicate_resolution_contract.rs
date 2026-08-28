@@ -447,6 +447,7 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
         reopened.pending_blob_cleanup(10).unwrap(),
         vec![picto_library::PendingBlobCleanup {
             file_id: loser_file,
+            content_hash: "shared-loser".into(),
             file_path: "/tmp/loser-member.bin".into(),
         }]
     );

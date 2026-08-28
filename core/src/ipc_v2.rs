@@ -92,6 +92,10 @@ pub fn dispatch_library(
             let input: PatchMetadataInput = parse(args_json)?;
             read(application.patch_metadata(&input.target, &input.patch)?)
         }
+        "items.delete" => {
+            let input: TargetInput = parse(args_json)?;
+            read(application.delete_items(&input.target)?)
+        }
         "items.organize_into_collection" => {
             let input: crate::operations_v2::OrganizeIntoCollectionInput = parse(args_json)?;
             read(application.organize_into_collection(&input)?)
@@ -1690,6 +1694,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(state.contains("items.set_lifecycle"));
+
+        let deleted = dispatch_library(
+            &application,
+            "items.delete",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}}}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let deleted: crate::operations_v2::DeleteItemsResult =
+            serde_json::from_str(&deleted).unwrap();
+        assert_eq!(deleted.freed_file_hashes, ["hash-greenfield-ipc-root"]);
+        assert_eq!(application.library().counts().unwrap().trash, 0);
+
         assert!(dispatch_library(&application, "legacy.magic", "{}")
             .unwrap()
             .is_none());

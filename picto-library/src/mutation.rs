@@ -3250,16 +3250,21 @@ impl Library {
                 let mut files = std::collections::HashMap::new();
                 {
                     let mut statement = transaction.prepare_cached(
-                        "SELECT file.file_id, file.file_path
+                        "SELECT file.file_id, file.content_hash, file.file_path
                          FROM media_item media
                          JOIN media_file file ON file.file_id = media.file_id
                          WHERE media.media_id = ?1",
                     )?;
                     for media_id in &media_ids {
-                        let (file_id, file_path) = statement.query_row([media_id], |row| {
-                            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
-                        })?;
-                        files.entry(file_id).or_insert(file_path);
+                        let (file_id, content_hash, file_path) =
+                            statement.query_row([media_id], |row| {
+                                Ok((
+                                    row.get::<_, u32>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, String>(2)?,
+                                ))
+                            })?;
+                        files.entry(file_id).or_insert((content_hash, file_path));
                     }
                 }
                 transaction.execute(
@@ -3297,7 +3302,7 @@ impl Library {
                 )?;
 
                 let mut cleanup = Vec::new();
-                for (file_id, file_path) in files {
+                for (file_id, (content_hash, file_path)) in files {
                     let referenced = transaction.query_row(
                         "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
                         [file_id],
@@ -3312,7 +3317,11 @@ impl Library {
                         )?;
                         let file_id = crate::FileId(file_id);
                         if !protected_cleanup_files.contains(&file_id) {
-                            cleanup.push(crate::PendingBlobCleanup { file_id, file_path });
+                            cleanup.push(crate::PendingBlobCleanup {
+                                file_id,
+                                content_hash,
+                                file_path,
+                            });
                         }
                     }
                 }

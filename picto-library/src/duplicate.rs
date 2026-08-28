@@ -307,8 +307,9 @@ pub(crate) fn ready_cleanup(
     limit: usize,
 ) -> Result<Vec<PendingBlobCleanup>> {
     let mut statement = connection.prepare(
-        "SELECT queue.file_id, queue.file_path
+        "SELECT queue.file_id, file.content_hash, queue.file_path
          FROM blob_cleanup_queue queue
+         JOIN media_file file ON file.file_id = queue.file_id
          WHERE NOT EXISTS(
              SELECT 1 FROM media_item media WHERE media.file_id = queue.file_id
          )
@@ -324,7 +325,8 @@ pub(crate) fn ready_cleanup(
         if !protected.contains(&file_id) {
             cleanup.push(PendingBlobCleanup {
                 file_id,
-                file_path: row.get(1)?,
+                content_hash: row.get(1)?,
+                file_path: row.get(2)?,
             });
         }
     }

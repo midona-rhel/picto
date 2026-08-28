@@ -725,6 +725,24 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn delete_items(
+        &self,
+        target: &ItemTarget,
+    ) -> Result<crate::operations_v2::DeleteItemsResult, String> {
+        let target = crate::library_v1::target(&self.library, target)?;
+        let (receipt, cleanup) = self
+            .library
+            .permanently_delete(&target, chrono::Utc::now().timestamp_millis())
+            .map_err(|error| error.to_string())?;
+        Ok(crate::operations_v2::DeleteItemsResult {
+            receipt: crate::library_v1::receipt(receipt),
+            freed_file_hashes: cleanup
+                .into_iter()
+                .map(|entry| entry.content_hash)
+                .collect(),
+        })
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self

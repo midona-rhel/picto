@@ -251,6 +251,7 @@ pub struct GroupRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingBlobCleanup {
     pub file_id: FileId,
+    pub content_hash: String,
     pub file_path: String,
 }
 
