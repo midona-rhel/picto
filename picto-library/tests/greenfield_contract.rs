@@ -134,6 +134,24 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
         .query(&query(ItemScope::Inbox), &PageRequest::default())
         .unwrap();
     assert_eq!(inbox_page.items[0].root_id, inbox);
+    let creator_tag = library.projections().snapshot().tag_ids_by_name["creator:alice"];
+    let inbox_tagged = RootQuery {
+        scope: ItemScope::Inbox,
+        view: ViewQuerySpec {
+            filter: FilterExpr::Clause(FilterClause::Tags {
+                tag_ids: vec![creator_tag],
+                mode: SetMatchMode::All,
+            }),
+            sort: ItemSort::default(),
+        },
+    };
+    assert_eq!(
+        library
+            .query(&inbox_tagged, &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
     let counts = library.counts().unwrap();
     assert_eq!(counts.all, 1);
     assert_eq!(counts.inbox, 1);
@@ -589,10 +607,13 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
     let values = vec![
         imported("searchable-active", Lifecycle::Active, &[]),
         imported("searchable-inbox", Lifecycle::Inbox, &[]),
+        imported("searchable-trash", Lifecycle::Trash, &[]),
     ];
     let outputs = library.ingest_batch(&values).unwrap();
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(outputs[0].1.revision, outputs[1].1.revision);
+    assert_eq!(outputs.len(), 3);
+    assert!(outputs
+        .iter()
+        .all(|(_, receipt)| receipt.revision == outputs[0].1.revision));
     assert_eq!(outputs[0].1.revision, before + 1);
 
     assert!(library.settle_fts(64).unwrap().is_some());
@@ -622,6 +643,25 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
                 &RootQuery {
                     scope: ItemScope::Inbox,
                     view: text_view,
+                },
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(
+                &RootQuery {
+                    scope: ItemScope::Trash,
+                    view: ViewQuerySpec {
+                        filter: FilterExpr::Clause(FilterClause::Text {
+                            field: picto_library::predicate::TextField::Global,
+                            query: "searchable".into(),
+                        }),
+                        sort: ItemSort::default(),
+                    },
                 },
                 &PageRequest::default(),
             )
