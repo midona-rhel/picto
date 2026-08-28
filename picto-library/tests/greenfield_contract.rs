@@ -1426,6 +1426,17 @@ fn fts_settlement_interleaves_dirty_categories() {
 }
 
 #[test]
+fn empty_fts_poll_does_not_advance_the_library_revision() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let before = library.database().revision().unwrap();
+
+    assert!(library.settle_fts(64).unwrap().is_none());
+    assert_eq!(library.database().revision().unwrap(), before);
+    assert_eq!(library.projections().snapshot().revision, before);
+}
+
+#[test]
 fn collections_are_one_root_and_media_filters_use_only_the_cover() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

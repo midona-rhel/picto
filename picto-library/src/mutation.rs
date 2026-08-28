@@ -910,11 +910,14 @@ impl Library {
         }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
+        let published = self.database.published_write_if_changed(
             WorkPriority::Fts,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 let settled = crate::fts::settle_batch(transaction, limit)?;
+                if settled.is_empty() {
+                    return Ok(None);
+                }
                 let mut next = (*snapshot).clone();
                 crate::smart::settle_affected_for(
                     transaction,
@@ -923,30 +926,25 @@ impl Library {
                     crate::predicate::DependencyChange::RootText,
                 )?;
                 next.revision = revision;
-                let resources = if settled.is_empty() {
-                    Vec::new()
-                } else {
-                    vec!["search".into(), "smart-folders".into()]
-                };
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    resources,
+                    vec!["search".into(), "smart-folders".into()],
                     settled.iter().map(RootId),
                 );
-                Ok((
+                Ok(Some((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
                         history: None,
                     },
-                ))
+                )))
             },
             move |_, delta| {
                 publish_delta(&projections, &publication, delta);
             },
         )?;
-        Ok((!receipt.resources.is_empty()).then_some(receipt))
+        Ok(published.map(|(receipt, _, ())| receipt))
     }
 
     pub fn write_projection_checkpoint(&self) -> Result<usize> {

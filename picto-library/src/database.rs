@@ -266,6 +266,43 @@ impl LibraryDatabase {
         Ok((output, revision, after_publication))
     }
 
+    /// Run a publication only when the prepared operation reports canonical
+    /// work. An empty background poll rolls its transaction back and leaves
+    /// both the database revision and projection untouched.
+    pub fn published_write_if_changed<P, T, D, A>(
+        &self,
+        priority: WorkPriority,
+        capture: impl FnOnce(u64) -> Result<P>,
+        operation: impl FnOnce(&Transaction<'_>, u64, u64, P) -> Result<Option<(T, D)>>,
+        publish: impl FnOnce(u64, D) -> A,
+    ) -> Result<Option<(T, u64, A)>> {
+        let _scheduler_lease = self.scheduler.acquire(priority);
+        let mut writer = self.writer.lock();
+        let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let base_revision = transaction.query_row(
+            "SELECT revision FROM library_meta WHERE singleton = 1",
+            [],
+            |row| row.get::<_, i64>(0).map(|value| value as u64),
+        )?;
+        let revision = base_revision + 1;
+        let prepared = capture(base_revision)?;
+        let Some((output, delta)) = operation(&transaction, base_revision, revision, prepared)?
+        else {
+            transaction.rollback()?;
+            return Ok(None);
+        };
+        transaction.execute(
+            "UPDATE library_meta SET revision = ?1 WHERE singleton = 1",
+            [revision as i64],
+        )?;
+        let after_publication = {
+            let _gate = self.publication_gate.write();
+            transaction.commit()?;
+            publish(revision, delta)
+        };
+        Ok(Some((output, revision, after_publication)))
+    }
+
     pub fn has_higher_priority_waiter(&self, priority: WorkPriority) -> bool {
         self.scheduler.has_higher_priority_waiter(priority)
     }
