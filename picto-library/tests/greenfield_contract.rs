@@ -239,6 +239,32 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
 }
 
 #[test]
+fn multiple_manual_tags_use_one_atomic_publication_and_one_inverse() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("batch-tags", Lifecycle::Active, &[]))
+        .unwrap();
+    let before_revision = library.database().revision().unwrap();
+
+    let receipt = library
+        .apply_tags(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            &["creator:alice".into(), "series:example".into()],
+            true,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.revision, before_revision + 1);
+    assert_eq!(library.details(root).unwrap().tag_ids.len(), 2);
+    assert_eq!(library.history().state().entries, 1);
+    library.undo().unwrap();
+    assert!(library.details(root).unwrap().tag_ids.is_empty());
+}
+
+#[test]
 fn tag_rename_changes_only_the_dictionary() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

@@ -26,6 +26,57 @@ use crate::subscription_catalog_v2::{
 };
 use crate::subscriptions::gallery_dl_runner::normalize_ehentai_gallery_url;
 
+/// Greenfield command path. Commands return `None` until their complete
+/// product behavior has moved to `LibraryApplication`; production state only
+/// switches after this dispatcher covers the entire command surface.
+pub fn dispatch_library(
+    application: &crate::library_application::LibraryApplication,
+    command: &str,
+    args_json: &str,
+) -> Result<Option<String>, String> {
+    let output = match command {
+        "items.query" => {
+            let input: QueryItemsInput = parse(args_json)?;
+            read(application.query(&input.query, input.page)?)
+        }
+        "items.details" => {
+            let input: ItemInput = parse(args_json)?;
+            read(application.details(input.item_id.0)?)
+        }
+        "items.selection_summary" => {
+            let input: TargetInput = parse(args_json)?;
+            read(application.selection_summary(&input.target)?)
+        }
+        "sidebar.counts" => read(application.sidebar_counts()?),
+        "items.record_view" => {
+            let input: ItemInput = parse(args_json)?;
+            read(application.record_recent_view(input.item_id.0)?)
+        }
+        "items.clear_recent_views" => read(application.clear_recent_views()?),
+        "items.set_lifecycle" => {
+            let input: LifecycleInput = parse(args_json)?;
+            read(application.set_lifecycle(&input.target, input.lifecycle)?)
+        }
+        "items.set_folder" => {
+            let input: FolderMembershipInput = parse(args_json)?;
+            read(application.set_folder_membership(
+                &input.target,
+                input.folder_id,
+                input.present,
+            )?)
+        }
+        "items.apply_tags" => {
+            let input: ApplyTagsInput = parse(args_json)?;
+            read(application.apply_tags(&input.target, &input.tags, input.add)?)
+        }
+        "history.state" => read(application.history_state()),
+        "history.undo" => read(application.undo()?),
+        "history.redo" => read(application.redo()?),
+        _ => return Ok(None),
+    }?;
+    Ok(Some(output))
+}
+
 pub fn dispatch(
     application: &Application,
     command: &str,
@@ -1413,6 +1464,97 @@ mod tests {
             })
             .unwrap();
         (directory, Application::new(store), ItemId(item_id))
+    }
+
+    fn greenfield_fixture() -> (
+        tempfile::TempDir,
+        crate::library_application::LibraryApplication,
+        picto_library::RootId,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let application =
+            crate::library_application::LibraryApplication::create(directory.path()).unwrap();
+        let input = picto_library::PreparedImport {
+            stable_key: "greenfield-ipc-root".into(),
+            media_name: "Greenfield IPC".into(),
+            file_path: "/tmp/greenfield-ipc.png".into(),
+            facts: picto_library::ImmutableMediaFacts {
+                mime: "image/png".into(),
+                size_bytes: 12,
+                width: Some(10),
+                height: Some(20),
+                duration_ms: None,
+                frame_count: Some(1),
+                content_hash: "greenfield-ipc-hash".into(),
+                perceptual_hash: None,
+                palette: Vec::new(),
+            },
+            lifecycle: picto_library::Lifecycle::Active,
+            rating: picto_library::Rating::Unrated,
+            tags: Vec::new(),
+            folders: Vec::new(),
+            source_urls: Vec::new(),
+            source_identity: None,
+            imported_at_ms: 1_700_000_000_000,
+            captured_at_ms: None,
+        };
+        let (root_id, _) = application.library().ingest(&input).unwrap();
+        (directory, application, root_id)
+    }
+
+    #[test]
+    fn greenfield_dispatch_routes_reads_and_session_history_without_fallback() {
+        let (_directory, application, root_id) = greenfield_fixture();
+        let output = dispatch_library(
+            &application,
+            "items.query",
+            r#"{"query":{"scope":{"kind":"all"}},"page":{"cursor":null,"limit":50}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let page: ItemPage = serde_json::from_str(&output).unwrap();
+        assert_eq!(page.items[0].item_id.0, i64::from(root_id.0));
+
+        let revision = application.library().database().revision().unwrap();
+        let tags = dispatch_library(
+            &application,
+            "items.apply_tags",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["creator:alice","series:example"],"add":true}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let receipt: MutationReceipt = serde_json::from_str(&tags).unwrap();
+        assert_eq!(receipt.revision, revision + 1);
+        assert_eq!(
+            application
+                .library()
+                .details(root_id)
+                .unwrap()
+                .tag_ids
+                .len(),
+            2
+        );
+
+        dispatch_library(
+            &application,
+            "items.set_lifecycle",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"lifecycle":"trash"}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let state = dispatch_library(&application, "history.state", "{}")
+            .unwrap()
+            .unwrap();
+        assert!(state.contains("items.set_lifecycle"));
+        assert!(dispatch_library(&application, "legacy.magic", "{}")
+            .unwrap()
+            .is_none());
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {

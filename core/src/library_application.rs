@@ -112,6 +112,66 @@ impl LibraryApplication {
         crate::library_v1::selection_summary(&self.library, summary)
     }
 
+    pub fn record_recent_view(&self, item_id: i64) -> Result<crate::app::MutationReceipt, String> {
+        self.library
+            .record_recent_view(
+                checked_root_id(item_id)?,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn clear_recent_views(&self) -> Result<crate::app::MutationReceipt, String> {
+        self.library
+            .clear_recent_views()
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_lifecycle(
+        &self,
+        target: &ItemTarget,
+        lifecycle: crate::app::Lifecycle,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let target = crate::library_v1::target(&self.library, target)?;
+        self.library
+            .set_lifecycle(&target, crate::library_v1::lifecycle(lifecycle))
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_folder_membership(
+        &self,
+        target: &ItemTarget,
+        folder_id: i64,
+        present: bool,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let target = crate::library_v1::target(&self.library, target)?;
+        let folder_id = picto_library::FolderId(checked_local_id(folder_id, "folder")?);
+        let result = if present {
+            self.library.add_to_folder(&target, folder_id)
+        } else {
+            self.library.remove_from_folder(&target, folder_id)
+        };
+        result
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn apply_tags(
+        &self,
+        target: &ItemTarget,
+        tags: &[String],
+        add: bool,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let target = crate::library_v1::target(&self.library, target)?;
+        self.library
+            .apply_tags(&target, tags, add)
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self
@@ -260,11 +320,14 @@ fn prepare_root(root: &Path) -> Result<PathBuf, String> {
 }
 
 fn checked_root_id(value: i64) -> Result<RootId, String> {
+    checked_local_id(value, "root").map(RootId)
+}
+
+fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
     u32::try_from(value)
         .ok()
         .filter(|value| *value > 0)
-        .map(RootId)
-        .ok_or_else(|| format!("root ID {value} is outside the local ID domain"))
+        .ok_or_else(|| format!("{kind} ID {value} is outside the local ID domain"))
 }
 
 fn checked_count(value: u64) -> Result<i64, String> {

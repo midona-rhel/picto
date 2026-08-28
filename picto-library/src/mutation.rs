@@ -1407,7 +1407,7 @@ impl Library {
     }
 
     pub fn add_tag(&self, target: &SelectionTarget, name: &str) -> Result<MutationReceipt> {
-        self.tag_mutation(target, name, true)
+        self.apply_tags(target, &[name.to_owned()], true)
     }
 
     /// Apply independently predicted tag sets to visible roots in one exact
@@ -2482,7 +2482,29 @@ impl Library {
     }
 
     pub fn remove_tag(&self, target: &SelectionTarget, name: &str) -> Result<MutationReceipt> {
-        self.tag_mutation(target, name, false)
+        self.apply_tags(target, &[name.to_owned()], false)
+    }
+
+    pub fn apply_tags(
+        &self,
+        target: &SelectionTarget,
+        names: &[String],
+        add: bool,
+    ) -> Result<MutationReceipt> {
+        let names = names
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one non-empty tag is required".into(),
+            ));
+        }
+        self.tag_mutation(target, names, add)
     }
 
     pub fn organize_into_collection(
@@ -3272,11 +3294,10 @@ impl Library {
     fn tag_mutation(
         &self,
         target: &SelectionTarget,
-        name: &str,
+        names: Vec<String>,
         add: bool,
     ) -> Result<MutationReceipt> {
         let target = target.clone();
-        let name = name.to_owned();
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -3287,105 +3308,114 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
                 let mut next = (*snapshot).clone();
-                let tag_id = if add {
-                    if let Some(tag_id) = next.tag_ids_by_name.get(&name).copied() {
+                if selection.is_empty() {
+                    next.revision = revision;
+                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                    return Ok((
+                        receipt.clone(),
+                        PublishedDelta {
+                            snapshot: next,
+                            receipt,
+                            history: None,
+                        },
+                    ));
+                }
+                let mut affected = RoaringBitmap::new();
+                let mut changes = Vec::new();
+                let mut tag_ids = Vec::new();
+                for name in &names {
+                    let tag_id = if add {
+                        if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                            tag_id
+                        } else {
+                            let tag_id = ingest::ensure_tag(transaction, name)?;
+                            Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                            tag_id
+                        }
+                    } else if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
                         tag_id
                     } else {
-                        let tag_id = ingest::ensure_tag(transaction, &name)?;
-                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
-                        tag_id
+                        continue;
+                    };
+                    let before = next
+                        .tags
+                        .get(&tag_id)
+                        .map(|members| members.to_bitmap())
+                        .unwrap_or_default();
+                    let mut after = before.clone();
+                    if add {
+                        after |= &selection;
+                    } else {
+                        after -= &selection;
                     }
-                } else if let Some(tag_id) = next.tag_ids_by_name.get(&name).copied() {
-                    tag_id
-                } else {
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
+                    let changed = &before ^ &after;
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
+                    bitmap::replace(
+                        transaction,
+                        revision,
+                        BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
                         },
-                    ));
-                };
-                let tags = Arc::make_mut(&mut next.tags);
-                let before = tags
-                    .get(&tag_id)
-                    .map(|members| members.to_bitmap())
-                    .unwrap_or_default();
-                let mut after = before.clone();
-                if add {
-                    after |= &selection;
-                } else {
-                    after -= &selection;
-                }
-                let changed = &before ^ &after;
-                if changed.is_empty() {
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    next.revision = revision;
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                tags.insert(tag_id, after.clone().into());
-                bitmap::replace(
-                    transaction,
-                    revision,
-                    BitmapKey {
-                        domain: BitmapDomain::Tag,
-                        key_id: tag_id.0,
-                    },
-                    &after,
-                )?;
-                let counts = Arc::make_mut(&mut next.tag_count);
-                for root_id in &changed {
-                    let current = counts.value(root_id).unwrap_or(0);
-                    counts.insert(
-                        root_id,
-                        if after.contains(root_id) {
-                            current + 1
-                        } else {
-                            current.saturating_sub(1)
-                        },
-                    );
-                }
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &changed,
-                    crate::predicate::DependencyChange::Tag(tag_id),
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    if add { "tag.add" } else { "tag.remove" },
-                    Some(&changed),
-                    serde_json::json!({"tag_id": tag_id.0}),
-                    changed_at_ms,
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["roots".into(), "tags".into(), "sidebar".into()],
-                    changed.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    "items.apply_tags",
-                    if add { "Add tag" } else { "Remove tag" },
-                    SemanticChange::Bitmap {
+                        &after,
+                    )?;
+                    let counts = Arc::make_mut(&mut next.tag_count);
+                    for root_id in &changed {
+                        let current = counts.value(root_id).unwrap_or(0);
+                        counts.insert(
+                            root_id,
+                            if after.contains(root_id) {
+                                current + 1
+                            } else {
+                                current.saturating_sub(1)
+                            },
+                        );
+                    }
+                    affected |= &changed;
+                    tag_ids.push(tag_id.0);
+                    changes.push(SemanticChange::Bitmap {
                         key: BitmapKey {
                             domain: BitmapDomain::Tag,
                             key_id: tag_id.0,
                         },
                         before: Arc::new(before),
                         after: Arc::new(after),
-                    },
+                    });
+                }
+                if changes.is_empty() {
+                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                    next.revision = revision;
+                    return Ok((
+                        receipt.clone(),
+                        PublishedDelta {
+                            snapshot: next,
+                            receipt,
+                            history: None,
+                        },
+                    ));
+                }
+                crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    if add { "tag.add" } else { "tag.remove" },
+                    Some(&affected),
+                    serde_json::json!({"tag_ids": tag_ids}),
+                    changed_at_ms,
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["roots".into(), "tags".into(), "sidebar".into()],
+                    affected.iter().map(RootId),
+                );
+                let history = HistoryEntry::for_command(
+                    "items.apply_tags",
+                    if add { "Add tags" } else { "Remove tags" },
+                    SemanticChange::Compound(changes),
                 );
                 Ok((
                     receipt.clone(),
