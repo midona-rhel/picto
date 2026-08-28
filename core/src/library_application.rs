@@ -535,10 +535,9 @@ impl LibraryApplication {
 
     pub fn move_smart_folder(
         &self,
-        smart_folder_id: i64,
-        parent_id: Option<i64>,
+        smart_folder_id: picto_library::SmartFolderId,
+        parent_id: Option<picto_library::SmartFolderId>,
     ) -> Result<picto_library::MutationReceipt, String> {
-        let smart_folder_id = checked_smart_folder_id(smart_folder_id)?;
         let mut record = self
             .library
             .smart_folders()
@@ -546,7 +545,7 @@ impl LibraryApplication {
             .into_iter()
             .find(|record| record.smart_folder_id == smart_folder_id)
             .ok_or_else(|| format!("Smart folder {} does not exist", smart_folder_id.0))?;
-        record.parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
+        record.parent_id = parent_id;
         self.library
             .update_smart_folder(
                 smart_folder_id,
@@ -564,26 +563,20 @@ impl LibraryApplication {
 
     pub fn reorder_smart_folder_children(
         &self,
-        parent_id: Option<i64>,
-        smart_folder_ids: &[i64],
+        parent_id: Option<picto_library::SmartFolderId>,
+        smart_folder_ids: &[picto_library::SmartFolderId],
     ) -> Result<picto_library::MutationReceipt, String> {
-        let parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
-        let ids = smart_folder_ids
-            .iter()
-            .copied()
-            .map(checked_smart_folder_id)
-            .collect::<Result<Vec<_>, String>>()?;
         self.library
-            .reorder_smart_folder_children(parent_id, &ids)
+            .reorder_smart_folder_children(parent_id, smart_folder_ids)
             .map_err(|error| error.to_string())
     }
 
     pub fn delete_smart_folder(
         &self,
-        smart_folder_id: i64,
+        smart_folder_id: picto_library::SmartFolderId,
     ) -> Result<picto_library::SmartFolderDeleteResult, String> {
         self.library
-            .delete_smart_folder(checked_smart_folder_id(smart_folder_id)?)
+            .delete_smart_folder(smart_folder_id)
             .map_err(|error| error.to_string())
     }
 
@@ -999,17 +992,6 @@ fn prepare_root(root: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(root)
         .map_err(|error| format!("Failed to create library directory: {error}"))?;
     Ok(root.to_path_buf())
-}
-
-fn checked_smart_folder_id(value: i64) -> Result<picto_library::SmartFolderId, String> {
-    checked_local_id(value, "smart folder").map(picto_library::SmartFolderId)
-}
-
-fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
-    u32::try_from(value)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| format!("{kind} ID {value} is outside the local ID domain"))
 }
 
 fn required_shell_value(label: &str, value: &str) -> Result<String, String> {
