@@ -13,8 +13,8 @@ use crate::history::{
 use crate::ingest;
 use crate::model::{
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
-    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderId,
-    SmartFolderInput,
+    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderDeleteResult,
+    SmartFolderId, SmartFolderInput,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -516,8 +516,92 @@ impl Library {
         Ok(receipt)
     }
 
-    pub fn delete_smart_folder(&self, smart_folder_id: SmartFolderId) -> Result<MutationReceipt> {
+    pub fn delete_smart_folder(
+        &self,
+        smart_folder_id: SmartFolderId,
+    ) -> Result<SmartFolderDeleteResult> {
         let changed_at_ms = now_ms();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (result, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let mut definitions = load_smart_folder_subtree(transaction, smart_folder_id)?;
+                let fallback_smart_folder_id = definitions
+                    .iter()
+                    .find(|(definition, _)| definition.smart_folder_id == smart_folder_id)
+                    .and_then(|(definition, _)| definition.parent_id);
+                definitions.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+                let mut next = (*snapshot).clone();
+                let mut changes = Vec::with_capacity(definitions.len());
+                for (definition, _) in &definitions {
+                    transaction.execute(
+                        "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
+                        [definition.smart_folder_id.0],
+                    )?;
+                    crate::smart::remove(&mut next, definition.smart_folder_id);
+                    changes.push(SemanticChange::SmartFolderDefinition {
+                        smart_folder_id: definition.smart_folder_id,
+                        before: Some(Box::new(definition.clone())),
+                        after: None,
+                    });
+                }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "smart_folder.delete",
+                    None,
+                    serde_json::json!({
+                        "smart_folder_ids": definitions.iter()
+                            .map(|(definition, _)| definition.smart_folder_id.0)
+                            .collect::<Vec<_>>()
+                    }),
+                    changed_at_ms,
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["smart-folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    SmartFolderDeleteResult {
+                        deleted_smart_folder_ids: definitions
+                            .iter()
+                            .map(|(definition, _)| definition.smart_folder_id)
+                            .collect(),
+                        fallback_smart_folder_id,
+                        receipt: receipt.clone(),
+                    },
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::new(
+                            "Delete smart folder",
+                            SemanticChange::Compound(changes),
+                        )),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(result)
+    }
+
+    pub fn reorder_smart_folder_children(
+        &self,
+        parent_id: Option<SmartFolderId>,
+        smart_folder_ids: &[SmartFolderId],
+    ) -> Result<MutationReceipt> {
+        let requested = smart_folder_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        if requested.iter().copied().collect::<HashSet<_>>().len() != requested.len() {
+            return Err(LibraryError::InvalidInput(
+                "smart-folder reorder contains duplicate IDs".into(),
+            ));
+        }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
@@ -525,40 +609,73 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let before = load_smart_folder_definition(transaction, smart_folder_id)?
-                    .ok_or_else(|| {
-                        LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
-                    })?;
-                let child_count = transaction.query_row(
-                    "SELECT COUNT(*) FROM smart_folder_definition WHERE parent_id = ?1",
-                    [smart_folder_id.0],
-                    |row| row.get::<_, i64>(0),
+                validate_smart_parent(transaction, parent_id, None)?;
+                let mut statement = transaction.prepare(
+                    "SELECT smart_folder_id FROM smart_folder_definition
+                     WHERE parent_id IS ?1 ORDER BY display_order, smart_folder_id",
                 )?;
-                if child_count > 0 {
+                let current = statement
+                    .query_map([parent_id.map(|id| id.0)], |row| {
+                        row.get::<_, u32>(0).map(SmartFolderId)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+                if current.iter().map(|id| id.0).collect::<BTreeSet<_>>()
+                    != requested.iter().copied().collect::<BTreeSet<_>>()
+                    || current.len() != requested.len()
+                {
                     return Err(LibraryError::InvalidInput(
-                        "move or delete child smart folders first".into(),
+                        "smart-folder reorder must contain every sibling exactly once".into(),
                     ));
                 }
-                if transaction.execute(
-                    "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
-                    [smart_folder_id.0],
-                )? == 0
-                {
-                    return Err(LibraryError::NotFound(format!(
-                        "smart folder {}",
-                        smart_folder_id.0
-                    )));
+                let before = current
+                    .iter()
+                    .map(|id| {
+                        load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "smart folder {} disappeared during reorder",
+                                id.0
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut update = transaction.prepare_cached(
+                    "UPDATE smart_folder_definition SET display_order = ?2
+                     WHERE smart_folder_id = ?1",
+                )?;
+                for (display_order, id) in smart_folder_ids.iter().enumerate() {
+                    update.execute(rusqlite::params![id.0, display_order as i64])?;
                 }
+                let mut after_by_id = HashMap::new();
+                for id in smart_folder_ids {
+                    let after =
+                        load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "smart folder {} disappeared during reorder",
+                                id.0
+                            ))
+                        })?;
+                    after_by_id.insert(*id, after);
+                }
+                let changes = before
+                    .into_iter()
+                    .filter_map(|before| {
+                        let after = after_by_id.remove(&before.smart_folder_id)?;
+                        (before != after).then_some(SemanticChange::SmartFolderDefinition {
+                            smart_folder_id: before.smart_folder_id,
+                            before: Some(Box::new(before)),
+                            after: Some(Box::new(after)),
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 insert_cloud_journal(
                     transaction,
                     revision,
-                    "smart_folder.delete",
+                    "smart_folder.reorder",
                     None,
-                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
-                    changed_at_ms,
+                    serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
+                    now_ms(),
                 )?;
                 let mut next = (*snapshot).clone();
-                crate::smart::remove(&mut next, smart_folder_id);
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -570,14 +687,12 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(HistoryEntry::new(
-                            "Delete smart folder",
-                            SemanticChange::SmartFolderDefinition {
-                                smart_folder_id,
-                                before: Some(Box::new(before)),
-                                after: None,
-                            },
-                        )),
+                        history: (!changes.is_empty()).then(|| {
+                            HistoryEntry::new(
+                                "Reorder smart folders",
+                                SemanticChange::Compound(changes),
+                            )
+                        }),
                     },
                 ))
             },
@@ -4560,6 +4675,45 @@ fn load_smart_folder_definition(
         },
     )
     .transpose()
+}
+
+fn load_smart_folder_subtree(
+    connection: &rusqlite::Connection,
+    smart_folder_id: SmartFolderId,
+) -> Result<Vec<(SmartFolderDefinitionState, u32)>> {
+    let mut statement = connection.prepare(
+        "WITH RECURSIVE subtree(smart_folder_id, depth) AS (
+             SELECT smart_folder_id, 0 FROM smart_folder_definition
+             WHERE smart_folder_id = ?1
+             UNION ALL
+             SELECT child.smart_folder_id, parent.depth + 1
+             FROM smart_folder_definition child
+             JOIN subtree parent ON child.parent_id = parent.smart_folder_id
+         )
+         SELECT smart_folder_id, depth FROM subtree ORDER BY smart_folder_id",
+    )?;
+    let ids = statement
+        .query_map([smart_folder_id.0], |row| {
+            Ok((SmartFolderId(row.get(0)?), row.get::<_, u32>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    if ids.is_empty() {
+        return Err(LibraryError::NotFound(format!(
+            "smart folder {smart_folder_id}"
+        )));
+    }
+    ids.into_iter()
+        .map(|(id, depth)| {
+            load_smart_folder_definition(connection, id)?
+                .map(|definition| (definition, depth))
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "smart folder {} disappeared during subtree load",
+                        id.0
+                    ))
+                })
+        })
+        .collect()
 }
 
 fn load_root_text(

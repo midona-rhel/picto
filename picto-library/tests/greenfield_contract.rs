@@ -947,12 +947,46 @@ fn smart_folder_definitions_are_typed_cycle_safe_and_session_undoable() {
         "Child"
     );
 
-    library.delete_smart_folder(child).unwrap();
-    assert_eq!(library.smart_folders().unwrap().len(), 1);
+    let (sibling, _) = library
+        .create_smart_folder(smart_input(
+            "Sibling",
+            Some(parent),
+            ViewQuerySpec::default(),
+        ))
+        .unwrap();
+    library
+        .reorder_smart_folder_children(Some(parent), &[sibling, child])
+        .unwrap();
+    assert_eq!(
+        library
+            .smart_folders()
+            .unwrap()
+            .into_iter()
+            .filter(|folder| folder.parent_id == Some(parent))
+            .map(|folder| folder.smart_folder_id)
+            .collect::<Vec<_>>(),
+        vec![sibling, child]
+    );
     library.undo().unwrap().unwrap();
-    assert_eq!(library.smart_folders().unwrap().len(), 2);
+    assert_eq!(
+        library
+            .smart_folders()
+            .unwrap()
+            .into_iter()
+            .filter(|folder| folder.parent_id == Some(parent))
+            .map(|folder| folder.smart_folder_id)
+            .collect::<Vec<_>>(),
+        vec![child, sibling]
+    );
+
+    let deleted = library.delete_smart_folder(parent).unwrap();
+    assert_eq!(deleted.deleted_smart_folder_ids.len(), 3);
+    assert_eq!(deleted.fallback_smart_folder_id, None);
+    assert!(library.smart_folders().unwrap().is_empty());
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap().len(), 3);
     library.redo().unwrap().unwrap();
-    assert_eq!(library.smart_folders().unwrap().len(), 1);
+    assert!(library.smart_folders().unwrap().is_empty());
 }
 
 #[test]

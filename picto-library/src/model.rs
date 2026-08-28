@@ -41,6 +41,13 @@ pub struct SmartFolderInput {
     pub view: crate::predicate::ViewQuerySpec,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmartFolderDeleteResult {
+    pub deleted_smart_folder_ids: Vec<SmartFolderId>,
+    pub fallback_smart_folder_id: Option<SmartFolderId>,
+    pub receipt: crate::MutationReceipt,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RootKind {
