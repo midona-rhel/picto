@@ -215,85 +215,64 @@ impl LibraryApplication {
 
     pub fn organize_into_collection(
         &self,
-        input: &crate::operations_v2::OrganizeIntoCollectionInput,
-    ) -> Result<crate::operations_v2::OrganizeIntoCollectionResult, String> {
-        let target = crate::library_v1::target(&self.library, &input.target)?;
-        let ordered = self
-            .library
-            .ordered_selection(&target)
-            .map_err(|error| error.to_string())?;
-        let cover_root_id = ordered
-            .first()
-            .copied()
-            .ok_or_else(|| "Creating a collection requires selected roots".to_string())?;
-        let winning_collection_id = input
-            .winning_collection_id
-            .map(|id| checked_root_id(id.0))
-            .transpose()?;
+        input: picto_library::OrganizeCollectionInput,
+    ) -> Result<picto_library::OrganizeCollectionResult, String> {
         let (collection_id, receipt) = self
             .library
             .organize_into_collection(&picto_library::GroupRequest {
-                target,
-                cover_root_id,
-                winning_collection_id,
-                name: input.label.clone(),
+                target: input.target,
+                cover_root_id: input.cover_root_id,
+                winning_collection_id: input.winning_collection_id,
+                name: input.name,
                 modified_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(|error| error.to_string())?;
-        Ok(crate::operations_v2::OrganizeIntoCollectionResult {
-            collection_id: crate::app::ItemId(i64::from(collection_id.0)),
-            receipt: crate::library_v1::receipt(receipt),
+        Ok(picto_library::OrganizeCollectionResult {
+            collection_id,
+            receipt,
         })
     }
 
-    pub fn ungroup_collection(&self, item_id: i64) -> Result<crate::app::MutationReceipt, String> {
-        let (_, receipt) = self
+    pub fn ungroup_collection(
+        &self,
+        collection_id: RootId,
+    ) -> Result<picto_library::CollectionRootsResult, String> {
+        let (root_ids, receipt) = self
             .library
             .ungroup_collection(
-                checked_root_id(item_id)?,
+                collection_id,
                 chrono::Utc::now().timestamp_millis(),
             )
             .map_err(|error| error.to_string())?;
-        Ok(crate::library_v1::receipt(receipt))
+        Ok(picto_library::CollectionRootsResult { root_ids, receipt })
     }
 
     pub fn detach_items(
         &self,
-        input: &crate::operations_v2::DetachItemsInput,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let media_ids = input
-            .media_item_ids
-            .iter()
-            .map(|id| checked_local_id(id.0, "media").map(picto_library::MediaId))
-            .collect::<Result<Vec<_>, String>>()?;
-        let (_, receipt) = self
+        input: picto_library::DetachCollectionInput,
+    ) -> Result<picto_library::CollectionRootsResult, String> {
+        let (root_ids, receipt) = self
             .library
             .detach_collection_members(
-                checked_root_id(input.collection_id.0)?,
-                media_ids,
-                input.target_lifecycle.map(crate::library_v1::lifecycle),
+                input.collection_id,
+                input.media_ids,
+                input.target_lifecycle,
                 chrono::Utc::now().timestamp_millis(),
             )
             .map_err(|error| error.to_string())?;
-        Ok(crate::library_v1::receipt(receipt))
+        Ok(picto_library::CollectionRootsResult { root_ids, receipt })
     }
 
     pub fn reorder_collection(
         &self,
-        input: &crate::operations_v2::ReorderCollectionInput,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let media_ids = input
-            .media_item_ids
-            .iter()
-            .map(|id| checked_local_id(id.0, "media").map(picto_library::MediaId))
-            .collect::<Result<Vec<_>, String>>()?;
+        input: picto_library::ReorderCollectionInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .reorder_collection(
-                checked_root_id(input.collection_id.0)?,
-                media_ids,
+                input.collection_id,
+                input.media_ids,
                 chrono::Utc::now().timestamp_millis(),
             )
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 

@@ -261,6 +261,39 @@ pub struct GroupRequest {
     pub modified_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrganizeCollectionInput {
+    pub target: crate::selection::SelectionTarget,
+    pub cover_root_id: RootId,
+    pub winning_collection_id: Option<RootId>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrganizeCollectionResult {
+    pub collection_id: RootId,
+    pub receipt: crate::MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachCollectionInput {
+    pub collection_id: RootId,
+    pub media_ids: Vec<MediaId>,
+    pub target_lifecycle: Option<Lifecycle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionRootsResult {
+    pub root_ids: Vec<RootId>,
+    pub receipt: crate::MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReorderCollectionInput {
+    pub collection_id: RootId,
+    pub media_ids: Vec<MediaId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingBlobCleanup {
     pub file_id: FileId,

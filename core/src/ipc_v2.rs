@@ -102,20 +102,20 @@ pub fn dispatch_library(
             read(application.delete_items(&input.target)?)
         }
         "items.organize_into_collection" => {
-            let input: crate::operations_v2::OrganizeIntoCollectionInput = parse(args_json)?;
-            read(application.organize_into_collection(&input)?)
+            let input: picto_library::OrganizeCollectionInput = parse(args_json)?;
+            read(application.organize_into_collection(input)?)
         }
         "items.detach" => {
-            let input: crate::operations_v2::DetachItemsInput = parse(args_json)?;
-            read(application.detach_items(&input)?)
+            let input: picto_library::DetachCollectionInput = parse(args_json)?;
+            read(application.detach_items(input)?)
         }
         "items.ungroup" => {
-            let input: ItemInput = parse(args_json)?;
-            read(application.ungroup_collection(input.item_id.0)?)
+            let input: LibraryCollectionInput = parse(args_json)?;
+            read(application.ungroup_collection(input.collection_id)?)
         }
         "items.reorder_collection" => {
-            let input: crate::operations_v2::ReorderCollectionInput = parse(args_json)?;
-            read(application.reorder_collection(&input)?)
+            let input: picto_library::ReorderCollectionInput = parse(args_json)?;
+            read(application.reorder_collection(input)?)
         }
         "folders.create" => {
             let input: crate::folders_v2::CreateFolderInput = parse(args_json)?;
@@ -1365,6 +1365,10 @@ struct LibraryPatchMetadataInput {
     target: picto_library::selection::SelectionTarget,
     patch: picto_library::RootMetadataPatch,
 }
+#[derive(Deserialize)]
+struct LibraryCollectionInput {
+    collection_id: picto_library::RootId,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1821,17 +1825,17 @@ mod tests {
             &application,
             "items.organize_into_collection",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{},{},{}]}},"label":"Grouped","winning_collection_id":null}}"#,
-                first.0, second.0, third.0
+                r#"{{"target":{{"kind":"explicit","root_ids":[{},{},{}]}},"cover_root_id":{},"winning_collection_id":null,"name":"Grouped"}}"#,
+                first.0, second.0, third.0, first.0
             ),
         )
         .unwrap()
         .unwrap();
-        let output: crate::operations_v2::OrganizeIntoCollectionResult =
+        let output: picto_library::OrganizeCollectionResult =
             serde_json::from_str(&output).unwrap();
         let details = application
             .library()
-            .details(picto_library::RootId(output.collection_id.0 as u32))
+            .details(output.collection_id)
             .unwrap();
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.root.name, "Grouped");
@@ -1842,17 +1846,19 @@ mod tests {
             &application,
             "items.detach",
             &format!(
-                r#"{{"collection_id":{},"media_item_ids":[{},{}],"target_lifecycle":"trash"}}"#,
+                r#"{{"collection_id":{},"media_ids":[{},{}],"target_lifecycle":"trash"}}"#,
                 output.collection_id.0, first.0, third.0
             ),
         )
         .unwrap()
         .unwrap();
-        let receipt: MutationReceipt = serde_json::from_str(&detached).unwrap();
-        assert_eq!(receipt.revision, revision + 1);
+        let detached: picto_library::CollectionRootsResult =
+            serde_json::from_str(&detached).unwrap();
+        assert_eq!(detached.receipt.revision, revision + 1);
+        assert_eq!(detached.root_ids.len(), 2);
         let details = application
             .library()
-            .details(picto_library::RootId(output.collection_id.0 as u32))
+            .details(output.collection_id)
             .unwrap();
         assert_eq!(details.media.len(), 1);
         assert_eq!(details.media[0].media_id.0, second.0);
