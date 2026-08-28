@@ -617,6 +617,114 @@ impl LibraryApplication {
         ))
     }
 
+    pub fn list_tags(
+        &self,
+        namespace: Option<&str>,
+        search: Option<&str>,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> Result<crate::tags_v2::TagPage, String> {
+        let cursor = cursor
+            .filter(|value| !value.is_empty())
+            .map(str::parse::<u32>)
+            .transpose()
+            .map_err(|_| "Invalid tag cursor".to_string())?
+            .unwrap_or(0);
+        let search = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        let limit = usize::try_from(limit.clamp(1, 500)).expect("positive tag limit");
+        let (tags, revision) = self
+            .library
+            .tags_with_revision()
+            .map_err(|error| error.to_string())?;
+        let mut tags = tags
+            .into_iter()
+            .filter(|tag| tag.tag_id.0 > cursor)
+            .filter(|tag| namespace.is_none_or(|namespace| tag.namespace == namespace))
+            .filter(|tag| {
+                search
+                    .as_ref()
+                    .is_none_or(|search| tag.subname.to_lowercase().contains(search))
+            })
+            .collect::<Vec<_>>();
+        tags.sort_by_key(|tag| tag.tag_id.0);
+        let next_cursor = (tags.len() > limit).then(|| tags[limit - 1].tag_id.0.to_string());
+        tags.truncate(limit);
+        Ok(crate::tags_v2::TagPage {
+            tags: tags
+                .into_iter()
+                .map(|tag| {
+                    let active_count = checked_count(tag.active_count)?;
+                    Ok(crate::tags_v2::TagSummary {
+                        tag_id: i64::from(tag.tag_id.0),
+                        namespace: tag.namespace,
+                        subtag: tag.subname,
+                        media_count: active_count,
+                        root_count: active_count,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            next_cursor,
+            revision,
+        })
+    }
+
+    pub fn tag_namespace_counts(&self) -> Result<Vec<(String, i64)>, String> {
+        let tags = self.library.tags().map_err(|error| error.to_string())?;
+        let mut counts = std::collections::BTreeMap::<String, i64>::new();
+        for tag in tags {
+            *counts.entry(tag.namespace).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
+    }
+
+    pub fn unused_tag_count(&self) -> Result<i64, String> {
+        self.library
+            .tags()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|tag| tag.assignment_count == 0)
+            .count()
+            .try_into()
+            .map_err(|_| "Tag count exceeds supported range".to_string())
+    }
+
+    pub fn rename_or_merge_tag(
+        &self,
+        tag_id: i64,
+        name: &str,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let tag_id = checked_local_id(tag_id, "tag").map(picto_library::TagId)?;
+        let target = self
+            .library
+            .projections()
+            .snapshot()
+            .tag_ids_by_name
+            .get(name.trim())
+            .copied();
+        let receipt = match target {
+            Some(target) if target != tag_id => {
+                self.library
+                    .merge_tags(tag_id, target, chrono::Utc::now().timestamp_millis())
+            }
+            _ => self.library.rename_tag(tag_id, name),
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(crate::library_v1::receipt(receipt))
+    }
+
+    pub fn delete_tag(&self, tag_id: i64) -> Result<crate::app::MutationReceipt, String> {
+        self.library
+            .delete_tag(
+                checked_local_id(tag_id, "tag").map(picto_library::TagId)?,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self

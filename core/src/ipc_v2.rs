@@ -48,6 +48,17 @@ pub fn dispatch_library(
             read(application.selection_summary(&input.target)?)
         }
         "sidebar.counts" => read(application.sidebar_counts()?),
+        "tags.list" => {
+            let input: ListTagsInput = parse(args_json)?;
+            read(application.list_tags(
+                input.namespace.as_deref(),
+                input.search.as_deref(),
+                input.cursor.as_deref(),
+                input.limit,
+            )?)
+        }
+        "tags.namespace_counts" => read(application.tag_namespace_counts()?),
+        "tags.unused_count" => read(application.unused_tag_count()?),
         "items.record_view" => {
             let input: ItemInput = parse(args_json)?;
             read(application.record_recent_view(input.item_id.0)?)
@@ -164,6 +175,14 @@ pub fn dispatch_library(
         "smart_folders.delete" => {
             let input: SmartFolderInput = parse(args_json)?;
             read(application.delete_smart_folder(input.smart_folder_id)?)
+        }
+        "tags.rename_or_merge" => {
+            let input: RenameTagInput = parse(args_json)?;
+            read(application.rename_or_merge_tag(input.tag_id, &input.name)?)
+        }
+        "tags.delete" => {
+            let input: TagInput = parse(args_json)?;
+            read(application.delete_tag(input.tag_id)?)
         }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
@@ -1818,6 +1837,78 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(application.library().smart_folders().unwrap().is_empty());
+    }
+
+    #[test]
+    fn greenfield_dispatch_routes_tag_reads_rename_merge_and_delete() {
+        let (_directory, application, root_id) = greenfield_fixture();
+        dispatch_library(
+            &application,
+            "items.apply_tags",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["creator:one","creator:two"],"add":true}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let page = dispatch_library(
+            &application,
+            "tags.list",
+            r#"{"namespace":"creator","search":null,"cursor":null,"limit":100}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let page: crate::tags_v2::TagPage = serde_json::from_str(&page).unwrap();
+        assert_eq!(page.tags.len(), 2);
+        let source = page
+            .tags
+            .iter()
+            .find(|tag| tag.subtag == "one")
+            .unwrap()
+            .tag_id;
+        dispatch_library(
+            &application,
+            "tags.rename_or_merge",
+            &format!(r#"{{"tag_id":{source},"name":"creator:two"}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let page = dispatch_library(
+            &application,
+            "tags.list",
+            r#"{"namespace":"creator","search":null,"cursor":null,"limit":100}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let page: crate::tags_v2::TagPage = serde_json::from_str(&page).unwrap();
+        assert_eq!(page.tags.len(), 1);
+        assert_eq!(page.tags[0].root_count, 1);
+        assert_eq!(
+            dispatch_library(&application, "tags.namespace_counts", "{}")
+                .unwrap()
+                .unwrap(),
+            r#"[["creator",1]]"#
+        );
+        dispatch_library(
+            &application,
+            "tags.delete",
+            &format!(r#"{{"tag_id":{}}}"#, page.tags[0].tag_id),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            dispatch_library(&application, "tags.unused_count", "{}")
+                .unwrap()
+                .unwrap(),
+            "0"
+        );
+        assert!(application
+            .library()
+            .details(root_id)
+            .unwrap()
+            .tag_ids
+            .is_empty());
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {

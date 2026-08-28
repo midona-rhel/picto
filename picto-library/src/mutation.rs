@@ -313,6 +313,10 @@ impl Library {
     }
 
     pub fn tags(&self) -> Result<Vec<TagRecord>> {
+        self.tags_with_revision().map(|(tags, _)| tags)
+    }
+
+    pub fn tags_with_revision(&self) -> Result<(Vec<TagRecord>, u64)> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
@@ -338,8 +342,10 @@ impl Library {
                         assignment_count: members.map_or(0, |roots| roots.len()),
                     })
                 })?;
-                rows.collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(Into::into)
+                let tags = rows
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(LibraryError::from)?;
+                Ok((tags, snapshot.revision))
             },
         )
     }
