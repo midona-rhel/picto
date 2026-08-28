@@ -314,6 +314,35 @@ fn compound_metadata_patch_settles_once_and_undoes_as_one_action() {
 }
 
 #[test]
+fn multi_rename_uses_one_publication_and_preserves_one_inverse() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported("rename-one", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("rename-two", Lifecycle::Active, &[]))
+        .unwrap();
+    let before_revision = library.database().revision().unwrap();
+
+    let receipt = library
+        .rename_roots(
+            &[(first, "First".into()), (second, "Second".into())],
+            1_800_000_000_000,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.revision, before_revision + 1);
+    assert_eq!(library.history().state().entries, 1);
+    assert_eq!(library.details(first).unwrap().root.name, "First");
+    assert_eq!(library.details(first).unwrap().media[0].media_name, "First");
+    assert_eq!(library.details(second).unwrap().root.name, "Second");
+    library.undo().unwrap();
+    assert_eq!(library.details(first).unwrap().root.name, "rename-one.png");
+    assert_eq!(library.details(second).unwrap().root.name, "rename-two.png");
+}
+
+#[test]
 fn tag_rename_changes_only_the_dictionary() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

@@ -187,6 +187,20 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn rename_items(
+        &self,
+        renames: &[crate::operations_v2::ItemRename],
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let renames = renames
+            .iter()
+            .map(|rename| Ok((checked_root_id(rename.item_id.0)?, rename.name.clone())))
+            .collect::<Result<Vec<_>, String>>()?;
+        self.library
+            .rename_roots(&renames, chrono::Utc::now().timestamp_millis())
+            .map(crate::library_v1::receipt)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn patch_metadata(
         &self,
         target: &ItemTarget,

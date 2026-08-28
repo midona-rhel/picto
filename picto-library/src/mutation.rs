@@ -33,7 +33,6 @@ struct PublishedDelta {
 }
 
 enum TextMutation {
-    Rename(String),
     Notes(Option<String>),
     SourceUrls(Vec<String>),
 }
@@ -1517,16 +1516,147 @@ impl Library {
         name: &str,
         modified_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        let name = required_name("root", name)?;
-        self.text_mutation(
-            &SelectionTarget::Explicit {
-                root_ids: vec![root_id],
+        self.rename_roots(&[(root_id, name.to_owned())], modified_at_ms)
+    }
+
+    pub fn rename_roots(
+        &self,
+        renames: &[(RootId, String)],
+        modified_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if renames.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one root rename is required".into(),
+            ));
+        }
+        let mut names = HashMap::new();
+        for (root_id, name) in renames {
+            let name = required_name("root", name)?;
+            if names.insert(*root_id, name).is_some() {
+                return Err(LibraryError::InvalidInput(format!(
+                    "root {} appears more than once in the rename request",
+                    root_id.0
+                )));
+            }
+        }
+        let requested = names
+            .keys()
+            .map(|root_id| root_id.0)
+            .collect::<RoaringBitmap>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let loaded = load_root_text(transaction, &requested)?;
+                if loaded.len() != names.len() {
+                    return Err(LibraryError::NotFound(
+                        "one or more roots to rename do not exist".into(),
+                    ));
+                }
+                let mut before = Vec::new();
+                let mut after = Vec::new();
+                let mut changed = RoaringBitmap::new();
+                for state in loaded {
+                    let name = names
+                        .get(&state.root_id)
+                        .expect("loaded roots are present in the rename map");
+                    if state.name == *name {
+                        continue;
+                    }
+                    let mut next_state = state.clone();
+                    next_state.name.clone_from(name);
+                    next_state.modified_at_ms = modified_at_ms;
+                    changed.insert(state.root_id.0);
+                    before.push(state);
+                    after.push(next_state);
+                }
+                let mut next = (*snapshot).clone();
+                if changed.is_empty() {
+                    next.revision = revision;
+                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                    return Ok((
+                        receipt.clone(),
+                        PublishedDelta {
+                            snapshot: next,
+                            receipt,
+                            history: None,
+                        },
+                    ));
+                }
+                let mut root_update = transaction.prepare_cached(
+                    "UPDATE library_root SET name = ?2, modified_at_ms = ?3 WHERE root_id = ?1",
+                )?;
+                let mut media_update = transaction.prepare_cached(
+                    "UPDATE media_item SET media_name = ?2
+                     WHERE media_id = ?1 AND EXISTS(
+                         SELECT 1 FROM library_item WHERE local_id = ?1 AND item_kind = 1
+                     )",
+                )?;
+                for state in &after {
+                    root_update.execute(rusqlite::params![
+                        state.root_id.0,
+                        state.name,
+                        state.modified_at_ms
+                    ])?;
+                    media_update.execute(rusqlite::params![state.root_id.0, state.name])?;
+                    Arc::make_mut(&mut next.modified_at)
+                        .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
+                }
+                drop(root_update);
+                drop(media_update);
+                crate::fts::mark_dirty(transaction, &changed, 1, modified_at_ms)?;
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &changed,
+                    crate::predicate::DependencyChange::RootText,
+                )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "root.rename",
+                    Some(&changed),
+                    serde_json::json!({"count": changed.len()}),
+                    modified_at_ms,
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["roots".into(), "search".into(), "smart-folders".into()],
+                    changed.iter().map(RootId),
+                );
+                let history = HistoryEntry::for_command(
+                    if changed.len() == 1 {
+                        "items.rename"
+                    } else {
+                        "items.rename_many"
+                    },
+                    if changed.len() == 1 {
+                        "Rename item"
+                    } else {
+                        "Rename items"
+                    },
+                    SemanticChange::RootText {
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    },
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(history),
+                    },
+                ))
             },
-            "items.rename",
-            "Rename",
-            TextMutation::Rename(name),
-            modified_at_ms,
-        )
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     pub fn set_notes(
@@ -3595,7 +3725,6 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let target = target.clone();
         let operation_kind = match &mutation {
-            TextMutation::Rename(_) => "root.rename",
             TextMutation::Notes(_) => "root.notes",
             TextMutation::SourceUrls(_) => "root.source_urls",
         };
@@ -3607,16 +3736,10 @@ impl Library {
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                if matches!(&mutation, TextMutation::Rename(_)) && selection.len() != 1 {
-                    return Err(LibraryError::InvalidInput(
-                        "rename requires exactly one root".into(),
-                    ));
-                }
                 let mut before = load_root_text(transaction, &selection)?;
                 let mut after = before.clone();
                 for state in &mut after {
                     match &mutation {
-                        TextMutation::Rename(name) => state.name.clone_from(name),
                         TextMutation::Notes(notes) => state.notes.clone_from(notes),
                         TextMutation::SourceUrls(urls) => state.source_urls.clone_from(urls),
                     }
@@ -3648,16 +3771,6 @@ impl Library {
                         serde_json::to_string(&state.source_urls)?,
                         state.modified_at_ms
                     ])?;
-                    if matches!(&mutation, TextMutation::Rename(_)) {
-                        transaction.execute(
-                            "UPDATE media_item SET media_name = ?2
-                             WHERE media_id = ?1 AND EXISTS(
-                                 SELECT 1 FROM library_item
-                                 WHERE local_id = ?1 AND item_kind = 1
-                             )",
-                            rusqlite::params![state.root_id.0, state.name],
-                        )?;
-                    }
                 }
                 drop(update);
                 crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;

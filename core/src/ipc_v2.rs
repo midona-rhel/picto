@@ -73,6 +73,10 @@ pub fn dispatch_library(
             let input: ItemNameInput = parse(args_json)?;
             read(application.rename_item(input.item_id.0, &input.name)?)
         }
+        "items.rename_many" => {
+            let input: RenameItemsInput = parse(args_json)?;
+            read(application.rename_items(&input.renames)?)
+        }
         "items.patch_metadata" => {
             let input: PatchMetadataInput = parse(args_json)?;
             read(application.patch_metadata(&input.target, &input.patch)?)
