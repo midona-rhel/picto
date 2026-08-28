@@ -9,8 +9,8 @@ use crate::database::WorkPriority;
 use crate::history::{HistoryEntry, SemanticChange, SessionHistory, TagDefinitionState};
 use crate::ingest;
 use crate::model::{
-    FolderId, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId, PreparedImport, Rating, RootId,
-    SmartFolderId,
+    FolderId, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId, PreparedCollectionImport,
+    PreparedImport, Rating, RootId, SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -362,6 +362,88 @@ impl Library {
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
         Ok(outputs)
+    }
+
+    pub fn ingest_collection(
+        &self,
+        input: &PreparedCollectionImport,
+    ) -> Result<(RootId, MutationReceipt)> {
+        if input.members.len() < 2 {
+            return Err(LibraryError::InvalidInput(
+                "a collection import requires at least two media members".into(),
+            ));
+        }
+        if input.members.len() > ingest::MAX_INGEST_BATCH {
+            return Err(LibraryError::InvalidInput(format!(
+                "one atomic collection batch may contain at most {} members",
+                ingest::MAX_INGEST_BATCH
+            )));
+        }
+        if input.cover_index >= input.members.len() {
+            return Err(LibraryError::InvalidInput(
+                "collection cover index is outside the member list".into(),
+            ));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let ((collection_id, receipt), _, ()) = self.database.published_write(
+            WorkPriority::CanonicalIngest,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let mut next = (*snapshot).clone();
+                let mut root_ids = Vec::with_capacity(input.members.len());
+                let mut resources = BTreeSet::new();
+                let mut bitmap_keys = HashSet::new();
+                let mut folder_ids = HashSet::new();
+                for member in &input.members {
+                    let output = ingest::insert_one(transaction, revision, next, member)?;
+                    next = output.snapshot;
+                    root_ids.push(output.root_id);
+                    resources.extend(output.resources);
+                    bitmap_keys.extend(output.bitmap_keys);
+                    folder_ids.extend(output.folder_ids);
+                }
+                let output = crate::group::organize(
+                    transaction,
+                    revision,
+                    next,
+                    &GroupRequest {
+                        target: SelectionTarget::Explicit {
+                            root_ids: root_ids.clone(),
+                        },
+                        cover_root_id: root_ids[input.cover_index],
+                        winning_collection_id: None,
+                        name: input.name.clone(),
+                        modified_at_ms: input.modified_at_ms,
+                    },
+                )?;
+                let mut next = output.snapshot;
+                ingest::persist_touched(transaction, revision, &next, bitmap_keys, folder_ids)?;
+                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+                resources.extend([
+                    "collections".to_owned(),
+                    "tags".to_owned(),
+                    "folders".to_owned(),
+                ]);
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    resources,
+                    output.affected.iter().map(RootId),
+                );
+                Ok((
+                    (output.collection_id, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok((collection_id, receipt))
     }
 
     pub fn settle_fts(&self, limit: usize) -> Result<Option<MutationReceipt>> {

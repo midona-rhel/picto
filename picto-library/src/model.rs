@@ -157,6 +157,14 @@ pub struct PreparedImport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreparedCollectionImport {
+    pub members: Vec<PreparedImport>,
+    pub cover_index: usize,
+    pub name: Option<String>,
+    pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupRequest {
     pub target: crate::selection::SelectionTarget,
     pub cover_root_id: RootId,

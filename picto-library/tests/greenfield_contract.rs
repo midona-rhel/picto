@@ -697,6 +697,61 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
 }
 
 #[test]
+fn prepared_collection_import_never_publishes_standalone_members() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let before = library.database().revision().unwrap();
+    let (collection, receipt) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                imported("atomic-one", Lifecycle::Inbox, &["post:atomic"]),
+                imported("atomic-two", Lifecycle::Inbox, &["post:atomic"]),
+            ],
+            cover_index: 1,
+            name: Some("Atomic post".into()),
+            modified_at_ms: 1_700_000_004_000,
+        })
+        .unwrap();
+    assert_eq!(receipt.revision, before + 1);
+    let inbox = library
+        .query(&query(ItemScope::Inbox), &PageRequest::default())
+        .unwrap();
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.items[0].root_id, collection);
+    assert_eq!(inbox.items[0].kind, RootKind::Collection);
+    assert_eq!(inbox.items[0].media_count, 2);
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    2
+                );
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT COUNT(DISTINCT revision) FROM cloud_journal",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    1
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
+#[test]
 fn fts_settlement_interleaves_dirty_categories() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
