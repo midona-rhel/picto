@@ -160,6 +160,16 @@ pub struct FolderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagRecord {
+    pub tag_id: TagId,
+    pub namespace_id: TagNamespaceId,
+    pub namespace: String,
+    pub subname: String,
+    pub active_count: u64,
+    pub assignment_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDeleteResult {
     pub deleted_folder_ids: Vec<FolderId>,
     pub fallback_folder_id: Option<FolderId>,

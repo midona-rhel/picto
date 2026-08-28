@@ -14,7 +14,7 @@ use crate::ingest;
 use crate::model::{
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
     PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderDeleteResult,
-    SmartFolderId, SmartFolderInput,
+    SmartFolderId, SmartFolderInput, TagNamespaceId, TagRecord,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -257,6 +257,38 @@ impl Library {
                             .folders
                             .get(&folder_id)
                             .map_or(0, |roots| (roots & snapshot.active()).len()),
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            },
+        )
+    }
+
+    pub fn tags(&self) -> Result<Vec<TagRecord>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let mut statement = connection.prepare(
+                    "SELECT tag.tag_id, namespace.namespace_id,
+                            namespace.display_name, tag.subname
+                     FROM tag_definition tag
+                     JOIN tag_namespace namespace
+                       ON namespace.namespace_id = tag.namespace_id
+                     ORDER BY namespace.display_name COLLATE NOCASE,
+                              tag.subname COLLATE NOCASE, tag.tag_id",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    let tag_id = crate::TagId(row.get(0)?);
+                    let members = snapshot.tags.get(&tag_id);
+                    Ok(TagRecord {
+                        tag_id,
+                        namespace_id: TagNamespaceId(row.get(1)?),
+                        namespace: row.get(2)?,
+                        subname: row.get(3)?,
+                        active_count: members.map_or(0, |roots| (roots & snapshot.active()).len()),
+                        assignment_count: members.map_or(0, |roots| roots.len()),
                     })
                 })?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1226,6 +1258,65 @@ impl Library {
                                 SemanticChange::TagName {
                                     tag_id,
                                     before: old_name,
+                                    after: name.clone(),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn rename_tag_namespace(
+        &self,
+        namespace_id: TagNamespaceId,
+        name: &str,
+    ) -> Result<MutationReceipt> {
+        let name = required_name("tag namespace", name)?;
+        if name.contains(':') {
+            return Err(LibraryError::InvalidInput(
+                "tag namespace cannot contain a colon".into(),
+            ));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = load_namespace_name(transaction, namespace_id)?;
+                let mut next = (*snapshot).clone();
+                apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "tag.namespace.rename",
+                    None,
+                    serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
+                    now_ms(),
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["tags".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (before != name).then(|| {
+                            HistoryEntry::new(
+                                "Rename tag namespace",
+                                SemanticChange::TagNamespaceName {
+                                    namespace_id,
+                                    before,
                                     after: name.clone(),
                                 },
                             )
@@ -3671,6 +3762,26 @@ fn apply_semantic_change(
             resources.insert("navigation".into());
             resources.insert("smart-folders".into());
         }
+        SemanticChange::TagNamespaceName {
+            namespace_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            if load_namespace_name(transaction, *namespace_id)? != *expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because tag namespace {} was renamed",
+                    namespace_id.0
+                )));
+            }
+            apply_namespace_name(transaction, snapshot, *namespace_id, replacement)?;
+            resources.insert("tags".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::TagDefinition {
             before,
             after,
@@ -4372,6 +4483,73 @@ fn rename_tag_definition(
     let names = Arc::make_mut(&mut snapshot.tag_ids_by_name);
     names.remove(&old_name);
     names.insert(name.to_owned(), tag_id);
+    Ok(())
+}
+
+fn load_namespace_name(
+    connection: &rusqlite::Connection,
+    namespace_id: TagNamespaceId,
+) -> Result<String> {
+    connection
+        .query_row(
+            "SELECT display_name FROM tag_namespace WHERE namespace_id = ?1",
+            [namespace_id.0],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => {
+                LibraryError::NotFound(format!("tag namespace {namespace_id}"))
+            }
+            error => error.into(),
+        })
+}
+
+fn apply_namespace_name(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    namespace_id: TagNamespaceId,
+    replacement: &str,
+) -> Result<()> {
+    let before = load_namespace_name(transaction, namespace_id)?;
+    let duplicate = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM tag_namespace
+             WHERE display_name = ?1 AND namespace_id != ?2
+         )",
+        rusqlite::params![replacement, namespace_id.0],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if duplicate {
+        return Err(LibraryError::InvalidInput(format!(
+            "tag namespace {replacement} already exists"
+        )));
+    }
+    let mut statement = transaction
+        .prepare("SELECT tag_id, subname FROM tag_definition WHERE namespace_id = ?1")?;
+    let tags = statement
+        .query_map([namespace_id.0], |row| {
+            Ok((crate::TagId(row.get(0)?), row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    transaction.execute(
+        "UPDATE tag_namespace SET display_name = ?2 WHERE namespace_id = ?1",
+        rusqlite::params![namespace_id.0, replacement],
+    )?;
+    let names = Arc::make_mut(&mut snapshot.tag_ids_by_name);
+    for (tag_id, subname) in tags {
+        let old_name = if before.is_empty() {
+            subname.clone()
+        } else {
+            format!("{before}:{subname}")
+        };
+        let new_name = if replacement.is_empty() {
+            subname
+        } else {
+            format!("{replacement}:{subname}")
+        };
+        names.remove(&old_name);
+        names.insert(new_name, tag_id);
+    }
     Ok(())
 }
 

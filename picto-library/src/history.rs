@@ -112,6 +112,11 @@ pub enum SemanticChange {
         before: String,
         after: String,
     },
+    TagNamespaceName {
+        namespace_id: crate::TagNamespaceId,
+        before: String,
+        after: String,
+    },
     TagDefinition {
         before: Option<TagDefinitionState>,
         after: Option<TagDefinitionState>,
@@ -170,6 +175,7 @@ impl SemanticChange {
                 .sum(),
             Self::CollectionCover { .. } => 64,
             Self::TagName { before, after, .. } => before.len() + after.len() + 32,
+            Self::TagNamespaceName { before, after, .. } => before.len() + after.len() + 32,
             Self::TagDefinition {
                 before,
                 after,

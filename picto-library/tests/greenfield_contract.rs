@@ -261,6 +261,26 @@ fn tag_rename_changes_only_the_dictionary() {
         library.projections().snapshot().tag_ids_by_name["new:name"],
         tag_id
     );
+
+    let tag = library
+        .tags()
+        .unwrap()
+        .into_iter()
+        .find(|tag| tag.tag_id == tag_id)
+        .unwrap();
+    assert_eq!(tag.active_count, 1);
+    assert_eq!(tag.assignment_count, 1);
+    library
+        .rename_tag_namespace(tag.namespace_id, "artist")
+        .unwrap();
+    let renamed_namespace = library.projections().snapshot();
+    assert_eq!(renamed_namespace.tag_ids_by_name["artist:name"], tag_id);
+    assert_eq!(renamed_namespace.tags[&tag_id], members);
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library.projections().snapshot().tag_ids_by_name["new:name"],
+        tag_id
+    );
 }
 
 #[test]
