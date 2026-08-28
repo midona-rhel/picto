@@ -574,6 +574,13 @@ pub struct DuplicateCandidate {
     pub decision: DuplicateQualityDecision,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateScanResult {
+    pub candidate_count: usize,
+    pub affected_item_ids: Vec<RootId>,
+    pub receipt: crate::MutationReceipt,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DuplicateResolutionChoice {
     KeepBoth,

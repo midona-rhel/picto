@@ -7,6 +7,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
+use std::path::PathBuf;
 
 use chrono::Utc;
 use fast_image_resize as fr;
@@ -1009,6 +1010,46 @@ fn spatial_descriptor_for_file(app: &Application, file: &StoredFile) -> Option<S
     spatial_descriptor(&bytes)
 }
 
+fn spatially_verify_library_pair(
+    application: &crate::library_application::LibraryApplication,
+    left: &StoredFile,
+    right: &StoredFile,
+    cache: &mut HashMap<i64, Option<SpatialDescriptor>>,
+) -> Option<u32> {
+    let descriptor = |file: &StoredFile, cache: &mut HashMap<i64, Option<SpatialDescriptor>>| {
+        cache
+            .entry(file.file_id)
+            .or_insert_with(|| spatial_descriptor_for_library_file(application, file))
+            .clone()
+    };
+    let comparison = spatial_comparison(&descriptor(left, cache)?, &descriptor(right, cache)?);
+    spatially_consistent(comparison).then_some(comparison.difference_basis_points)
+}
+
+fn spatial_descriptor_for_library_file(
+    application: &crate::library_application::LibraryApplication,
+    file: &StoredFile,
+) -> Option<SpatialDescriptor> {
+    if let Some(bytes) = application
+        .blobs()
+        .read_thumbnail(&file.file_hash.0)
+        .ok()
+        .flatten()
+    {
+        return spatial_descriptor(&bytes);
+    }
+    let mut source = PreparedMediaSource::from_stored_metadata(
+        file.file_path.clone()?,
+        &file.mime_type,
+        None,
+        file.frame_count,
+    );
+    let (bytes, _) = source
+        .render_inline_thumbnail_bytes(DEFAULT_THUMBNAIL_DIMENSIONS)
+        .ok()?;
+    spatial_descriptor(&bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct DuplicateCandidate {
@@ -1063,6 +1104,115 @@ pub struct ResolutionResult {
     pub affected_item_ids: Vec<ItemId>,
     pub freed_file_hash: Option<FileHash>,
     pub receipt: MutationReceipt,
+}
+
+pub fn scan_library(
+    application: &crate::library_application::LibraryApplication,
+    distance_threshold: u32,
+) -> Result<picto_library::DuplicateScanResult, String> {
+    let files = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::Maintenance,
+            load_library_files_with_hash,
+        )
+        .map_err(|error| error.to_string())?;
+    let parsed = files
+        .iter()
+        .filter_map(|file| {
+            parse_supported_hash(file.perceptual_hash.as_deref()?).map(|hash| (file.file_id, hash))
+        })
+        .collect::<Vec<_>>();
+    let plan = candidate_plan(&parsed, distance_threshold).map_err(|error| error.to_string())?;
+    let by_id = files
+        .into_iter()
+        .map(|file| (file.file_id, file))
+        .collect::<HashMap<_, _>>();
+    let mut spatial_cache = HashMap::new();
+    let mut spatial_comparisons = 0usize;
+    let mut verified_pairs = Vec::new();
+    let mut representatives = Vec::<Vec<i64>>::with_capacity(plan.groups.len());
+
+    for group in &plan.groups {
+        let mut group_representatives = Vec::new();
+        for file_id in &group.file_ids {
+            let Some(file) = by_id.get(file_id) else {
+                continue;
+            };
+            let mut matched = false;
+            for representative_id in &group_representatives {
+                spatial_comparisons += 1;
+                if spatial_comparisons > MAX_SPATIAL_COMPARISONS {
+                    return Err(
+                        "duplicate scan paused: spatial verification budget exceeded".into(),
+                    );
+                }
+                let Some(representative) = by_id.get(representative_id) else {
+                    continue;
+                };
+                if let Some(distance) = spatially_verify_library_pair(
+                    application,
+                    representative,
+                    file,
+                    &mut spatial_cache,
+                ) {
+                    verified_pairs.push((*representative_id, *file_id, distance));
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                if group_representatives.len() >= MAX_SIGNATURE_REPRESENTATIVES {
+                    return Err(format!(
+                        "duplicate scan paused: one exact hash signature contains more than {MAX_SIGNATURE_REPRESENTATIVES} visually distinct representatives"
+                    ));
+                }
+                group_representatives.push(*file_id);
+            }
+        }
+        representatives.push(group_representatives);
+    }
+
+    for (left_group, right_group, _global_distance) in plan.neighboring_groups {
+        for left_id in &representatives[left_group] {
+            for right_id in &representatives[right_group] {
+                spatial_comparisons += 1;
+                if spatial_comparisons > MAX_SPATIAL_COMPARISONS {
+                    return Err(
+                        "duplicate scan paused: spatial verification budget exceeded".into(),
+                    );
+                }
+                let (Some(left), Some(right)) = (by_id.get(left_id), by_id.get(right_id)) else {
+                    continue;
+                };
+                if let Some(distance) =
+                    spatially_verify_library_pair(application, left, right, &mut spatial_cache)
+                {
+                    verified_pairs.push((*left_id, *right_id, distance));
+                }
+            }
+        }
+    }
+
+    let pairs =
+        verified_pairs
+            .into_iter()
+            .map(|(file_id_a, file_id_b, distance)| {
+                Ok((
+                    picto_library::FileId(u32::try_from(file_id_a).map_err(|_| {
+                        format!("file ID {file_id_a} exceeds canonical ID capacity")
+                    })?),
+                    picto_library::FileId(u32::try_from(file_id_b).map_err(|_| {
+                        format!("file ID {file_id_b} exceeds canonical ID capacity")
+                    })?),
+                    distance,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+    application
+        .library()
+        .replace_detected_duplicate_pairs(&pairs, Utc::now().timestamp_millis())
+        .map_err(|error| error.to_string())
 }
 
 /// Scan stored pHashes and replace only unresolved candidate rows. Existing
@@ -1563,6 +1713,7 @@ struct StoredFile {
     pixel_height: Option<i64>,
     frame_count: Option<i64>,
     perceptual_hash: Option<String>,
+    file_path: Option<PathBuf>,
 }
 
 impl StoredFile {
@@ -1597,9 +1748,33 @@ fn load_files_with_hash(transaction: &Transaction<'_>) -> rusqlite::Result<Vec<S
             pixel_height: row.get(5)?,
             frame_count: row.get(6)?,
             perceptual_hash: row.get(7)?,
+            file_path: None,
         })
     })?;
     rows.collect()
+}
+
+fn load_library_files_with_hash(connection: &Connection) -> picto_library::Result<Vec<StoredFile>> {
+    let mut statement = connection.prepare(
+        "SELECT file_id, content_hash, mime, size_bytes, width, height,
+                frame_count, perceptual_hash, file_path
+         FROM media_file WHERE perceptual_hash IS NOT NULL ORDER BY file_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(StoredFile {
+            file_id: row.get::<_, u32>(0)? as i64,
+            file_hash: FileHash(row.get(1)?),
+            mime_type: row.get(2)?,
+            size_bytes: row.get(3)?,
+            pixel_width: row.get::<_, Option<u32>>(4)?.map(i64::from),
+            pixel_height: row.get::<_, Option<u32>>(5)?.map(i64::from),
+            frame_count: row.get::<_, Option<u32>>(6)?.map(i64::from),
+            perceptual_hash: row.get(7)?,
+            file_path: Some(PathBuf::from(row.get::<_, String>(8)?)),
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn occurrences_for_file(

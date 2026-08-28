@@ -15,9 +15,9 @@ use crate::ingest;
 use crate::model::{
     DuplicatePair, DuplicateResolutionChoice, DuplicateResolutionResult, DuplicateStatus, FileId,
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, LibraryStatistics, Lifecycle,
-    MediaFactsUpdate, MediaId, PendingBlobCleanup, PreparedCollectionImport, PreparedImport, Rating,
-    RootId, RootKind, RootTagAssignment, SmartFolderDeleteResult, SmartFolderId, SmartFolderInput,
-    TagNamespaceId, TagRecord,
+    MediaFactsUpdate, MediaId, PendingBlobCleanup, PreparedCollectionImport, PreparedImport,
+    Rating, RootId, RootKind, RootTagAssignment, SmartFolderDeleteResult, SmartFolderId,
+    SmartFolderInput, TagNamespaceId, TagRecord,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -134,8 +134,7 @@ impl Library {
                 let output = operation(transaction, revision)?;
                 let mut next = (*snapshot).clone();
                 next.revision = revision;
-                let receipt =
-                    PublicationCoordinator::receipt(revision, resources, item_ids);
+                let receipt = PublicationCoordinator::receipt(revision, resources, item_ids);
                 Ok((
                     (output, receipt.clone()),
                     PublishedDelta {
@@ -170,8 +169,7 @@ impl Library {
                 };
                 let mut next = (*snapshot).clone();
                 next.revision = revision;
-                let receipt =
-                    PublicationCoordinator::receipt(revision, resources, item_ids);
+                let receipt = PublicationCoordinator::receipt(revision, resources, item_ids);
                 Ok(Some((
                     (output, receipt.clone()),
                     PublishedDelta {
@@ -195,25 +193,20 @@ impl Library {
         payload: serde_json::Value,
         operation: impl FnOnce(&rusqlite::Transaction<'_>, u64) -> Result<Option<T>>,
     ) -> Result<Option<(T, MutationReceipt)>> {
-        self.auxiliary_write_if_changed(
-            priority,
-            resources,
-            item_ids,
-            |transaction, revision| {
-                let Some(output) = operation(transaction, revision)? else {
-                    return Ok(None);
-                };
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    operation_kind,
-                    None,
-                    payload,
-                    now_ms(),
-                )?;
-                Ok(Some(output))
-            },
-        )
+        self.auxiliary_write_if_changed(priority, resources, item_ids, |transaction, revision| {
+            let Some(output) = operation(transaction, revision)? else {
+                return Ok(None);
+            };
+            insert_cloud_journal(
+                transaction,
+                revision,
+                operation_kind,
+                None,
+                payload,
+                now_ms(),
+            )?;
+            Ok(Some(output))
+        })
     }
 
     pub fn read_auxiliary_json(&self, table: &str, key: &str) -> Result<Option<String>> {
@@ -388,8 +381,7 @@ impl Library {
                     },
                 )?
                 .len();
-                let duplicates =
-                    crate::duplicate::count_visible_candidates(connection, &snapshot)?;
+                let duplicates = crate::duplicate::count_visible_candidates(connection, &snapshot)?;
                 let mut folders = counts
                     .folders
                     .into_iter()
@@ -470,7 +462,8 @@ impl Library {
                     standalone_items: snapshot
                         .root_kinds
                         .get(&RootKind::Media)
-                        .map_or(0, |roots| roots.len()) as i64,
+                        .map_or(0, |roots| roots.len())
+                        as i64,
                     collections: snapshot
                         .root_kinds
                         .get(&RootKind::Collection)
@@ -613,9 +606,7 @@ impl Library {
         )
     }
 
-    pub fn navigation(
-        &self,
-    ) -> Result<(Vec<FolderRecord>, Vec<SmartFolderRecord>, u64)> {
+    pub fn navigation(&self) -> Result<(Vec<FolderRecord>, Vec<SmartFolderRecord>, u64)> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
@@ -1448,6 +1439,65 @@ impl Library {
         Ok(published.map(|(receipt, _, ())| receipt))
     }
 
+    pub fn replace_detected_duplicate_pairs(
+        &self,
+        pairs: &[(FileId, FileId, u32)],
+        detected_at_ms: i64,
+    ) -> Result<crate::DuplicateScanResult> {
+        let pairs = pairs.to_vec();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let (result, _, ()) = self.database.published_write(
+            WorkPriority::Maintenance,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let affected = crate::duplicate::replace_detected(
+                    transaction,
+                    &snapshot,
+                    &pairs,
+                    detected_at_ms,
+                )?;
+                let candidate_count = transaction.query_row(
+                    "SELECT COUNT(*) FROM duplicate_pair WHERE status = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )? as usize;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "duplicate.scan",
+                    (!affected.is_empty()).then_some(&affected),
+                    serde_json::json!({"candidate_count": candidate_count}),
+                    detected_at_ms,
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["duplicates".into()],
+                    affected.iter().map(RootId),
+                );
+                let result = crate::DuplicateScanResult {
+                    candidate_count,
+                    affected_item_ids: receipt.item_ids.clone(),
+                    receipt: receipt.clone(),
+                };
+                Ok((
+                    result,
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok(result)
+    }
+
     pub fn duplicate_pairs(
         &self,
         status: Option<DuplicateStatus>,
@@ -1476,12 +1526,7 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                crate::duplicate::candidate_for_pair(
-                    connection,
-                    &snapshot,
-                    file_id_a,
-                    file_id_b,
-                )
+                crate::duplicate::candidate_for_pair(connection, &snapshot, file_id_a, file_id_b)
             },
         )?;
         let winner_file_id = match candidate.map(|candidate| candidate.decision) {
@@ -2441,10 +2486,9 @@ impl Library {
                 use rusqlite::OptionalExtension;
 
                 let source_state = load_namespace_definition(transaction, namespace_id)?
-                    .ok_or_else(|| LibraryError::NotFound(format!(
-                        "tag namespace {}",
-                        namespace_id.0
-                    )))?;
+                    .ok_or_else(|| {
+                        LibraryError::NotFound(format!("tag namespace {}", namespace_id.0))
+                    })?;
                 if source_state.display_name.is_empty() {
                     return Err(LibraryError::InvalidInput(
                         "the unnamespaced tag group cannot be renamed".into(),
@@ -2475,19 +2519,22 @@ impl Library {
                         vec!["tags".into(), "navigation".into()],
                         Vec::new(),
                     );
-                    return Ok((receipt.clone(), PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "tags.group.rename",
-                            "Rename tag namespace",
-                            SemanticChange::TagNamespaceName {
-                                namespace_id,
-                                before: source_state.display_name,
-                                after: name.clone(),
-                            },
-                        )),
-                    }));
+                    return Ok((
+                        receipt.clone(),
+                        PublishedDelta {
+                            snapshot: next,
+                            receipt,
+                            history: Some(HistoryEntry::for_command(
+                                "tags.group.rename",
+                                "Rename tag namespace",
+                                SemanticChange::TagNamespaceName {
+                                    namespace_id,
+                                    before: source_state.display_name,
+                                    after: name.clone(),
+                                },
+                            )),
+                        },
+                    ));
                 };
 
                 let source_tags = transaction
@@ -2526,10 +2573,12 @@ impl Library {
                             .tag_ids_by_name
                             .iter()
                             .find_map(|(name, id)| (*id == source_tag_id).then_some(name.clone()))
-                            .ok_or_else(|| LibraryError::InvalidState(format!(
-                                "tag {} has no projection name",
-                                source_tag_id.0
-                            )))?;
+                            .ok_or_else(|| {
+                                LibraryError::InvalidState(format!(
+                                    "tag {} has no projection name",
+                                    source_tag_id.0
+                                ))
+                            })?;
                         let after = if name.is_empty() {
                             subname.clone()
                         } else {
@@ -2571,18 +2620,26 @@ impl Library {
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec!["roots".into(), "tags".into(), "navigation".into(), "smart-folders".into()],
+                    vec![
+                        "roots".into(),
+                        "tags".into(),
+                        "navigation".into(),
+                        "smart-folders".into(),
+                    ],
                     affected.iter().map(RootId),
                 );
-                Ok((receipt.clone(), PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: Some(HistoryEntry::for_command(
-                        "tags.group.rename",
-                        "Merge tag namespaces",
-                        SemanticChange::Compound(changes),
-                    )),
-                }))
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::for_command(
+                            "tags.group.rename",
+                            "Merge tag namespaces",
+                            SemanticChange::Compound(changes),
+                        )),
+                    },
+                ))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
@@ -2591,17 +2648,19 @@ impl Library {
     }
 
     pub fn delete_tag_namespace(&self, namespace_id: TagNamespaceId) -> Result<MutationReceipt> {
-        let general_id = self.database.read(WorkPriority::VisibleRead, |connection| {
-            use rusqlite::OptionalExtension;
-            connection
-                .query_row(
-                    "SELECT namespace_id FROM tag_namespace WHERE display_name = ''",
-                    [],
-                    |row| row.get::<_, u32>(0).map(TagNamespaceId),
-                )
-                .optional()
-                .map_err(Into::into)
-        })?;
+        let general_id = self
+            .database
+            .read(WorkPriority::VisibleRead, |connection| {
+                use rusqlite::OptionalExtension;
+                connection
+                    .query_row(
+                        "SELECT namespace_id FROM tag_namespace WHERE display_name = ''",
+                        [],
+                        |row| row.get::<_, u32>(0).map(TagNamespaceId),
+                    )
+                    .optional()
+                    .map_err(Into::into)
+            })?;
         if general_id == Some(namespace_id) {
             return Err(LibraryError::InvalidInput(
                 "the unnamespaced tag group cannot be deleted".into(),
@@ -2845,12 +2904,13 @@ impl Library {
                             display_order,
                         ],
                     )?;
-                    let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
-                        LibraryError::InvalidState(format!(
-                            "duplicated folder {} disappeared",
-                            folder_id.0
-                        ))
-                    })?;
+                    let after =
+                        load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "duplicated folder {} disappeared",
+                                folder_id.0
+                            ))
+                        })?;
                     changes.push(SemanticChange::FolderDefinition {
                         folder_id,
                         before: None,
@@ -2880,15 +2940,18 @@ impl Library {
                     vec!["folders".into(), "navigation".into()],
                     Vec::new(),
                 );
-                Ok(((duplicate_id, receipt.clone()), PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: Some(HistoryEntry::for_command(
-                        "folders.duplicate",
-                        "Duplicate folder",
-                        SemanticChange::Compound(changes),
-                    )),
-                }))
+                Ok((
+                    (duplicate_id, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::for_command(
+                            "folders.duplicate",
+                            "Duplicate folder",
+                            SemanticChange::Compound(changes),
+                        )),
+                    },
+                ))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
@@ -3263,18 +3326,25 @@ impl Library {
                             .to_lowercase()
                             .cmp(&right.name.to_lowercase())
                             .then_with(|| left.folder_id.cmp(&right.folder_id));
-                        if descending { ordering.reverse() } else { ordering }
+                        if descending {
+                            ordering.reverse()
+                        } else {
+                            ordering
+                        }
                     });
                     for (display_order, before) in states.into_iter().enumerate() {
                         if before.display_order == display_order as i64 {
                             continue;
                         }
-                        update.execute(rusqlite::params![before.folder_id.0, display_order as i64])?;
+                        update
+                            .execute(rusqlite::params![before.folder_id.0, display_order as i64])?;
                         let after = load_folder_definition(transaction, before.folder_id)?
-                            .ok_or_else(|| LibraryError::InvalidState(format!(
-                                "folder {} disappeared during sort",
-                                before.folder_id.0
-                            )))?;
+                            .ok_or_else(|| {
+                                LibraryError::InvalidState(format!(
+                                    "folder {} disappeared during sort",
+                                    before.folder_id.0
+                                ))
+                            })?;
                         changes.push(SemanticChange::FolderDefinition {
                             folder_id: before.folder_id,
                             before: Some(Box::new(before)),
@@ -3301,15 +3371,20 @@ impl Library {
                     vec!["folders".into(), "navigation".into()],
                     Vec::new(),
                 );
-                Ok((receipt.clone(), PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: (!changes.is_empty()).then(|| HistoryEntry::for_command(
-                        "folders.sort_tree",
-                        "Sort folders",
-                        SemanticChange::Compound(changes),
-                    )),
-                }))
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (!changes.is_empty()).then(|| {
+                            HistoryEntry::for_command(
+                                "folders.sort_tree",
+                                "Sort folders",
+                                SemanticChange::Compound(changes),
+                            )
+                        }),
+                    },
+                ))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
@@ -5498,11 +5573,7 @@ fn apply_semantic_change(
                      ON CONFLICT(namespace_id) DO UPDATE SET
                          stable_key = excluded.stable_key,
                          display_name = excluded.display_name",
-                    rusqlite::params![
-                        state.namespace_id.0,
-                        state.stable_key,
-                        state.display_name,
-                    ],
+                    rusqlite::params![state.namespace_id.0, state.stable_key, state.display_name,],
                 )?;
             } else {
                 transaction.execute(
@@ -6369,9 +6440,11 @@ fn load_namespace_name_for_library(
     library: &Library,
     namespace_id: TagNamespaceId,
 ) -> Result<String> {
-    library.database.read(WorkPriority::VisibleRead, |connection| {
-        load_namespace_name(connection, namespace_id)
-    })
+    library
+        .database
+        .read(WorkPriority::VisibleRead, |connection| {
+            load_namespace_name(connection, namespace_id)
+        })
 }
 
 fn load_namespace_definition(

@@ -69,6 +69,13 @@ pub fn dispatch_library(
             let input: LimitInput = parse(args_json)?;
             read(application.duplicate_candidates(input.limit)?)
         }
+        "duplicates.scan" => {
+            let input: ScanDuplicatesInput = parse(args_json)?;
+            read(crate::duplicates_v2::scan_library(
+                application,
+                input.distance_threshold,
+            )?)
+        }
         "subscriptions.list" => read(crate::subscription_catalog_v2::list_library(application)?),
         "subscriptions.runs.list" => {
             let input: SubscriptionRunsInput = parse(args_json)?;
@@ -3002,6 +3009,15 @@ mod tests {
     #[test]
     fn greenfield_dispatch_returns_and_resolves_canonical_duplicate_candidates() {
         let (_directory, application, first_root) = greenfield_fixture();
+        let scan = dispatch_library(
+            &application,
+            "duplicates.scan",
+            r#"{"distance_threshold":16}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let scan: picto_library::DuplicateScanResult = serde_json::from_str(&scan).unwrap();
+        assert_eq!(scan.candidate_count, 0);
         let (second_root, _) = application
             .library()
             .ingest(&greenfield_input("greenfield-duplicate-second"))

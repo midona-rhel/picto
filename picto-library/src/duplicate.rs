@@ -95,6 +95,54 @@ pub(crate) fn record_detected(
     load_pair(transaction, file_id_a, file_id_b)
 }
 
+pub(crate) fn replace_detected(
+    transaction: &Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    pairs: &[(FileId, FileId, u32)],
+    detected_at_ms: i64,
+) -> Result<RoaringBitmap> {
+    let mut normalized = std::collections::BTreeMap::new();
+    for &(file_id_a, file_id_b, distance) in pairs {
+        let (file_id_a, file_id_b) = normalize_pair(file_id_a, file_id_b)?;
+        require_file(transaction, file_id_a)?;
+        require_file(transaction, file_id_b)?;
+        normalized
+            .entry((file_id_a.0, file_id_b.0))
+            .and_modify(|known: &mut u32| *known = (*known).min(distance))
+            .or_insert(distance);
+    }
+
+    let mut affected = RoaringBitmap::new();
+    {
+        let mut statement = transaction
+            .prepare("SELECT file_id_a, file_id_b FROM duplicate_pair WHERE status = ?1")?;
+        let existing = statement
+            .query_map([STATUS_DETECTED], |row| {
+                Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (file_id_a, file_id_b) in existing {
+            affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
+        }
+    }
+    transaction.execute(
+        "DELETE FROM duplicate_pair WHERE status = ?1",
+        [STATUS_DETECTED],
+    )?;
+
+    for ((file_id_a, file_id_b), distance) in normalized {
+        let file_id_a = FileId(file_id_a);
+        let file_id_b = FileId(file_id_b);
+        let _ = record_detected(transaction, file_id_a, file_id_b, distance, detected_at_ms)?;
+        if load_pair(transaction, file_id_a, file_id_b)?
+            .is_some_and(|pair| pair.status == DuplicateStatus::Detected)
+        {
+            affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
+        }
+    }
+    Ok(affected)
+}
+
 pub(crate) fn list_pairs(
     connection: &Connection,
     status: Option<DuplicateStatus>,
@@ -250,9 +298,8 @@ fn candidate_side(
         },
     )?;
     let active = snapshot.lifecycle(Lifecycle::Active);
-    let mut statement = connection.prepare_cached(
-        "SELECT media_id FROM media_item WHERE file_id = ?1 ORDER BY media_id",
-    )?;
+    let mut statement = connection
+        .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1 ORDER BY media_id")?;
     let mut occurrences = Vec::new();
     let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
     for media_id in rows {

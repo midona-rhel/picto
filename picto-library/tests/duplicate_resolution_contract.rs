@@ -208,6 +208,71 @@ fn keep_both_changes_only_pair_state_and_is_session_undoable() {
 }
 
 #[test]
+fn rescanning_replaces_detected_pairs_without_reopening_keep_both_decisions() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let color = LabColor {
+        l: 50.0,
+        a: 0.0,
+        b: 0.0,
+        weight: 1.0,
+    };
+    let mut roots = Vec::new();
+    for key in ["scan-left", "scan-right", "scan-third"] {
+        roots.push(
+            library
+                .ingest(&imported(
+                    key,
+                    key,
+                    "image/png",
+                    100,
+                    Some(100),
+                    Some(100),
+                    None,
+                    color.clone(),
+                ))
+                .unwrap()
+                .0,
+        );
+    }
+    let files = roots
+        .into_iter()
+        .map(|root_id| file_id(&library, root_id))
+        .collect::<Vec<_>>();
+    library
+        .record_duplicate_pair(files[0], files[1], 1, 1_700_000_000_100)
+        .unwrap();
+    library
+        .resolve_duplicate(
+            files[0],
+            files[1],
+            DuplicateResolutionChoice::KeepBoth,
+            1_700_000_000_200,
+        )
+        .unwrap();
+
+    let scan = library
+        .replace_detected_duplicate_pairs(
+            &[(files[0], files[1], 2), (files[0], files[2], 3)],
+            1_700_000_000_300,
+        )
+        .unwrap();
+    assert_eq!(scan.candidate_count, 1);
+    let pairs = library.duplicate_pairs(None, 10).unwrap();
+    assert_eq!(pairs.len(), 2);
+    assert!(pairs.iter().any(|pair| {
+        pair.file_id_a == files[0]
+            && pair.file_id_b == files[1]
+            && pair.status == DuplicateStatus::NotDuplicate
+    }));
+    assert!(pairs.iter().any(|pair| {
+        pair.file_id_a == files[0]
+            && pair.file_id_b == files[2]
+            && pair.status == DuplicateStatus::Detected
+    }));
+}
+
+#[test]
 fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
