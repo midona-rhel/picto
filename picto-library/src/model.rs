@@ -378,6 +378,49 @@ pub struct ClaimedIngestJob {
     pub payload: PreparedIngestPayload,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaWorkKind {
+    Thumbnail,
+    DominantColors,
+    PerceptualHash,
+    AiTag,
+    BlobDelete,
+}
+
+impl MediaWorkKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Thumbnail => "thumbnail",
+            Self::DominantColors => "dominant_colors",
+            Self::PerceptualHash => "perceptual_hash",
+            Self::AiTag => "ai_tag",
+            Self::BlobDelete => "blob_delete",
+        }
+    }
+
+    pub const fn priority(self) -> i64 {
+        match self {
+            Self::Thumbnail => 500,
+            Self::DominantColors => 400,
+            Self::PerceptualHash => 300,
+            Self::AiTag => 200,
+            Self::BlobDelete => 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimedMediaWork {
+    pub work_id: i64,
+    pub root_id: Option<RootId>,
+    pub media_id: Option<MediaId>,
+    pub file_id: Option<FileId>,
+    pub file_hash: Option<String>,
+    pub kind: MediaWorkKind,
+    pub attempt_count: u32,
+}
+
 /// Tags produced for one visible library root. Collection callers combine
 /// member predictions before submitting this assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -210,6 +210,51 @@ fn durable_ingest_queue_persists_only_canonical_payloads() {
 }
 
 #[test]
+fn derivative_queue_is_prioritized_bounded_and_retryable() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut input = imported("derivative-work", Lifecycle::Active, &[]);
+    input.facts.palette.clear();
+    library.ingest(&input).unwrap();
+
+    let claimed = library.claim_media_work(2, "2026-08-28T10:00:00Z").unwrap();
+    assert_eq!(claimed.len(), 2);
+    assert_eq!(claimed[0].kind, picto_library::MediaWorkKind::Thumbnail);
+    assert_eq!(
+        claimed[1].kind,
+        picto_library::MediaWorkKind::DominantColors
+    );
+    let (terminal, _) = library
+        .retry_media_work(
+            claimed[0].work_id,
+            claimed[0].attempt_count,
+            "retry",
+            "2026-08-28T10:00:00Z",
+        )
+        .unwrap();
+    assert!(!terminal);
+    library.complete_media_work(&[claimed[1].work_id]).unwrap();
+
+    let phash = library.claim_media_work(8, "2026-08-28T10:00:00Z").unwrap();
+    assert_eq!(phash.len(), 1);
+    assert_eq!(phash[0].kind, picto_library::MediaWorkKind::PerceptualHash);
+    library.complete_media_work(&[phash[0].work_id]).unwrap();
+
+    let thumbnail = library.claim_media_work(8, "2026-08-28T10:00:02Z").unwrap();
+    assert_eq!(thumbnail.len(), 1);
+    assert_eq!(thumbnail[0].attempt_count, 2);
+    library
+        .complete_media_work(&[thumbnail[0].work_id])
+        .unwrap();
+    let revision = library.database().revision().unwrap();
+    assert!(library
+        .claim_media_work(8, "2026-08-28T10:00:03Z")
+        .unwrap()
+        .is_empty());
+    assert_eq!(library.database().revision().unwrap(), revision);
+}
+
+#[test]
 fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

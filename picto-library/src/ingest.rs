@@ -310,13 +310,32 @@ fn enqueue_file_work(
     work_type: &str,
     now_ms: i64,
 ) -> Result<()> {
+    let available_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms)
+        .ok_or_else(|| LibraryError::InvalidInput("ingest timestamp is outside range".into()))?
+        .to_rfc3339();
+    let kind = match work_type {
+        "thumbnail" => crate::model::MediaWorkKind::Thumbnail,
+        "dominant_colors" => crate::model::MediaWorkKind::DominantColors,
+        "perceptual_hash" => crate::model::MediaWorkKind::PerceptualHash,
+        _ => {
+            return Err(LibraryError::InvalidState(format!(
+                "unsupported ingest work kind {work_type}"
+            )))
+        }
+    };
     transaction.execute(
         "INSERT INTO work_item
              (file_id, file_hash, work_type, status, priority, attempt_count,
               available_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'pending', 0, 0, ?4, ?4, ?4)
+         VALUES (?1, ?2, ?3, 'pending', ?5, 0, ?4, ?4, ?4)
          ON CONFLICT DO NOTHING",
-        params![file_id, content_hash, work_type, now_ms.to_string()],
+        params![
+            file_id,
+            content_hash,
+            work_type,
+            available_at,
+            kind.priority()
+        ],
     )?;
     Ok(())
 }

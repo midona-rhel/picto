@@ -265,18 +265,19 @@ CREATE TABLE ingest_job (
 
 CREATE TABLE work_item (
     work_id INTEGER PRIMARY KEY,
+    root_id INTEGER REFERENCES library_root(root_id) ON DELETE CASCADE,
     media_item_id INTEGER REFERENCES media_item(media_id) ON DELETE CASCADE,
     file_id INTEGER REFERENCES media_file(file_id) ON DELETE CASCADE,
     file_hash TEXT,
     work_type TEXT NOT NULL CHECK (work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash', 'blob_delete', 'ai_tag')),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'running')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'failed')),
     priority INTEGER NOT NULL DEFAULT 0,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     available_at TEXT NOT NULL,
     last_error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    CHECK (media_item_id IS NOT NULL OR file_id IS NOT NULL OR file_hash IS NOT NULL)
+    CHECK (root_id IS NOT NULL OR media_item_id IS NOT NULL OR file_id IS NOT NULL OR file_hash IS NOT NULL)
 ) STRICT;
 
 CREATE TABLE subscription_issue (
@@ -515,5 +516,7 @@ CREATE UNIQUE INDEX idx_work_item_file_kind ON work_item(file_id, work_type)
     WHERE file_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_work_item_media_kind ON work_item(media_item_id, work_type)
     WHERE media_item_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_work_item_root_kind ON work_item(root_id, work_type)
+    WHERE root_id IS NOT NULL;
 CREATE INDEX idx_subscription_issue_open ON subscription_issue(status, last_seen_at, issue_id);
 CREATE INDEX idx_cloud_outbox_pending ON cloud_outbox(published_at, created_at, mutation_id);

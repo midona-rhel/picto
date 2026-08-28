@@ -24,6 +24,7 @@ pub mod query;
 pub mod schema;
 pub mod selection;
 pub mod smart;
+pub mod work_queue;
 
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
