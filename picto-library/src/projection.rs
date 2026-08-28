@@ -74,6 +74,16 @@ impl NumericIndex {
             .sum()
     }
 
+    fn estimated_bytes(&self) -> usize {
+        self.present.serialized_size()
+            + self
+                .slices
+                .iter()
+                .map(RoaringBitmap::serialized_size)
+                .sum::<usize>()
+            + self.slices.capacity() * std::mem::size_of::<RoaringBitmap>()
+    }
+
     fn less_than(&self, value: u64) -> RoaringBitmap {
         if value == 0 {
             return RoaringBitmap::new();
@@ -149,6 +159,70 @@ impl ProjectionSnapshot {
             .get(&rating)
             .expect("every snapshot contains every rating partition")
     }
+
+    pub fn estimated_bytes(&self) -> usize {
+        let mut bytes = bitmap_map_estimated_bytes(&self.lifecycle)
+            + bitmap_map_estimated_bytes(&self.ratings)
+            + bitmap_map_estimated_bytes(&self.tags)
+            + bitmap_map_estimated_bytes(&self.folders)
+            + bitmap_map_estimated_bytes(&self.root_kinds)
+            + bitmap_map_estimated_bytes(&self.mime)
+            + bitmap_map_estimated_bytes(&self.mime_family)
+            + bitmap_map_estimated_bytes(&self.color_cells)
+            + bitmap_map_estimated_bytes(&self.smart_results)
+            + self.notes_present.serialized_size()
+            + self.urls_present.serialized_size()
+            + self.media_owner.capacity() * std::mem::size_of::<Option<RootId>>();
+        bytes += self
+            .tag_ids_by_name
+            .keys()
+            .map(|name| name.capacity())
+            .sum::<usize>();
+        bytes += self
+            .folder_orders
+            .values()
+            .map(|values| values.capacity() * std::mem::size_of::<RootId>())
+            .sum::<usize>();
+        bytes += self
+            .collection_orders
+            .values()
+            .map(|values| values.capacity() * std::mem::size_of::<MediaId>())
+            .sum::<usize>();
+        bytes += self
+            .cover_palettes
+            .values()
+            .map(|values| values.capacity() * std::mem::size_of::<LabColor>())
+            .sum::<usize>();
+        bytes += [
+            &self.tag_count,
+            &self.folder_count,
+            &self.total_bytes,
+            &self.media_count,
+            &self.width,
+            &self.height,
+            &self.duration,
+            &self.imported_at,
+            &self.modified_at,
+        ]
+        .into_iter()
+        .map(|index| index.estimated_bytes())
+        .sum::<usize>();
+        bytes += self
+            .smart_queries
+            .values()
+            .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
+            .sum::<usize>();
+        bytes
+    }
+}
+
+fn bitmap_map_estimated_bytes<K>(values: &HashMap<K, RoaringBitmap>) -> usize {
+    values
+        .values()
+        .map(RoaringBitmap::serialized_size)
+        .sum::<usize>()
+        + values.capacity()
+            * (std::mem::size_of::<RoaringBitmap>() + 2 * std::mem::size_of::<usize>())
 }
 
 pub struct ProjectionStore {

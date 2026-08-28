@@ -124,6 +124,12 @@ fn main() -> picto_library::Result<()> {
     println!("sidebar_active_count={}", counts.all);
     println!("add_tag_all_ms={:.3}", millis(tag_elapsed));
     println!("lifecycle_all_ms={:.3}", millis(lifecycle_elapsed));
+    let projection_bytes = library.projections().snapshot().estimated_bytes();
+    println!("projection_estimated_bytes={projection_bytes}");
+    println!(
+        "projection_estimated_mib={:.3}",
+        projection_bytes as f64 / (1024.0 * 1024.0)
+    );
     let checkpoint_started = Instant::now();
     let checkpoint_bytes = library.write_projection_checkpoint()?;
     println!(
