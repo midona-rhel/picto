@@ -2926,23 +2926,41 @@ impl Library {
         media_id: MediaId,
         modified_at_ms: i64,
     ) -> Result<(RootId, MutationReceipt)> {
+        let (mut roots, receipt) =
+            self.detach_collection_members(collection_id, vec![media_id], None, modified_at_ms)?;
+        let root_id = roots
+            .pop()
+            .ok_or_else(|| LibraryError::InvalidState("detach produced no root".into()))?;
+        Ok((root_id, receipt))
+    }
+
+    pub fn detach_collection_members(
+        &self,
+        collection_id: RootId,
+        media_ids: Vec<MediaId>,
+        target_lifecycle: Option<Lifecycle>,
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
-        let ((root_id, receipt), _, history_entry) = self.database.published_write(
+        let ((root_ids, receipt), _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let affected = [collection_id.0, media_id.0]
-                    .into_iter()
+                let mut affected = media_ids
+                    .iter()
+                    .map(|media_id| media_id.0)
                     .collect::<RoaringBitmap>();
+                affected.insert(collection_id.0);
                 let before = capture_structure(transaction, &snapshot, &affected)?;
-                let output = crate::group::detach(
+                let output = crate::group::detach_many(
                     transaction,
                     revision,
                     (*snapshot).clone(),
                     collection_id,
-                    media_id,
+                    &media_ids,
+                    target_lifecycle,
                     modified_at_ms,
                 )?;
                 let mut next = output.snapshot;
@@ -2961,7 +2979,7 @@ impl Library {
                     output.affected.iter().map(RootId),
                 );
                 Ok((
-                    (output.root_id, receipt.clone()),
+                    (output.root_ids, receipt.clone()),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
@@ -2980,7 +2998,7 @@ impl Library {
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
         push_history(&history, history_entry);
-        Ok((root_id, receipt))
+        Ok((root_ids, receipt))
     }
 
     pub fn reorder_collection(

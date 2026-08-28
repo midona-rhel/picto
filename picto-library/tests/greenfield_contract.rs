@@ -2129,6 +2129,129 @@ fn detaching_restores_one_root_and_keeps_collection_organization_on_the_root() {
 }
 
 #[test]
+fn detaching_many_members_is_one_exact_reversible_publication() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported(
+            "detach-many-first",
+            Lifecycle::Active,
+            &["set:one"],
+        ))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported(
+            "detach-many-second",
+            Lifecycle::Active,
+            &["set:two"],
+        ))
+        .unwrap();
+    let (third, _) = library
+        .ingest(&imported(
+            "detach-many-third",
+            Lifecycle::Active,
+            &["set:three"],
+        ))
+        .unwrap();
+    let (folder, _) = library.create_folder("Detach many", None).unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first, second, third],
+            },
+            folder,
+        )
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![first, second, third],
+            },
+            cover_root_id: first,
+            winning_collection_id: None,
+            name: Some("Detach many".into()),
+            modified_at_ms: 1_700_000_002_200,
+        })
+        .unwrap();
+    let revision_before = library.projections().snapshot().revision;
+    let history_before = library.history().state().entries;
+
+    let (detached, receipt) = library
+        .detach_collection_members(
+            collection,
+            vec![
+                picto_library::MediaId(first.0),
+                picto_library::MediaId(third.0),
+            ],
+            Some(Lifecycle::Trash),
+            1_700_000_002_300,
+        )
+        .unwrap();
+
+    assert_eq!(detached, vec![first, third]);
+    assert_eq!(receipt.revision, revision_before + 1);
+    assert_eq!(library.history().state().entries, history_before + 1);
+    assert_eq!(
+        library.history().state().undo.unwrap().command,
+        "collections.detach"
+    );
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![picto_library::MediaId(second.0)]
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::Trash), &PageRequest::default())
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [first, third].into_iter().collect()
+    );
+    assert_eq!(
+        library.projections().snapshot().folder_orders[&folder]
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![collection, first, third]
+    );
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .map(|media| media.0)
+            .collect::<Vec<_>>(),
+        vec![first.0, second.0, third.0]
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::Trash), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        library.projections().snapshot().folder_orders[&folder]
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![collection]
+    );
+}
+
+#[test]
 fn organizing_a_collection_is_reversible_without_persisted_history() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

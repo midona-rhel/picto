@@ -25,17 +25,18 @@ pub(crate) struct UngroupResult {
 }
 
 pub(crate) struct DetachResult {
-    pub root_id: RootId,
+    pub root_ids: Vec<RootId>,
     pub affected: RoaringBitmap,
     pub snapshot: ProjectionSnapshot,
 }
 
-pub(crate) fn detach(
+pub(crate) fn detach_many(
     transaction: &Transaction<'_>,
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     collection_id: RootId,
-    media_id: MediaId,
+    media_ids: &[MediaId],
+    target_lifecycle: Option<Lifecycle>,
     modified_at_ms: i64,
 ) -> Result<DetachResult> {
     let members = snapshot
@@ -45,21 +46,33 @@ pub(crate) fn detach(
         .ok_or_else(|| {
             LibraryError::InvalidInput(format!("root {collection_id} is not a collection"))
         })?;
-    if !members.contains(&media_id) {
-        return Err(LibraryError::InvalidInput(format!(
-            "media {media_id} is not a member of collection {collection_id}"
-        )));
-    }
-    if members.len() < 2 {
+    let selected = media_ids
+        .iter()
+        .map(|media_id| media_id.0)
+        .collect::<RoaringBitmap>();
+    if selected.is_empty() {
         return Err(LibraryError::InvalidInput(
-            "ungroup a one-member collection instead of detaching its only member".into(),
+            "detaching collection members requires at least one media item".into(),
         ));
+    }
+    if selected.len() != media_ids.len() as u64 {
+        return Err(LibraryError::InvalidInput(
+            "collection members must be unique".into(),
+        ));
+    }
+    for media_id in media_ids {
+        if !members.contains(media_id) {
+            return Err(LibraryError::InvalidInput(format!(
+                "media {media_id} is not a member of collection {collection_id}"
+            )));
+        }
     }
     let collection = load_roots(transaction, &[collection_id])?
         .into_iter()
         .next()
         .ok_or_else(|| LibraryError::NotFound(format!("collection {collection_id}")))?;
     let lifecycle = common_lifecycle(&snapshot, &[collection_id.0].into_iter().collect())?;
+    let detached_lifecycle = target_lifecycle.unwrap_or(lifecycle);
     let rating = rating_for(&snapshot, collection_id)?;
     let inherited_tags = snapshot
         .tags
@@ -71,13 +84,18 @@ pub(crate) fn detach(
         .iter()
         .filter_map(|(folder_id, roots)| roots.contains(collection_id.0).then_some(*folder_id))
         .collect::<Vec<_>>();
-    let (media_name, facts) = transaction.query_row(
+    let mut media_rows = Vec::with_capacity(media_ids.len());
+    let mut statement = transaction.prepare_cached(
         "SELECT media.media_name, file.mime, file.size_bytes, file.width, file.height,
                 file.duration_ms, file.palette_json
          FROM media_item media JOIN media_file file ON file.file_id = media.file_id
          WHERE media.media_id = ?1",
-        [media_id.0],
-        |row| {
+    )?;
+    for media_id in members
+        .iter()
+        .filter(|media_id| selected.contains(media_id.0))
+    {
+        let row = statement.query_row([media_id.0], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 CoverFacts {
@@ -89,81 +107,117 @@ pub(crate) fn detach(
                     palette: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
                 },
             ))
-        },
-    )?;
+        })?;
+        media_rows.push((*media_id, row.0, row.1));
+    }
+    drop(statement);
     let remaining = members
         .iter()
         .copied()
-        .filter(|member| *member != media_id)
+        .filter(|member| !selected.contains(member.0))
         .collect::<Vec<_>>();
-    let next_cover = if collection.cover_media_id == media_id {
-        remaining[0]
-    } else {
-        collection.cover_media_id
-    };
+    let detached_size = media_rows.iter().try_fold(0u64, |total, (_, _, facts)| {
+        total
+            .checked_add(facts.size_bytes)
+            .ok_or_else(|| LibraryError::InvalidState("detached media size overflow".into()))
+    })?;
     let remaining_size = collection
         .total_size_bytes
-        .checked_sub(facts.size_bytes)
+        .checked_sub(detached_size)
         .ok_or_else(|| LibraryError::InvalidState("collection size underflow".into()))?;
+    let removes_collection = remaining.is_empty();
+    let next_cover = remaining
+        .first()
+        .copied()
+        .filter(|_| selected.contains(collection.cover_media_id.0));
 
-    transaction.execute(
-        "UPDATE library_root
-         SET cover_media_id = ?2, modified_at_ms = ?3, media_count = ?4,
-             total_size_bytes = ?5
-         WHERE root_id = ?1",
-        params![
+    if removes_collection {
+        transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [collection_id.0])?;
+        transaction.execute(
+            "DELETE FROM library_root WHERE root_id = ?1",
+            [collection_id.0],
+        )?;
+        ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
+        transaction.execute(
+            "DELETE FROM library_item WHERE local_id = ?1",
+            [collection_id.0],
+        )?;
+    } else {
+        let next_cover = next_cover.unwrap_or(collection.cover_media_id);
+        transaction.execute(
+            "UPDATE library_root
+             SET cover_media_id = ?2, modified_at_ms = ?3, media_count = ?4,
+                 total_size_bytes = ?5
+             WHERE root_id = ?1",
+            params![
+                collection_id.0,
+                next_cover.0,
+                modified_at_ms,
+                remaining.len() as i64,
+                i64::try_from(remaining_size).map_err(|_| LibraryError::InvalidState(
+                    "collection size exceeds SQLite range".into()
+                ))?
+            ],
+        )?;
+        ordering::replace(
+            transaction,
+            revision,
+            OrderOwnerKind::Collection,
             collection_id.0,
-            next_cover.0,
-            modified_at_ms,
-            remaining.len() as i64,
-            i64::try_from(remaining_size).map_err(|_| LibraryError::InvalidState(
-                "collection size exceeds SQLite range".into()
-            ))?
-        ],
-    )?;
-    transaction.execute(
+            &remaining.iter().map(|media| media.0).collect::<Vec<_>>(),
+        )?;
+    }
+    let mut insert_root = transaction.prepare_cached(
         "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
               captured_at_ms, modified_at_ms, media_count, total_size_bytes)
          VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?6, ?7, 1, ?8)",
-        params![
+    )?;
+    let urls = serde_json::to_string(&collection.urls)?;
+    for (media_id, media_name, facts) in &media_rows {
+        insert_root.execute(params![
             media_id.0,
             media_name,
             collection.notes,
-            serde_json::to_string(&collection.urls)?,
+            urls,
             collection.imported_at_ms,
             collection.captured_at_ms,
             modified_at_ms,
             i64::try_from(facts.size_bytes).map_err(|_| LibraryError::InvalidState(
                 "media size exceeds SQLite range".into()
             ))?
-        ],
-    )?;
-    ordering::replace(
-        transaction,
-        revision,
-        OrderOwnerKind::Collection,
-        collection_id.0,
-        &remaining.iter().map(|media| media.0).collect::<Vec<_>>(),
-    )?;
+        ])?;
+        crate::fts::mark_one(transaction, RootId(media_id.0), modified_at_ms)?;
+    }
+    drop(insert_root);
 
-    let lifecycle_members = Arc::make_mut(&mut snapshot.lifecycle)
-        .entry(lifecycle)
-        .or_default();
-    lifecycle_members.insert(media_id.0);
-    bitmap::replace(
-        transaction,
-        revision,
-        BitmapKey {
-            domain: BitmapDomain::Lifecycle,
-            key_id: lifecycle.bitmap_key(),
-        },
-        lifecycle_members,
-    )?;
+    for value in Lifecycle::ALL {
+        let lifecycle_members = Arc::make_mut(&mut snapshot.lifecycle)
+            .entry(value)
+            .or_default();
+        if removes_collection {
+            lifecycle_members.remove(collection_id.0);
+        }
+        if value == detached_lifecycle {
+            *lifecycle_members |= &selected;
+        }
+        bitmap::replace(
+            transaction,
+            revision,
+            BitmapKey {
+                domain: BitmapDomain::Lifecycle,
+                key_id: value.bitmap_key(),
+            },
+            lifecycle_members,
+        )?;
+    }
     let rating_members = Arc::make_mut(&mut snapshot.ratings)
         .entry(rating)
         .or_default();
-    rating_members.insert(media_id.0);
+    if removes_collection {
+        rating_members.remove(collection_id.0);
+    }
+    *rating_members |= &selected;
     bitmap::replace(
         transaction,
         revision,
@@ -177,7 +231,10 @@ pub(crate) fn detach(
         let roots = Arc::make_mut(&mut snapshot.tags)
             .entry(*tag_id)
             .or_default();
-        roots.insert(media_id.0);
+        if removes_collection {
+            roots.remove(collection_id.0);
+        }
+        *roots |= &selected;
         bitmap::replace(
             transaction,
             revision,
@@ -200,7 +257,16 @@ pub(crate) fn detach(
                 ))
             })?;
         let mut after = before.clone();
-        after.insert(position + 1, RootId(media_id.0));
+        let insertion = if removes_collection {
+            after.remove(position);
+            position
+        } else {
+            position + 1
+        };
+        after.splice(
+            insertion..insertion,
+            media_rows.iter().map(|(media_id, _, _)| RootId(media_id.0)),
+        );
         ordering::replace(
             transaction,
             revision,
@@ -213,45 +279,67 @@ pub(crate) fn detach(
             .insert(*folder_id, after.iter().map(|root| root.0).collect());
     }
 
-    Arc::make_mut(&mut snapshot.collection_orders).insert(collection_id, Arc::new(remaining));
-    let owners = Arc::make_mut(&mut snapshot.media_owner);
-    owners.insert(media_id.0, RootId(media_id.0));
-    Arc::make_mut(&mut snapshot.media_count).insert(collection_id.0, members.len() as u64 - 1);
-    Arc::make_mut(&mut snapshot.total_bytes).insert(collection_id.0, remaining_size);
-    Arc::make_mut(&mut snapshot.modified_at).insert(collection_id.0, modified_at_ms.max(0) as u64);
-    refresh_root_mime_projection(transaction, &mut snapshot, collection_id)?;
-    if next_cover != collection.cover_media_id {
-        refresh_cover_projection(transaction, &mut snapshot, collection_id)?;
+    if removes_collection {
+        Arc::make_mut(&mut snapshot.collection_orders).remove(&collection_id);
+    } else {
+        Arc::make_mut(&mut snapshot.collection_orders)
+            .insert(collection_id, Arc::new(remaining.clone()));
     }
-    add_media_root_projection(
-        &mut snapshot,
-        RootId(media_id.0),
-        &facts,
-        collection.imported_at_ms,
-        collection.captured_at_ms,
-        modified_at_ms,
-        inherited_tags.len() as u64,
-        inherited_folders.len() as u64,
-        collection.notes.is_some(),
-        !collection.urls.is_empty(),
-    );
-    crate::fts::mark_one(transaction, RootId(media_id.0), modified_at_ms)?;
+    let owners = Arc::make_mut(&mut snapshot.media_owner);
+    for (media_id, _, _) in &media_rows {
+        owners.insert(media_id.0, RootId(media_id.0));
+    }
+    if removes_collection {
+        remove_root_projections(&mut snapshot, &[collection_id.0].into_iter().collect());
+    } else {
+        Arc::make_mut(&mut snapshot.media_count).insert(collection_id.0, remaining.len() as u64);
+        Arc::make_mut(&mut snapshot.total_bytes).insert(collection_id.0, remaining_size);
+        Arc::make_mut(&mut snapshot.modified_at)
+            .insert(collection_id.0, modified_at_ms.max(0) as u64);
+        refresh_root_mime_projection(transaction, &mut snapshot, collection_id)?;
+        if next_cover.is_some() {
+            refresh_cover_projection(transaction, &mut snapshot, collection_id)?;
+        }
+    }
+    for (media_id, _, facts) in &media_rows {
+        add_media_root_projection(
+            &mut snapshot,
+            RootId(media_id.0),
+            facts,
+            collection.imported_at_ms,
+            collection.captured_at_ms,
+            modified_at_ms,
+            inherited_tags.len() as u64,
+            inherited_folders.len() as u64,
+            collection.notes.is_some(),
+            !collection.urls.is_empty(),
+        );
+    }
+    let mut affected = selected.clone();
+    affected.insert(collection_id.0);
     transaction.execute(
         "INSERT INTO cloud_journal
              (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
          VALUES (?1, 'collection.detach', ?2, ?3, ?4)",
         params![
             revision as i64,
-            crate::bitmap::encode(&[collection_id.0, media_id.0].into_iter().collect())?,
-            serde_json::json!({"collection_id": collection_id.0, "media_id": media_id.0})
-                .to_string(),
+            crate::bitmap::encode(&affected)?,
+            serde_json::json!({
+                "collection_id": collection_id.0,
+                "media_ids": media_ids.iter().map(|media_id| media_id.0).collect::<Vec<_>>(),
+                "target_lifecycle": target_lifecycle,
+            })
+            .to_string(),
             modified_at_ms
         ],
     )?;
     snapshot.revision = revision;
     Ok(DetachResult {
-        root_id: RootId(media_id.0),
-        affected: [collection_id.0, media_id.0].into_iter().collect(),
+        root_ids: media_rows
+            .iter()
+            .map(|(media_id, _, _)| RootId(media_id.0))
+            .collect(),
+        affected,
         snapshot,
     })
 }

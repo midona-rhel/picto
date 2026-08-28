@@ -85,6 +85,10 @@ pub fn dispatch_library(
             let input: crate::operations_v2::OrganizeIntoCollectionInput = parse(args_json)?;
             read(application.organize_into_collection(&input)?)
         }
+        "items.detach" => {
+            let input: crate::operations_v2::DetachItemsInput = parse(args_json)?;
+            read(application.detach_items(&input)?)
+        }
         "items.ungroup" => {
             let input: ItemInput = parse(args_json)?;
             read(application.ungroup_collection(input.item_id.0)?)
@@ -1611,12 +1615,16 @@ mod tests {
             .library()
             .ingest(&greenfield_input("greenfield-ipc-second"))
             .unwrap();
+        let (third, _) = application
+            .library()
+            .ingest(&greenfield_input("greenfield-ipc-third"))
+            .unwrap();
         let output = dispatch_library(
             &application,
             "items.organize_into_collection",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{},{}]}},"label":"Grouped","winning_collection_id":null}}"#,
-                first.0, second.0
+                r#"{{"target":{{"kind":"explicit","item_ids":[{},{},{}]}},"label":"Grouped","winning_collection_id":null}}"#,
+                first.0, second.0, third.0
             ),
         )
         .unwrap()
@@ -1629,7 +1637,41 @@ mod tests {
             .unwrap();
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.root.name, "Grouped");
-        assert_eq!(details.media.len(), 2);
+        assert_eq!(details.media.len(), 3);
+
+        let revision = application.library().database().revision().unwrap();
+        let detached = dispatch_library(
+            &application,
+            "items.detach",
+            &format!(
+                r#"{{"collection_id":{},"media_item_ids":[{},{}],"target_lifecycle":"trash"}}"#,
+                output.collection_id.0, first.0, third.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let receipt: MutationReceipt = serde_json::from_str(&detached).unwrap();
+        assert_eq!(receipt.revision, revision + 1);
+        let details = application
+            .library()
+            .details(picto_library::RootId(output.collection_id.0 as u32))
+            .unwrap();
+        assert_eq!(details.media.len(), 1);
+        assert_eq!(details.media[0].media_id.0, second.0);
+        assert_eq!(
+            application
+                .library()
+                .query(
+                    &picto_library::query::RootQuery {
+                        scope: picto_library::query::ItemScope::Trash,
+                        view: Default::default(),
+                    },
+                    &Default::default(),
+                )
+                .unwrap()
+                .total,
+            2
+        );
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {

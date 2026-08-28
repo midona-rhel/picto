@@ -267,6 +267,27 @@ impl LibraryApplication {
         Ok(crate::library_v1::receipt(receipt))
     }
 
+    pub fn detach_items(
+        &self,
+        input: &crate::operations_v2::DetachItemsInput,
+    ) -> Result<crate::app::MutationReceipt, String> {
+        let media_ids = input
+            .media_item_ids
+            .iter()
+            .map(|id| checked_local_id(id.0, "media").map(picto_library::MediaId))
+            .collect::<Result<Vec<_>, String>>()?;
+        let (_, receipt) = self
+            .library
+            .detach_collection_members(
+                checked_root_id(input.collection_id.0)?,
+                media_ids,
+                input.target_lifecycle.map(crate::library_v1::lifecycle),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(crate::library_v1::receipt(receipt))
+    }
+
     pub fn reorder_collection(
         &self,
         input: &crate::operations_v2::ReorderCollectionInput,
