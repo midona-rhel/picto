@@ -437,9 +437,7 @@ pub async fn unload_sessions(application: &Application) {
     tracing::debug!(target: "ai_inference", "AI model session unloaded");
 }
 
-pub async fn unload_library_sessions(
-    application: &crate::library_application::LibraryApplication,
-) {
+pub async fn unload_library_sessions(application: &crate::library_application::LibraryApplication) {
     application.ai_sessions().lock().await.clear();
     application.set_ai_worker_status(false, "Idle");
     tracing::debug!(target: "ai_inference", "AI model session unloaded");

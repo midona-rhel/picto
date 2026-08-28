@@ -10,8 +10,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::store::Store;
 use crate::library_application::LibraryApplication;
+use crate::store::Store;
 
 const MAX_PAGE_SIZE: usize = 100;
 
@@ -210,7 +210,9 @@ pub fn list_runs_library(
         .library()
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
-            |connection| list_runs_from_connection(connection, subscription_id, limit).map_err(Into::into),
+            |connection| {
+                list_runs_from_connection(connection, subscription_id, limit).map_err(Into::into)
+            },
         )
         .map_err(|error| error.to_string())
 }
@@ -250,7 +252,10 @@ pub fn run_activity_library(
         .library()
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
-            |connection| run_activity_from_connection(connection, run_id, source_item_limit).map_err(Into::into),
+            |connection| {
+                run_activity_from_connection(connection, run_id, source_item_limit)
+                    .map_err(Into::into)
+            },
         )
         .map_err(|error| error.to_string())
 }
@@ -298,7 +303,9 @@ pub fn current_progress_library(
         .library()
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
-            |connection| current_progress_from_connection(connection, subscription_id).map_err(Into::into),
+            |connection| {
+                current_progress_from_connection(connection, subscription_id).map_err(Into::into)
+            },
         )
         .map_err(|error| error.to_string())
 }
@@ -350,7 +357,9 @@ pub fn list_issues_library(
         .library()
         .auxiliary_read(
             picto_library::database::WorkPriority::VisibleRead,
-            |connection| list_issues_from_connection(connection, request, limit).map_err(Into::into),
+            |connection| {
+                list_issues_from_connection(connection, request, limit).map_err(Into::into)
+            },
         )
         .map_err(|error| error.to_string())
 }
@@ -367,19 +376,19 @@ fn list_issues_from_connection(
         .map(|cursor| cursor.last_seen_at.as_str());
     let cursor_id = request.cursor.as_ref().map(|cursor| cursor.issue_id);
     let total_count = connection.query_row(
-            "SELECT COUNT(*) FROM subscription_issue
+        "SELECT COUNT(*) FROM subscription_issue
              WHERE subscription_id = ?1
                AND (?2 IS NULL OR query_id = ?2)
                AND (?3 = 0 OR status = 'open')",
-            params![
-                request.subscription_id,
-                request.query_id,
-                request.open_only as i64,
-            ],
-            |row| row.get(0),
-        )?;
-        let mut statement = connection.prepare(
-            "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind,
+        params![
+            request.subscription_id,
+            request.query_id,
+            request.open_only as i64,
+        ],
+        |row| row.get(0),
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind,
                     message, detail, status, first_seen_at, last_seen_at, resolved_at
              FROM subscription_issue
              WHERE subscription_id = ?1
@@ -392,43 +401,43 @@ fn list_issues_from_connection(
                )
              ORDER BY last_seen_at DESC, issue_id DESC
              LIMIT ?6",
-        )?;
-        let mut rows = statement.query(params![
-            request.subscription_id,
-            request.query_id,
-            request.open_only as i64,
-            cursor_time,
-            cursor_id,
-            fetch_limit,
-        ])?;
-        let mut issues = Vec::with_capacity(limit);
-        while let Some(row) = rows.next()? {
-            issues.push(SubscriptionIssue {
-                issue_id: row.get(0)?,
-                issue_key: row.get(1)?,
-                subscription_id: row.get(2)?,
-                query_id: row.get(3)?,
-                issue_kind: row.get(4)?,
-                message: row.get(5)?,
-                detail: row.get(6)?,
-                status: row.get(7)?,
-                first_seen_at: row.get(8)?,
-                last_seen_at: row.get(9)?,
-                resolved_at: row.get(10)?,
-            });
-        }
-        let has_more = issues.len() > limit;
-        if has_more {
-            issues.truncate(limit);
-        }
-        let next_cursor = if has_more {
-            issues.last().map(|issue| IssueCursor {
-                last_seen_at: issue.last_seen_at.clone(),
-                issue_id: issue.issue_id,
-            })
-        } else {
-            None
-        };
+    )?;
+    let mut rows = statement.query(params![
+        request.subscription_id,
+        request.query_id,
+        request.open_only as i64,
+        cursor_time,
+        cursor_id,
+        fetch_limit,
+    ])?;
+    let mut issues = Vec::with_capacity(limit);
+    while let Some(row) = rows.next()? {
+        issues.push(SubscriptionIssue {
+            issue_id: row.get(0)?,
+            issue_key: row.get(1)?,
+            subscription_id: row.get(2)?,
+            query_id: row.get(3)?,
+            issue_kind: row.get(4)?,
+            message: row.get(5)?,
+            detail: row.get(6)?,
+            status: row.get(7)?,
+            first_seen_at: row.get(8)?,
+            last_seen_at: row.get(9)?,
+            resolved_at: row.get(10)?,
+        });
+    }
+    let has_more = issues.len() > limit;
+    if has_more {
+        issues.truncate(limit);
+    }
+    let next_cursor = if has_more {
+        issues.last().map(|issue| IssueCursor {
+            last_seen_at: issue.last_seen_at.clone(),
+            issue_id: issue.issue_id,
+        })
+    } else {
+        None
+    };
     Ok(IssuePage {
         subscription_id: request.subscription_id,
         issues,

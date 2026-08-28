@@ -188,22 +188,22 @@ pub async fn scan_watched_folders(
         .auxiliary_read(
             picto_library::database::WorkPriority::CanonicalIngest,
             |connection| {
-            let mut statement = connection.prepare(
-                "SELECT folder_id, watch_path, watch_subfolders
+                let mut statement = connection.prepare(
+                    "SELECT folder_id, watch_path, watch_subfolders
                  FROM folder_definition
                  WHERE watch_enabled = 1 AND watch_path IS NOT NULL
                  ORDER BY folder_id",
-            )?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok(WatchedFolder {
-                        folder_id: FolderId(row.get(0)?),
-                        path: PathBuf::from(row.get::<_, String>(1)?),
-                        recursive: row.get(2)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(WatchedFolder {
+                            folder_id: FolderId(row.get(0)?),
+                            path: PathBuf::from(row.get::<_, String>(1)?),
+                            recursive: row.get(2)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
             },
         )
         .map_err(|error| error.to_string())?;
@@ -216,23 +216,22 @@ pub async fn scan_watched_folders(
         .auxiliary_read(
             picto_library::database::WorkPriority::CanonicalIngest,
             |connection| {
-            let mut statement = connection.prepare(
-                "SELECT job_key FROM ingest_job
+                let mut statement = connection.prepare(
+                    "SELECT job_key FROM ingest_job
                  WHERE source_kind = 'watch' AND status <> 'failed'",
-            )?;
-            let keys = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<HashSet<_>>>()?;
-            Ok(keys)
+                )?;
+                let keys = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<HashSet<_>>>()?;
+                Ok(keys)
             },
         )
         .map_err(|error| error.to_string())?;
 
-    let (mut report, pending) = tokio::task::spawn_blocking(move || {
-        collect_watched_candidates(watches, &mut existing)
-    })
-    .await
-    .map_err(|error| format!("Watched-folder scan worker failed: {error}"))??;
+    let (mut report, pending) =
+        tokio::task::spawn_blocking(move || collect_watched_candidates(watches, &mut existing))
+            .await
+            .map_err(|error| format!("Watched-folder scan worker failed: {error}"))??;
     if !pending.is_empty() {
         tokio::time::sleep(WATCH_STABLE_DELAY).await;
     }
@@ -478,7 +477,10 @@ fn collect_manual_candidates(
         let path = fs::canonicalize(value)
             .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
         if path.starts_with(&library) {
-            return Err(format!("Import path must be outside the library: {}", path.display()));
+            return Err(format!(
+                "Import path must be outside the library: {}",
+                path.display()
+            ));
         }
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
@@ -487,7 +489,10 @@ fn collect_manual_candidates(
         }
         if metadata.is_file() {
             if is_media_path(&path) && !should_ignore(&path) {
-                candidates.push(ImportCandidate { path, relative_parent: None });
+                candidates.push(ImportCandidate {
+                    path,
+                    relative_parent: None,
+                });
             }
         } else if metadata.is_dir() {
             let root_name = path.file_name().map(PathBuf::from);
@@ -581,7 +586,10 @@ fn collect_directory(
 fn collection_name(paths: &[String]) -> Option<String> {
     let first = paths.first().map(Path::new)?;
     if paths.len() == 1 {
-        return first.file_stem().and_then(|value| value.to_str()).map(str::to_owned);
+        return first
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::to_owned);
     }
     first
         .parent()
@@ -689,7 +697,10 @@ mod tests {
         assert_eq!(settled.ingested, 1);
         let details = application.library().details(settled.root_ids[0]).unwrap();
         assert_eq!(details.lifecycle, Lifecycle::Inbox);
-        assert_eq!(details.root.source_urls, vec!["https://example.test/manual"]);
+        assert_eq!(
+            details.root.source_urls,
+            vec!["https://example.test/manual"]
+        );
         assert_eq!(details.tag_ids.len(), 1);
     }
 

@@ -102,17 +102,19 @@ pub fn dispatch_library(
         }
         "subscriptions.cover.candidates" => {
             let input: SubscriptionCoverCandidatesInput = parse(args_json)?;
-            read(crate::subscription_catalog_v2::subscription_cover_candidates_library(
-                application,
-                input.subscription_id,
-                input.cursor.as_ref(),
-                input.limit,
-            )?)
+            read(
+                crate::subscription_catalog_v2::subscription_cover_candidates_library(
+                    application,
+                    input.subscription_id,
+                    input.cursor.as_ref(),
+                    input.limit,
+                )?,
+            )
         }
         "subscriptions.create" => {
             let input: NewSubscription = parse(args_json)?;
-            let (subscription_id, receipt) = application
-                .create_subscription_definition_library(&input, &now())?;
+            let (subscription_id, receipt) =
+                application.create_subscription_definition_library(&input, &now())?;
             read(serde_json::json!({
                 "subscription_id": subscription_id,
                 "receipt": receipt
@@ -120,8 +122,8 @@ pub fn dispatch_library(
         }
         "subscriptions.queries.add" => {
             let input: AddSubscriptionQueryInput = parse(args_json)?;
-            let (query_id, receipt) = application
-                .add_subscription_query_library(input.subscription_id, &input.query)?;
+            let (query_id, receipt) =
+                application.add_subscription_query_library(input.subscription_id, &input.query)?;
             read(serde_json::json!({"query_id": query_id, "receipt": receipt}))
         }
         "subscriptions.queries.update" => {
@@ -134,10 +136,10 @@ pub fn dispatch_library(
         }
         "subscriptions.queries.grouping" => {
             let input: SetSubscriptionQueryGroupingInput = parse(args_json)?;
-            read(application.set_subscription_query_grouping_library(
-                input.query_id,
-                input.group_posts,
-            )?)
+            read(
+                application
+                    .set_subscription_query_grouping_library(input.query_id, input.group_posts)?,
+            )
         }
         "subscriptions.queries.delete" => {
             let input: SubscriptionQueryInput = parse(args_json)?;
@@ -168,17 +170,16 @@ pub fn dispatch_library(
         }
         "subscriptions.destination" => {
             let input: SubscriptionDestinationInput = parse(args_json)?;
-            read(application.set_subscription_destination_library(
-                input.subscription_id,
-                &input.destination,
-            )?)
+            read(
+                application.set_subscription_destination_library(
+                    input.subscription_id,
+                    &input.destination,
+                )?,
+            )
         }
         "subscriptions.cover.set" => {
             let input: SubscriptionCoverInput = parse(args_json)?;
-            read(application.set_subscription_cover_library(
-                input.subscription_id,
-                &input.cover,
-            )?)
+            read(application.set_subscription_cover_library(input.subscription_id, &input.cover)?)
         }
         "subscriptions.delete" => {
             let input: SubscriptionInput = parse(args_json)?;
@@ -397,11 +398,7 @@ pub fn dispatch_library(
         }
         "duplicates.resolve" => {
             let input: LibraryResolveDuplicateInput = parse(args_json)?;
-            read(application.resolve_duplicate(
-                input.file_id_a,
-                input.file_id_b,
-                input.choice,
-            )?)
+            read(application.resolve_duplicate(input.file_id_a, input.file_id_b, input.choice)?)
         }
         "duplicates.resolve_automatically" => {
             let input: LibraryAutomaticDuplicateInput = parse(args_json)?;
@@ -439,7 +436,10 @@ pub fn dispatch_library(
         }
         "cloud.retention.update" => {
             let input: ValueInput = parse(args_json)?;
-            read(crate::cloud::update_retention_library(application, &input.value)?)
+            read(crate::cloud::update_retention_library(
+                application,
+                &input.value,
+            )?)
         }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
@@ -525,7 +525,10 @@ pub async fn dispatch_library_async(
             let url = normalize_ehentai_gallery_url(&input.url)?;
             let is_exhentai = url.starts_with("https://exhentai.org/");
             if input.service_id.as_deref().is_some_and(|service| {
-                !matches!((service, is_exhentai), ("ehentai", false) | ("exhentai", true))
+                !matches!(
+                    (service, is_exhentai),
+                    ("ehentai", false) | ("exhentai", true)
+                )
             }) {
                 return Err("The selected gallery service does not match the URL".into());
             }
@@ -552,11 +555,12 @@ pub async fn dispatch_library_async(
             let timestamp = now();
             let (subscription_id, _) =
                 application.create_subscription_definition_library(&definition, &timestamp)?;
-            if let Err(error) = crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-                application.root(),
-                subscription_id,
-            )
-            .await
+            if let Err(error) =
+                crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+                    application.root(),
+                    subscription_id,
+                )
+                .await
             {
                 let _ = application.delete_subscription_library(subscription_id);
                 return Err(error);
@@ -639,7 +643,11 @@ pub async fn dispatch_library_async(
         }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
-            read(application.reset_subscription_library(input.subscription_id).await?)
+            read(
+                application
+                    .reset_subscription_library(input.subscription_id)
+                    .await?,
+            )
         }
         _ => return dispatch_library(application, command, args_json),
     }?;
@@ -2354,7 +2362,10 @@ mod tests {
             subscription.destination.automatic_tags,
             vec!["creator:test".to_string()]
         );
-        assert_eq!(list.revision, application.library().database().revision().unwrap());
+        assert_eq!(
+            list.revision,
+            application.library().database().revision().unwrap()
+        );
     }
 
     #[test]
@@ -2653,10 +2664,7 @@ mod tests {
         .unwrap();
         let output: picto_library::OrganizeCollectionResult =
             serde_json::from_str(&output).unwrap();
-        let details = application
-            .library()
-            .details(output.collection_id)
-            .unwrap();
+        let details = application.library().details(output.collection_id).unwrap();
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.root.name, "Grouped");
         assert_eq!(details.media.len(), 3);
@@ -2676,10 +2684,7 @@ mod tests {
             serde_json::from_str(&detached).unwrap();
         assert_eq!(detached.receipt.revision, revision + 1);
         assert_eq!(detached.root_ids.len(), 2);
-        let details = application
-            .library()
-            .details(output.collection_id)
-            .unwrap();
+        let details = application.library().details(output.collection_id).unwrap();
         assert_eq!(details.media.len(), 1);
         assert_eq!(details.media[0].media_id.0, second.0);
         assert_eq!(
@@ -2928,10 +2933,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(
-            application.library().tags().unwrap()[0].namespace,
-            "people"
-        );
+        assert_eq!(application.library().tags().unwrap()[0].namespace, "people");
         dispatch_library(
             &application,
             "tags.group.delete",
@@ -3389,9 +3391,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let status: crate::ai_runtime_v2::AiRuntimeStatus =
-            serde_json::from_str(&status).unwrap();
-        assert_eq!(status.models.len(), crate::ai_tagger::models::known_models().len());
+        let status: crate::ai_runtime_v2::AiRuntimeStatus = serde_json::from_str(&status).unwrap();
+        assert_eq!(
+            status.models.len(),
+            crate::ai_tagger::models::known_models().len()
+        );
 
         let output = dispatch_library_async(
             &application,

@@ -122,11 +122,8 @@ pub fn resolve_target_file_paths_library(
         .auxiliary_read_consistent(
             picto_library::database::WorkPriority::VisibleRead,
             |connection, projection| {
-                let roots = picto_library::selection::resolve_ordered(
-                    connection,
-                    projection,
-                    target,
-                )?;
+                let roots =
+                    picto_library::selection::resolve_ordered(connection, projection, target)?;
                 let media_ids = roots
                     .iter()
                     .flat_map(|root_id| {
@@ -323,21 +320,21 @@ pub fn request_thumbnail_library(
     }
     let (mime, frame_count) = application
         .library()
-        .auxiliary_read(picto_library::database::WorkPriority::VisibleRead, |connection| {
-            connection
-                .query_row(
-                    "SELECT mime, frame_count FROM media_file WHERE content_hash = ?1",
-                    [&file_hash.0],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<u32>>(1)?)),
-                )
-                .map_err(Into::into)
-        })
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT mime, frame_count FROM media_file WHERE content_hash = ?1",
+                        [&file_hash.0],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<u32>>(1)?)),
+                    )
+                    .map_err(Into::into)
+            },
+        )
         .map_err(|error| error.to_string())?;
-    if !crate::media_capabilities::capabilities_for_stored_media(
-        &mime,
-        frame_count.map(i64::from),
-    )
-    .can_thumbnail()
+    if !crate::media_capabilities::capabilities_for_stored_media(&mime, frame_count.map(i64::from))
+        .can_thumbnail()
     {
         return Ok(RequestThumbnailResult {
             ready: false,
@@ -676,11 +673,8 @@ fn ordered_media_library(
         .auxiliary_read_consistent(
             picto_library::database::WorkPriority::VisibleRead,
             |connection, projection| {
-                let roots = picto_library::selection::resolve_ordered(
-                    connection,
-                    projection,
-                    target,
-                )?;
+                let roots =
+                    picto_library::selection::resolve_ordered(connection, projection, target)?;
                 let media_ids = roots
                     .iter()
                     .flat_map(|root_id| {

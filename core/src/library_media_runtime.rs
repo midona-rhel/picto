@@ -92,7 +92,9 @@ pub async fn render_thumbnail_now(
     let mut source = PreparedMediaSource::from_stored_metadata(
         target.file_path.clone(),
         &target.mime,
-        target.duration_ms.and_then(|value| i64::try_from(value).ok()),
+        target
+            .duration_ms
+            .and_then(|value| i64::try_from(value).ok()),
         target.frame_count.map(i64::from),
     );
     ensure_thumbnail(application, &target, &mut source).await?;

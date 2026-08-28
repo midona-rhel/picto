@@ -4,8 +4,8 @@
 //! not open the legacy `Store`; auxiliary services share the kernel's
 //! `LibraryDatabase` scheduler through `library().database()`.
 
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use picto_library::{Library, RootId};
@@ -154,8 +154,7 @@ impl LibraryApplication {
     }
 
     pub fn details(&self, root_id: RootId) -> Result<picto_library::RootDetails, String> {
-        self
-            .library
+        self.library
             .details(root_id)
             .map_err(|error| error.to_string())
     }
@@ -164,18 +163,17 @@ impl LibraryApplication {
         &self,
         target: &picto_library::selection::SelectionTarget,
     ) -> Result<picto_library::selection::SelectionSummary, String> {
-        self
-            .library
+        self.library
             .selection_summary(target)
             .map_err(|error| error.to_string())
     }
 
-    pub fn record_recent_view(&self, root_id: RootId) -> Result<picto_library::MutationReceipt, String> {
+    pub fn record_recent_view(
+        &self,
+        root_id: RootId,
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .record_recent_view(
-                root_id,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .record_recent_view(root_id, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())
     }
 
@@ -226,11 +224,7 @@ impl LibraryApplication {
         name: &str,
     ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .rename_root(
-                root_id,
-                name,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .rename_root(root_id, name, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())
     }
 
@@ -289,10 +283,7 @@ impl LibraryApplication {
     ) -> Result<picto_library::CollectionRootsResult, String> {
         let (root_ids, receipt) = self
             .library
-            .ungroup_collection(
-                collection_id,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .ungroup_collection(collection_id, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())?;
         Ok(picto_library::CollectionRootsResult { root_ids, receipt })
     }
@@ -334,10 +325,7 @@ impl LibraryApplication {
             .library
             .create_folder(&input.name, input.parent_id)
             .map_err(|error| error.to_string())?;
-        Ok(picto_library::CreatedFolder {
-            folder_id,
-            receipt,
-        })
+        Ok(picto_library::CreatedFolder { folder_id, receipt })
     }
 
     pub fn rename_folder(
@@ -345,8 +333,7 @@ impl LibraryApplication {
         folder_id: picto_library::FolderId,
         name: &str,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .rename_folder(folder_id, name)
             .map_err(|error| error.to_string())
     }
@@ -366,8 +353,7 @@ impl LibraryApplication {
         &self,
         input: &picto_library::FolderMetadataInput,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .set_folder_metadata(
                 input.folder_id,
                 input.icon.as_deref(),
@@ -406,8 +392,7 @@ impl LibraryApplication {
         tag_ids.sort_unstable();
         tag_ids.dedup();
         drop(snapshot);
-        self
-            .library
+        self.library
             .set_folder_auto_tags(
                 input.folder_id,
                 tag_ids,
@@ -441,10 +426,13 @@ impl LibraryApplication {
         let path = std::fs::canonicalize(input.path.trim())
             .map_err(|error| format!("Failed to resolve watched folder: {error}"))?;
         if !path.is_dir() {
-            return Err(format!("Watched path is not a directory: {}", path.display()));
+            return Err(format!(
+                "Watched path is not a directory: {}",
+                path.display()
+            ));
         }
-        let library_root = std::fs::canonicalize(self.root())
-            .unwrap_or_else(|_| self.root().to_path_buf());
+        let library_root =
+            std::fs::canonicalize(self.root()).unwrap_or_else(|_| self.root().to_path_buf());
         if path.starts_with(library_root) {
             return Err("A watched folder cannot be inside the Picto library".into());
         }
@@ -471,8 +459,7 @@ impl LibraryApplication {
         folder_id: picto_library::FolderId,
         parent_id: Option<picto_library::FolderId>,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .move_folder(folder_id, parent_id)
             .map_err(|error| error.to_string())
     }
@@ -481,8 +468,7 @@ impl LibraryApplication {
         &self,
         input: &picto_library::ReorderFolderChildrenInput,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .reorder_folder_children(input.parent_id, &input.folder_ids)
             .map_err(|error| error.to_string())
     }
@@ -491,8 +477,7 @@ impl LibraryApplication {
         &self,
         input: &picto_library::ReorderFolderRootsInput,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .reorder_folder_items(input.folder_id, &input.root_ids)
             .map_err(|error| error.to_string())
     }
@@ -510,8 +495,7 @@ impl LibraryApplication {
         &self,
         folder_id: picto_library::FolderId,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .sort_folder_items_by_name(folder_id)
             .map_err(|error| error.to_string())
     }
@@ -520,8 +504,7 @@ impl LibraryApplication {
         &self,
         folder_ids: &[picto_library::FolderId],
     ) -> Result<picto_library::FolderDeleteResult, String> {
-        self
-            .library
+        self.library
             .delete_folders(folder_ids)
             .map_err(|error| error.to_string())
     }
@@ -545,8 +528,7 @@ impl LibraryApplication {
         smart_folder_id: picto_library::SmartFolderId,
         input: picto_library::SmartFolderInput,
     ) -> Result<picto_library::MutationReceipt, String> {
-        self
-            .library
+        self.library
             .update_smart_folder(smart_folder_id, input)
             .map_err(|error| error.to_string())
     }
@@ -565,8 +547,7 @@ impl LibraryApplication {
             .find(|record| record.smart_folder_id == smart_folder_id)
             .ok_or_else(|| format!("Smart folder {} does not exist", smart_folder_id.0))?;
         record.parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
-        self
-            .library
+        self.library
             .update_smart_folder(
                 smart_folder_id,
                 picto_library::SmartFolderInput {
@@ -592,8 +573,7 @@ impl LibraryApplication {
             .copied()
             .map(checked_smart_folder_id)
             .collect::<Result<Vec<_>, String>>()?;
-        self
-            .library
+        self.library
             .reorder_smart_folder_children(parent_id, &ids)
             .map_err(|error| error.to_string())
     }
@@ -602,15 +582,16 @@ impl LibraryApplication {
         &self,
         smart_folder_id: i64,
     ) -> Result<picto_library::SmartFolderDeleteResult, String> {
-        self
-            .library
+        self.library
             .delete_smart_folder(checked_smart_folder_id(smart_folder_id)?)
             .map_err(|error| error.to_string())
     }
 
     pub fn navigation(&self) -> Result<LibraryNavigationSnapshot, String> {
-        let (folders, smart_folders, revision) =
-            self.library.navigation().map_err(|error| error.to_string())?;
+        let (folders, smart_folders, revision) = self
+            .library
+            .navigation()
+            .map_err(|error| error.to_string())?;
         Ok(LibraryNavigationSnapshot {
             folders,
             smart_folders,
@@ -670,15 +651,23 @@ impl LibraryApplication {
         &self,
         tag_ids: &[picto_library::TagId],
     ) -> Result<Vec<picto_library::TagRecord>, String> {
-        let wanted = tag_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+        let wanted = tag_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
         self.library
             .tags()
-            .map(|tags| tags.into_iter().filter(|tag| wanted.contains(&tag.tag_id)).collect())
+            .map(|tags| {
+                tags.into_iter()
+                    .filter(|tag| wanted.contains(&tag.tag_id))
+                    .collect()
+            })
             .map_err(|error| error.to_string())
     }
 
     pub fn unused_tag_count(&self) -> Result<u64, String> {
-        Ok(self.library
+        Ok(self
+            .library
             .tags()
             .map_err(|error| error.to_string())?
             .into_iter()
@@ -713,10 +702,7 @@ impl LibraryApplication {
         tag_id: picto_library::TagId,
     ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .delete_tag(
-                tag_id,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .delete_tag(tag_id, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())
     }
 
@@ -744,9 +730,7 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
-    pub fn application_settings(
-        &self,
-    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+    pub fn application_settings(&self) -> Result<crate::settings_v2::SettingsSnapshot, String> {
         self.settings_value("setting", "application")
     }
 
@@ -810,10 +794,8 @@ impl LibraryApplication {
                 ["settings".to_string()],
                 [],
                 |transaction, _| {
-                    transaction.execute(
-                        "DELETE FROM view_pref WHERE scope <> 'grid:defaults'",
-                        [],
-                    )?;
+                    transaction
+                        .execute("DELETE FROM view_pref WHERE scope <> 'grid:defaults'", [])?;
                     Ok(())
                 },
             )
@@ -1116,10 +1098,7 @@ mod tests {
             .unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].root_id, root_id);
-        assert_eq!(
-            application.details(root_id).unwrap().root.root_id,
-            root_id
-        );
+        assert_eq!(application.details(root_id).unwrap().root.root_id, root_id);
         assert_eq!(
             application.library().database().path(),
             directory.path().join(DATABASE_FILE)
@@ -1190,7 +1169,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(receipt.revision, before + 1);
-        assert_eq!(application.library().projections().snapshot().revision, receipt.revision);
+        assert_eq!(
+            application.library().projections().snapshot().revision,
+            receipt.revision
+        );
         assert_eq!(
             application
                 .library()

@@ -43,120 +43,132 @@ pub fn snapshot_library(
 }
 
 fn durable_workers(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<WorkerDiagnostic>> {
-        let ingest = connection.query_row(
-            "SELECT
+    let ingest = connection.query_row(
+        "SELECT
                  COALESCE(SUM(status = 'running'), 0),
                  COALESCE(SUM(status = 'pending'), 0),
                  COALESCE(SUM(status = 'failed'), 0)
              FROM ingest_job",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        let ingest_activity = connection
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let ingest_activity = connection
             .query_row(
                 "SELECT source_kind FROM ingest_job WHERE status = 'running' ORDER BY updated_at DESC LIMIT 1",
                 [],
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        let work = connection.query_row(
-            "SELECT
+    let work = connection.query_row(
+        "SELECT
                  COALESCE(SUM(status = 'running'), 0),
                  COALESCE(SUM(status = 'pending'), 0),
                  COALESCE(SUM(status = 'pending' AND last_error IS NOT NULL), 0)
              FROM work_item",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        let work_activity = connection
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let work_activity = connection
             .query_row(
                 "SELECT work_type FROM work_item WHERE status = 'running' ORDER BY updated_at DESC LIMIT 1",
                 [],
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        let work_noun = {
-            let mut statement = connection.prepare(
-                "SELECT work_type, COUNT(*)
+    let work_noun = {
+        let mut statement = connection.prepare(
+            "SELECT work_type, COUNT(*)
                  FROM work_item
                  WHERE status = 'pending'
                  GROUP BY work_type
                  ORDER BY work_type",
-            )?;
-            let kinds = statement
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if kinds.len() == 1 {
-                format!("{} jobs", work_kind_noun(&kinds[0].0))
-            } else {
-                "media jobs".to_string()
-            }
-        };
-        let subscriptions = connection.query_row(
-            "SELECT
+        )?;
+        let kinds = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if kinds.len() == 1 {
+            format!("{} jobs", work_kind_noun(&kinds[0].0))
+        } else {
+            "media jobs".to_string()
+        }
+    };
+    let subscriptions = connection.query_row(
+        "SELECT
                  COALESCE(SUM(status = 'running'), 0),
                  COALESCE(SUM(status = 'pending'), 0),
                  (SELECT COUNT(*) FROM subscription_issue WHERE status = 'open')
              FROM subscription_run_query",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        let subscription_activity = connection
-            .query_row(
-                "SELECT q.site_id
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let subscription_activity = connection
+        .query_row(
+            "SELECT q.site_id
                  FROM subscription_run_query rq
                  JOIN subscription_query q ON q.query_id = rq.query_id
                  WHERE rq.status = 'running'
                  ORDER BY rq.started_at DESC
                  LIMIT 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        let scheduled_runs: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM subscription_run WHERE status = 'pending'",
             [],
-            |row| row.get(0),
-        )?;
-        Ok(vec![
-            worker("ingest", "Ingest", ingest, "media awaiting publication", ingest_activity.as_deref()),
-            worker(
-                "derivatives",
-                "Media processing",
-                work,
-                &work_noun,
-                work_activity.as_deref().map(work_label),
-            ),
-            worker(
-                "subscriptions",
-                "Subscriptions",
-                subscriptions,
-                "source queries across four slots",
-                subscription_activity.as_deref(),
-            ),
-            WorkerDiagnostic {
-                id: "scheduler".into(),
-                label: "Subscription scheduler".into(),
-                state: if scheduled_runs > 0 { "working" } else { "waiting" },
-                detail: if scheduled_runs > 0 {
-                    format!("{scheduled_runs} run(s) ready")
-                } else {
-                    "Waiting for scheduled runs".into()
-                },
-                active: 0,
-                queued: scheduled_runs,
-                attention: 0,
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let scheduled_runs: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM subscription_run WHERE status = 'pending'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(vec![
+        worker(
+            "ingest",
+            "Ingest",
+            ingest,
+            "media awaiting publication",
+            ingest_activity.as_deref(),
+        ),
+        worker(
+            "derivatives",
+            "Media processing",
+            work,
+            &work_noun,
+            work_activity.as_deref().map(work_label),
+        ),
+        worker(
+            "subscriptions",
+            "Subscriptions",
+            subscriptions,
+            "source queries across four slots",
+            subscription_activity.as_deref(),
+        ),
+        WorkerDiagnostic {
+            id: "scheduler".into(),
+            label: "Subscription scheduler".into(),
+            state: if scheduled_runs > 0 {
+                "working"
+            } else {
+                "waiting"
             },
-            WorkerDiagnostic {
-                id: "folder-watches".into(),
-                label: "Folder watches".into(),
-                state: "waiting",
-                detail: "Checks watched folders every 30 seconds".into(),
-                active: 0,
-                queued: 0,
-                attention: 0,
+            detail: if scheduled_runs > 0 {
+                format!("{scheduled_runs} run(s) ready")
+            } else {
+                "Waiting for scheduled runs".into()
             },
-        ])
+            active: 0,
+            queued: scheduled_runs,
+            attention: 0,
+        },
+        WorkerDiagnostic {
+            id: "folder-watches".into(),
+            label: "Folder watches".into(),
+            state: "waiting",
+            detail: "Checks watched folders every 30 seconds".into(),
+            active: 0,
+            queued: 0,
+            attention: 0,
+        },
+    ])
 }
 
 fn finish_snapshot(

@@ -267,9 +267,7 @@ pub(crate) fn migrate_legacy_storage(
     })
 }
 
-pub(crate) fn storage_bytes(
-    application: &(impl AiModelHost + ?Sized),
-) -> Result<u64, String> {
+pub(crate) fn storage_bytes(application: &(impl AiModelHost + ?Sized)) -> Result<u64, String> {
     directory_bytes(&models_root(application))
 }
 
