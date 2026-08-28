@@ -43,6 +43,11 @@ pub enum SemanticChange {
         before: MediaId,
         after: MediaId,
     },
+    TagName {
+        tag_id: crate::TagId,
+        before: String,
+        after: String,
+    },
     Compound(Vec<SemanticChange>),
 }
 
@@ -64,6 +69,7 @@ impl SemanticChange {
                 })
                 .sum(),
             Self::CollectionCover { .. } => 64,
+            Self::TagName { before, after, .. } => before.len() + after.len() + 32,
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }

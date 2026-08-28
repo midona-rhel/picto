@@ -514,13 +514,10 @@ impl Library {
 
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
         let name = required_name("tag", name)?;
-        let (namespace, subname) = name.split_once(':').unwrap_or(("", name.as_str()));
-        if subname.trim().is_empty() {
-            return Err(LibraryError::InvalidInput("tag name is empty".into()));
-        }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
@@ -538,15 +535,8 @@ impl Library {
                         "tag {name} already exists"
                     )));
                 }
-                let namespace_id = ingest::ensure_namespace(transaction, namespace)?;
-                transaction.execute(
-                    "UPDATE tag_definition SET namespace_id = ?2, subname = ?3 WHERE tag_id = ?1",
-                    rusqlite::params![tag_id.0, namespace_id, subname],
-                )?;
                 let mut next = (*snapshot).clone();
-                let names = Arc::make_mut(&mut next.tag_ids_by_name);
-                names.remove(&old_name);
-                names.insert(name.clone(), tag_id);
+                rename_tag_definition(transaction, &mut next, tag_id, &name)?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
@@ -558,14 +548,22 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: (old_name != name).then(|| {
+                            HistoryEntry::new(
+                                "Rename tag",
+                                SemanticChange::TagName {
+                                    tag_id,
+                                    before: old_name,
+                                    after: name.clone(),
+                                },
+                            )
+                        }),
                     },
                 ))
             },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
+        push_history(&history, history_entry);
         Ok(receipt)
     }
 
@@ -1892,6 +1890,32 @@ fn apply_semantic_change(
             resources.insert("roots".into());
             resources.insert("collections".into());
         }
+        SemanticChange::TagName {
+            tag_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let current = snapshot
+                .tag_ids_by_name
+                .iter()
+                .find_map(|(name, id)| (*id == *tag_id).then_some(name.as_str()))
+                .ok_or_else(|| LibraryError::NotFound(format!("tag {}", tag_id.0)))?;
+            if current != expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because tag {} was renamed",
+                    tag_id.0
+                )));
+            }
+            rename_tag_definition(transaction, snapshot, *tag_id, replacement)?;
+            resources.insert("tags".into());
+            resources.insert("navigation".into());
+            resources.insert("smart-folders".into());
+        }
         SemanticChange::Compound(changes) => {
             for change in changes {
                 apply_semantic_change(
@@ -1967,6 +1991,41 @@ fn push_history(history: &SessionHistory, entry: Option<HistoryEntry>) {
     if let Some(entry) = entry {
         history.push(entry);
     }
+}
+
+fn rename_tag_definition(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    tag_id: crate::TagId,
+    name: &str,
+) -> Result<()> {
+    let (namespace, subname) = name.split_once(':').unwrap_or(("", name));
+    if subname.trim().is_empty() {
+        return Err(LibraryError::InvalidInput("tag name is empty".into()));
+    }
+    if snapshot
+        .tag_ids_by_name
+        .get(name)
+        .is_some_and(|existing| *existing != tag_id)
+    {
+        return Err(LibraryError::InvalidInput(format!(
+            "tag {name} already exists"
+        )));
+    }
+    let old_name = snapshot
+        .tag_ids_by_name
+        .iter()
+        .find_map(|(name, id)| (*id == tag_id).then_some(name.clone()))
+        .ok_or_else(|| LibraryError::NotFound(format!("tag {}", tag_id.0)))?;
+    let namespace_id = ingest::ensure_namespace(transaction, namespace)?;
+    transaction.execute(
+        "UPDATE tag_definition SET namespace_id = ?2, subname = ?3 WHERE tag_id = ?1",
+        rusqlite::params![tag_id.0, namespace_id, subname],
+    )?;
+    let names = Arc::make_mut(&mut snapshot.tag_ids_by_name);
+    names.remove(&old_name);
+    names.insert(name.to_owned(), tag_id);
+    Ok(())
 }
 
 fn required_name(kind: &str, name: &str) -> Result<String> {

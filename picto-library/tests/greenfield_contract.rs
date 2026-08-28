@@ -213,6 +213,16 @@ fn tag_rename_changes_only_the_dictionary() {
     assert_eq!(after.tag_ids_by_name["new:name"], tag_id);
     assert_eq!(after.tags[&tag_id], members);
     assert!(after.tags[&tag_id].contains(root.0));
+
+    library.undo().unwrap().unwrap();
+    let undone = library.projections().snapshot();
+    assert_eq!(undone.tag_ids_by_name["old:name"], tag_id);
+    assert_eq!(undone.tags[&tag_id], members);
+    library.redo().unwrap().unwrap();
+    assert_eq!(
+        library.projections().snapshot().tag_ids_by_name["new:name"],
+        tag_id
+    );
 }
 
 #[test]
