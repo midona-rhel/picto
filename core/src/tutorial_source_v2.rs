@@ -5,13 +5,12 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::Lifecycle;
-use crate::ingest_v2::SourcePostInput;
 use crate::subscription_runtime_v2::{
     DownloadedItem, RunnerFailure, RunnerFailureKind, RunnerFuture, RunnerSuccess, SourceEvent,
     SourceRunner,
 };
 use crate::subscriptions_v2::{ClaimedQueryRun, NormalizedItem, NormalizedPost};
+use picto_library::{ImmutableMediaFacts, Lifecycle, PreparedImport, Rating, SourceIdentity};
 
 #[derive(Clone)]
 pub struct TutorialSourceRunner {
@@ -58,7 +57,7 @@ impl SourceRunner for TutorialSourceRunner {
             let post = normalized_post(post_key, &fixtures);
             send(&output, SourceEvent::PostTraversed(post.clone()), &cancel).await?;
 
-            for (index, (file_name, item_key, position)) in fixtures.iter().enumerate() {
+            for (index, (file_name, item_key, _position)) in fixtures.iter().enumerate() {
                 if cancel.is_cancelled() {
                     return Err(RunnerFailure::terminal(
                         RunnerFailureKind::Interrupted,
@@ -67,54 +66,14 @@ impl SourceRunner for TutorialSourceRunner {
                 }
                 let path = self.fixture_root.join(file_name);
                 ensure_fixture(&path)?;
-                let source = SourcePostInput {
-                    site_id: "twitter".into(),
-                    post_key: post_key.into(),
-                    item_key: (*item_key).into(),
-                    position: *position,
-                    post_complete: index + 1 == fixtures.len(),
-                    force_collection: false,
-                    group_post: query.group_posts,
-                    canonical_post_url: Some(format!(
-                        "https://x.com/leonardo_archive/status/{post_key}"
-                    )),
-                    canonical_media_url: None,
-                    creator_name: Some("Leonardo da Vinci Archive".into()),
-                    title: Some(
-                        if fixtures.len() > 1 {
-                            "Lady with an Ermine studies"
-                        } else {
-                            "Mona Lisa"
-                        }
-                        .into(),
-                    ),
-                    description: Some("Bundled public-domain guided-tour fixture".into()),
-                    captured_at: Some("1519-05-02T00:00:00Z".into()),
-                    metadata_json: Some("{\"tutorial\":true,\"network\":false}".into()),
-                };
-                let input = crate::import_v2::prepare_input(
-                    &path,
-                    Lifecycle::Inbox,
-                    None,
-                    &[
-                        "creator:leonardo da vinci".into(),
-                        "general:tutorial".into(),
-                    ],
-                    &[format!(
-                        "https://commons.wikimedia.org/wiki/File:{file_name}"
-                    )],
-                    Some(source),
-                )
-                .await
-                .map_err(|error| {
-                    RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error)
-                })?;
+                let input = prepare_fixture(&path, post_key, item_key, file_name).await?;
                 send(
                     &output,
                     SourceEvent::MediaDownloaded(DownloadedItem {
                         post: post.clone(),
-                        source_path: path,
                         input,
+                        post_complete: index + 1 == fixtures.len(),
+                        force_collection: false,
                         delete_after_ingest: false,
                     }),
                     &cancel,
@@ -135,6 +94,71 @@ impl SourceRunner for TutorialSourceRunner {
             })
         })
     }
+}
+
+async fn prepare_fixture(
+    path: &Path,
+    post_key: &str,
+    item_key: &str,
+    file_name: &str,
+) -> Result<PreparedImport, RunnerFailure> {
+    let prepared = crate::media_processing::PreparedMediaSource::prepare_ingest(path)
+        .await
+        .map_err(|error| {
+            RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
+        })?;
+    let hash_path = path.to_path_buf();
+    let content_hash = tokio::task::spawn_blocking(move || {
+        crate::media_processing::get_hash_from_path(&hash_path).map(hex::encode)
+    })
+    .await
+    .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::Runtime, error.to_string()))?
+    .map_err(|error| {
+        RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
+    })?;
+    let size_bytes = std::fs::metadata(path)
+        .map_err(|error| {
+            RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
+        })?
+        .len();
+    Ok(PreparedImport {
+        stable_key: format!("source:twitter:{post_key}:{item_key}"),
+        media_name: path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Untitled")
+            .into(),
+        file_path: path.to_string_lossy().into_owned(),
+        facts: ImmutableMediaFacts {
+            mime: prepared.mime_type,
+            size_bytes,
+            width: prepared.pixel_width,
+            height: prepared.pixel_height,
+            duration_ms: prepared.duration_ms,
+            frame_count: prepared.num_frames,
+            content_hash,
+            perceptual_hash: None,
+            palette: Vec::new(),
+        },
+        lifecycle: Lifecycle::Inbox,
+        rating: Rating::Unrated,
+        notes: Some("Bundled public-domain guided-tour fixture".into()),
+        tags: vec![
+            "creator:leonardo da vinci".into(),
+            "general:tutorial".into(),
+        ],
+        folders: Vec::new(),
+        source_urls: vec![format!(
+            "https://commons.wikimedia.org/wiki/File:{file_name}"
+        )],
+        source_identity: Some(SourceIdentity {
+            source_key: format!("twitter:{post_key}"),
+            source_item_key: item_key.into(),
+            source_text: Some("{\"tutorial\":true,\"network\":false}".into()),
+        }),
+        imported_at_ms: chrono::Utc::now().timestamp_millis(),
+        captured_at_ms: Some(-14_221_440_000_000),
+    })
 }
 
 fn normalized_post(post_key: &str, fixtures: &[(&str, &str, i64)]) -> NormalizedPost {

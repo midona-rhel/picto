@@ -164,7 +164,7 @@ impl OnlyFansSourceRunner {
                                         return Err(runtime_failure("OnlyFans started a new post before completing the previous post"));
                                     }
                                     if let Some(mut previous) = pending.replace(normalized) {
-                                        if let Some(source) = previous.input.source.as_mut() { source.post_complete = false; }
+                                        previous.post_complete = false;
                                         output.send(SourceEvent::MediaDownloaded(previous)).await.map_err(|_| runtime_failure("subscription receiver closed"))?;
                                     }
                                 }
@@ -174,7 +174,7 @@ impl OnlyFansSourceRunner {
                                     if item.post.post_key != post_id {
                                         return Err(runtime_failure("OnlyFans completed a post that does not match its downloaded media"));
                                     }
-                                    if let Some(source) = item.input.source.as_mut() { source.post_complete = true; }
+                                    item.post_complete = true;
                                     output.send(SourceEvent::MediaDownloaded(item)).await.map_err(|_| runtime_failure("subscription receiver closed"))?;
                                 }
                             }

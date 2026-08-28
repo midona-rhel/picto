@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::Lifecycle;
-use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
 use crate::subscription_runtime_v2::{
     DownloadedItem, RunnerFailure, RunnerFailureKind, RunnerFuture, RunnerSuccess, SourceEvent,
     SourceRunner,
@@ -18,6 +16,7 @@ use crate::subscriptions::gallery_dl_runner::{
 use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::{self, ParsedMetadata};
 use crate::subscriptions_v2::{ClaimedQueryRun, NormalizedItem, NormalizedPost};
+use picto_library::{ImmutableMediaFacts, Lifecycle, PreparedImport, Rating, SourceIdentity};
 
 const CHANNEL_CAPACITY: usize = 32;
 const PERIODIC_ABORT_THRESHOLD: u32 = 25;
@@ -302,9 +301,6 @@ async fn queue_downloads(
             .and_modify(|value| *value += 1)
             .or_insert(1);
         item.post.items[0].position = *position;
-        if let Some(source) = item.input.source.as_mut() {
-            source.position = *position;
-        }
         queue_download(output, pending, item).await?;
     }
     Ok(count)
@@ -325,9 +321,7 @@ async fn queue_download(
 }
 
 fn set_post_complete(item: &mut DownloadedItem, complete: bool) {
-    if let Some(source) = item.input.source.as_mut() {
-        source.post_complete = complete;
-    }
+    item.post_complete = complete;
 }
 
 async fn send_download(
@@ -392,9 +386,7 @@ pub(crate) async fn normalize_downloads(
             entry_metadata.media_url = None;
             match normalize_media_download(site_id, entry.path, entry_metadata).await? {
                 Some(mut item) => {
-                    if let Some(source) = item.input.source.as_mut() {
-                        source.force_collection = true;
-                    }
+                    item.force_collection = true;
                     normalized.push(item)
                 }
                 None => tracing::warn!(
@@ -450,24 +442,18 @@ async fn normalize_media_download(
         );
         return Ok(None);
     }
-    let needs_identity_hash = (metadata.post_id.is_none() && metadata.canonical_post_url.is_none())
-        || (metadata.item_key.is_none() && metadata.media_url.is_none());
-    let identity_hash = if needs_identity_hash {
-        Some(hex::encode(
-            crate::media_processing::get_hash_from_path(&file_path).map_err(|error| {
-                RunnerFailure::terminal(
-                    RunnerFailureKind::InvalidOutput,
-                    format!(
-                        "Could not hash downloaded media {}: {error}",
-                        file_path.display()
-                    ),
-                )
-            })?,
-        ))
-    } else {
-        None
-    };
-    let size_bytes = prepared.size_bytes.unwrap_or_default() as i64;
+    let content_hash = hex::encode(
+        crate::media_processing::get_hash_from_path(&file_path).map_err(|error| {
+            RunnerFailure::terminal(
+                RunnerFailureKind::InvalidOutput,
+                format!(
+                    "Could not hash downloaded media {}: {error}",
+                    file_path.display()
+                ),
+            )
+        })?,
+    );
+    let size_bytes = prepared.size_bytes.unwrap_or_default();
     let created_at = metadata.created_at.clone().or_else(|| {
         std::fs::metadata(&file_path).ok().and_then(|file| {
             let timestamp = file.created().or_else(|_| file.modified()).ok()?;
@@ -488,18 +474,13 @@ async fn normalize_media_download(
         .post_id
         .clone()
         .or_else(|| metadata.canonical_post_url.clone())
-        .unwrap_or_else(|| identity_hash.clone().expect("fallback hash computed"));
+        .unwrap_or_else(|| content_hash.clone());
     let position = i64::from(metadata.page_num.unwrap_or(0));
     let item_key = metadata
         .item_key
         .clone()
         .or_else(|| metadata.media_url.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "{post_key}:{position}:{}",
-                identity_hash.as_deref().expect("fallback hash computed")
-            )
-        });
+        .unwrap_or_else(|| format!("{post_key}:{position}:{}", content_hash));
     let creator_name = metadata
         .raw_metadata
         .as_ref()
@@ -512,22 +493,30 @@ async fn normalize_media_download(
         .map_err(|error| {
             RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
         })?;
-    let source = SourcePostInput {
-        site_id: site_id.to_string(),
-        post_key: post_key.clone(),
-        item_key: item_key.clone(),
-        position,
-        post_complete: false,
-        force_collection: false,
-        group_post: true,
-        canonical_post_url: metadata.canonical_post_url.clone(),
-        canonical_media_url: metadata.media_url.clone(),
-        creator_name: creator_name.clone(),
-        title: metadata.title.clone(),
-        description: metadata.description.clone(),
-        captured_at: metadata.created_at.clone(),
-        metadata_json: metadata_json.clone(),
-    };
+    let captured_at_ms = created_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis());
+    let source_key = format!("{site_id}:{post_key}");
+    let stable_key = format!("source:{source_key}:{item_key}");
+    let media_name = preferred_import_name(&metadata).unwrap_or_else(|| {
+        file_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Untitled")
+            .to_owned()
+    });
+    let mut source_urls = metadata.source_urls.clone();
+    if let Some(url) = metadata.canonical_post_url.as_ref() {
+        if !source_urls.contains(url) {
+            source_urls.push(url.clone());
+        }
+    }
+    if let Some(url) = metadata.source_url.as_ref() {
+        if !source_urls.contains(url) {
+            source_urls.push(url.clone());
+        }
+    }
     Ok(Some(DownloadedItem {
         post: NormalizedPost {
             site_id: site_id.to_string(),
@@ -537,35 +526,45 @@ async fn normalize_media_download(
             title: metadata.title.clone(),
             description: metadata.description.clone(),
             captured_at: metadata.created_at.clone(),
-            metadata_json,
+            metadata_json: metadata_json.clone(),
             items: vec![NormalizedItem {
-                item_key,
+                item_key: item_key.clone(),
                 position,
                 media_url: metadata.media_url.clone(),
                 canonical_url: metadata.source_url.clone(),
             }],
         },
-        source_path: file_path,
-        input: PreparedMediaInput {
-            file_hash: String::new(),
-            mime_type: prepared.mime_type,
-            size_bytes,
-            pixel_width: prepared.pixel_width.map(i64::from),
-            pixel_height: prepared.pixel_height.map(i64::from),
-            duration_ms: prepared.duration_ms.map(|value| value as i64),
-            frame_count: prepared.num_frames.map(i64::from),
-            has_audio: prepared.has_audio,
-            name: preferred_import_name(&metadata),
-            notes: metadata.description,
-            rating: None,
-            source_urls: metadata.source_urls,
+        input: PreparedImport {
+            stable_key,
+            media_name,
+            file_path: file_path.to_string_lossy().into_owned(),
+            facts: ImmutableMediaFacts {
+                mime: prepared.mime_type,
+                size_bytes,
+                width: prepared.pixel_width,
+                height: prepared.pixel_height,
+                duration_ms: prepared.duration_ms,
+                frame_count: prepared.num_frames,
+                content_hash,
+                perceptual_hash: None,
+                palette: Vec::new(),
+            },
             tags,
             lifecycle: Lifecycle::Inbox,
-            captured_at: created_at,
-            source: Some(source),
-            target_folder_id: None,
-            target_folder_ids: Vec::new(),
+            rating: Rating::Unrated,
+            notes: metadata.description,
+            folders: Vec::new(),
+            source_urls,
+            source_identity: Some(SourceIdentity {
+                source_key,
+                source_item_key: item_key,
+                source_text: metadata_json,
+            }),
+            imported_at_ms: chrono::Utc::now().timestamp_millis(),
+            captured_at_ms,
         },
+        post_complete: false,
+        force_collection: false,
         delete_after_ingest: true,
     }))
 }
@@ -754,11 +753,14 @@ mod tests {
 
         assert_eq!(item.post.post_key, "42");
         assert_eq!(item.post.items[0].position, 1);
-        assert_eq!(item.input.pixel_width, Some(3));
-        assert_eq!(item.input.pixel_height, Some(2));
+        assert_eq!(item.input.facts.width, Some(3));
+        assert_eq!(item.input.facts.height, Some(2));
         assert_eq!(item.input.tags, vec!["character:hero"]);
         assert_eq!(item.input.notes.as_deref(), Some("Description"));
-        assert_eq!(item.input.source.as_ref().unwrap().item_key, "pixiv:42:1");
+        assert_eq!(
+            item.input.source_identity.as_ref().unwrap().source_item_key,
+            "pixiv:42:1"
+        );
         assert!(item.delete_after_ingest);
 
         let (output, mut input) = mpsc::channel(4);
@@ -773,18 +775,17 @@ mod tests {
         let SourceEvent::MediaDownloaded(received) = input.recv().await.unwrap() else {
             panic!("expected media event");
         };
-        assert!(!received.input.source.unwrap().post_complete);
+        assert!(!received.post_complete);
 
         let mut next_post = item;
         next_post.post.post_key = "43".to_string();
-        next_post.input.source.as_mut().unwrap().post_key = "43".to_string();
         queue_download(&output, &mut pending, next_post)
             .await
             .unwrap();
         let SourceEvent::MediaDownloaded(received) = input.recv().await.unwrap() else {
             panic!("expected media event");
         };
-        assert!(received.input.source.unwrap().post_complete);
+        assert!(received.post_complete);
     }
 
     #[tokio::test]
@@ -818,14 +819,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(normalized.len(), 2);
-        let source = normalized[0].input.source.as_ref().unwrap();
-        assert_eq!(source.post_key, "58577141");
-        assert!(source.item_key.contains(":zip:0:pages/001.png"));
-        assert_eq!(normalized[0].input.mime_type, "image/png");
-        assert_eq!(normalized[1].input.mime_type, "text/plain");
-        assert!(normalized
-            .iter()
-            .all(|item| item.input.source.as_ref().unwrap().force_collection));
+        let source = normalized[0].input.source_identity.as_ref().unwrap();
+        assert_eq!(source.source_key, "patreon:58577141");
+        assert!(source.source_item_key.contains(":zip:0:pages/001.png"));
+        assert_eq!(normalized[0].input.facts.mime, "image/png");
+        assert_eq!(normalized[1].input.facts.mime, "text/plain");
+        assert!(normalized.iter().all(|item| item.force_collection));
     }
 
     #[tokio::test]
@@ -851,15 +850,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(normalized.len(), 1);
-        assert_eq!(normalized[0].input.mime_type, "audio/mpeg");
-        assert!(
-            normalized[0]
-                .input
-                .source
-                .as_ref()
-                .unwrap()
-                .force_collection
-        );
+        assert_eq!(normalized[0].input.facts.mime, "audio/mpeg");
+        assert!(normalized[0].force_collection);
     }
 
     #[tokio::test]

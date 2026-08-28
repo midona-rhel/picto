@@ -61,6 +61,7 @@ pub fn run_batch(
     for (job_id, input, cleanup) in collections {
         match application.library().ingest_collection(&input) {
             Ok((root_id, _)) => {
+                reconcile_ingested_sources(application, &input.members, root_id, &now)?;
                 application
                     .library()
                     .complete_ingest_jobs(&[job_id], &now)
@@ -96,6 +97,14 @@ fn settle_items(
         .collect::<Vec<_>>();
     match application.library().ingest_batch(&inputs) {
         Ok(outputs) => {
+            for (input, (root_id, _)) in inputs.iter().zip(&outputs) {
+                reconcile_ingested_sources(
+                    application,
+                    std::slice::from_ref(input),
+                    *root_id,
+                    now,
+                )?;
+            }
             let job_ids = jobs
                 .iter()
                 .map(|(job_id, _, _)| *job_id)
@@ -130,6 +139,66 @@ fn settle_items(
             Ok(())
         }
     }
+}
+
+fn reconcile_ingested_sources(
+    application: &LibraryApplication,
+    inputs: &[PreparedImport],
+    root_id: RootId,
+    now: &str,
+) -> Result<(), String> {
+    let sources = inputs
+        .iter()
+        .filter_map(|input| input.source_identity.as_ref())
+        .filter_map(|source| {
+            let (site_id, post_key) = source.source_key.split_once(':')?;
+            Some((
+                site_id.to_owned(),
+                post_key.to_owned(),
+                source.source_key.clone(),
+                source.source_item_key.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Ok(());
+    }
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::CanonicalIngest,
+            ["subscriptions".to_owned(), "tasks".to_owned()],
+            [root_id],
+            |transaction, _| {
+                let mut changed = 0;
+                for (site_id, post_key, source_key, item_key) in &sources {
+                    let media_id = transaction.query_row(
+                        "SELECT media_id FROM source_provenance
+                         WHERE source_key = ?1 AND source_item_key = ?2
+                         ORDER BY media_id LIMIT 1",
+                        rusqlite::params![source_key, item_key],
+                        |row| row.get::<_, u32>(0),
+                    )?;
+                    changed += transaction.execute(
+                        "UPDATE source_item
+                         SET media_item_id = ?1, state = 'ingested', last_error = NULL, updated_at = ?2
+                         WHERE item_key = ?3 AND source_post_id = (
+                             SELECT source_post_id FROM source_post
+                             WHERE site_id = ?4 AND post_key = ?5
+                         ) AND (media_item_id IS NOT ?1 OR state != 'ingested')",
+                        rusqlite::params![media_id, now, item_key, site_id, post_key],
+                    )?;
+                    changed += transaction.execute(
+                        "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
+                         WHERE site_id = ?3 AND post_key = ?4 AND root_item_id IS NOT ?1",
+                        rusqlite::params![root_id.0, now, site_id, post_key],
+                    )?;
+                }
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn prepare_job(

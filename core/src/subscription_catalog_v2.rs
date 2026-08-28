@@ -2378,6 +2378,24 @@ pub fn subscription_destination(
         .read(|connection| subscription_destination_from_connection(connection, subscription_id))
 }
 
+pub fn subscription_destination_library(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<SubscriptionDestinationPolicy, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(subscription_destination_from_connection(
+                    connection,
+                    subscription_id,
+                )?)
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 fn subscription_destination_from_connection(
     connection: &rusqlite::Connection,
     subscription_id: i64,

@@ -320,6 +320,13 @@ impl LibraryDatabase {
         Ok(output)
     }
 
+    pub fn checkpoint_wal(&self) -> Result<()> {
+        let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
+        let writer = self.writer.lock();
+        writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        Ok(())
+    }
+
     pub fn allocate_id(transaction: &Transaction<'_>) -> Result<u32> {
         let next = transaction.query_row(
             "SELECT next_local_id FROM library_meta WHERE singleton = 1",

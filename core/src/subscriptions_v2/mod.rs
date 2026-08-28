@@ -198,12 +198,12 @@ impl DomainSchedule {
         self.next_allowed_at_ms.get(domain_key).copied()
     }
 
-    fn allows(&self, domain_key: &str, now_ms: i64) -> bool {
+    pub(crate) fn allows(&self, domain_key: &str, now_ms: i64) -> bool {
         self.next_allowed_at_ms(domain_key)
             .is_none_or(|next| next <= now_ms)
     }
 
-    fn mark_started(&mut self, domain_key: String, now_ms: i64) {
+    pub(crate) fn mark_started(&mut self, domain_key: String, now_ms: i64) {
         self.next_allowed_at_ms
             .insert(domain_key, now_ms + DOMAIN_INTERVAL_MS);
     }
