@@ -171,6 +171,36 @@ impl Library {
         Ok(published.map(|((output, receipt), _, _)| (output, receipt)))
     }
 
+    pub fn auxiliary_semantic_write_if_changed<T>(
+        &self,
+        priority: WorkPriority,
+        resources: impl IntoIterator<Item = String>,
+        item_ids: impl IntoIterator<Item = RootId>,
+        operation_kind: &'static str,
+        payload: serde_json::Value,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>, u64) -> Result<Option<T>>,
+    ) -> Result<Option<(T, MutationReceipt)>> {
+        self.auxiliary_write_if_changed(
+            priority,
+            resources,
+            item_ids,
+            |transaction, revision| {
+                let Some(output) = operation(transaction, revision)? else {
+                    return Ok(None);
+                };
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    operation_kind,
+                    None,
+                    payload,
+                    now_ms(),
+                )?;
+                Ok(Some(output))
+            },
+        )
+    }
+
     pub fn read_auxiliary_json(&self, table: &str, key: &str) -> Result<Option<String>> {
         let (table, key_column) = auxiliary_json_spec(table)?;
         self.database.read(WorkPriority::VisibleRead, |connection| {

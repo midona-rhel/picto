@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::store::Store;
+use crate::library_application::LibraryApplication;
 
 const MAX_PAGE_SIZE: usize = 100;
 
@@ -196,15 +197,36 @@ pub fn list_runs(
     limit: usize,
 ) -> Result<SubscriptionRunList, String> {
     let limit = bounded_limit(limit);
-    store.read(|connection| {
-        let mut statement = connection.prepare(RUN_SUMMARY_SQL)?;
-        let runs = statement
-            .query_map(params![subscription_id, limit as i64], run_summary_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(SubscriptionRunList {
-            subscription_id,
-            runs,
-        })
+    store.read(|connection| list_runs_from_connection(connection, subscription_id, limit))
+}
+
+pub fn list_runs_library(
+    application: &LibraryApplication,
+    subscription_id: i64,
+    limit: usize,
+) -> Result<SubscriptionRunList, String> {
+    let limit = bounded_limit(limit);
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| list_runs_from_connection(connection, subscription_id, limit).map_err(Into::into),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn list_runs_from_connection(
+    connection: &Connection,
+    subscription_id: i64,
+    limit: usize,
+) -> rusqlite::Result<SubscriptionRunList> {
+    let mut statement = connection.prepare(RUN_SUMMARY_SQL)?;
+    let runs = statement
+        .query_map(params![subscription_id, limit as i64], run_summary_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(SubscriptionRunList {
+        subscription_id,
+        runs,
     })
 }
 
@@ -215,32 +237,49 @@ pub fn run_activity(
     source_item_limit: usize,
 ) -> Result<Option<SubscriptionRunActivity>, String> {
     let source_item_limit = bounded_limit(source_item_limit);
-    store.read(|connection| {
-        let Some(summary) = connection
-            .query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)
-            .optional()?
-        else {
-            return Ok(None);
-        };
+    store.read(|connection| run_activity_from_connection(connection, run_id, source_item_limit))
+}
 
-        let mut query_statement = connection.prepare(
-            "SELECT run_query_id
-             FROM subscription_run_query
-             WHERE run_id = ?1
-             ORDER BY run_query_id",
-        )?;
-        let query_ids = query_statement
-            .query_map([run_id], |row| row.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let queries = query_ids
-            .into_iter()
-            .map(|run_query_id| {
-                query_activity_from_connection(connection, run_query_id, source_item_limit)
-            })
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+pub fn run_activity_library(
+    application: &LibraryApplication,
+    run_id: i64,
+    source_item_limit: usize,
+) -> Result<Option<SubscriptionRunActivity>, String> {
+    let source_item_limit = bounded_limit(source_item_limit);
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| run_activity_from_connection(connection, run_id, source_item_limit).map_err(Into::into),
+        )
+        .map_err(|error| error.to_string())
+}
 
-        Ok(Some(SubscriptionRunActivity { summary, queries }))
-    })
+fn run_activity_from_connection(
+    connection: &Connection,
+    run_id: i64,
+    source_item_limit: usize,
+) -> rusqlite::Result<Option<SubscriptionRunActivity>> {
+    let Some(summary) = connection
+        .query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let mut query_statement = connection.prepare(
+        "SELECT run_query_id FROM subscription_run_query
+         WHERE run_id = ?1 ORDER BY run_query_id",
+    )?;
+    let query_ids = query_statement
+        .query_map([run_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let queries = query_ids
+        .into_iter()
+        .map(|run_query_id| {
+            query_activity_from_connection(connection, run_query_id, source_item_limit)
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(SubscriptionRunActivity { summary, queries }))
 }
 
 /// Returns persisted progress for the active run, if the subscription is running.
@@ -248,50 +287,86 @@ pub fn current_progress(
     store: &Store,
     subscription_id: i64,
 ) -> Result<Option<CurrentSubscriptionProgress>, String> {
-    store.read_snapshot(|connection| {
-        let active_run = connection
-            .query_row(
-                "SELECT run_id,
-                        CASE
-                            WHEN status = 'pending'
-                             AND failure_kind IN ('paused', 'inbox_full')
-                            THEN failure_kind
-                            ELSE status
-                        END
-                 FROM subscription_run
-                 WHERE subscription_id = ?1 AND status IN ('pending', 'running')
-                 ORDER BY run_id DESC
-                 LIMIT 1",
-                [subscription_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        let Some((run_id, status)) = active_run else {
-            return Ok(None);
-        };
-        let summary =
-            connection.query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)?;
-        Ok(Some(CurrentSubscriptionProgress {
-            subscription_id,
-            run_id,
-            status,
-            counts: summary.counts,
-        }))
-    })
+    store.read_snapshot(|connection| current_progress_from_connection(connection, subscription_id))
+}
+
+pub fn current_progress_library(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<Option<CurrentSubscriptionProgress>, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| current_progress_from_connection(connection, subscription_id).map_err(Into::into),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn current_progress_from_connection(
+    connection: &Connection,
+    subscription_id: i64,
+) -> rusqlite::Result<Option<CurrentSubscriptionProgress>> {
+    let active_run = connection
+        .query_row(
+            "SELECT run_id,
+                    CASE
+                        WHEN status = 'pending'
+                         AND failure_kind IN ('paused', 'inbox_full')
+                        THEN failure_kind
+                        ELSE status
+                    END
+             FROM subscription_run
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+             ORDER BY run_id DESC LIMIT 1",
+            [subscription_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((run_id, status)) = active_run else {
+        return Ok(None);
+    };
+    let summary = connection.query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)?;
+    Ok(Some(CurrentSubscriptionProgress {
+        subscription_id,
+        run_id,
+        status,
+        counts: summary.counts,
+    }))
 }
 
 /// Returns open or historical issues using a stable `(last_seen_at, issue_id)` cursor.
 pub fn list_issues(store: &Store, request: &IssuePageRequest) -> Result<IssuePage, String> {
     let limit = bounded_limit(request.limit);
+    store.read(|connection| list_issues_from_connection(connection, request, limit))
+}
+
+pub fn list_issues_library(
+    application: &LibraryApplication,
+    request: &IssuePageRequest,
+) -> Result<IssuePage, String> {
+    let limit = bounded_limit(request.limit);
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| list_issues_from_connection(connection, request, limit).map_err(Into::into),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn list_issues_from_connection(
+    connection: &Connection,
+    request: &IssuePageRequest,
+    limit: usize,
+) -> rusqlite::Result<IssuePage> {
     let fetch_limit = (limit + 1) as i64;
     let cursor_time = request
         .cursor
         .as_ref()
         .map(|cursor| cursor.last_seen_at.as_str());
     let cursor_id = request.cursor.as_ref().map(|cursor| cursor.issue_id);
-
-    store.read(|connection| {
-        let total_count = connection.query_row(
+    let total_count = connection.query_row(
             "SELECT COUNT(*) FROM subscription_issue
              WHERE subscription_id = ?1
                AND (?2 IS NULL OR query_id = ?2)
@@ -354,12 +429,11 @@ pub fn list_issues(store: &Store, request: &IssuePageRequest) -> Result<IssuePag
         } else {
             None
         };
-        Ok(IssuePage {
-            subscription_id: request.subscription_id,
-            issues,
-            next_cursor,
-            total_count,
-        })
+    Ok(IssuePage {
+        subscription_id: request.subscription_id,
+        issues,
+        next_cursor,
+        total_count,
     })
 }
 

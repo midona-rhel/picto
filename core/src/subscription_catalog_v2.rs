@@ -367,6 +367,678 @@ fn query_subscription_views(
         .collect()
 }
 
+impl LibraryApplication {
+    pub fn create_subscription_definition_library(
+        &self,
+        input: &NewSubscription,
+        now: &str,
+    ) -> Result<(i64, picto_library::MutationReceipt), String> {
+        validate_subscription(input)?;
+        let queries = input
+            .queries
+            .iter()
+            .map(prepare_query)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_run_at = subscriptions_v2::next_schedule_at(&input.schedule, now)?;
+        let payload = serde_json::json!({"name": input.name.trim()});
+        let published = self
+            .library()
+            .auxiliary_semantic_write_if_changed(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                subscription_resources(),
+                [],
+                "subscriptions.create",
+                payload,
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO subscription (
+                             subscription_key, name, schedule, paused, initial_post_limit,
+                             periodic_post_limit, next_run_at, created_at
+                         ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)",
+                        params![
+                            new_key("subscription"),
+                            input.name.trim(),
+                            input.schedule,
+                            input.initial_post_limit,
+                            input.periodic_post_limit,
+                            next_run_at,
+                            now,
+                        ],
+                    )?;
+                    let subscription_id = transaction.last_insert_rowid();
+                    for query in &queries {
+                        insert_query(transaction, subscription_id, query)?;
+                    }
+                    Ok(Some(subscription_id))
+                },
+            )
+            .map_err(|error| error.to_string())?
+            .expect("subscription creation always changes canonical state");
+        Ok(published)
+    }
+
+    pub fn add_subscription_query_library(
+        &self,
+        subscription_id: i64,
+        query: &NewSubscriptionQuery,
+    ) -> Result<(i64, picto_library::MutationReceipt), String> {
+        let query = prepare_query(query)?;
+        let published = self
+            .library()
+            .auxiliary_semantic_write_if_changed(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                subscription_resources(),
+                [],
+                "subscriptions.queries.add",
+                serde_json::json!({"subscription_id": subscription_id}),
+                |transaction, _| {
+                    require_subscription(transaction, subscription_id)?;
+                    Ok(Some(insert_query(transaction, subscription_id, &query)?))
+                },
+            )
+            .map_err(|error| error.to_string())?
+            .expect("query creation always changes canonical state");
+        Ok(published)
+    }
+
+    pub fn update_subscription_query_library(
+        &self,
+        query_id: i64,
+        query: &NewSubscriptionQuery,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let query = prepare_query(query)?;
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.queries.update",
+                    serde_json::json!({"query_id": query_id}),
+                    |transaction, _| {
+                        reject_active_query_edit(transaction, query_id)?;
+                        let changed = transaction.execute(
+                            "UPDATE subscription_query
+                             SET site_id = ?1, domain_key = ?2, query_kind = ?3,
+                                 query_text = ?4, display_name = ?5, notes = ?6,
+                                 resume_cursor = NULL, initial_run_complete = 0,
+                                 last_failure_at = NULL, last_failure_kind = NULL,
+                                 last_failure_message = NULL
+                             WHERE query_id = ?7
+                               AND (site_id != ?1 OR domain_key != ?2 OR query_kind != ?3
+                                    OR query_text != ?4 OR display_name IS NOT ?5
+                                    OR notes IS NOT ?6)",
+                            params![
+                                query.site_id,
+                                query.domain_key,
+                                query.query_kind,
+                                query.query_text,
+                                query.display_name,
+                                query.notes,
+                                query_id,
+                            ],
+                        )?;
+                        if changed == 0 {
+                            require_query(transaction, query_id)?;
+                            return Ok(None);
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn pause_subscription_query_library(
+        &self,
+        query_id: i64,
+        paused: bool,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.queries.pause",
+                    serde_json::json!({"query_id": query_id, "paused": paused}),
+                    |transaction, _| {
+                        let changed = transaction.execute(
+                            "UPDATE subscription_query SET paused = ?1
+                             WHERE query_id = ?2 AND paused != ?1",
+                            params![paused, query_id],
+                        )?;
+                        if changed == 0 {
+                            require_query(transaction, query_id)?;
+                            return Ok(None);
+                        }
+                        set_active_query_pause_state(transaction, query_id, paused)?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn set_subscription_query_grouping_library(
+        &self,
+        query_id: i64,
+        group_posts: bool,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.queries.grouping",
+                    serde_json::json!({"query_id": query_id, "group_posts": group_posts}),
+                    |transaction, _| {
+                        reject_active_query_edit(transaction, query_id)?;
+                        let changed = transaction.execute(
+                            "UPDATE subscription_query SET group_posts = ?1
+                             WHERE query_id = ?2 AND group_posts != ?1",
+                            params![group_posts, query_id],
+                        )?;
+                        if changed == 0 {
+                            require_query(transaction, query_id)?;
+                            return Ok(None);
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn delete_subscription_query_library(
+        &self,
+        query_id: i64,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.queries.delete",
+                    serde_json::json!({"query_id": query_id}),
+                    |transaction, _| {
+                        reject_active_query_edit(transaction, query_id)?;
+                        let changed = transaction.execute(
+                            "DELETE FROM subscription_query WHERE query_id = ?1",
+                            [query_id],
+                        )?;
+                        if changed != 1 {
+                            return Err(invalid("subscription query does not exist").into());
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn rename_subscription_library(
+        &self,
+        subscription_id: i64,
+        name: &str,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Subscription name is required".to_string());
+        }
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.rename",
+                    serde_json::json!({"subscription_id": subscription_id, "name": name}),
+                    |transaction, _| {
+                        let changed = transaction.execute(
+                            "UPDATE subscription SET name = ?1
+                             WHERE subscription_id = ?2 AND name != ?1",
+                            params![name, subscription_id],
+                        )?;
+                        if changed == 0 {
+                            require_subscription(transaction, subscription_id)?;
+                            return Ok(None);
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn pause_subscription_library(
+        &self,
+        subscription_id: i64,
+        paused: bool,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.pause",
+                    serde_json::json!({"subscription_id": subscription_id, "paused": paused}),
+                    |transaction, _| {
+                        let changed = transaction.execute(
+                            "UPDATE subscription SET paused = ?1
+                             WHERE subscription_id = ?2 AND paused != ?1",
+                            params![paused, subscription_id],
+                        )?;
+                        if changed == 0 {
+                            require_subscription(transaction, subscription_id)?;
+                            return Ok(None);
+                        }
+                        set_active_subscription_pause_state(transaction, subscription_id, paused)?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn set_subscription_schedule_library(
+        &self,
+        subscription_id: i64,
+        schedule: &str,
+        now: &str,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let next_run_at = subscriptions_v2::next_schedule_at(schedule, now)?;
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.schedule",
+                    serde_json::json!({"subscription_id": subscription_id, "schedule": schedule}),
+                    |transaction, _| {
+                        let changed = transaction.execute(
+                            "UPDATE subscription SET schedule = ?1, next_run_at = ?2
+                             WHERE subscription_id = ?3
+                               AND (schedule != ?1 OR next_run_at IS NOT ?2)",
+                            params![schedule, next_run_at, subscription_id],
+                        )?;
+                        if changed == 0 {
+                            require_subscription(transaction, subscription_id)?;
+                            return Ok(None);
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn set_subscription_posts_per_run_library(
+        &self,
+        subscription_id: i64,
+        posts_per_run: i64,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        if !(1..=10_000).contains(&posts_per_run) {
+            return Err("Posts per run must be between 1 and 10,000".to_string());
+        }
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.posts_per_run",
+                    serde_json::json!({
+                        "subscription_id": subscription_id,
+                        "posts_per_run": posts_per_run
+                    }),
+                    |transaction, _| {
+                        reject_active_subscription_edit(transaction, subscription_id)?;
+                        let changed = transaction.execute(
+                            "UPDATE subscription
+                             SET initial_post_limit = ?1, periodic_post_limit = ?1
+                             WHERE subscription_id = ?2
+                               AND (initial_post_limit IS NOT ?1
+                                    OR periodic_post_limit IS NOT ?1)",
+                            params![posts_per_run, subscription_id],
+                        )?;
+                        if changed == 0 {
+                            require_subscription(transaction, subscription_id)?;
+                            return Ok(None);
+                        }
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn set_subscription_destination_library(
+        &self,
+        subscription_id: i64,
+        policy: &SubscriptionDestinationPolicy,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let policy = normalize_destination_policy(policy)?;
+        let value = serde_json::to_string(&policy).map_err(|error| error.to_string())?;
+        let key = destination_setting_key(subscription_id);
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.destination",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        require_subscription(transaction, subscription_id)?;
+                        for folder_id in &policy.target_folder_ids {
+                            let exists: bool = transaction.query_row(
+                                "SELECT EXISTS(
+                                     SELECT 1 FROM folder_definition WHERE folder_id = ?1
+                                 )",
+                                [folder_id],
+                                |row| row.get(0),
+                            )?;
+                            if !exists {
+                                return Err(invalid("destination folder does not exist").into());
+                            }
+                        }
+                        let previous: Option<String> = transaction
+                            .query_row(
+                                "SELECT value_json FROM setting WHERE key = ?1",
+                                [&key],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        if previous.as_deref() == Some(value.as_str()) {
+                            return Ok(None);
+                        }
+                        transaction.execute(
+                            "INSERT INTO setting (key, value_json) VALUES (?1, ?2)
+                             ON CONFLICT(key) DO UPDATE
+                             SET value_json = excluded.value_json",
+                            params![key, value],
+                        )?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn delete_subscription_library(
+        &self,
+        subscription_id: i64,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        crate::onlyfans_source_v2::clear_subscription_state(self.root(), subscription_id)?;
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.delete",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        let changed = transaction.execute(
+                            "DELETE FROM subscription WHERE subscription_id = ?1",
+                            [subscription_id],
+                        )?;
+                        if changed != 1 {
+                            return Err(invalid("subscription does not exist").into());
+                        }
+                        transaction.execute(
+                            "DELETE FROM setting WHERE key IN (?1, ?2)",
+                            params![
+                                destination_setting_key(subscription_id),
+                                cover_setting_key(subscription_id)
+                            ],
+                        )?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn request_subscription_run_library(
+        &self,
+        subscription_id: i64,
+        now: &str,
+    ) -> Result<(CreatedRun, picto_library::MutationReceipt), String> {
+        let published = self
+            .library()
+            .auxiliary_semantic_write_if_changed(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                subscription_resources(),
+                [],
+                "subscriptions.run",
+                serde_json::json!({"subscription_id": subscription_id}),
+                |transaction, _| {
+                    let run = subscriptions_v2::create_run_in(
+                        transaction,
+                        subscription_id,
+                        "manual",
+                        now,
+                    )?;
+                    Ok(run.created.then_some(run))
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        if let Some(result) = published {
+            return Ok(result);
+        }
+        let run = self
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT run_id, status FROM subscription_run
+                             WHERE subscription_id = ?1
+                               AND status IN ('pending', 'running')
+                             ORDER BY run_id LIMIT 1",
+                            [subscription_id],
+                            |row| {
+                                Ok(CreatedRun {
+                                    run_id: row.get(0)?,
+                                    created: false,
+                                    state: subscriptions_v2::parse_run_state(row.get(1)?)?,
+                                })
+                            },
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        Ok((run, current_subscription_receipt(self)?))
+    }
+
+    pub fn cancel_subscription_run_library(
+        &self,
+        subscription_id: i64,
+        now: &str,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.cancel",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        let run_id: i64 = transaction
+                            .query_row(
+                                "SELECT run_id FROM subscription_run
+                                 WHERE subscription_id = ?1
+                                   AND status IN ('pending', 'running')",
+                                [subscription_id],
+                                |row| row.get(0),
+                            )
+                            .optional()?
+                            .ok_or_else(|| invalid("subscription is not running"))?;
+                        transaction.execute(
+                            "UPDATE subscription_run_query
+                             SET status = 'cancelled', finished_at = ?1
+                             WHERE run_id = ?2 AND status IN ('pending', 'running')",
+                            params![now, run_id],
+                        )?;
+                        transaction.execute(
+                            "UPDATE subscription_run
+                             SET status = 'cancelled', finished_at = ?1
+                             WHERE run_id = ?2",
+                            params![now, run_id],
+                        )?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn set_subscription_cover_library(
+        &self,
+        subscription_id: i64,
+        selection: &SubscriptionCoverSelection,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        validate_cover_selection(selection)?;
+        let source = self
+            .library()
+            .auxiliary_read_consistent(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection, projection| {
+                    require_subscription(connection, subscription_id)?;
+                    find_subscription_cover_candidate_library(
+                        connection,
+                        projection,
+                        subscription_id,
+                        selection.media_item_id,
+                    )?
+                    .ok_or_else(|| invalid("cover media is not active in this subscription").into())
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let rendered_hash =
+            render_subscription_cover(self.blobs(), subscription_id, &source, selection)?;
+        let stored = StoredSubscriptionCover {
+            media_item_id: selection.media_item_id,
+            focus_x: selection.focus_x,
+            focus_y: selection.focus_y,
+            zoom_percent: selection.zoom_percent,
+            rendered_hash: Some(rendered_hash.clone()),
+        };
+        let value = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
+        let key = cover_setting_key(subscription_id);
+        let published = self
+            .library()
+            .auxiliary_semantic_write_if_changed(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                subscription_resources(),
+                [],
+                "subscriptions.cover.set",
+                serde_json::json!({
+                    "subscription_id": subscription_id,
+                    "media_item_id": selection.media_item_id
+                }),
+                |transaction, _| {
+                    require_subscription(transaction, subscription_id)?;
+                    let current_hash: Option<String> = transaction
+                        .query_row(
+                            "SELECT file.content_hash
+                             FROM subscription_source_post ssp
+                             JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                             JOIN media_item media ON media.media_id = si.media_item_id
+                             JOIN media_file file ON file.file_id = media.file_id
+                             WHERE ssp.subscription_id = ?1
+                               AND si.media_item_id = ?2 AND si.state = 'ingested'
+                             LIMIT 1",
+                            params![subscription_id, selection.media_item_id],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if current_hash.as_deref() != Some(source.file_hash.as_str()) {
+                        return Err(invalid("cover media changed while rendering").into());
+                    }
+                    let previous: Option<String> = transaction
+                        .query_row(
+                            "SELECT value_json FROM setting WHERE key = ?1",
+                            [&key],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if previous.as_deref() == Some(value.as_str()) {
+                        return Ok(None);
+                    }
+                    transaction.execute(
+                        "INSERT INTO setting (key, value_json) VALUES (?1, ?2)
+                         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                        params![key, value],
+                    )?;
+                    Ok(Some(stored_rendered_hash(previous.as_deref())))
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let Some((previous_rendered_hash, receipt)) = published else {
+            return current_subscription_receipt(self);
+        };
+        if previous_rendered_hash.as_deref() != Some(rendered_hash.as_str()) {
+            if let Some(previous_rendered_hash) = previous_rendered_hash {
+                let _ = self.blobs().delete_thumbnail(&previous_rendered_hash);
+            }
+        }
+        Ok(receipt)
+    }
+}
+
+fn subscription_resources() -> Vec<String> {
+    vec![
+        resources::SUBSCRIPTIONS.to_string(),
+        resources::TASKS.to_string(),
+    ]
+}
+
+fn finish_subscription_mutation(
+    application: &LibraryApplication,
+    published: Option<((), picto_library::MutationReceipt)>,
+) -> Result<picto_library::MutationReceipt, String> {
+    if let Some(((), receipt)) = published {
+        return Ok(receipt);
+    }
+    Ok(current_subscription_receipt(application)?)
+}
+
+fn current_subscription_receipt(
+    application: &LibraryApplication,
+) -> Result<picto_library::MutationReceipt, String> {
+    let revision = application
+        .library()
+        .database()
+        .revision()
+        .map_err(|error| error.to_string())?;
+    Ok(picto_library::MutationReceipt {
+        revision,
+        resources: subscription_resources(),
+        item_ids: Vec::new(),
+    })
+}
+
 pub fn list(application: &Application) -> Result<SubscriptionList, String> {
     application.store().read_snapshot_captured(
         || application.projections().selection_snapshot(),
@@ -1208,6 +1880,100 @@ fn cover_setting_key(subscription_id: i64) -> String {
     format!("subscription.{subscription_id}.cover")
 }
 
+pub fn subscription_cover_candidates_library(
+    application: &LibraryApplication,
+    subscription_id: i64,
+    cursor: Option<&SubscriptionCoverCandidateCursor>,
+    limit: i64,
+) -> Result<SubscriptionCoverCandidatePage, String> {
+    let limit = limit.clamp(1, 200);
+    application
+        .library()
+        .auxiliary_read_consistent(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection, projection| {
+                require_subscription(connection, subscription_id)?;
+                let mut raw_cursor = cursor.cloned();
+                let mut rows = Vec::new();
+                let batch_limit = ((limit + 1) * 4).clamp(64, 800);
+                loop {
+                    let cursor_updated_at =
+                        raw_cursor.as_ref().map(|value| value.imported_at.as_str());
+                    let cursor_media_id = raw_cursor.as_ref().map(|value| value.media_item_id);
+                    let batch = connection
+                        .prepare(
+                            "SELECT media.media_id, file.content_hash, media.media_name,
+                                    file.width, file.height, si.updated_at
+                             FROM subscription_source_post ssp
+                             JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                             JOIN media_item media ON media.media_id = si.media_item_id
+                             JOIN media_file file ON file.file_id = media.file_id
+                             WHERE ssp.subscription_id = ?1
+                               AND si.state = 'ingested'
+                               AND file.mime LIKE 'image/%'
+                               AND (?2 IS NULL OR si.updated_at < ?2
+                                    OR (si.updated_at = ?2 AND media.media_id < ?3))
+                             GROUP BY media.media_id, file.content_hash, media.media_name,
+                                      file.width, file.height, si.updated_at
+                             ORDER BY si.updated_at DESC, media.media_id DESC
+                             LIMIT ?4",
+                        )?
+                        .query_map(
+                            params![
+                                subscription_id,
+                                cursor_updated_at,
+                                cursor_media_id,
+                                batch_limit,
+                            ],
+                            |row| {
+                                Ok((
+                                    SubscriptionCoverCandidate {
+                                        media_item_id: row.get(0)?,
+                                        file_hash: row.get(1)?,
+                                        name: row.get(2)?,
+                                        pixel_width: row.get(3)?,
+                                        pixel_height: row.get(4)?,
+                                    },
+                                    row.get::<_, String>(5)?,
+                                ))
+                            },
+                        )?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    let raw_count = batch.len() as i64;
+                    let last = batch.last().map(|(candidate, imported_at)| {
+                        SubscriptionCoverCandidateCursor {
+                            imported_at: imported_at.clone(),
+                            media_item_id: candidate.media_item_id,
+                        }
+                    });
+                    rows.extend(batch.into_iter().filter(|(candidate, _)| {
+                        u32::try_from(candidate.media_item_id)
+                            .ok()
+                            .and_then(|media_id| projection.media_owner.get(media_id))
+                            .is_some_and(|root_id| projection.active().contains(root_id.0))
+                    }));
+                    if rows.len() as i64 > limit || raw_count < batch_limit || last.is_none() {
+                        break;
+                    }
+                    raw_cursor = last;
+                }
+                let next_cursor = (rows.len() as i64 > limit).then(|| {
+                    let (candidate, imported_at) = &rows[limit as usize - 1];
+                    SubscriptionCoverCandidateCursor {
+                        imported_at: imported_at.clone(),
+                        media_item_id: candidate.media_item_id,
+                    }
+                });
+                rows.truncate(limit as usize);
+                Ok(SubscriptionCoverCandidatePage {
+                    candidates: rows.into_iter().map(|(candidate, _)| candidate).collect(),
+                    next_cursor,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn subscription_cover_candidates(
     application: &Application,
     subscription_id: i64,
@@ -1358,6 +2124,44 @@ fn find_subscription_cover_candidate(
             |row| {
                 Ok(SubscriptionCoverSource {
                     root_item_id,
+                    file_hash: row.get(0)?,
+                    mime_type: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+}
+
+fn find_subscription_cover_candidate_library(
+    connection: &rusqlite::Connection,
+    projection: &picto_library::ProjectionSnapshot,
+    subscription_id: i64,
+    media_item_id: i64,
+) -> rusqlite::Result<Option<SubscriptionCoverSource>> {
+    let Some(media_id) = u32::try_from(media_item_id).ok() else {
+        return Ok(None);
+    };
+    let Some(root_id) = projection.media_owner.get(media_id) else {
+        return Ok(None);
+    };
+    if !projection.active().contains(root_id.0) {
+        return Ok(None);
+    }
+    connection
+        .query_row(
+            "SELECT file.content_hash, file.mime
+             FROM subscription_source_post ssp
+             JOIN source_item si ON si.source_post_id = ssp.source_post_id
+             JOIN media_item media ON media.media_id = si.media_item_id
+             JOIN media_file file ON file.file_id = media.file_id
+             WHERE ssp.subscription_id = ?1
+               AND media.media_id = ?2
+               AND si.state = 'ingested'
+             LIMIT 1",
+            params![subscription_id, media_item_id],
+            |row| {
+                Ok(SubscriptionCoverSource {
+                    root_item_id: i64::from(root_id.0),
                     file_hash: row.get(0)?,
                     mime_type: row.get(1)?,
                 })

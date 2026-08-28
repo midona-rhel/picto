@@ -66,6 +66,134 @@ pub fn dispatch_library(
             read(application.duplicate_candidates(input.limit)?)
         }
         "subscriptions.list" => read(crate::subscription_catalog_v2::list_library(application)?),
+        "subscriptions.runs.list" => {
+            let input: SubscriptionRunsInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::list_runs_library(
+                application,
+                input.subscription_id,
+                input.limit,
+            )?)
+        }
+        "subscriptions.runs.get" => {
+            let input: SubscriptionRunActivityInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::run_activity_library(
+                application,
+                input.run_id,
+                input.source_item_limit,
+            )?)
+        }
+        "subscriptions.progress.get" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::current_progress_library(
+                application,
+                input.subscription_id,
+            )?)
+        }
+        "subscriptions.issues.list" => {
+            let input: crate::subscription_activity_v2::IssuePageRequest = parse(args_json)?;
+            read(crate::subscription_activity_v2::list_issues_library(
+                application,
+                &input,
+            )?)
+        }
+        "subscriptions.cover.candidates" => {
+            let input: SubscriptionCoverCandidatesInput = parse(args_json)?;
+            read(crate::subscription_catalog_v2::subscription_cover_candidates_library(
+                application,
+                input.subscription_id,
+                input.cursor.as_ref(),
+                input.limit,
+            )?)
+        }
+        "subscriptions.create" => {
+            let input: NewSubscription = parse(args_json)?;
+            let (subscription_id, receipt) = application
+                .create_subscription_definition_library(&input, &now())?;
+            read(serde_json::json!({
+                "subscription_id": subscription_id,
+                "receipt": receipt
+            }))
+        }
+        "subscriptions.queries.add" => {
+            let input: AddSubscriptionQueryInput = parse(args_json)?;
+            let (query_id, receipt) = application
+                .add_subscription_query_library(input.subscription_id, &input.query)?;
+            read(serde_json::json!({"query_id": query_id, "receipt": receipt}))
+        }
+        "subscriptions.queries.update" => {
+            let input: UpdateSubscriptionQueryInput = parse(args_json)?;
+            read(application.update_subscription_query_library(input.query_id, &input.query)?)
+        }
+        "subscriptions.queries.pause" => {
+            let input: PauseSubscriptionQueryInput = parse(args_json)?;
+            read(application.pause_subscription_query_library(input.query_id, input.paused)?)
+        }
+        "subscriptions.queries.grouping" => {
+            let input: SetSubscriptionQueryGroupingInput = parse(args_json)?;
+            read(application.set_subscription_query_grouping_library(
+                input.query_id,
+                input.group_posts,
+            )?)
+        }
+        "subscriptions.queries.delete" => {
+            let input: SubscriptionQueryInput = parse(args_json)?;
+            read(application.delete_subscription_query_library(input.query_id)?)
+        }
+        "subscriptions.rename" => {
+            let input: RenameSubscriptionInput = parse(args_json)?;
+            read(application.rename_subscription_library(input.subscription_id, &input.name)?)
+        }
+        "subscriptions.pause" => {
+            let input: PauseSubscriptionInput = parse(args_json)?;
+            read(application.pause_subscription_library(input.subscription_id, input.paused)?)
+        }
+        "subscriptions.schedule" => {
+            let input: ScheduleSubscriptionInput = parse(args_json)?;
+            read(application.set_subscription_schedule_library(
+                input.subscription_id,
+                &input.schedule,
+                &now(),
+            )?)
+        }
+        "subscriptions.posts_per_run" => {
+            let input: SubscriptionPostsPerRunInput = parse(args_json)?;
+            read(application.set_subscription_posts_per_run_library(
+                input.subscription_id,
+                input.posts_per_run,
+            )?)
+        }
+        "subscriptions.destination" => {
+            let input: SubscriptionDestinationInput = parse(args_json)?;
+            read(application.set_subscription_destination_library(
+                input.subscription_id,
+                &input.destination,
+            )?)
+        }
+        "subscriptions.cover.set" => {
+            let input: SubscriptionCoverInput = parse(args_json)?;
+            read(application.set_subscription_cover_library(
+                input.subscription_id,
+                &input.cover,
+            )?)
+        }
+        "subscriptions.delete" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(application.delete_subscription_library(input.subscription_id)?)
+        }
+        "subscriptions.run" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            let (run, receipt) =
+                application.request_subscription_run_library(input.subscription_id, &now())?;
+            read(serde_json::json!({
+                "run_id": run.run_id,
+                "created": run.created,
+                "receipt": receipt
+            }))
+        }
+        "subscriptions.cancel" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(application.cancel_subscription_run_library(input.subscription_id, &now())?)
+        }
         "sources.list" => read(crate::auth_v2::sources()),
         "auth.credentials.list" => read(crate::auth_v2::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth_v2::list_library_health(application)?),
@@ -1958,6 +2086,99 @@ mod tests {
             vec!["creator:test".to_string()]
         );
         assert_eq!(list.revision, application.library().database().revision().unwrap());
+    }
+
+    #[test]
+    fn greenfield_subscription_mutations_publish_once_and_feed_activity_reads() {
+        let (_directory, application, _) = greenfield_fixture();
+        let created = dispatch_library(
+            &application,
+            "subscriptions.create",
+            r#"{
+                "name":"Artist",
+                "schedule":"daily",
+                "initial_post_limit":100,
+                "periodic_post_limit":20,
+                "queries":[{
+                    "site_id":"pixivuser",
+                    "query_text":"42",
+                    "display_name":"Artist",
+                    "notes":null,
+                    "group_posts":true
+                }]
+            }"#,
+        )
+        .unwrap()
+        .unwrap();
+        let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+        let subscription_id = created["subscription_id"].as_i64().unwrap();
+        let created_revision = created["receipt"]["revision"].as_u64().unwrap();
+
+        let no_op = dispatch_library(
+            &application,
+            "subscriptions.pause",
+            &format!(r#"{{"subscription_id":{subscription_id},"paused":false}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let no_op: picto_library::MutationReceipt = serde_json::from_str(&no_op).unwrap();
+        assert_eq!(no_op.revision, created_revision);
+
+        let run = dispatch_library(
+            &application,
+            "subscriptions.run",
+            &format!(r#"{{"subscription_id":{subscription_id}}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let run: serde_json::Value = serde_json::from_str(&run).unwrap();
+        let run_id = run["run_id"].as_i64().unwrap();
+        assert!(run["created"].as_bool().unwrap());
+
+        let activity = dispatch_library(
+            &application,
+            "subscriptions.runs.get",
+            &format!(r#"{{"run_id":{run_id},"source_item_limit":25}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let activity: crate::subscription_activity_v2::SubscriptionRunActivity =
+            serde_json::from_str(&activity).unwrap();
+        assert_eq!(activity.summary.run_id, run_id);
+        assert_eq!(activity.queries.len(), 1);
+
+        dispatch_library(
+            &application,
+            "subscriptions.cancel",
+            &format!(r#"{{"subscription_id":{subscription_id}}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let operations = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .prepare(
+                            "SELECT operation_kind FROM cloud_journal
+                             WHERE operation_kind LIKE 'subscriptions.%'
+                             ORDER BY journal_id",
+                        )?
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            operations,
+            vec![
+                "subscriptions.create".to_string(),
+                "subscriptions.run".to_string(),
+                "subscriptions.cancel".to_string(),
+            ]
+        );
     }
 
     #[test]

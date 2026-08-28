@@ -354,7 +354,7 @@ pub fn set_schedule(
     Ok(())
 }
 
-fn create_run_in(
+pub(crate) fn create_run_in(
     tx: &Transaction<'_>,
     subscription_id: i64,
     requested_by: &str,
@@ -1287,7 +1287,7 @@ fn settle_run(tx: &Transaction<'_>, run_id: i64, now: &str) -> rusqlite::Result<
     Ok(Some(state))
 }
 
-fn parse_run_state(value: String) -> rusqlite::Result<RunState> {
+pub(crate) fn parse_run_state(value: String) -> rusqlite::Result<RunState> {
     match value.as_str() {
         "pending" => Ok(RunState::Pending),
         "running" => Ok(RunState::Running),
