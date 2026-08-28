@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::bitmap::BitmapKey;
-use crate::model::{MediaId, RootId, RootKind};
+use crate::model::{FolderId, MediaId, RootId, RootKind};
 use crate::ordering::OrderOwnerKind;
 use crate::projection::ProjectionSnapshot;
 
@@ -35,6 +35,19 @@ pub struct RootTextState {
     pub notes: Option<String>,
     pub source_urls: Vec<String>,
     pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderDefinitionState {
+    pub folder_id: FolderId,
+    pub stable_key: String,
+    pub parent_id: Option<FolderId>,
+    pub name: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub auto_tag_ids: Vec<u8>,
+    pub display_order: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +116,11 @@ pub enum SemanticChange {
         before: String,
         after: String,
     },
+    FolderDefinition {
+        folder_id: FolderId,
+        before: Option<Box<FolderDefinitionState>>,
+        after: Option<Box<FolderDefinitionState>>,
+    },
     RecentViews {
         before: Arc<Vec<(RootId, i64)>>,
         after: Arc<Vec<(RootId, i64)>>,
@@ -162,6 +180,19 @@ impl SemanticChange {
                 before.serialized_size() + after.serialized_size() + 32
             }
             Self::FolderName { before, after, .. } => before.len() + after.len() + 32,
+            Self::FolderDefinition { before, after, .. } => before
+                .iter()
+                .chain(after.iter())
+                .map(|state| {
+                    state.stable_key.len()
+                        + state.name.len()
+                        + state.icon.as_deref().map(str::len).unwrap_or(0)
+                        + state.color.as_deref().map(str::len).unwrap_or(0)
+                        + state.notes.as_deref().map(str::len).unwrap_or(0)
+                        + state.auto_tag_ids.len()
+                        + 64
+                })
+                .sum(),
             Self::RecentViews { before, after } => (before.len() + after.len()) * 16 + 32,
             Self::Structure {
                 affected,

@@ -130,6 +130,19 @@ pub struct RootRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderRecord {
+    pub folder_id: FolderId,
+    pub stable_key: String,
+    pub parent_id: Option<FolderId>,
+    pub name: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub display_order: i64,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceIdentity {
     pub source_key: String,
     pub source_item_key: String,

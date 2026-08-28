@@ -519,6 +519,135 @@ fn folder_vector_is_the_only_folder_membership_authority() {
 }
 
 #[test]
+fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (temporary, _) = library.create_folder("Temporary", None).unwrap();
+    assert_eq!(library.folders().unwrap().len(), 1);
+    library.undo().unwrap().unwrap();
+    assert!(library.folders().unwrap().is_empty());
+    library.redo().unwrap().unwrap();
+    assert_eq!(library.folders().unwrap()[0].folder_id, temporary);
+
+    let (parent, _) = library.create_folder("Parent", None).unwrap();
+    let (first_child, _) = library.create_folder("First", Some(parent)).unwrap();
+    let (second_child, _) = library.create_folder("Second", Some(parent)).unwrap();
+    library
+        .set_folder_metadata(
+            first_child,
+            Some("folder-heart"),
+            Some("#336699"),
+            Some("  references  "),
+        )
+        .unwrap();
+    let first_record = library
+        .folders()
+        .unwrap()
+        .into_iter()
+        .find(|folder| folder.folder_id == first_child)
+        .unwrap();
+    assert_eq!(first_record.icon.as_deref(), Some("folder-heart"));
+    assert_eq!(first_record.color.as_deref(), Some("#336699"));
+    assert_eq!(first_record.notes.as_deref(), Some("references"));
+
+    library
+        .reorder_folder_children(Some(parent), &[second_child, first_child])
+        .unwrap();
+    let children = library
+        .folders()
+        .unwrap()
+        .into_iter()
+        .filter(|folder| folder.parent_id == Some(parent))
+        .map(|folder| folder.folder_id)
+        .collect::<Vec<_>>();
+    assert_eq!(children, vec![second_child, first_child]);
+    library.undo().unwrap().unwrap();
+    let children = library
+        .folders()
+        .unwrap()
+        .into_iter()
+        .filter(|folder| folder.parent_id == Some(parent))
+        .map(|folder| folder.folder_id)
+        .collect::<Vec<_>>();
+    assert_eq!(children, vec![first_child, second_child]);
+
+    library.move_folder(second_child, None).unwrap();
+    assert_eq!(
+        library
+            .folders()
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.folder_id == second_child)
+            .unwrap()
+            .parent_id,
+        None
+    );
+    assert!(library.move_folder(parent, Some(first_child)).is_err());
+
+    let (first, _) = library
+        .ingest(&imported("alpha", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("beta", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first, second],
+            },
+            first_child,
+        )
+        .unwrap();
+    library
+        .reorder_folder_items(first_child, &[second, first])
+        .unwrap();
+    let folder_query = RootQuery {
+        scope: ItemScope::Folder {
+            folder_id: first_child,
+        },
+        view: ViewQuerySpec {
+            filter: FilterExpr::default(),
+            sort: ItemSort {
+                field: SortField::FolderOrder,
+                direction: SortDirection::Ascending,
+                random_seed: None,
+            },
+        },
+    };
+    assert_eq!(
+        library
+            .query(&folder_query, &PageRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![second, first]
+    );
+    library.sort_folder_items_by_name(first_child).unwrap();
+    assert_eq!(
+        library
+            .query(&folder_query, &PageRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    assert_eq!(
+        library
+            .folders()
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.folder_id == first_child)
+            .unwrap()
+            .count,
+        2
+    );
+}
+
+#[test]
 fn folder_auto_tags_apply_once_on_assignment_and_participate_in_memory_history() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

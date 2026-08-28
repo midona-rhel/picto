@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -7,13 +7,13 @@ use roaring::RoaringBitmap;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
 use crate::history::{
-    HistoryEntry, SemanticChange, SessionHistory, StructuralRootState, StructuralState,
-    TagDefinitionState,
+    FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory, StructuralRootState,
+    StructuralState, TagDefinitionState,
 };
 use crate::ingest;
 use crate::model::{
-    FolderId, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId, PreparedCollectionImport,
-    PreparedImport, Rating, RootId, RootKind, SmartFolderId,
+    FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
+    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -227,6 +227,40 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| crate::smart::list(connection, &snapshot),
+        )
+    }
+
+    pub fn folders(&self) -> Result<Vec<FolderRecord>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let mut statement = connection.prepare(
+                    "SELECT folder_id, stable_key, parent_id, name, icon, color, notes,
+                            display_order
+                     FROM folder_definition
+                     ORDER BY parent_id, display_order, folder_id",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    let folder_id = FolderId(row.get(0)?);
+                    Ok(FolderRecord {
+                        folder_id,
+                        stable_key: row.get(1)?,
+                        parent_id: row.get::<_, Option<u32>>(2)?.map(FolderId),
+                        name: row.get(3)?,
+                        icon: row.get(4)?,
+                        color: row.get(5)?,
+                        notes: row.get(6)?,
+                        display_order: row.get(7)?,
+                        count: snapshot
+                            .folders
+                            .get(&folder_id)
+                            .map_or(0, |roots| (roots & snapshot.active()).len()),
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1110,6 +1144,12 @@ impl Library {
                 Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
                 Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
                 next.revision = revision;
+                let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "new folder {} disappeared before publication",
+                        folder_id.0
+                    ))
+                })?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec!["folders".into(), "navigation".into()],
@@ -1120,7 +1160,14 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: Some(HistoryEntry::new(
+                            "Create folder",
+                            SemanticChange::FolderDefinition {
+                                folder_id,
+                                before: None,
+                                after: Some(Box::new(after)),
+                            },
+                        )),
                     },
                 ))
             },
@@ -1128,6 +1175,363 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok((folder_id, receipt))
+    }
+
+    pub fn set_folder_metadata(
+        &self,
+        folder_id: FolderId,
+        icon: Option<&str>,
+        color: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<MutationReceipt> {
+        let icon = normalized_optional(icon);
+        let color = normalized_optional(color);
+        let notes = normalized_optional(notes);
+        self.update_folder_definition("Edit folder", folder_id, move |transaction| {
+            if transaction.execute(
+                "UPDATE folder_definition SET icon = ?2, color = ?3, notes = ?4
+                 WHERE folder_id = ?1",
+                rusqlite::params![folder_id.0, icon, color, notes],
+            )? == 0
+            {
+                return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+            }
+            Ok(())
+        })
+    }
+
+    pub fn move_folder(
+        &self,
+        folder_id: FolderId,
+        parent_id: Option<FolderId>,
+    ) -> Result<MutationReceipt> {
+        self.update_folder_definition("Move folder", folder_id, move |transaction| {
+            validate_folder_parent(transaction, parent_id, Some(folder_id))?;
+            let name = transaction
+                .query_row(
+                    "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("folder {folder_id}"))
+                    }
+                    error => error.into(),
+                })?;
+            let duplicate = transaction.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM folder_definition
+                     WHERE parent_id IS ?1 AND name = ?2 AND folder_id != ?3
+                 )",
+                rusqlite::params![parent_id.map(|id| id.0), name, folder_id.0],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if duplicate {
+                return Err(LibraryError::InvalidInput(format!(
+                    "a sibling folder named {name} already exists"
+                )));
+            }
+            let display_order = transaction.query_row(
+                "SELECT COALESCE(MAX(display_order) + 1, 0)
+                 FROM folder_definition WHERE parent_id IS ?1 AND folder_id != ?2",
+                rusqlite::params![parent_id.map(|id| id.0), folder_id.0],
+                |row| row.get::<_, i64>(0),
+            )?;
+            transaction.execute(
+                "UPDATE folder_definition SET parent_id = ?2, display_order = ?3
+                 WHERE folder_id = ?1",
+                rusqlite::params![folder_id.0, parent_id.map(|id| id.0), display_order],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn reorder_folder_children(
+        &self,
+        parent_id: Option<FolderId>,
+        folder_ids: &[FolderId],
+    ) -> Result<MutationReceipt> {
+        let requested = folder_ids
+            .iter()
+            .map(|folder_id| folder_id.0)
+            .collect::<Vec<_>>();
+        if requested.iter().copied().collect::<HashSet<_>>().len() != requested.len() {
+            return Err(LibraryError::InvalidInput(
+                "folder reorder contains duplicate IDs".into(),
+            ));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                validate_folder_parent(transaction, parent_id, None)?;
+                let current = load_folder_children(transaction, parent_id)?;
+                let current_set = current
+                    .iter()
+                    .map(|folder| folder.0)
+                    .collect::<BTreeSet<_>>();
+                let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
+                if current_set != requested_set || current.len() != requested.len() {
+                    return Err(LibraryError::InvalidInput(
+                        "folder reorder must contain every sibling exactly once".into(),
+                    ));
+                }
+                let before = current
+                    .iter()
+                    .map(|folder_id| {
+                        load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "folder {} disappeared during reorder",
+                                folder_id.0
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut update = transaction.prepare_cached(
+                    "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
+                )?;
+                for (display_order, folder_id) in folder_ids.iter().enumerate() {
+                    update.execute(rusqlite::params![folder_id.0, display_order as i64])?;
+                }
+                let after = folder_ids
+                    .iter()
+                    .map(|folder_id| {
+                        load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "folder {} disappeared during reorder",
+                                folder_id.0
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut after_by_id = after
+                    .into_iter()
+                    .map(|state| (state.folder_id, state))
+                    .collect::<HashMap<_, _>>();
+                let changes = before
+                    .into_iter()
+                    .filter_map(|before| {
+                        let after = after_by_id.remove(&before.folder_id)?;
+                        (before != after).then_some(SemanticChange::FolderDefinition {
+                            folder_id: before.folder_id,
+                            before: Some(Box::new(before)),
+                            after: Some(Box::new(after)),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.reorder",
+                    None,
+                    serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (!changes.is_empty()).then(|| {
+                            HistoryEntry::new("Reorder folders", SemanticChange::Compound(changes))
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn reorder_folder_items(
+        &self,
+        folder_id: FolderId,
+        root_ids: &[RootId],
+    ) -> Result<MutationReceipt> {
+        let values = root_ids.iter().map(|root_id| root_id.0).collect::<Vec<_>>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                require_folder(transaction, folder_id)?;
+                let before = snapshot
+                    .folder_orders
+                    .get(&folder_id)
+                    .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if before.iter().copied().collect::<BTreeSet<_>>()
+                    != values.iter().copied().collect::<BTreeSet<_>>()
+                    || before.len() != values.len()
+                {
+                    return Err(LibraryError::InvalidInput(
+                        "folder item reorder must contain every member exactly once".into(),
+                    ));
+                }
+                ordering::replace(
+                    transaction,
+                    revision,
+                    OrderOwnerKind::Folder,
+                    folder_id.0,
+                    &values,
+                )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.items.reorder",
+                    None,
+                    serde_json::json!({"folder_id": folder_id.0}),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                Arc::make_mut(&mut next.folder_orders).insert(
+                    folder_id,
+                    Arc::new(values.iter().copied().map(RootId).collect()),
+                );
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), format!("folder:{}", folder_id.0)],
+                    if values.len() <= 256 {
+                        values.iter().copied().map(RootId).collect()
+                    } else {
+                        Vec::new()
+                    },
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (before != values).then(|| {
+                            HistoryEntry::new(
+                                "Reorder folder items",
+                                SemanticChange::Order {
+                                    owner_kind: OrderOwnerKind::Folder,
+                                    owner_id: folder_id.0,
+                                    before: Arc::new(before),
+                                    after: Arc::new(values.clone()),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn sort_folder_items_by_name(&self, folder_id: FolderId) -> Result<MutationReceipt> {
+        let ordered = self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                require_folder(connection, folder_id)?;
+                let roots = snapshot
+                    .folder_orders
+                    .get(&folder_id)
+                    .map(AsRef::as_ref)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let mut statement = connection
+                    .prepare_cached("SELECT name FROM library_root WHERE root_id = ?1")?;
+                let mut values = roots
+                    .iter()
+                    .map(|root_id| {
+                        statement
+                            .query_row([root_id.0], |row| row.get::<_, String>(0))
+                            .map(|name| (name.to_lowercase(), *root_id))
+                            .map_err(Into::into)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                values.sort();
+                Ok(values
+                    .into_iter()
+                    .map(|(_, root_id)| root_id)
+                    .collect::<Vec<_>>())
+            },
+        )?;
+        self.reorder_folder_items(folder_id, &ordered)
+    }
+
+    fn update_folder_definition<F>(
+        &self,
+        label: &'static str,
+        folder_id: FolderId,
+        update: F,
+    ) -> Result<MutationReceipt>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<()>,
+    {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = load_folder_definition(transaction, folder_id)?
+                    .ok_or_else(|| LibraryError::NotFound(format!("folder {folder_id}")))?;
+                update(transaction)?;
+                let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "folder {} disappeared during update",
+                        folder_id.0
+                    ))
+                })?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.update",
+                    None,
+                    serde_json::json!({"folder_id": folder_id.0}),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (before != after).then(|| {
+                            HistoryEntry::new(
+                                label,
+                                SemanticChange::FolderDefinition {
+                                    folder_id,
+                                    before: Some(Box::new(before)),
+                                    after: Some(Box::new(after)),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     pub fn rename_folder(&self, folder_id: FolderId, name: &str) -> Result<MutationReceipt> {
@@ -3118,6 +3522,81 @@ fn apply_semantic_change(
             resources.insert("folders".into());
             resources.insert("navigation".into());
         }
+        SemanticChange::FolderDefinition {
+            folder_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let current = load_folder_definition(transaction, *folder_id)?;
+            if current.as_ref() != expected.as_deref() {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because folder {} changed",
+                    folder_id.0
+                )));
+            }
+            match replacement {
+                Some(folder) => {
+                    transaction.execute(
+                        "INSERT INTO folder_definition
+                             (folder_id, stable_key, parent_id, name, icon, color, notes,
+                              auto_tag_ids, display_order)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                         ON CONFLICT(folder_id) DO UPDATE SET
+                             stable_key = excluded.stable_key,
+                             parent_id = excluded.parent_id,
+                             name = excluded.name,
+                             icon = excluded.icon,
+                             color = excluded.color,
+                             notes = excluded.notes,
+                             auto_tag_ids = excluded.auto_tag_ids,
+                             display_order = excluded.display_order",
+                        rusqlite::params![
+                            folder.folder_id.0,
+                            folder.stable_key,
+                            folder.parent_id.map(|id| id.0),
+                            folder.name,
+                            folder.icon,
+                            folder.color,
+                            folder.notes,
+                            folder.auto_tag_ids,
+                            folder.display_order
+                        ],
+                    )?;
+                    Arc::make_mut(&mut snapshot.folders)
+                        .entry(*folder_id)
+                        .or_default();
+                    Arc::make_mut(&mut snapshot.folder_orders)
+                        .entry(*folder_id)
+                        .or_insert_with(|| Arc::new(Vec::new()));
+                }
+                None => {
+                    let members = snapshot
+                        .folder_orders
+                        .get(folder_id)
+                        .map_or(0, |order| order.len());
+                    if members != 0 {
+                        return Err(LibraryError::InvalidState(format!(
+                            "cannot remove folder {} with members while replaying history",
+                            folder_id.0
+                        )));
+                    }
+                    ordering::delete(transaction, OrderOwnerKind::Folder, folder_id.0)?;
+                    transaction.execute(
+                        "DELETE FROM folder_definition WHERE folder_id = ?1",
+                        [folder_id.0],
+                    )?;
+                    Arc::make_mut(&mut snapshot.folders).remove(folder_id);
+                    Arc::make_mut(&mut snapshot.folder_orders).remove(folder_id);
+                }
+            }
+            resources.insert("folders".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::RecentViews { before, after } => {
             let replacement = if use_after { after } else { before };
             transaction.execute("DELETE FROM recent_view", [])?;
@@ -3561,6 +4040,102 @@ fn rename_folder_definition(
         return Err(LibraryError::NotFound(format!("folder {}", folder_id.0)));
     }
     Ok(())
+}
+
+fn load_folder_definition(
+    connection: &rusqlite::Connection,
+    folder_id: FolderId,
+) -> Result<Option<FolderDefinitionState>> {
+    use rusqlite::OptionalExtension;
+
+    connection
+        .query_row(
+            "SELECT stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
+                    display_order
+             FROM folder_definition WHERE folder_id = ?1",
+            [folder_id.0],
+            |row| {
+                Ok(FolderDefinitionState {
+                    folder_id,
+                    stable_key: row.get(0)?,
+                    parent_id: row.get::<_, Option<u32>>(1)?.map(FolderId),
+                    name: row.get(2)?,
+                    icon: row.get(3)?,
+                    color: row.get(4)?,
+                    notes: row.get(5)?,
+                    auto_tag_ids: row.get(6)?,
+                    display_order: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn require_folder(connection: &rusqlite::Connection, folder_id: FolderId) -> Result<()> {
+    if load_folder_definition(connection, folder_id)?.is_none() {
+        return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+    }
+    Ok(())
+}
+
+fn load_folder_children(
+    connection: &rusqlite::Connection,
+    parent_id: Option<FolderId>,
+) -> Result<Vec<FolderId>> {
+    let mut statement = connection.prepare(
+        "SELECT folder_id FROM folder_definition
+         WHERE parent_id IS ?1 ORDER BY display_order, folder_id",
+    )?;
+    let values = statement
+        .query_map([parent_id.map(|id| id.0)], |row| {
+            row.get::<_, u32>(0).map(FolderId)
+        })?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    Ok(values)
+}
+
+fn validate_folder_parent(
+    connection: &rusqlite::Connection,
+    parent_id: Option<FolderId>,
+    child_id: Option<FolderId>,
+) -> Result<()> {
+    if parent_id.is_some() && parent_id == child_id {
+        return Err(LibraryError::InvalidInput(
+            "a folder cannot be its own parent".into(),
+        ));
+    }
+    let Some(parent_id) = parent_id else {
+        return Ok(());
+    };
+    require_folder(connection, parent_id)?;
+    if let Some(child_id) = child_id {
+        let creates_cycle = connection.query_row(
+            "WITH RECURSIVE descendants(folder_id) AS (
+                 SELECT folder_id FROM folder_definition WHERE parent_id = ?1
+                 UNION ALL
+                 SELECT child.folder_id
+                 FROM folder_definition child
+                 JOIN descendants parent ON child.parent_id = parent.folder_id
+             )
+             SELECT EXISTS(SELECT 1 FROM descendants WHERE folder_id = ?2)",
+            rusqlite::params![child_id.0, parent_id.0],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if creates_cycle {
+            return Err(LibraryError::InvalidInput(
+                "a folder cannot move below its descendant".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalized_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn required_name(kind: &str, name: &str) -> Result<String> {
