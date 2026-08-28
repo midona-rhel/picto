@@ -32,6 +32,7 @@ pub enum SetMatchMode {
 #[serde(rename_all = "snake_case")]
 pub enum TextField {
     Global,
+    Name,
     Notes,
     SourceUrl,
 }

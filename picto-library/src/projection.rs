@@ -597,7 +597,7 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         "SELECT root.root_id, item.item_kind, root.total_size_bytes, root.media_count,
                 root.imported_at_ms, root.captured_at_ms, root.modified_at_ms,
                 root.notes, root.source_urls_json,
-                file.mime, file.width, file.height, file.duration_ms, file.palette_json
+                file.width, file.height, file.duration_ms, file.palette_json
          FROM library_root root
          JOIN library_item item ON item.local_id = root.root_id
          JOIN media_item media ON media.media_id = root.cover_media_id
@@ -614,11 +614,10 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             row.get::<_, i64>(6)?,
             row.get::<_, Option<String>>(7)?,
             row.get::<_, String>(8)?,
-            row.get::<_, String>(9)?,
+            row.get::<_, Option<u32>>(9)?,
             row.get::<_, Option<u32>>(10)?,
-            row.get::<_, Option<u32>>(11)?,
-            row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
-            row.get::<_, String>(13)?,
+            row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+            row.get::<_, String>(12)?,
         ))
     })?;
     for row in rows {
@@ -632,7 +631,6 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             modified,
             notes,
             urls,
-            root_mime,
             root_width,
             root_height,
             root_duration,
@@ -648,11 +646,6 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             }
         };
         root_kinds.entry(kind).or_default().insert(root_id);
-        mime.entry(root_mime.clone()).or_default().insert(root_id);
-        mime_family
-            .entry(mime_family_name(&root_mime).to_owned())
-            .or_default()
-            .insert(root_id);
         total_bytes.insert(root_id, bytes);
         media_count.insert(root_id, count as u64);
         imported_at.insert(root_id, imported.max(0) as u64);
@@ -714,8 +707,16 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
     })?;
     for row in media_rows {
-        let (media_id, mime) = row?;
-        if mime.starts_with("image/") {
+        let (media_id, media_mime) = row?;
+        let owner = media_owner.get(media_id).ok_or_else(|| {
+            crate::LibraryError::InvalidState(format!("media {media_id} has no owning root"))
+        })?;
+        mime.entry(media_mime.clone()).or_default().insert(owner.0);
+        mime_family
+            .entry(mime_family_name(&media_mime).to_owned())
+            .or_default()
+            .insert(owner.0);
+        if media_mime.starts_with("image/") {
             image_media.insert(media_id);
         }
     }

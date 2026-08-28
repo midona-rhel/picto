@@ -219,6 +219,7 @@ pub(crate) fn detach(
     Arc::make_mut(&mut snapshot.media_count).insert(collection_id.0, members.len() as u64 - 1);
     Arc::make_mut(&mut snapshot.total_bytes).insert(collection_id.0, remaining_size);
     Arc::make_mut(&mut snapshot.modified_at).insert(collection_id.0, modified_at_ms.max(0) as u64);
+    refresh_root_mime_projection(transaction, &mut snapshot, collection_id)?;
     if next_cover != collection.cover_media_id {
         refresh_cover_projection(transaction, &mut snapshot, collection_id)?;
     }
@@ -758,6 +759,7 @@ pub(crate) fn organize(
         !urls.is_empty(),
         has_image,
     );
+    refresh_root_mime_projection(transaction, &mut snapshot, collection_id)?;
 
     crate::fts::mark_one(transaction, collection_id, request.modified_at_ms)?;
     transaction.execute(
@@ -1039,12 +1041,6 @@ fn add_collection_projection(
 }
 
 fn remove_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId) {
-    for roots in Arc::make_mut(&mut snapshot.mime).values_mut() {
-        roots.remove(root_id.0);
-    }
-    for roots in Arc::make_mut(&mut snapshot.mime_family).values_mut() {
-        roots.remove(root_id.0);
-    }
     for roots in Arc::make_mut(&mut snapshot.color_cells).values_mut() {
         roots.remove(root_id.0);
     }
@@ -1056,20 +1052,6 @@ fn remove_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId) {
 
 fn add_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId, cover: &CoverFacts) {
     let id = root_id.0;
-    Arc::make_mut(&mut snapshot.mime)
-        .entry(cover.mime.clone())
-        .or_default()
-        .insert(id);
-    Arc::make_mut(&mut snapshot.mime_family)
-        .entry(
-            cover
-                .mime
-                .split_once('/')
-                .map_or(cover.mime.as_str(), |value| value.0)
-                .to_owned(),
-        )
-        .or_default()
-        .insert(id);
     for color in &cover.palette {
         Arc::make_mut(&mut snapshot.color_cells)
             .entry(color_cell(color))
@@ -1086,6 +1068,59 @@ fn add_cover_projection(snapshot: &mut ProjectionSnapshot, root_id: RootId, cove
     if let Some(value) = cover.duration_ms {
         Arc::make_mut(&mut snapshot.duration).insert(id, value);
     }
+}
+
+pub(crate) fn refresh_root_mime_projection(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    root_id: RootId,
+) -> Result<()> {
+    for roots in Arc::make_mut(&mut snapshot.mime).values_mut() {
+        roots.remove(root_id.0);
+    }
+    for roots in Arc::make_mut(&mut snapshot.mime_family).values_mut() {
+        roots.remove(root_id.0);
+    }
+
+    let media_ids = snapshot.collection_orders.get(&root_id).map_or_else(
+        || vec![MediaId(root_id.0)],
+        |members| members.as_ref().clone(),
+    );
+    let mut mime_values = std::collections::BTreeSet::new();
+    for chunk in media_ids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT DISTINCT file.mime
+             FROM media_item media
+             JOIN media_file file ON file.file_id = media.file_id
+             WHERE media.media_id IN ({placeholders})"
+        );
+        let values = chunk.iter().map(|media_id| media_id.0).collect::<Vec<_>>();
+        let rows = transaction
+            .prepare(&sql)?
+            .query_map(rusqlite::params_from_iter(values), |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        mime_values.extend(rows);
+    }
+    for mime in mime_values {
+        Arc::make_mut(&mut snapshot.mime)
+            .entry(mime.clone())
+            .or_default()
+            .insert(root_id.0);
+        Arc::make_mut(&mut snapshot.mime_family)
+            .entry(
+                mime.split_once('/')
+                    .map_or(mime.as_str(), |value| value.0)
+                    .to_owned(),
+            )
+            .or_default()
+            .insert(root_id.0);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

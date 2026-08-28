@@ -1472,7 +1472,43 @@ fn empty_fts_poll_does_not_advance_the_library_revision() {
 }
 
 #[test]
-fn collections_are_one_root_and_media_filters_use_only_the_cover() {
+fn name_text_filter_uses_the_root_fts_column_in_every_lifecycle_scope() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut input = imported("name-search", Lifecycle::Inbox, &[]);
+    input.media_name = "Original Capture Fox".into();
+    let (root_id, _) = library.ingest(&input).unwrap();
+    assert!(library.settle_fts(64).unwrap().is_some());
+
+    let name_query = RootQuery {
+        scope: ItemScope::Inbox,
+        view: ViewQuerySpec {
+            filter: FilterExpr::Clause(FilterClause::Text {
+                field: picto_library::predicate::TextField::Name,
+                query: "Capture".into(),
+            }),
+            sort: ItemSort::default(),
+        },
+    };
+    let page = library.query(&name_query, &PageRequest::default()).unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![root_id]
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+}
+
+#[test]
+fn collections_are_one_root_and_mime_filters_include_every_member() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let (image, _) = library
@@ -1541,7 +1577,7 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             .query(&mime_query("video/mp4"), &PageRequest::default())
             .unwrap()
             .total,
-        0
+        1
     );
 
     library
@@ -1615,7 +1651,7 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             .query(&mime_query("image/png"), &PageRequest::default())
             .unwrap()
             .total,
-        0
+        1
     );
     library.undo().unwrap().unwrap();
     assert_eq!(
@@ -1837,7 +1873,7 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
             .query(&mime_query("audio/mpeg"), &PageRequest::default())
             .unwrap()
             .total,
-        0
+        1
     );
 
     library

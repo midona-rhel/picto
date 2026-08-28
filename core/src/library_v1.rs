@@ -3,19 +3,23 @@
 //! This module translates the renderer's stable command DTOs into the closed
 //! `picto_library` model. It contains no persistence or product behavior.
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use picto_library::predicate::{
     FilterClause, FilterExpr, ItemSort, SetMatchMode, SortDirection, SortField, TextField,
     ViewQuerySpec,
 };
 use picto_library::query::{ItemScope, RootQuery};
 use picto_library::selection::SelectionTarget;
-use picto_library::{FolderId, LabColor, Library, Rating, RootId, TagId};
+use picto_library::{
+    FolderId, LabColor, Library, Rating, RootId, SmartFolderId, SmartFolderInput, TagId,
+};
 
 use crate::app::{
     FilterMatchMode, ItemFilters, ItemQuery, ItemScope as AppScope, ItemSortField, ItemTarget,
     Lifecycle, MutationReceipt, SortDirection as AppSortDirection,
 };
+use crate::navigation_v2::CreateSmartFolderInput;
+use crate::smart_v2::{MatchMode, PredicateRule, SmartFolderPredicate};
 
 pub fn query(library: &Library, value: &ItemQuery) -> Result<RootQuery, String> {
     let snapshot = library.projections().snapshot();
@@ -57,6 +61,30 @@ pub fn target(library: &Library, value: &ItemTarget) -> Result<SelectionTarget, 
             query: query(library, value)?,
             anchor_root_id: root_id(anchor_item_id.0)?,
             focus_root_id: root_id(focus_item_id.0)?,
+        },
+    })
+}
+
+pub fn smart_folder_input(
+    library: &Library,
+    value: &CreateSmartFolderInput,
+) -> Result<SmartFolderInput, String> {
+    let snapshot = library.projections().snapshot();
+    let filter = smart_predicate(&value.predicate, |name| {
+        snapshot.tag_ids_by_name.get(name).copied()
+    })?;
+    Ok(SmartFolderInput {
+        name: value.name.clone(),
+        parent_id: value
+            .parent_id
+            .map(|id| local_id(id, "smart folder").map(SmartFolderId))
+            .transpose()?,
+        icon: value.icon.clone(),
+        color: value.color.clone(),
+        notes: value.notes.clone(),
+        view: ViewQuerySpec {
+            filter,
+            sort: smart_sort(value.sort_field.as_deref(), value.sort_order.as_deref())?,
         },
     })
 }
@@ -333,10 +361,20 @@ fn filters(
         .filter_map(|name| tag_id(name))
         .collect::<Vec<_>>();
     if !value.include_tags.is_empty() {
-        clauses.push(FilterExpr::Clause(FilterClause::Tags {
-            tag_ids: include_tags,
-            mode: set_mode(&value.tag_match_mode),
-        }));
+        let mode = set_mode(&value.tag_match_mode);
+        clauses.push(
+            if include_tags.is_empty()
+                || (!matches!(mode, SetMatchMode::Any)
+                    && include_tags.len() != value.include_tags.len())
+            {
+                FilterExpr::Any(Vec::new())
+            } else {
+                FilterExpr::Clause(FilterClause::Tags {
+                    tag_ids: include_tags,
+                    mode,
+                })
+            },
+        );
     }
     let exclude_tags = value
         .exclude_tags
@@ -470,6 +508,365 @@ fn filters(
         }));
     }
     Ok(FilterExpr::All(clauses))
+}
+
+fn smart_predicate(
+    value: &SmartFolderPredicate,
+    mut tag_id: impl FnMut(&str) -> Option<TagId>,
+) -> Result<FilterExpr, String> {
+    let mut groups = Vec::with_capacity(value.groups.len());
+    for group in &value.groups {
+        let mut rules = Vec::with_capacity(group.rules.len());
+        for rule in &group.rules {
+            rules.push(smart_rule(rule, &mut tag_id)?);
+        }
+        let expression = match group.match_mode {
+            MatchMode::All => FilterExpr::All(rules),
+            MatchMode::Any => FilterExpr::Any(rules),
+        };
+        groups.push(if group.negate {
+            FilterExpr::Not(Box::new(expression))
+        } else {
+            expression
+        });
+    }
+    Ok(FilterExpr::All(groups))
+}
+
+fn smart_rule(
+    rule: &PredicateRule,
+    tag_id: &mut impl FnMut(&str) -> Option<TagId>,
+) -> Result<FilterExpr, String> {
+    match rule.field.as_str() {
+        "tags" => smart_tag_rule(rule, tag_id),
+        "file_type" => {
+            let value = string_value(rule, "file type")?;
+            let (values, families) = if value.contains('/') {
+                (vec![value], Vec::new())
+            } else if matches!(value.as_str(), "image" | "video" | "audio") {
+                (Vec::new(), vec![value])
+            } else {
+                return Err(format!("unsupported file type {value}"));
+            };
+            let expression = FilterExpr::Clause(FilterClause::Mime { values, families });
+            match rule.op.as_str() {
+                "is" => Ok(expression),
+                "is_not" => Ok(FilterExpr::Not(Box::new(expression))),
+                operator => Err(unsupported_rule(rule, operator)),
+            }
+        }
+        "rating" => rating_rule(rule),
+        "file_size" => numeric_rule(rule, 1_000_000.0, |minimum_bytes, maximum_bytes| {
+            FilterClause::TotalSize {
+                minimum_bytes,
+                maximum_bytes,
+            }
+        }),
+        "date_added" => date_rule(rule, |minimum_ms, maximum_ms| FilterClause::ImportedAt {
+            minimum_ms,
+            maximum_ms,
+        }),
+        "date_created" => date_rule(rule, |minimum_ms, maximum_ms| FilterClause::CapturedAt {
+            minimum_ms,
+            maximum_ms,
+        }),
+        "name" => text_rule(rule, TextField::Name, None),
+        "width" => numeric_rule(rule, 1.0, |minimum, maximum| FilterClause::Width {
+            minimum,
+            maximum,
+        }),
+        "height" => numeric_rule(rule, 1.0, |minimum, maximum| FilterClause::Height {
+            minimum,
+            maximum,
+        }),
+        "duration" => numeric_rule(rule, 1_000.0, |minimum_ms, maximum_ms| {
+            FilterClause::Duration {
+                minimum_ms,
+                maximum_ms,
+            }
+        }),
+        "notes" => text_rule(
+            rule,
+            TextField::Notes,
+            Some(|present| FilterClause::NotesPresent { present }),
+        ),
+        "source_url" => text_rule(
+            rule,
+            TextField::SourceUrl,
+            Some(|present| FilterClause::SourceUrlsPresent { present }),
+        ),
+        "color" => color_rule(rule),
+        field => Err(format!("unsupported smart-folder field {field}")),
+    }
+}
+
+fn smart_tag_rule(
+    rule: &PredicateRule,
+    tag_id: &mut impl FnMut(&str) -> Option<TagId>,
+) -> Result<FilterExpr, String> {
+    let requested = rule.values.as_deref().unwrap_or_default();
+    let known = requested
+        .iter()
+        .filter_map(|name| tag_id(name))
+        .collect::<Vec<_>>();
+    match rule.op.as_str() {
+        "include_all" if requested.is_empty() || known.len() != requested.len() => {
+            Ok(FilterExpr::Any(Vec::new()))
+        }
+        "include_any" if known.is_empty() => Ok(FilterExpr::Any(Vec::new())),
+        "include_all" => Ok(FilterExpr::Clause(FilterClause::Tags {
+            tag_ids: known,
+            mode: SetMatchMode::All,
+        })),
+        "include_any" => Ok(FilterExpr::Clause(FilterClause::Tags {
+            tag_ids: known,
+            mode: SetMatchMode::Any,
+        })),
+        "do_not_include" if known.is_empty() => Ok(FilterExpr::All(Vec::new())),
+        "do_not_include" => Ok(FilterExpr::Not(Box::new(FilterExpr::Clause(
+            FilterClause::Tags {
+                tag_ids: known,
+                mode: SetMatchMode::Any,
+            },
+        )))),
+        operator => Err(unsupported_rule(rule, operator)),
+    }
+}
+
+fn rating_rule(rule: &PredicateRule) -> Result<FilterExpr, String> {
+    let first = integer_value(rule.value.as_ref(), "rating")?;
+    let second = if rule.op == "between" {
+        Some(integer_value(rule.value2.as_ref(), "second rating")?)
+    } else {
+        None
+    };
+    let matches = (0_u64..=5)
+        .filter(|candidate| compare_number(*candidate, rule.op.as_str(), first, second))
+        .map(|value| match value {
+            0 => Rating::Unrated,
+            1 => Rating::One,
+            2 => Rating::Two,
+            3 => Rating::Three,
+            4 => Rating::Four,
+            5 => Rating::Five,
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    if !matches!(
+        rule.op.as_str(),
+        "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "between"
+    ) {
+        return Err(unsupported_rule(rule, &rule.op));
+    }
+    Ok(FilterExpr::Clause(FilterClause::Ratings {
+        ratings: matches,
+    }))
+}
+
+fn numeric_rule(
+    rule: &PredicateRule,
+    multiplier: f64,
+    clause: impl FnOnce(Option<u64>, Option<u64>) -> FilterClause,
+) -> Result<FilterExpr, String> {
+    let first = scaled_value(rule.value.as_ref(), multiplier, &rule.field)?;
+    let second = if rule.op == "between" {
+        Some(scaled_value(
+            rule.value2.as_ref(),
+            multiplier,
+            &format!("second {}", rule.field),
+        )?)
+    } else {
+        None
+    };
+    let expression = match rule.op.as_str() {
+        "eq" => FilterExpr::Clause(clause(Some(first), Some(first))),
+        "neq" => FilterExpr::Not(Box::new(FilterExpr::Clause(clause(
+            Some(first),
+            Some(first),
+        )))),
+        "gt" => first.checked_add(1).map_or_else(
+            || FilterExpr::Any(Vec::new()),
+            |minimum| FilterExpr::Clause(clause(Some(minimum), None)),
+        ),
+        "gte" => FilterExpr::Clause(clause(Some(first), None)),
+        "lt" if first == 0 => FilterExpr::Any(Vec::new()),
+        "lt" => FilterExpr::Clause(clause(None, Some(first - 1))),
+        "lte" => FilterExpr::Clause(clause(None, Some(first))),
+        "between" => {
+            let second = second.expect("between value validated");
+            FilterExpr::Clause(clause(Some(first.min(second)), Some(first.max(second))))
+        }
+        operator => return Err(unsupported_rule(rule, operator)),
+    };
+    Ok(expression)
+}
+
+fn date_rule(
+    rule: &PredicateRule,
+    clause: impl FnOnce(Option<u64>, Option<u64>) -> FilterClause,
+) -> Result<FilterExpr, String> {
+    let (first_start, first_end) = day_bounds(rule.value.as_ref(), &rule.field)?;
+    let second = if rule.op == "between" {
+        Some(day_bounds(
+            rule.value2.as_ref(),
+            &format!("second {}", rule.field),
+        )?)
+    } else {
+        None
+    };
+    Ok(match rule.op.as_str() {
+        "eq" => FilterExpr::Clause(clause(Some(first_start), Some(first_end))),
+        "gt" => FilterExpr::Clause(clause(first_end.checked_add(1), None)),
+        "gte" => FilterExpr::Clause(clause(Some(first_start), None)),
+        "lt" if first_start == 0 => FilterExpr::Any(Vec::new()),
+        "lt" => FilterExpr::Clause(clause(None, Some(first_start - 1))),
+        "lte" => FilterExpr::Clause(clause(None, Some(first_end))),
+        "between" => {
+            let (second_start, second_end) = second.expect("between date validated");
+            FilterExpr::Clause(clause(
+                Some(first_start.min(second_start)),
+                Some(first_end.max(second_end)),
+            ))
+        }
+        operator => return Err(unsupported_rule(rule, operator)),
+    })
+}
+
+type PresenceClause = fn(bool) -> FilterClause;
+
+fn text_rule(
+    rule: &PredicateRule,
+    field: TextField,
+    presence: Option<PresenceClause>,
+) -> Result<FilterExpr, String> {
+    match rule.op.as_str() {
+        "contains" => Ok(FilterExpr::Clause(FilterClause::Text {
+            field,
+            query: string_value(rule, &rule.field)?,
+        })),
+        "is_empty" => presence
+            .map(|clause| FilterExpr::Clause(clause(false)))
+            .ok_or_else(|| unsupported_rule(rule, "is_empty")),
+        "is_not_empty" => presence
+            .map(|clause| FilterExpr::Clause(clause(true)))
+            .ok_or_else(|| unsupported_rule(rule, "is_not_empty")),
+        operator => Err(unsupported_rule(rule, operator)),
+    }
+}
+
+fn color_rule(rule: &PredicateRule) -> Result<FilterExpr, String> {
+    if rule.op != "contains" {
+        return Err(unsupported_rule(rule, &rule.op));
+    }
+    let values = rule.values.as_deref().unwrap_or_default();
+    if values.is_empty() {
+        return Ok(FilterExpr::Any(Vec::new()));
+    }
+    values
+        .iter()
+        .map(|value| {
+            let (l, a, b) = crate::media_processing::colors::lab_components_from_hex(value)
+                .ok_or_else(|| format!("invalid color {value}"))?;
+            Ok(FilterExpr::Clause(FilterClause::Color {
+                color: LabColor {
+                    l: l as f32,
+                    a: a as f32,
+                    b: b as f32,
+                    weight: 1.0,
+                },
+                delta_e: crate::media_processing::colors::FILTER_DELTA_E as f32,
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(FilterExpr::Any)
+}
+
+fn smart_sort(field: Option<&str>, direction: Option<&str>) -> Result<ItemSort, String> {
+    let field = match field.unwrap_or("imported_at") {
+        "imported_at" => SortField::ImportedAt,
+        "captured_at" => SortField::CapturedAt,
+        "name" => SortField::Name,
+        "rating" => SortField::Rating,
+        "size" => SortField::TotalSize,
+        "random" => SortField::Random,
+        value => return Err(format!("unsupported smart-folder sort field {value}")),
+    };
+    let direction = match direction.unwrap_or("descending") {
+        "ascending" | "asc" => SortDirection::Ascending,
+        "descending" | "desc" => SortDirection::Descending,
+        value => return Err(format!("unsupported smart-folder sort order {value}")),
+    };
+    Ok(ItemSort {
+        field,
+        direction,
+        random_seed: None,
+    })
+}
+
+fn string_value(rule: &PredicateRule, label: &str) -> Result<String, String> {
+    rule.value
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{label} requires a value"))
+}
+
+fn integer_value(value: Option<&serde_json::Value>, label: &str) -> Result<u64, String> {
+    scaled_value(value, 1.0, label)
+}
+
+fn scaled_value(
+    value: Option<&serde_json::Value>,
+    multiplier: f64,
+    label: &str,
+) -> Result<u64, String> {
+    let value = value
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| format!("{label} requires a numeric value"))?;
+    let scaled = value * multiplier;
+    if !scaled.is_finite() || scaled < 0.0 || scaled > u64::MAX as f64 {
+        return Err(format!("{label} is outside the supported range"));
+    }
+    Ok(scaled.round() as u64)
+}
+
+fn compare_number(candidate: u64, operator: &str, first: u64, second: Option<u64>) -> bool {
+    match operator {
+        "eq" => candidate == first,
+        "neq" => candidate != first,
+        "gt" => candidate > first,
+        "gte" => candidate >= first,
+        "lt" => candidate < first,
+        "lte" => candidate <= first,
+        "between" => second
+            .is_some_and(|second| candidate >= first.min(second) && candidate <= first.max(second)),
+        _ => false,
+    }
+}
+
+fn day_bounds(value: Option<&serde_json::Value>, label: &str) -> Result<(u64, u64), String> {
+    let value = value
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("{label} requires a date"))?;
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|error| format!("invalid {label} date {value}: {error}"))?;
+    let start = Utc
+        .from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight is valid"))
+        .timestamp_millis();
+    let end = start + 86_400_000 - 1;
+    Ok((
+        u64::try_from(start).map_err(|_| format!("{label} predates the Unix epoch"))?,
+        u64::try_from(end).map_err(|_| format!("{label} exceeds the timestamp domain"))?,
+    ))
+}
+
+fn unsupported_rule(rule: &PredicateRule, operator: &str) -> String {
+    format!(
+        "unsupported smart-folder operator {operator} for {}",
+        rule.field
+    )
 }
 
 fn sort(value: &crate::app::ItemSort) -> ItemSort {
@@ -616,6 +1013,7 @@ fn lab_hex(value: &LabColor) -> String {
 mod tests {
     use super::*;
     use crate::app::{ItemSort as AppItemSort, ItemSortField};
+    use crate::smart_v2::{SmartFolderPredicate, SmartRuleGroup};
 
     #[test]
     fn inbox_query_keeps_text_and_structured_filters_inside_the_inbox_scope() {
@@ -660,6 +1058,113 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("outside the local ID domain"));
+    }
+
+    #[test]
+    fn smart_folder_contract_maps_created_date_and_ui_units_exactly() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let input = CreateSmartFolderInput {
+            name: "Created media".into(),
+            parent_id: None,
+            predicate: SmartFolderPredicate {
+                groups: vec![SmartRuleGroup {
+                    match_mode: MatchMode::All,
+                    negate: false,
+                    rules: vec![
+                        PredicateRule {
+                            field: "date_created".into(),
+                            op: "eq".into(),
+                            value: Some(serde_json::json!("2026-08-28")),
+                            value2: None,
+                            values: None,
+                        },
+                        PredicateRule {
+                            field: "duration".into(),
+                            op: "gte".into(),
+                            value: Some(serde_json::json!(1.5)),
+                            value2: None,
+                            values: None,
+                        },
+                        PredicateRule {
+                            field: "file_size".into(),
+                            op: "lte".into(),
+                            value: Some(serde_json::json!(2)),
+                            value2: None,
+                            values: None,
+                        },
+                    ],
+                }],
+            },
+            icon: None,
+            color: None,
+            notes: None,
+            sort_field: Some("captured_at".into()),
+            sort_order: Some("ascending".into()),
+        };
+
+        let converted = smart_folder_input(&library, &input).unwrap();
+        assert_eq!(converted.view.sort.field, SortField::CapturedAt);
+        assert_eq!(converted.view.sort.direction, SortDirection::Ascending);
+        let FilterExpr::All(groups) = converted.view.filter else {
+            panic!("smart-folder groups are intersected");
+        };
+        let FilterExpr::All(rules) = &groups[0] else {
+            panic!("all-group remains a conjunction");
+        };
+        assert!(matches!(
+            rules[0],
+            FilterExpr::Clause(FilterClause::CapturedAt { .. })
+        ));
+        assert_eq!(
+            rules[1],
+            FilterExpr::Clause(FilterClause::Duration {
+                minimum_ms: Some(1_500),
+                maximum_ms: None,
+            })
+        );
+        assert_eq!(
+            rules[2],
+            FilterExpr::Clause(FilterClause::TotalSize {
+                minimum_bytes: None,
+                maximum_bytes: Some(2_000_000),
+            })
+        );
+    }
+
+    #[test]
+    fn smart_folder_contract_rejects_removed_fields_and_operators() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let input = |field: &str, op: &str| CreateSmartFolderInput {
+            name: "Invalid".into(),
+            parent_id: None,
+            predicate: SmartFolderPredicate {
+                groups: vec![SmartRuleGroup {
+                    match_mode: MatchMode::All,
+                    negate: false,
+                    rules: vec![PredicateRule {
+                        field: field.into(),
+                        op: op.into(),
+                        value: Some(serde_json::json!("wide")),
+                        value2: None,
+                        values: None,
+                    }],
+                }],
+            },
+            icon: None,
+            color: None,
+            notes: None,
+            sort_field: None,
+            sort_order: None,
+        };
+
+        assert!(smart_folder_input(&library, &input("shape", "eq"))
+            .unwrap_err()
+            .contains("unsupported smart-folder field shape"));
+        assert!(smart_folder_input(&library, &input("name", "starts_with"))
+            .unwrap_err()
+            .contains("unsupported smart-folder operator starts_with"));
     }
 
     #[test]

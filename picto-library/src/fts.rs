@@ -7,6 +7,7 @@ use crate::{Result, RootId};
 pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<RoaringBitmap> {
     let column = match field {
         TextField::Global => "root_fts",
+        TextField::Name => "name",
         TextField::Notes => "notes",
         TextField::SourceUrl => "urls",
     };

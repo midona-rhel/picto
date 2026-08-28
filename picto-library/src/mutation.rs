@@ -1101,6 +1101,11 @@ impl Library {
                         &mut next,
                         RootId(root_id),
                     )?;
+                    crate::group::refresh_root_mime_projection(
+                        transaction,
+                        &mut next,
+                        RootId(root_id),
+                    )?;
                 }
                 crate::smart::settle_affected_for(
                     transaction,
