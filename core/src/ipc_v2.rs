@@ -490,6 +490,32 @@ pub async fn dispatch_library_async(
                     .map_err(|error| error.to_string())?,
             )
         }
+        "pixiv_oauth_start" => read(crate::subscriptions::pixiv_oauth::generate_challenge()),
+        "pixiv_oauth_exchange" => {
+            let input: PixivOAuthExchangeInput = parse(args_json)?;
+            let refresh_token =
+                crate::subscriptions::pixiv_oauth::exchange_code(&input.code, &input.code_verifier)
+                    .await?;
+            let cookies = input
+                .phpsessid
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| std::collections::HashMap::from([("PHPSESSID".to_string(), value)]));
+            crate::auth_v2::set_library_credential(
+                application,
+                crate::auth_v2::SetCredentialInput {
+                    site_id: "pixiv".into(),
+                    credential_type: "oauth_token".into(),
+                    display_name: Some("Pixiv".into()),
+                    username: None,
+                    password: None,
+                    cookies,
+                    headers: None,
+                    oauth_token: Some(refresh_token),
+                },
+                &now(),
+            )?;
+            read(PixivOAuthExchangeOutput { ok: true })
+        }
         "media.request_thumbnail" => {
             let input: FileHashInput = parse(args_json)?;
             read(crate::media_io_v2::request_thumbnail_library(
