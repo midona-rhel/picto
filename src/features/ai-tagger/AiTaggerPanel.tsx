@@ -1,8 +1,8 @@
 /**
  * AI review portal.
  *
- * Predictions are reviewed per media item and remain read-only until applied.
- * Logical item IDs drive mutations; hashes are used only to render previews.
+ * Predictions are reviewed per root and remain read-only until applied.
+ * Collection image predictions are unioned before one root-level assignment.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,6 +30,7 @@ import {
   type MediaPrediction,
 } from '../../platform/aiTaggerApi';
 import { viewerController } from '../../controllers/viewerController';
+import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
 import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
@@ -61,6 +62,13 @@ interface RunProgress {
   done: number;
   total: number;
   currentItemId: number | null;
+}
+
+interface ReviewRoot {
+  rootItemId: number;
+  label: string;
+  imageMedia: MediaDetails[];
+  previewMedia: MediaDetails;
 }
 
 function predictionTags(prediction: MediaPrediction | undefined, runModels: Set<string>): ReviewTag[] {
@@ -101,13 +109,26 @@ function mergePredictionResults(previous: MediaPrediction[], incoming: MediaPred
   return [...byItem.values()];
 }
 
-function uniqueMedia(details: MediaDetails[]): MediaDetails[] {
-  const seen = new Set<number>();
-  return details.filter((media) => {
-    if (seen.has(media.media_item_id)) return false;
-    seen.add(media.media_item_id);
-    return true;
-  });
+function reviewRoot(details: ItemDetails): ReviewRoot | null {
+  const imageMedia = details.media.filter((media) => media.mime_type.startsWith('image/'));
+  if (imageMedia.length === 0) return null;
+  const previewMedia = imageMedia.find((media) => media.media_item_id === details.cover_media_item_id)
+    ?? imageMedia[0];
+  return {
+    rootItemId: details.item_id,
+    label: details.label || previewMedia.name || `Item ${details.item_id}`,
+    imageMedia,
+    previewMedia,
+  };
+}
+
+function combineRootPrediction(rootItemId: number, predictions: MediaPrediction[]): MediaPrediction {
+  const errors = predictions.flatMap((prediction) => prediction.error ? [prediction.error] : []);
+  return {
+    mediaItemId: rootItemId,
+    predictions: predictions.flatMap((prediction) => prediction.predictions),
+    error: errors.length > 0 ? errors.join('; ') : null,
+  };
 }
 
 function overrideKey(itemId: number, tag: string): string {
@@ -128,7 +149,7 @@ export function AiTaggerPanel() {
   const [models, setModels] = useState<AiModelStatus[]>([]);
   const [runModels, setRunModels] = useState<Set<string>>(new Set());
   const [predictions, setPredictions] = useState<MediaPrediction[]>([]);
-  const [reviewMedia, setReviewMedia] = useState<MediaDetails[]>([]);
+  const [reviewRoots, setReviewRoots] = useState<ReviewRoot[]>([]);
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
   const [progress, setProgress] = useState<RunProgress>({ done: 0, total: 0, currentItemId: null });
   const [backend, setBackend] = useState<string | null>(null);
@@ -154,35 +175,36 @@ export function AiTaggerPanel() {
     setPortalState({ open: false });
   }, [setPortalState]);
 
-  const runPredict = useCallback(async (slugs: Set<string>, ids: number[], reset = false) => {
-    if (runningRef.current || slugs.size === 0 || ids.length === 0) return;
+  const runPredict = useCallback(async (slugs: Set<string>, roots: ReviewRoot[], reset = false) => {
+    if (runningRef.current || slugs.size === 0 || roots.length === 0) return;
     const generation = ++runGenerationRef.current;
     runningRef.current = true;
     setRunning(true);
     setError(null);
     const orderedSlugs = [...slugs];
-    const total = orderedSlugs.length * ids.length;
-    setProgress({ done: 0, total, currentItemId: ids[0] ?? null });
+    const total = orderedSlugs.length * roots.length;
+    setProgress({ done: 0, total, currentItemId: roots[0]?.rootItemId ?? null });
     if (reset) setPredictions([]);
 
     try {
       const failures: MediaPrediction[] = [];
       let done = 0;
       for (const slug of orderedSlugs) {
-        for (const itemId of ids) {
+        for (const root of roots) {
           if (generation !== runGenerationRef.current) return;
-          setProgress({ done, total, currentItemId: itemId });
-          const output = await aiTagPredict([itemId], [slug]);
+          setProgress({ done, total, currentItemId: root.rootItemId });
+          const output = await aiTagPredict(root.imageMedia.map((media) => media.media_item_id), [slug]);
           if (generation !== runGenerationRef.current) return;
-          setPredictions((previous) => mergePredictionResults(previous, output.predictions, new Set([slug])));
-          setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
-          failures.push(...output.predictions.filter((entry) => entry.error));
+          const combined = combineRootPrediction(root.rootItemId, output.predictions);
+          setPredictions((previous) => mergePredictionResults(previous, [combined], new Set([slug])));
+          setActiveItemId((current) => current ?? root.rootItemId);
+          if (combined.error) failures.push(combined);
           done += 1;
-          setProgress({ done, total, currentItemId: itemId });
+          setProgress({ done, total, currentItemId: root.rootItemId });
         }
       }
       if (failures.length > 0) {
-        setError(`${failures.length} of ${total} model/image analyses failed. ${failures[0].error}`);
+        setError(`${failures.length} of ${total} model/item analyses failed. ${failures[0].error}`);
       }
       try {
         const status = await aiTaggerStatus();
@@ -207,7 +229,7 @@ export function AiTaggerPanel() {
     runningRef.current = false;
     setQuery('');
     setPredictions([]);
-    setReviewMedia([]);
+    setReviewRoots([]);
     setActiveItemId(null);
     setOverrides(new Map());
     setViewMode('suggested');
@@ -223,8 +245,15 @@ export function AiTaggerPanel() {
       Promise.allSettled(itemIds.map((itemId) => viewerController.getItemDetails(itemId))),
     ]).then(([status, detailResults]) => {
       if (generation !== runGenerationRef.current) return;
-      const media = uniqueMedia(detailResults.flatMap((result) => result.status === 'fulfilled' ? result.value.media : []));
+      const roots = detailResults.flatMap((result) => {
+        if (result.status !== 'fulfilled') return [];
+        const root = reviewRoot(result.value);
+        return root ? [root] : [];
+      });
       const detailFailures = detailResults.filter((result) => result.status === 'rejected');
+      const unsupported = detailResults.filter((result) => (
+        result.status === 'fulfilled' && reviewRoot(result.value) == null
+      ));
       setModels(status.models);
       const initialConfidence = Math.min(
         MAX_REVIEW_CONFIDENCE,
@@ -233,9 +262,13 @@ export function AiTaggerPanel() {
       setConfidence(initialConfidence);
       setConfidenceDraft(initialConfidence);
       setBackend(status.cachedBackend);
-      setReviewMedia(media);
-      setActiveItemId(media[0]?.media_item_id ?? null);
-      if (detailFailures.length > 0) setError(`${detailFailures.length} selected items could not be prepared for AI review.`);
+      setReviewRoots(roots);
+      setActiveItemId(roots[0]?.rootItemId ?? null);
+      if (detailFailures.length > 0) {
+        setError(`${detailFailures.length} selected items could not be prepared for AI review.`);
+      } else if (unsupported.length > 0) {
+        setError(`${unsupported.length} selected items contain no images.`);
+      }
       const downloaded = new Set(status.models.filter((model) => model.downloaded).map((model) => model.slug));
       const previous = status.configuredModelSlugs.filter((slug) => downloaded.has(slug));
       const fallback = status.models.find((model) => model.downloaded && model.recommended)
@@ -254,11 +287,12 @@ export function AiTaggerPanel() {
     };
   }, [open, itemFingerprint]);
 
-  const reviewItemIds = useMemo(() => reviewMedia.length > 0
-    ? reviewMedia.map((media) => media.media_item_id)
-    : predictions.map((prediction) => prediction.mediaItemId), [predictions, reviewMedia]);
+  const reviewItemIds = useMemo(() => reviewRoots.length > 0
+    ? reviewRoots.map((root) => root.rootItemId)
+    : predictions.map((prediction) => prediction.mediaItemId), [predictions, reviewRoots]);
   const activeIndex = Math.max(0, reviewItemIds.indexOf(activeItemId ?? reviewItemIds[0]));
-  const activeMedia = reviewMedia.find((media) => media.media_item_id === activeItemId) ?? reviewMedia[activeIndex] ?? null;
+  const activeRoot = reviewRoots.find((root) => root.rootItemId === activeItemId) ?? reviewRoots[activeIndex] ?? null;
+  const activeMedia = activeRoot?.previewMedia ?? null;
   const activePrediction = predictions.find((prediction) => prediction.mediaItemId === activeItemId);
 
   const moveActive = useCallback((delta: number) => {
@@ -302,8 +336,11 @@ export function AiTaggerPanel() {
     const tags = predictionTags(prediction, runModels)
       .filter((tag) => isChecked(prediction.mediaItemId, tag))
       .map((tag) => tag.key);
-    return tags.length > 0 ? [{ media_item_id: prediction.mediaItemId, tags }] : [];
-  }), [isChecked, predictions, runModels]);
+    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.mediaItemId);
+    return tags.length > 0 && root
+      ? [{ media_item_id: root.imageMedia[0].media_item_id, tags }]
+      : [];
+  }), [isChecked, predictions, reviewRoots, runModels]);
   const checkedCount = assignments.reduce((total, assignment) => total + assignment.tags.length, 0);
 
   const applyChecked = useCallback(async () => {
@@ -389,7 +426,7 @@ export function AiTaggerPanel() {
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
             <button
               className={`${btnStyles.btn} ${styles.footerButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
-              onClick={() => void runPredict(runModels, reviewItemIds, true)}
+              onClick={() => void runPredict(runModels, reviewRoots, true)}
               disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
               type="button"
             >{running ? 'Running…' : 'Run'}</button>
@@ -422,27 +459,27 @@ export function AiTaggerPanel() {
 
         <section className={styles.reviewPane} aria-label="Media review">
           <div className={styles.reviewNavigation}>
-            <KbdTooltip label="Previous image" shortcutId="view.prevImage">
-              <button type="button" className={styles.navButton} aria-label="Previous image" onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
+            <KbdTooltip label="Previous item" shortcutId="view.prevImage">
+              <button type="button" className={styles.navButton} aria-label="Previous item" onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
             </KbdTooltip>
             <span className={styles.reviewCounter}>{currentNumber} / {reviewItemIds.length}</span>
-            <KbdTooltip label="Next image" shortcutId="view.nextImage">
-              <button type="button" className={styles.navButton} aria-label="Next image" onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
+            <KbdTooltip label="Next item" shortcutId="view.nextImage">
+              <button type="button" className={styles.navButton} aria-label="Next item" onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
             </KbdTooltip>
           </div>
           <div className={inspectorStyles.preview}>
             <div className={inspectorStyles.previewFrame} style={{ background: activeMedia?.dominant_color_hex ?? undefined }}>
               {activeMedia ? <ThumbnailImage src={mediaThumbnailUrl(activeMedia.file_hash)} alt="" className={inspectorStyles.previewImage} draggable={false} /> : <div className={styles.previewEmpty}>Preparing preview…</div>}
               <div className={inspectorStyles.previewGlass} />
-              {activeIsRunning && <div className={styles.previewStatus}>Analyzing this image…</div>}
+              {activeIsRunning && <div className={styles.previewStatus}>Analyzing this item…</div>}
             </div>
           </div>
-          <div className={styles.mediaName}>{activeMedia?.name || `Image ${currentNumber || 1}`}</div>
+          <div className={styles.mediaName}>{activeRoot?.label || `Item ${currentNumber || 1}`}</div>
           <div className={styles.mediaMeta}>{activePrediction ? `${activePrediction.predictions.length} tag predictions` : running ? 'Waiting for analysis' : 'No prediction result'}</div>
-          <div className={styles.thumbnailRail} aria-label="Selected images">
-            {reviewMedia.map((media, index) => (
-              <KbdTooltip key={media.media_item_id} label={`Review image ${index + 1}`}><button type="button" className={`${styles.thumbnailButton} ${media.media_item_id === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(media.media_item_id)} aria-label={`Review image ${index + 1}`}>
-                <ThumbnailImage src={mediaThumbnailUrl(media.file_hash)} alt="" draggable={false} />
+          <div className={styles.thumbnailRail} aria-label="Selected items">
+            {reviewRoots.map((root, index) => (
+              <KbdTooltip key={root.rootItemId} label={`Review item ${index + 1}`}><button type="button" className={`${styles.thumbnailButton} ${root.rootItemId === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(root.rootItemId)} aria-label={`Review item ${index + 1}`}>
+                <ThumbnailImage src={mediaThumbnailUrl(root.previewMedia.file_hash)} alt="" draggable={false} />
               </button></KbdTooltip>
             ))}
           </div>
@@ -452,8 +489,8 @@ export function AiTaggerPanel() {
           {error && visibleTags.length > 0 && <div className={styles.partialError}>{error}</div>}
           <div className={styles.tagListScroller}>
             {error && visibleTags.length === 0 && !running ? <div className={styles.emptyState}><span className={styles.errorText}>{error}</span></div>
-              : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific media items to auto tag</div>
-                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this image…' : running ? 'Waiting for this image…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
+              : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific library items to auto tag</div>
+                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this item…' : running ? 'Waiting for this item…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
                   : visibleTags.map((tag) => {
                     const itemId = activeItemId ?? activePrediction?.mediaItemId;
                     if (itemId == null) return null;

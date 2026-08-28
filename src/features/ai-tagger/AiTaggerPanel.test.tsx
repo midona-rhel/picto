@@ -96,6 +96,18 @@ const details = (itemId: number) => ({
   }],
 });
 
+const collectionDetails = (itemId: number, mediaItemIds: number[]) => ({
+  ...details(itemId),
+  kind: 'collection',
+  label: 'Mixed collection',
+  cover_media_item_id: mediaItemIds[0],
+  media: mediaItemIds.map((mediaItemId, position) => ({
+    ...details(mediaItemId).media[0],
+    media_item_id: mediaItemId,
+    position,
+  })),
+});
+
 async function renderPanel(itemIds = [1]) {
   const store = createStore();
   store.set(mocks.portalAtom, { open: true, anchor: null });
@@ -206,6 +218,28 @@ describe('AiTaggerPanel', () => {
     const wdButton = screen.getAllByText('WD14').map((node) => node.closest('button')).find(Boolean);
     expect(wdButton?.className).toContain('sidebarItemSelected');
     expect(z3dButton?.className).toContain('sidebarItemSelected');
+  });
+
+  it('reviews a collection once, unions member predictions, and applies once to its root', async () => {
+    mocks.details.mockResolvedValue(collectionDetails(10, [11, 12]));
+    mocks.predict.mockImplementation(async (itemIds: number[]) => ({
+      predictions: itemIds.map((itemId) => prediction(itemId, itemId === 11 ? 'cat' : 'dog')),
+      thresholds: { character: 0.35 },
+    }));
+    const user = setupUser();
+    await renderPanel([10]);
+    await startRun();
+
+    expect(await screen.findByText('cat')).toBeInTheDocument();
+    expect(await screen.findByText('dog')).toBeInTheDocument();
+    expect(mocks.predict).toHaveBeenCalledTimes(1);
+    expect(mocks.predict).toHaveBeenCalledWith([11, 12], [model.slug]);
+    expect(screen.getByText('Mixed collection')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply 2 tags' }));
+    await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
+      { media_item_id: 11, tags: ['character:cat', 'character:dog'] },
+    ]));
   });
 
   it('starts manual review at the general confidence setting', async () => {
@@ -360,7 +394,7 @@ describe('AiTaggerPanel', () => {
     await renderPanel([1, 2]);
     await startRun();
     expect(await screen.findByText('fresh')).toBeInTheDocument();
-    expect(await screen.findByText(/1 of 2 model\/image analyses failed.*unsupported media/i)).toBeInTheDocument();
+    expect(await screen.findByText(/1 of 2 model\/item analyses failed.*unsupported media/i)).toBeInTheDocument();
   });
 
   it('reports determinate progress while selected media are analyzed', async () => {
@@ -402,7 +436,7 @@ describe('AiTaggerPanel', () => {
     await screen.findByText('cat');
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
     await user.click(screen.getByText('cat'));
-    await user.click(screen.getByRole('button', { name: 'Next image' }));
+    await user.click(screen.getByRole('button', { name: 'Next item' }));
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
       { media_item_id: 2, tags: ['character:cat'] },
