@@ -30,3 +30,4 @@ pub use model::*;
 pub use mutation::Library;
 pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};
+pub use smart::SmartFolderRecord;

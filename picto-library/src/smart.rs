@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
 use crate::model::SmartFolderId;
 use crate::predicate::{self, ViewQuerySpec};
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SmartFolderRecord {
     pub smart_folder_id: SmartFolderId,
     pub name: String,

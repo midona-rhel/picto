@@ -44,6 +44,19 @@ pub struct LibraryHistoryOperationResult {
     pub receipt: crate::app::MutationReceipt,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LibraryNavigationSnapshot {
+    pub folders: Vec<picto_library::FolderRecord>,
+    pub smart_folders: Vec<picto_library::SmartFolderRecord>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LibraryCreatedSmartFolder {
+    pub smart_folder_id: picto_library::SmartFolderId,
+    pub receipt: picto_library::MutationReceipt,
+}
+
 impl LibraryApplication {
     pub fn create(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = prepare_root(root.as_ref())?;
@@ -515,43 +528,34 @@ impl LibraryApplication {
 
     pub fn create_smart_folder(
         &self,
-        input: &crate::navigation_v2::CreateSmartFolderInput,
-    ) -> Result<(i64, crate::navigation_v2::SmartFolderMutationReceipt), String> {
-        let input = crate::library_v1::smart_folder_input(&self.library, input)?;
+        input: picto_library::SmartFolderInput,
+    ) -> Result<LibraryCreatedSmartFolder, String> {
         let (smart_folder_id, receipt) = self
             .library
             .create_smart_folder(input)
             .map_err(|error| error.to_string())?;
-        Ok((
-            i64::from(smart_folder_id.0),
-            smart_receipt(receipt, vec![smart_folder_id], Vec::new(), None),
-        ))
+        Ok(LibraryCreatedSmartFolder {
+            smart_folder_id,
+            receipt,
+        })
     }
 
     pub fn update_smart_folder(
         &self,
-        smart_folder_id: i64,
-        input: &crate::navigation_v2::CreateSmartFolderInput,
-    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
-        let smart_folder_id = checked_smart_folder_id(smart_folder_id)?;
-        let input = crate::library_v1::smart_folder_input(&self.library, input)?;
-        let receipt = self
+        smart_folder_id: picto_library::SmartFolderId,
+        input: picto_library::SmartFolderInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self
             .library
             .update_smart_folder(smart_folder_id, input)
-            .map_err(|error| error.to_string())?;
-        Ok(smart_receipt(
-            receipt,
-            vec![smart_folder_id],
-            Vec::new(),
-            None,
-        ))
+            .map_err(|error| error.to_string())
     }
 
     pub fn move_smart_folder(
         &self,
         smart_folder_id: i64,
         parent_id: Option<i64>,
-    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+    ) -> Result<picto_library::MutationReceipt, String> {
         let smart_folder_id = checked_smart_folder_id(smart_folder_id)?;
         let mut record = self
             .library
@@ -561,7 +565,7 @@ impl LibraryApplication {
             .find(|record| record.smart_folder_id == smart_folder_id)
             .ok_or_else(|| format!("Smart folder {} does not exist", smart_folder_id.0))?;
         record.parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
-        let receipt = self
+        self
             .library
             .update_smart_folder(
                 smart_folder_id,
@@ -574,47 +578,44 @@ impl LibraryApplication {
                     view: record.view,
                 },
             )
-            .map_err(|error| error.to_string())?;
-        Ok(smart_receipt(
-            receipt,
-            vec![smart_folder_id],
-            Vec::new(),
-            None,
-        ))
+            .map_err(|error| error.to_string())
     }
 
     pub fn reorder_smart_folder_children(
         &self,
         parent_id: Option<i64>,
         smart_folder_ids: &[i64],
-    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+    ) -> Result<picto_library::MutationReceipt, String> {
         let parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
         let ids = smart_folder_ids
             .iter()
             .copied()
             .map(checked_smart_folder_id)
             .collect::<Result<Vec<_>, String>>()?;
-        let receipt = self
+        self
             .library
             .reorder_smart_folder_children(parent_id, &ids)
-            .map_err(|error| error.to_string())?;
-        Ok(smart_receipt(receipt, ids, Vec::new(), None))
+            .map_err(|error| error.to_string())
     }
 
     pub fn delete_smart_folder(
         &self,
         smart_folder_id: i64,
-    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
-        let result = self
+    ) -> Result<picto_library::SmartFolderDeleteResult, String> {
+        self
             .library
             .delete_smart_folder(checked_smart_folder_id(smart_folder_id)?)
-            .map_err(|error| error.to_string())?;
-        Ok(smart_receipt(
-            result.receipt,
-            Vec::new(),
-            result.deleted_smart_folder_ids,
-            result.fallback_smart_folder_id,
-        ))
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn navigation(&self) -> Result<LibraryNavigationSnapshot, String> {
+        let (folders, smart_folders, revision) =
+            self.library.navigation().map_err(|error| error.to_string())?;
+        Ok(LibraryNavigationSnapshot {
+            folders,
+            smart_folders,
+            revision,
+        })
     }
 
     pub fn list_tags(
@@ -940,26 +941,6 @@ fn folder_receipt(
         folder_ids,
         deleted_folder_ids,
         fallback_folder_id,
-    }
-}
-
-fn smart_receipt(
-    receipt: picto_library::MutationReceipt,
-    smart_folder_ids: Vec<picto_library::SmartFolderId>,
-    deleted_smart_folder_ids: Vec<picto_library::SmartFolderId>,
-    fallback_smart_folder_id: Option<picto_library::SmartFolderId>,
-) -> crate::navigation_v2::SmartFolderMutationReceipt {
-    crate::navigation_v2::SmartFolderMutationReceipt {
-        receipt: crate::library_v1::receipt(receipt),
-        smart_folder_ids: smart_folder_ids
-            .into_iter()
-            .map(|id| i64::from(id.0))
-            .collect(),
-        deleted_smart_folder_ids: deleted_smart_folder_ids
-            .into_iter()
-            .map(|id| i64::from(id.0))
-            .collect(),
-        fallback_smart_folder_id: fallback_smart_folder_id.map(|id| i64::from(id.0)),
     }
 }
 

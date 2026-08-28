@@ -253,32 +253,22 @@ impl Library {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
+            |connection, snapshot| list_folders(connection, &snapshot),
+        )
+    }
+
+    pub fn navigation(
+        &self,
+    ) -> Result<(Vec<FolderRecord>, Vec<SmartFolderRecord>, u64)> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                let mut statement = connection.prepare(
-                    "SELECT folder_id, stable_key, parent_id, name, icon, color, notes,
-                            display_order
-                     FROM folder_definition
-                     ORDER BY parent_id, display_order, folder_id",
-                )?;
-                let rows = statement.query_map([], |row| {
-                    let folder_id = FolderId(row.get(0)?);
-                    Ok(FolderRecord {
-                        folder_id,
-                        stable_key: row.get(1)?,
-                        parent_id: row.get::<_, Option<u32>>(2)?.map(FolderId),
-                        name: row.get(3)?,
-                        icon: row.get(4)?,
-                        color: row.get(5)?,
-                        notes: row.get(6)?,
-                        display_order: row.get(7)?,
-                        count: snapshot
-                            .folders
-                            .get(&folder_id)
-                            .map_or(0, |roots| (roots & snapshot.active()).len()),
-                    })
-                })?;
-                rows.collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(Into::into)
+                Ok((
+                    list_folders(connection, &snapshot)?,
+                    crate::smart::list(connection, &snapshot)?,
+                    snapshot.revision,
+                ))
             },
         )
     }
@@ -5421,6 +5411,36 @@ fn load_folder_definition(
             },
         )
         .optional()
+        .map_err(Into::into)
+}
+
+fn list_folders(
+    connection: &rusqlite::Connection,
+    snapshot: &ProjectionSnapshot,
+) -> Result<Vec<FolderRecord>> {
+    let mut statement = connection.prepare(
+        "SELECT folder_id, stable_key, parent_id, name, icon, color, notes, display_order
+         FROM folder_definition
+         ORDER BY parent_id, display_order, folder_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let folder_id = FolderId(row.get(0)?);
+        Ok(FolderRecord {
+            folder_id,
+            stable_key: row.get(1)?,
+            parent_id: row.get::<_, Option<u32>>(2)?.map(FolderId),
+            name: row.get(3)?,
+            icon: row.get(4)?,
+            color: row.get(5)?,
+            notes: row.get(6)?,
+            display_order: row.get(7)?,
+            count: snapshot
+                .folders
+                .get(&folder_id)
+                .map_or(0, |roots| (roots & snapshot.active()).len()),
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
 }
 

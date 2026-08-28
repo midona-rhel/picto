@@ -48,6 +48,7 @@ pub fn dispatch_library(
             read(application.selection_summary(&input.target)?)
         }
         "sidebar.counts" => read(application.sidebar_counts()?),
+        "navigation.get" => read(application.navigation()?),
         "tags.list" => {
             let input: ListTagsInput = parse(args_json)?;
             read(application.list_tags(
@@ -158,16 +159,12 @@ pub fn dispatch_library(
             read(application.delete_folders(&input.folder_ids)?)
         }
         "smart_folders.create" => {
-            let input: CreateSmartFolderInput = parse(args_json)?;
-            let (smart_folder_id, receipt) = application.create_smart_folder(&input)?;
-            read(CreatedSmartFolder {
-                smart_folder_id,
-                receipt,
-            })
+            let input: picto_library::SmartFolderInput = parse(args_json)?;
+            read(application.create_smart_folder(input)?)
         }
         "smart_folders.update" => {
-            let input: UpdateSmartFolderInput = parse(args_json)?;
-            read(application.update_smart_folder(input.smart_folder_id, &input.value)?)
+            let input: LibraryUpdateSmartFolderInput = parse(args_json)?;
+            read(application.update_smart_folder(input.smart_folder_id, input.value)?)
         }
         "smart_folders.move" => {
             let input: MoveSmartFolderInput = parse(args_json)?;
@@ -1319,6 +1316,11 @@ struct LibraryResolveDuplicateInput {
     file_id_b: picto_library::FileId,
     choice: picto_library::DuplicateResolutionChoice,
 }
+#[derive(Deserialize)]
+struct LibraryUpdateSmartFolderInput {
+    smart_folder_id: picto_library::SmartFolderId,
+    value: picto_library::SmartFolderInput,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1860,13 +1862,22 @@ mod tests {
         let smart = dispatch_library(
             &application,
             "smart_folders.create",
-            r#"{"name":"Everything","parent_id":null,"predicate":{"groups":[]},"icon":null,"color":null,"notes":null,"sort_field":"imported_at","sort_order":"descending"}"#,
+            r#"{"name":"Everything","parent_id":null,"icon":null,"color":null,"notes":null,"view":{}}"#,
         )
         .unwrap()
         .unwrap();
         let smart: serde_json::Value = serde_json::from_str(&smart).unwrap();
         let smart_folder_id = smart["smart_folder_id"].as_i64().unwrap();
         assert_eq!(application.library().smart_folders().unwrap()[0].count, 1);
+        let navigation = dispatch_library(&application, "navigation.get", "{}")
+            .unwrap()
+            .unwrap();
+        let navigation: serde_json::Value = serde_json::from_str(&navigation).unwrap();
+        assert_eq!(navigation["folders"][0]["folder_id"], folder_id);
+        assert_eq!(
+            navigation["smart_folders"][0]["view"]["filter"]["kind"],
+            "all"
+        );
         dispatch_library(
             &application,
             "smart_folders.delete",
