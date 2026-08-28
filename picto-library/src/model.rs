@@ -231,6 +231,14 @@ pub struct PreparedCollectionImport {
     pub modified_at_ms: i64,
 }
 
+/// Tags produced for one visible library root. Collection callers combine
+/// member predictions before submitting this assignment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootTagAssignment {
+    pub root_id: RootId,
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupRequest {
     pub target: crate::selection::SelectionTarget,

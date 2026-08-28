@@ -13,8 +13,8 @@ use crate::history::{
 use crate::ingest;
 use crate::model::{
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
-    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderDeleteResult,
-    SmartFolderId, SmartFolderInput, TagNamespaceId, TagRecord,
+    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, RootTagAssignment,
+    SmartFolderDeleteResult, SmartFolderId, SmartFolderInput, TagNamespaceId, TagRecord,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -1227,6 +1227,145 @@ impl Library {
 
     pub fn add_tag(&self, target: &SelectionTarget, name: &str) -> Result<MutationReceipt> {
         self.tag_mutation(target, name, true)
+    }
+
+    /// Apply independently predicted tag sets to visible roots in one exact
+    /// publication. Collections are one root, so callers union all member
+    /// predictions into one assignment before entering the library kernel.
+    pub fn add_tag_assignments(
+        &self,
+        assignments: &[RootTagAssignment],
+    ) -> Result<MutationReceipt> {
+        if assignments.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one root tag assignment is required".into(),
+            ));
+        }
+        let mut roots_by_tag = HashMap::<String, RoaringBitmap>::new();
+        let mut requested_roots = RoaringBitmap::new();
+        for assignment in assignments {
+            requested_roots.insert(assignment.root_id.0);
+            for tag in &assignment.tags {
+                roots_by_tag
+                    .entry(required_name("tag", tag)?)
+                    .or_default()
+                    .insert(assignment.root_id.0);
+            }
+        }
+        if roots_by_tag.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one tag is required".into(),
+            ));
+        }
+
+        let changed_at_ms = now_ms();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let every_root = snapshot.root_kinds.values().fold(
+                    RoaringBitmap::new(),
+                    |mut roots, members| {
+                        roots |= members;
+                        roots
+                    },
+                );
+                let missing = &requested_roots - &every_root;
+                if let Some(root_id) = missing.min() {
+                    return Err(LibraryError::NotFound(format!("root {root_id}")));
+                }
+
+                let mut next = (*snapshot).clone();
+                let mut changes = Vec::with_capacity(roots_by_tag.len());
+                let mut affected = RoaringBitmap::new();
+                for (name, requested) in &roots_by_tag {
+                    let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                        tag_id
+                    } else {
+                        let tag_id = ingest::ensure_tag(transaction, name)?;
+                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                        tag_id
+                    };
+                    let before = next
+                        .tags
+                        .get(&tag_id)
+                        .map(|members| members.to_bitmap())
+                        .unwrap_or_default();
+                    let mut after = before.clone();
+                    after |= requested;
+                    let changed = &after - &before;
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    bitmap::replace(
+                        transaction,
+                        revision,
+                        BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
+                        },
+                        &after,
+                    )?;
+                    Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
+                    let counts = Arc::make_mut(&mut next.tag_count);
+                    for root_id in &changed {
+                        counts.insert(root_id, counts.value(root_id).unwrap_or(0) + 1);
+                    }
+                    affected |= &changed;
+                    changes.push(SemanticChange::Bitmap {
+                        key: BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
+                        },
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
+                }
+
+                if !affected.is_empty() {
+                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                    insert_cloud_journal(
+                        transaction,
+                        revision,
+                        "tag.ai_batch",
+                        Some(&affected),
+                        serde_json::json!({"assignment_count": assignments.len()}),
+                        changed_at_ms,
+                    )?;
+                }
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    if affected.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![
+                            "roots".into(),
+                            "tags".into(),
+                            "sidebar".into(),
+                            "smart-folders".into(),
+                        ]
+                    },
+                    affected.iter().map(RootId),
+                );
+                let history = (!changes.is_empty())
+                    .then(|| HistoryEntry::new("Apply AI tags", SemanticChange::Compound(changes)));
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
     }
 
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {

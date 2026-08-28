@@ -5,7 +5,7 @@ use picto_library::query::{ItemScope, PageRequest, RootQuery};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
     GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle, PreparedImport, Rating,
-    RootKind, SmartFolderInput,
+    RootKind, RootTagAssignment, SmartFolderInput,
 };
 use tempfile::TempDir;
 
@@ -419,6 +419,72 @@ fn undo_and_redo_are_process_memory_only_and_restore_bitmap_state() {
     let reopened = Library::open(&path).unwrap();
     assert_eq!(root_tag_count(&reopened, root), 1);
     assert_eq!(reopened.history().state().entries, 0);
+}
+
+#[test]
+fn ai_tag_assignments_union_member_predictions_onto_one_collection_root() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (image, _) = library
+        .ingest(&imported_as(
+            "ai-image",
+            "image/png",
+            LabColor {
+                l: 50.0,
+                a: 10.0,
+                b: -5.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (video, _) = library
+        .ingest(&imported_as(
+            "ai-video",
+            "video/mp4",
+            LabColor {
+                l: 60.0,
+                a: -10.0,
+                b: 5.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![image, video],
+            },
+            cover_root_id: video,
+            winning_collection_id: None,
+            name: Some("AI collection".into()),
+            modified_at_ms: 1_700_000_000_100,
+        })
+        .unwrap();
+
+    let receipt = library
+        .add_tag_assignments(&[
+            RootTagAssignment {
+                root_id: collection,
+                tags: vec!["character:cat".into(), "series:test".into()],
+            },
+            RootTagAssignment {
+                root_id: collection,
+                tags: vec!["character:cat".into(), "character:dog".into()],
+            },
+        ])
+        .unwrap();
+
+    assert_eq!(receipt.item_ids, vec![collection]);
+    let details = library.details(collection).unwrap();
+    assert_eq!(details.tag_ids.len(), 3);
+    assert_eq!(root_tag_count(&library, collection), 3);
+    assert_eq!(root_tag_count(&library, image), 0);
+    assert_eq!(root_tag_count(&library, video), 0);
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, collection), 0);
+    library.redo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, collection), 3);
 }
 
 #[test]
