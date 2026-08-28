@@ -104,6 +104,35 @@ pub fn list_credentials(store: &Store) -> Result<Vec<CredentialRecord>, String> 
     })
 }
 
+pub fn list_library_credentials(
+    application: &crate::library_application::LibraryApplication,
+) -> Result<Vec<CredentialRecord>, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT site_id, credential_type, display_name, created_at
+                     FROM credential ORDER BY site_id",
+                )?;
+                let records = statement
+                    .query_map([], |row| {
+                        Ok(CredentialRecord {
+                            site_id: row.get(0)?,
+                            credential_type: row.get(1)?,
+                            display_name: row.get(2)?,
+                            created_at: row.get(3)?,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(picto_library::LibraryError::from)?;
+                Ok(records)
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn list_health(store: &Store) -> Result<Vec<CredentialHealthRecord>, String> {
     store.read(|connection| {
         let mut statement = connection.prepare(
@@ -122,6 +151,118 @@ pub fn list_health(store: &Store) -> Result<Vec<CredentialHealthRecord>, String>
             .collect();
         records
     })
+}
+
+pub fn list_library_health(
+    application: &crate::library_application::LibraryApplication,
+) -> Result<Vec<CredentialHealthRecord>, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT site_id, status, checked_at, last_error
+                     FROM credential_health ORDER BY site_id",
+                )?;
+                let records = statement
+                    .query_map([], |row| {
+                        Ok(CredentialHealthRecord {
+                            site_id: row.get(0)?,
+                            status: row.get(1)?,
+                            checked_at: row.get(2)?,
+                            last_error: row.get(3)?,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(picto_library::LibraryError::from)?;
+                Ok(records)
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+pub fn set_library_credential(
+    application: &crate::library_application::LibraryApplication,
+    input: SetCredentialInput,
+    now: &str,
+) -> Result<picto_library::MutationReceipt, String> {
+    let owner = credential_owner(&input.site_id)?;
+    let credential_type = CredentialType::from_str(&input.credential_type)
+        .ok_or_else(|| format!("Unsupported credential type: {}", input.credential_type))?;
+    if !owner.credential_types.contains(&credential_type.as_str()) {
+        return Err(format!(
+            "{} does not accept {} credentials",
+            owner.name,
+            credential_type.as_str()
+        ));
+    }
+    let credential = SiteCredential {
+        site_category: owner.id.to_string(),
+        credential_type,
+        username: input.username,
+        password: input.password,
+        cookies: input.cookies,
+        headers: input.headers,
+        oauth_token: input.oauth_token,
+    };
+    validate_secret(&credential)?;
+    crate::credential_store::set_credential(&credential)?;
+
+    let site_id = owner.id.to_string();
+    let credential_type = credential_type.as_str().to_string();
+    let display_name = clean_display_name(input.display_name);
+    let now = now.to_owned();
+    let (_, receipt) = application
+        .library()
+        .auxiliary_write(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            ["subscriptions".to_string(), "settings".to_string()],
+            [],
+            move |transaction, _| {
+                transaction.execute(
+                    "INSERT INTO credential (site_id, credential_type, display_name, created_at)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(site_id) DO UPDATE SET
+                         credential_type = excluded.credential_type,
+                         display_name = excluded.display_name,
+                         created_at = excluded.created_at",
+                    params![site_id, credential_type, display_name, now],
+                )?;
+                transaction.execute(
+                    "INSERT INTO credential_health (site_id, status, checked_at, last_error)
+                     VALUES (?1, 'unknown', NULL, NULL)
+                     ON CONFLICT(site_id) DO UPDATE SET
+                         status = 'unknown', checked_at = NULL, last_error = NULL",
+                    [&site_id],
+                )?;
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(receipt)
+}
+
+pub fn delete_library_credential(
+    application: &crate::library_application::LibraryApplication,
+    site_id: &str,
+) -> Result<picto_library::MutationReceipt, String> {
+    let owner = credential_owner(site_id)?;
+    crate::credential_store::delete_credential(owner.id)?;
+    let owner_id = owner.id.to_owned();
+    let (_, receipt) = application
+        .library()
+        .auxiliary_write(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            ["subscriptions".to_string(), "settings".to_string()],
+            [],
+            move |transaction, _| {
+                transaction.execute("DELETE FROM credential WHERE site_id = ?1", [owner_id])?;
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(receipt)
 }
 
 pub fn set_credential(

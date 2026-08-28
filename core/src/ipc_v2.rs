@@ -64,6 +64,21 @@ pub fn dispatch_library(
             let input: LimitInput = parse(args_json)?;
             read(application.duplicate_candidates(input.limit)?)
         }
+        "sources.list" => read(crate::auth_v2::sources()),
+        "auth.credentials.list" => read(crate::auth_v2::list_library_credentials(application)?),
+        "auth.health.list" => read(crate::auth_v2::list_library_health(application)?),
+        "auth.credentials.set" => read(crate::auth_v2::set_library_credential(
+            application,
+            parse(args_json)?,
+            &now(),
+        )?),
+        "auth.credentials.delete" => {
+            let input: SiteInput = parse(args_json)?;
+            read(crate::auth_v2::delete_library_credential(
+                application,
+                &input.site_id,
+            )?)
+        }
         "items.record_view" => {
             let input: LibraryRootInput = parse(args_json)?;
             read(application.record_recent_view(input.root_id)?)
@@ -2294,6 +2309,48 @@ mod tests {
             serde_json::from_str(&output).unwrap();
         assert!(candidates.is_empty());
         assert_eq!(application.sidebar_counts().unwrap().duplicates, 0);
+    }
+
+    #[test]
+    fn greenfield_dispatch_reads_non_secret_auth_metadata_through_shared_scheduler() {
+        let (_directory, application, _) = greenfield_fixture();
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["settings".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO credential
+                             (site_id, credential_type, display_name, created_at)
+                         VALUES ('patreon', 'cookies', 'Test account', '2026-08-28T00:00:00Z')",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO credential_health
+                             (site_id, status, checked_at, last_error)
+                         VALUES ('patreon', 'valid', '2026-08-28T00:00:01Z', NULL)",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let credentials = dispatch_library(&application, "auth.credentials.list", "{}")
+            .unwrap()
+            .unwrap();
+        let credentials: Vec<crate::auth_v2::CredentialRecord> =
+            serde_json::from_str(&credentials).unwrap();
+        assert_eq!(credentials[0].display_name.as_deref(), Some("Test account"));
+        let encoded = serde_json::to_value(&credentials).unwrap();
+        assert!(encoded[0].get("cookies").is_none());
+        let health = dispatch_library(&application, "auth.health.list", "{}")
+            .unwrap()
+            .unwrap();
+        let health: Vec<crate::auth_v2::CredentialHealthRecord> =
+            serde_json::from_str(&health).unwrap();
+        assert_eq!(health[0].status, "valid");
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {
