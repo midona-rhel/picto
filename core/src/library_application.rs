@@ -682,6 +682,136 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn application_settings(
+        &self,
+    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+        self.settings_value("setting", "application")
+    }
+
+    pub fn view_preferences(
+        &self,
+        scope: &str,
+    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+        let scope = required_shell_value("View preference scope", scope)?;
+        self.settings_value("view_pref", &scope)
+    }
+
+    pub fn replace_application_settings(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        require_json_object("Application settings", value)?;
+        self.library
+            .replace_auxiliary_json(
+                "settings.replace",
+                "Replace settings",
+                "setting",
+                "application",
+                Some(serde_json::to_string(value).map_err(|error| error.to_string())?),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn patch_application_settings(
+        &self,
+        patch: &serde_json::Value,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.patch_settings_value(
+            "settings.patch",
+            "Change settings",
+            "setting",
+            "application",
+            patch,
+        )
+    }
+
+    pub fn patch_view_preferences(
+        &self,
+        scope: &str,
+        patch: &serde_json::Value,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let scope = required_shell_value("View preference scope", scope)?;
+        self.patch_settings_value(
+            "settings.view.patch",
+            "Change view preferences",
+            "view_pref",
+            &scope,
+            patch,
+        )
+    }
+
+    pub fn reset_view_preferences(&self) -> Result<picto_library::MutationReceipt, String> {
+        let (_, receipt) = self
+            .library
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["settings".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "DELETE FROM view_pref WHERE scope <> 'grid:defaults'",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(receipt)
+    }
+
+    fn settings_value(
+        &self,
+        table: &str,
+        key: &str,
+    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+        let value = self
+            .library
+            .read_auxiliary_json(table, key)
+            .map_err(|error| error.to_string())?
+            .map(|encoded| serde_json::from_str(&encoded).map_err(|error| error.to_string()))
+            .transpose()?
+            .unwrap_or_else(|| serde_json::json!({}));
+        Ok(crate::settings_v2::SettingsSnapshot {
+            value,
+            revision: self
+                .library
+                .database()
+                .revision()
+                .map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn patch_settings_value(
+        &self,
+        command: &'static str,
+        label: &'static str,
+        table: &'static str,
+        key: &str,
+        patch: &serde_json::Value,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        require_json_object("Settings patch", patch)?;
+        let mut value = self.settings_value(table, key)?.value;
+        let target = value
+            .as_object_mut()
+            .ok_or_else(|| "Stored settings must be a JSON object".to_string())?;
+        for (name, replacement) in patch.as_object().expect("validated object") {
+            if replacement.is_null() {
+                target.remove(name);
+            } else {
+                target.insert(name.clone(), replacement.clone());
+            }
+        }
+        self.library
+            .replace_auxiliary_json(
+                command,
+                label,
+                table,
+                key,
+                Some(serde_json::to_string(&value).map_err(|error| error.to_string())?),
+            )
+            .map_err(|error| error.to_string())
+    }
+
     pub fn delete_items(
         &self,
         target: &picto_library::selection::SelectionTarget,
@@ -816,6 +946,23 @@ fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| format!("{kind} ID {value} is outside the local ID domain"))
+}
+
+fn required_shell_value(label: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err(format!("{label} cannot be empty"))
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+fn require_json_object(label: &str, value: &serde_json::Value) -> Result<(), String> {
+    if value.is_object() {
+        Ok(())
+    } else {
+        Err(format!("{label} must be a JSON object"))
+    }
 }
 
 fn map_history_state(value: picto_library::history::HistoryState) -> LibraryHistoryState {
@@ -976,6 +1123,22 @@ mod tests {
                 )
                 .unwrap(),
             "{}"
+        );
+        let changed = application
+            .patch_application_settings(&serde_json::json!({"zoom": 1.25}))
+            .unwrap();
+        let no_op = application
+            .patch_application_settings(&serde_json::json!({"zoom": 1.25}))
+            .unwrap();
+        assert_eq!(no_op.revision, changed.revision);
+        assert_eq!(
+            application.application_settings().unwrap().value,
+            serde_json::json!({"zoom": 1.25})
+        );
+        application.undo().unwrap();
+        assert_eq!(
+            application.application_settings().unwrap().value,
+            serde_json::json!({})
         );
     }
 }

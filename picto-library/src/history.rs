@@ -98,6 +98,13 @@ pub struct StructuralState {
 
 #[derive(Debug, Clone)]
 pub enum SemanticChange {
+    AuxiliaryJson {
+        table: &'static str,
+        key: String,
+        before: Option<String>,
+        after: Option<String>,
+        resource: &'static str,
+    },
     Bitmap {
         key: BitmapKey,
         before: Arc<RoaringBitmap>,
@@ -175,6 +182,12 @@ pub enum SemanticChange {
 impl SemanticChange {
     pub fn estimated_bytes(&self) -> usize {
         match self {
+            Self::AuxiliaryJson {
+                key, before, after, ..
+            } => key.len()
+                + before.as_deref().map(str::len).unwrap_or(0)
+                + after.as_deref().map(str::len).unwrap_or(0)
+                + 64,
             Self::Bitmap { before, after, .. } => {
                 before.serialized_size() + after.serialized_size() + 64
             }

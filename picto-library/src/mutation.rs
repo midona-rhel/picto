@@ -123,6 +123,107 @@ impl Library {
         Ok((output, receipt))
     }
 
+    pub fn read_auxiliary_json(&self, table: &str, key: &str) -> Result<Option<String>> {
+        let (table, key_column) = auxiliary_json_spec(table)?;
+        self.database.read(WorkPriority::VisibleRead, |connection| {
+            use rusqlite::OptionalExtension;
+            connection
+                .query_row(
+                    &format!("SELECT value_json FROM {table} WHERE {key_column} = ?1"),
+                    [key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn replace_auxiliary_json(
+        &self,
+        command: &'static str,
+        label: &'static str,
+        table: &'static str,
+        key: &str,
+        value: Option<String>,
+    ) -> Result<MutationReceipt> {
+        let (table, key_column) = auxiliary_json_spec(table)?;
+        let key = key.to_owned();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let result = self.database.published_write_if_changed(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                use rusqlite::OptionalExtension;
+                let before = transaction
+                    .query_row(
+                        &format!("SELECT value_json FROM {table} WHERE {key_column} = ?1"),
+                        [&key],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                if before == value {
+                    return Ok(None);
+                }
+                if let Some(value) = value.as_ref() {
+                    transaction.execute(
+                        &format!(
+                            "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
+                             ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
+                        ),
+                        rusqlite::params![key, value],
+                    )?;
+                } else {
+                    transaction.execute(
+                        &format!("DELETE FROM {table} WHERE {key_column} = ?1"),
+                        [&key],
+                    )?;
+                }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    command,
+                    None,
+                    serde_json::json!({"key": key}),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["settings".into()],
+                    Vec::new(),
+                );
+                Ok(Some((receipt.clone(), PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        command,
+                        label,
+                        SemanticChange::AuxiliaryJson {
+                            table,
+                            key: key.clone(),
+                            before,
+                            after: value.clone(),
+                            resource: "settings",
+                        },
+                    )),
+                })))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        let Some((receipt, _, history_entry)) = result else {
+            return Ok(PublicationCoordinator::receipt(
+                self.database.revision()?,
+                Vec::new(),
+                Vec::new(),
+            ));
+        };
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
     pub fn undo(&self) -> Result<Option<MutationReceipt>> {
         let Some(entry) = self.history.take_undo() else {
             return Ok(None);
@@ -4846,6 +4947,48 @@ fn apply_semantic_change(
     resources: &mut BTreeSet<String>,
 ) -> Result<()> {
     match change {
+        SemanticChange::AuxiliaryJson {
+            table,
+            key,
+            before,
+            after,
+            resource,
+        } => {
+            use rusqlite::OptionalExtension;
+            let (table, key_column) = auxiliary_json_spec(table)?;
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let current = transaction
+                .query_row(
+                    &format!("SELECT value_json FROM {table} WHERE {key_column} = ?1"),
+                    [key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if &current != expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because {table}/{key} changed"
+                )));
+            }
+            if let Some(value) = replacement {
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
+                         ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
+                    ),
+                    rusqlite::params![key, value],
+                )?;
+            } else {
+                transaction.execute(
+                    &format!("DELETE FROM {table} WHERE {key_column} = ?1"),
+                    [key],
+                )?;
+            }
+            resources.insert((*resource).into());
+        }
         SemanticChange::Bitmap { key, before, after } => {
             let (expected, replacement) = if use_after {
                 (before.as_ref(), after.as_ref())
@@ -6689,4 +6832,14 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as i64)
+}
+
+fn auxiliary_json_spec(table: &str) -> Result<(&'static str, &'static str)> {
+    match table {
+        "setting" => Ok(("setting", "key")),
+        "view_pref" => Ok(("view_pref", "scope")),
+        _ => Err(LibraryError::InvalidInput(format!(
+            "unsupported auxiliary JSON table {table}"
+        ))),
+    }
 }

@@ -229,6 +229,24 @@ pub fn dispatch_library(
                 input.choice,
             )?)
         }
+        "settings.get" => read(application.application_settings()?),
+        "settings.view.get" => {
+            let input: ScopeInput = parse(args_json)?;
+            read(application.view_preferences(&input.scope)?)
+        }
+        "settings.replace" => {
+            let input: ValueInput = parse(args_json)?;
+            read(application.replace_application_settings(&input.value)?)
+        }
+        "settings.patch" => {
+            let input: ValueInput = parse(args_json)?;
+            read(application.patch_application_settings(&input.value)?)
+        }
+        "settings.view.patch" => {
+            let input: PatchViewSettingsInput = parse(args_json)?;
+            read(application.patch_view_preferences(&input.scope, &input.value)?)
+        }
+        "settings.view.reset" => read(application.reset_view_preferences()?),
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
