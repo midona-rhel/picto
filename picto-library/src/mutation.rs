@@ -136,6 +136,54 @@ impl Library {
         )
     }
 
+    pub fn sidebar_counts(&self) -> Result<crate::SidebarCounts> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let counts = crate::query::counts(&snapshot);
+                let recently_viewed = crate::query::matching_roots(
+                    connection,
+                    &snapshot,
+                    &crate::query::RootQuery {
+                        scope: crate::query::ItemScope::RecentlyViewed,
+                        view: Default::default(),
+                    },
+                )?
+                .len();
+                let duplicates =
+                    crate::duplicate::count_visible_candidates(connection, &snapshot)?;
+                let mut folders = counts
+                    .folders
+                    .into_iter()
+                    .map(|(folder_id, count)| crate::FolderCount { folder_id, count })
+                    .collect::<Vec<_>>();
+                folders.sort_by_key(|entry| entry.folder_id);
+                let mut smart_folders = counts
+                    .smart_folders
+                    .into_iter()
+                    .map(|(smart_folder_id, count)| crate::SmartFolderCount {
+                        smart_folder_id,
+                        count,
+                    })
+                    .collect::<Vec<_>>();
+                smart_folders.sort_by_key(|entry| entry.smart_folder_id);
+                Ok(crate::SidebarCounts {
+                    all: counts.all,
+                    inbox: counts.inbox,
+                    trash: counts.trash,
+                    recently_viewed,
+                    untagged: counts.untagged,
+                    uncategorized: counts.uncategorized,
+                    duplicates,
+                    folders,
+                    smart_folders,
+                    revision: counts.revision,
+                })
+            },
+        )
+    }
+
     pub fn selection_summary(&self, target: &SelectionTarget) -> Result<SelectionSummary> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,

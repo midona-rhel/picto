@@ -197,6 +197,32 @@ pub struct TagPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderCount {
+    pub folder_id: FolderId,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmartFolderCount {
+    pub smart_folder_id: SmartFolderId,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarCounts {
+    pub all: u64,
+    pub inbox: u64,
+    pub trash: u64,
+    pub recently_viewed: u64,
+    pub untagged: u64,
+    pub uncategorized: u64,
+    pub duplicates: u64,
+    pub folders: Vec<FolderCount>,
+    pub smart_folders: Vec<SmartFolderCount>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDeleteResult {
     pub deleted_folder_ids: Vec<FolderId>,
     pub fallback_folder_id: Option<FolderId>,

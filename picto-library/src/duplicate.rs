@@ -154,6 +154,51 @@ pub(crate) fn list_candidates(
     Ok(candidates)
 }
 
+pub(crate) fn count_visible_candidates(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+) -> Result<u64> {
+    let mut statement = connection.prepare(
+        "SELECT file_id_a, file_id_b FROM duplicate_pair
+         WHERE status = ?1 ORDER BY file_id_a, file_id_b",
+    )?;
+    let pairs = statement.query_map([STATUS_DETECTED], |row| {
+        Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
+    })?;
+    let mut count = 0_u64;
+    for pair in pairs {
+        let (left, right) = pair?;
+        if file_has_active_occurrence(connection, snapshot, left)?
+            && file_has_active_occurrence(connection, snapshot, right)?
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn file_has_active_occurrence(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    file_id: FileId,
+) -> Result<bool> {
+    let active = snapshot.lifecycle(Lifecycle::Active);
+    let mut statement =
+        connection.prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?;
+    let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
+    for media_id in rows {
+        let media_id = media_id?;
+        if snapshot
+            .media_owner
+            .get(media_id)
+            .is_some_and(|root_id| active.contains(root_id.0))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn candidate_side(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,

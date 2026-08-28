@@ -7,7 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use picto_library::query::PageRequest;
 use picto_library::{Library, RootId};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -628,68 +627,10 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
-    pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
-        let counts = self.library.counts().map_err(|error| error.to_string())?;
-        let recently_viewed = self
-            .library
-            .query(
-                &picto_library::query::RootQuery {
-                    scope: picto_library::query::ItemScope::RecentlyViewed,
-                    view: picto_library::predicate::ViewQuerySpec::default(),
-                },
-                &PageRequest {
-                    limit: 1,
-                    cursor: None,
-                },
-            )
-            .map_err(|error| error.to_string())?
-            .total;
-        let duplicates = self
-            .library
-            .database()
-            .read(
-                picto_library::database::WorkPriority::VisibleRead,
-                |connection| {
-                    connection
-                        .query_row(
-                        "SELECT COUNT(*) FROM duplicate_pair WHERE status = 1",
-                            [],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .map_err(Into::into)
-                },
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(crate::query_v2::SidebarCounts {
-            all: checked_count(counts.all)?,
-            inbox: checked_count(counts.inbox)?,
-            trash: checked_count(counts.trash)?,
-            recently_viewed: checked_count(recently_viewed)?,
-            untagged: checked_count(counts.untagged)?,
-            uncategorized: checked_count(counts.uncategorized)?,
-            duplicates,
-            folders: counts
-                .folders
-                .into_iter()
-                .map(|(folder_id, count)| {
-                    Ok(crate::query_v2::ScopeCount {
-                        id: i64::from(folder_id.0),
-                        count: checked_count(count)?,
-                    })
-                })
-                .collect::<Result<_, String>>()?,
-            smart_folders: counts
-                .smart_folders
-                .into_iter()
-                .map(|(smart_folder_id, count)| {
-                    Ok(crate::query_v2::ScopeCount {
-                        id: i64::from(smart_folder_id.0),
-                        count: checked_count(count)?,
-                    })
-                })
-                .collect::<Result<_, String>>()?,
-            revision: counts.revision,
-        })
+    pub fn sidebar_counts(&self) -> Result<picto_library::SidebarCounts, String> {
+        self.library
+            .sidebar_counts()
+            .map_err(|error| error.to_string())
     }
 
     pub fn history_state(&self) -> LibraryHistoryState {
@@ -784,10 +725,6 @@ fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| format!("{kind} ID {value} is outside the local ID domain"))
-}
-
-fn checked_count(value: u64) -> Result<i64, String> {
-    i64::try_from(value).map_err(|_| format!("count {value} exceeds the renderer integer domain"))
 }
 
 fn map_history_state(value: picto_library::history::HistoryState) -> LibraryHistoryState {
