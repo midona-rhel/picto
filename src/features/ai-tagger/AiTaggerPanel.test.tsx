@@ -85,7 +85,6 @@ const details = (itemId: number) => ({
     pixel_height: 100,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     name: `Image ${itemId}`,
     notes: null,
     rating: null,

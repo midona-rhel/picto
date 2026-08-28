@@ -51,7 +51,6 @@ const itemDetails = {
     pixel_height: 10,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     name: 'Previous item',
     notes: null,
     rating: null,

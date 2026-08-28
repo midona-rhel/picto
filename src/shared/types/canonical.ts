@@ -64,7 +64,6 @@ export interface CanonicalEntityDetails {
   pixel_height: number | null;
   duration_ms: number | null;
   frame_count: number | null;
-  has_audio: boolean;
   status: number;
   rating: number | null;
   notes: string | null;

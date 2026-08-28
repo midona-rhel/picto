@@ -108,7 +108,6 @@ pub struct MediaDetails {
     pub duration_ms: Option<i64>,
     #[ts(type = "number | null")]
     pub frame_count: Option<i64>,
-    pub has_audio: bool,
     pub name: Option<String>,
     pub notes: Option<String>,
     #[ts(type = "number | null")]
@@ -1372,7 +1371,7 @@ fn details_connection(
              )
              SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.dominant_color_hex,
                     mf.dominant_palette_blob, mf.size_bytes, mf.pixel_width, mf.pixel_height,
-                    mf.duration_ms, mf.frame_count, mf.has_audio, ma.name,
+                    mf.duration_ms, mf.frame_count, ma.name,
                     ma.captured_at, ma.imported_at, rm.position
              FROM root_media rm
              CROSS JOIN media_asset ma ON ma.item_id = rm.media_item_id
@@ -1410,14 +1409,13 @@ fn details_connection(
                 pixel_height: row.get(7)?,
                 duration_ms: row.get(8)?,
                 frame_count,
-                has_audio: row.get(10)?,
-                name: row.get(11)?,
+                name: row.get(10)?,
                 notes: notes.clone(),
                 rating,
                 source_urls: source_urls.clone(),
-                captured_at: row.get(12)?,
-                imported_at: row.get(13)?,
-                position: row.get(14)?,
+                captured_at: row.get(11)?,
+                imported_at: row.get(12)?,
+                position: row.get(13)?,
                 tags: Vec::new(),
             })
         })?

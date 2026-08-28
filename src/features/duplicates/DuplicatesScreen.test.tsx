@@ -83,7 +83,6 @@ function details(itemId: number, hash: string, name: string): ItemDetails {
       pixel_height: 100,
       duration_ms: null,
       frame_count: null,
-      has_audio: false,
       name,
       notes: null,
       rating: null,

@@ -939,7 +939,6 @@ fn rule_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite:
         "captured" | "captured_at" | "captured_date" | "date_captured" => {
             comparable_condition("ma.captured_at", rule, arguments)
         }
-        "has_audio" => has_audio_condition(rule, arguments),
         "color" => color_condition(rule, arguments),
         field => Err(invalid(format!("Unknown smart-folder field: {field}"))),
     }
@@ -1065,24 +1064,6 @@ fn file_type_condition(
         op => return Err(invalid(format!("Unknown file_type operator: {op}"))),
     };
     Ok(format!("mf.mime_type {operator} ?{}", arguments.len()))
-}
-
-fn has_audio_condition(
-    rule: &PredicateRule,
-    arguments: &mut Vec<Value>,
-) -> rusqlite::Result<String> {
-    if !matches!(rule.op.as_str(), "is" | "eq") {
-        return Err(invalid(format!("Unknown has_audio operator: {}", rule.op)));
-    }
-    let value = match rule.value.as_ref() {
-        Some(serde_json::Value::Bool(value)) => i64::from(*value),
-        Some(serde_json::Value::Number(value)) => value
-            .as_i64()
-            .ok_or_else(|| invalid("has_audio must be boolean or integer"))?,
-        _ => return Err(invalid("has_audio requires a boolean or integer value")),
-    };
-    arguments.push(Value::Integer(value));
-    Ok(format!("mf.has_audio = ?{}", arguments.len()))
 }
 
 fn color_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::Result<String> {

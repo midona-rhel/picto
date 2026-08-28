@@ -6,7 +6,6 @@
 import { modalStyles } from '../../../shared/ui/GlassModal';
 import { GlassInput } from '../../../shared/ui/GlassInput';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
-import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { TagTokenInput } from '../../../shared/ui/TagTokenInput';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import type { SmartFolderPredicateRule } from '../../../shared/types/canonical';
@@ -76,19 +75,6 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
             onChange={(e) => onChange({ ...rule, values: parseCsvValues(e.target.value) })}
             placeholder="#ff0000, #00ff00"
           />
-        );
-
-      case 'boolean':
-        return (
-          <div className={modalStyles.row}>
-            <ToggleSwitch
-              on={rule.value !== false}
-              onChange={() => onChange({ ...rule, value: !rule.value })}
-            />
-            <span className={modalStyles.inlineLabel}>
-              {rule.value !== false ? 'Yes' : 'No'}
-            </span>
-          </div>
         );
 
       case 'select':

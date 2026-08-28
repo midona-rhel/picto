@@ -7,7 +7,7 @@ export interface FieldDef {
   key: string;
   label: string;
   operators: { value: string; label: string }[];
-  valueType: 'tags' | 'text' | 'number' | 'date' | 'boolean' | 'select' | 'filesize' | 'color';
+  valueType: 'tags' | 'text' | 'number' | 'date' | 'select' | 'filesize' | 'color';
   selectOptions?: { value: string; label: string }[];
   unit?: string;
 }
@@ -44,10 +44,6 @@ const DATE_OPERATORS = [
   { value: 'lt', label: 'before' },
   { value: 'lte', label: 'on or before' },
   { value: 'between', label: 'between' },
-];
-
-const BOOLEAN_OPERATORS = [
-  { value: 'is', label: 'is' },
 ];
 
 export const FIELD_DEFS: FieldDef[] = [
@@ -126,12 +122,6 @@ export const FIELD_DEFS: FieldDef[] = [
     unit: 's',
   },
   {
-    key: 'has_audio',
-    label: 'Has Audio',
-    operators: BOOLEAN_OPERATORS,
-    valueType: 'boolean',
-  },
-  {
     key: 'notes',
     label: 'Notes',
     operators: TEXT_OPERATORS,
@@ -194,8 +184,6 @@ export function defaultValue(fieldKey: string): unknown {
       return 0;
     case 'date':
       return new Date().toISOString().slice(0, 10);
-    case 'boolean':
-      return true;
     case 'select':
       return def.selectOptions?.[0]?.value ?? '';
     case 'text':

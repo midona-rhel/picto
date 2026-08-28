@@ -186,7 +186,6 @@ function media(itemId: number, hash: string, mimeType: string, position: number)
     pixel_height: 200,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     name: `Item ${itemId}`,
     notes: null,
     rating: null,
