@@ -105,6 +105,7 @@ pub struct ProjectionSnapshot {
     pub lifecycle: Arc<HashMap<Lifecycle, RoaringBitmap>>,
     pub ratings: Arc<HashMap<Rating, RoaringBitmap>>,
     pub tags: Arc<HashMap<TagId, RoaringBitmap>>,
+    pub tag_ids_by_name: Arc<HashMap<String, TagId>>,
     pub folder_orders: Arc<HashMap<FolderId, Arc<Vec<RootId>>>>,
     pub folders: Arc<HashMap<FolderId, RoaringBitmap>>,
     pub collection_orders: Arc<HashMap<RootId, Arc<Vec<MediaId>>>>,
@@ -208,6 +209,28 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         .filter(|(key, _)| key.domain == BitmapDomain::Tag)
         .map(|(key, bitmap)| (TagId(key.key_id), bitmap.clone()))
         .collect::<HashMap<_, _>>();
+    let mut tag_ids_by_name = HashMap::new();
+    let mut tag_statement = connection.prepare(
+        "SELECT tag.tag_id, namespace.display_name, tag.subname
+         FROM tag_definition tag
+         JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id",
+    )?;
+    let tag_rows = tag_statement.query_map([], |row| {
+        Ok((
+            TagId(row.get::<_, u32>(0)?),
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in tag_rows {
+        let (tag_id, namespace, subname) = row?;
+        let name = if namespace.is_empty() {
+            subname
+        } else {
+            format!("{namespace}:{subname}")
+        };
+        tag_ids_by_name.insert(name, tag_id);
+    }
 
     let mut folder_orders = HashMap::new();
     let mut folders = HashMap::new();
@@ -408,6 +431,7 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         lifecycle: Arc::new(lifecycle),
         ratings: Arc::new(ratings),
         tags: Arc::new(tags),
+        tag_ids_by_name: Arc::new(tag_ids_by_name),
         folder_orders: Arc::new(folder_orders),
         folders: Arc::new(folders),
         collection_orders: Arc::new(collection_orders),

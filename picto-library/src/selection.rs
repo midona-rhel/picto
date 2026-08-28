@@ -142,21 +142,40 @@ pub fn summarize(
     let shared_rating = Rating::ALL
         .into_iter()
         .find(|rating| (snapshot.rating(*rating) & selection).len() == selection.len());
-    let shared_tags = snapshot
-        .tags
-        .iter()
-        .filter_map(|(tag_id, members)| {
-            ((members & selection).len() == selection.len()).then_some(*tag_id)
-        })
-        .collect();
-    let shared_folders = snapshot
-        .folders
-        .iter()
-        .filter_map(|(folder_id, members)| {
-            ((members & selection).len() == selection.len()).then_some(*folder_id)
-        })
-        .collect();
-    let (shared_notes, shared_source_urls) = shared_text(connection, selection)?;
+    let first = selection.min();
+    let shared_tags = first.map_or_else(Vec::new, |first| {
+        snapshot
+            .tags
+            .iter()
+            .filter_map(|(tag_id, members)| {
+                (members.contains(first) && members.is_superset(selection)).then_some(*tag_id)
+            })
+            .collect()
+    });
+    let shared_folders = first.map_or_else(Vec::new, |first| {
+        snapshot
+            .folders
+            .iter()
+            .filter_map(|(folder_id, members)| {
+                (members.contains(first) && members.is_superset(selection)).then_some(*folder_id)
+            })
+            .collect()
+    });
+    let notes_members = &*snapshot.notes_present & selection;
+    let urls_members = &*snapshot.urls_present & selection;
+    let compare_notes = !selection.is_empty() && notes_members.len() == selection.len();
+    let compare_urls = !selection.is_empty() && urls_members.len() == selection.len();
+    let (shared_notes, compared_urls) =
+        shared_text(connection, selection, compare_notes, compare_urls)?;
+    let shared_source_urls = if selection.is_empty() {
+        None
+    } else if urls_members.is_empty() {
+        Some(Vec::new())
+    } else if urls_members.len() != selection.len() {
+        None
+    } else {
+        compared_urls
+    };
     Ok(SelectionSummary {
         selected_count: selection.len(),
         total_size_bytes: snapshot.total_bytes.sum(selection),
@@ -173,13 +192,18 @@ pub fn summarize(
 fn shared_text(
     connection: &Connection,
     selection: &RoaringBitmap,
+    compare_notes: bool,
+    compare_urls: bool,
 ) -> Result<(Option<String>, Option<Vec<String>>)> {
+    if !compare_notes && !compare_urls {
+        return Ok((None, None));
+    }
     let mut statement = connection
         .prepare_cached("SELECT notes, source_urls_json FROM library_root WHERE root_id = ?1")?;
     let mut notes: Option<Option<String>> = None;
     let mut urls: Option<Vec<String>> = None;
-    let mut notes_match = true;
-    let mut urls_match = true;
+    let mut notes_match = compare_notes;
+    let mut urls_match = compare_urls;
     for root_id in selection {
         let (current_notes, current_urls): (Option<String>, String) =
             statement.query_row([root_id], |row| Ok((row.get(0)?, row.get(1)?)))?;

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -307,10 +307,11 @@ impl Library {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
-        if inputs.len() > 64 {
-            return Err(LibraryError::InvalidInput(
-                "one canonical ingest batch may contain at most 64 items".into(),
-            ));
+        if inputs.len() > ingest::MAX_INGEST_BATCH {
+            return Err(LibraryError::InvalidInput(format!(
+                "one canonical ingest batch may contain at most {} items",
+                ingest::MAX_INGEST_BATCH
+            )));
         }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -321,12 +322,17 @@ impl Library {
                 let mut next = (*snapshot).clone();
                 let mut root_ids = Vec::with_capacity(inputs.len());
                 let mut resources = BTreeSet::new();
+                let mut bitmap_keys = HashSet::new();
+                let mut folder_ids = HashSet::new();
                 for input in inputs {
                     let output = ingest::insert_one(transaction, revision, next, input)?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
                     resources.extend(output.resources);
+                    bitmap_keys.extend(output.bitmap_keys);
+                    folder_ids.extend(output.folder_ids);
                 }
+                ingest::persist_touched(transaction, revision, &next, bitmap_keys, folder_ids)?;
                 let affected = root_ids.iter().map(|root| root.0).collect();
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
                 let receipt =
@@ -674,8 +680,14 @@ impl Library {
                 let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
                 let mut next = (*snapshot).clone();
                 let tag_id = if add {
-                    ingest::ensure_tag(transaction, &name)?
-                } else if let Some(tag_id) = ingest::find_tag(transaction, &name)? {
+                    if let Some(tag_id) = next.tag_ids_by_name.get(&name).copied() {
+                        tag_id
+                    } else {
+                        let tag_id = ingest::ensure_tag(transaction, &name)?;
+                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                        tag_id
+                    }
+                } else if let Some(tag_id) = next.tag_ids_by_name.get(&name).copied() {
                     tag_id
                 } else {
                     next.revision = revision;

@@ -6,15 +6,19 @@ use uuid::Uuid;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::LibraryDatabase;
 use crate::fts;
-use crate::model::{MediaId, PreparedImport, RootId, RootKind, TagId};
+use crate::model::{FolderId, MediaId, PreparedImport, RootId, RootKind, TagId};
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
+
+pub const MAX_INGEST_BATCH: usize = 48;
 
 pub(crate) struct IngestResult {
     pub root_id: RootId,
     pub snapshot: ProjectionSnapshot,
     pub resources: Vec<String>,
+    pub bitmap_keys: Vec<BitmapKey>,
+    pub folder_ids: Vec<FolderId>,
 }
 
 pub(crate) fn insert_one(
@@ -95,12 +99,6 @@ pub(crate) fn insert_one(
         .entry(input.lifecycle)
         .or_default()
         .insert(root_id.0);
-    bitmap::replace(
-        transaction,
-        revision,
-        lifecycle_key,
-        lifecycle.get(&input.lifecycle).expect("inserted lifecycle"),
-    )?;
 
     let rating_key = BitmapKey {
         domain: BitmapDomain::Rating,
@@ -108,30 +106,26 @@ pub(crate) fn insert_one(
     };
     let ratings = Arc::make_mut(&mut snapshot.ratings);
     ratings.entry(input.rating).or_default().insert(root_id.0);
-    bitmap::replace(
-        transaction,
-        revision,
-        rating_key,
-        ratings.get(&input.rating).expect("inserted rating"),
-    )?;
 
     let mut assigned_tags = 0u64;
+    let mut bitmap_keys = vec![lifecycle_key, rating_key];
     for name in &input.tags {
-        let tag_id = ensure_tag(transaction, name)?;
+        let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(name).copied() {
+            tag_id
+        } else {
+            let tag_id = ensure_tag(transaction, name)?;
+            Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name.clone(), tag_id);
+            tag_id
+        };
         let tags = Arc::make_mut(&mut snapshot.tags);
         let members = tags.entry(tag_id).or_default();
         if members.insert(root_id.0) {
             assigned_tags += 1;
         }
-        bitmap::replace(
-            transaction,
-            revision,
-            BitmapKey {
-                domain: BitmapDomain::Tag,
-                key_id: tag_id.0,
-            },
-            members,
-        )?;
+        bitmap_keys.push(BitmapKey {
+            domain: BitmapDomain::Tag,
+            key_id: tag_id.0,
+        });
     }
 
     let mut assigned_folders = 0u64;
@@ -156,13 +150,6 @@ pub(crate) fn insert_one(
             order.push(root_id);
             assigned_folders += 1;
         }
-        ordering::replace(
-            transaction,
-            revision,
-            OrderOwnerKind::Folder,
-            folder_id.0,
-            &order.iter().map(|id| id.0).collect::<Vec<_>>(),
-        )?;
         Arc::make_mut(&mut snapshot.folders)
             .entry(*folder_id)
             .or_default()
@@ -236,7 +223,51 @@ pub(crate) fn insert_one(
             "tags".into(),
             "folders".into(),
         ],
+        bitmap_keys,
+        folder_ids: input.folders.clone(),
     })
+}
+
+pub(crate) fn persist_touched(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    snapshot: &ProjectionSnapshot,
+    bitmap_keys: impl IntoIterator<Item = BitmapKey>,
+    folder_ids: impl IntoIterator<Item = FolderId>,
+) -> Result<()> {
+    for key in bitmap_keys {
+        let values = match key.domain {
+            BitmapDomain::Lifecycle => snapshot
+                .lifecycle
+                .iter()
+                .find_map(|(value, roots)| (value.bitmap_key() == key.key_id).then_some(roots)),
+            BitmapDomain::Rating => snapshot
+                .ratings
+                .iter()
+                .find_map(|(value, roots)| (value.bitmap_key() == key.key_id).then_some(roots)),
+            BitmapDomain::Tag => snapshot.tags.get(&TagId(key.key_id)),
+        }
+        .ok_or_else(|| {
+            LibraryError::InvalidState(format!(
+                "ingest changed missing bitmap {:?}/{}",
+                key.domain, key.key_id
+            ))
+        })?;
+        bitmap::replace(transaction, revision, key, values)?;
+    }
+    for folder_id in folder_ids {
+        let values = snapshot.folder_orders.get(&folder_id).ok_or_else(|| {
+            LibraryError::InvalidState(format!("ingest changed missing folder {}", folder_id.0))
+        })?;
+        ordering::replace(
+            transaction,
+            revision,
+            OrderOwnerKind::Folder,
+            folder_id.0,
+            &values.iter().map(|root| root.0).collect::<Vec<_>>(),
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<TagId> {
@@ -279,21 +310,6 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
         params![tag_id, Uuid::new_v4().to_string(), namespace_id, subname],
     )?;
     Ok(TagId(tag_id))
-}
-
-pub(crate) fn find_tag(transaction: &Transaction<'_>, name: &str) -> Result<Option<TagId>> {
-    let (namespace, subname) = name.split_once(':').unwrap_or(("", name));
-    transaction
-        .query_row(
-            "SELECT tag.tag_id
-             FROM tag_definition tag
-             JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id
-             WHERE namespace.display_name = ?1 AND tag.subname = ?2",
-            params![namespace, subname],
-            |row| row.get::<_, u32>(0).map(TagId),
-        )
-        .optional()
-        .map_err(Into::into)
 }
 
 fn mime_family(mime: &str) -> &str {
