@@ -155,3 +155,9 @@ pub struct GroupRequest {
     pub name: Option<String>,
     pub modified_at_ms: i64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingBlobCleanup {
+    pub file_id: FileId,
+    pub file_path: String,
+}

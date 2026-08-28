@@ -147,6 +147,18 @@ CREATE TABLE cloud_journal (
     expanded_at_ms INTEGER
 ) STRICT;
 
+CREATE TABLE deletion_tombstone (
+    stable_key TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    deleted_at_ms INTEGER NOT NULL
+) WITHOUT ROWID, STRICT;
+
+CREATE TABLE blob_cleanup_queue (
+    file_id INTEGER PRIMARY KEY REFERENCES media_file(file_id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    enqueued_revision INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE projection_checkpoint (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_fingerprint TEXT NOT NULL,
@@ -169,4 +181,3 @@ CREATE INDEX idx_recent_viewed ON recent_view(viewed_at_ms DESC, root_id);
 CREATE INDEX idx_source_media ON source_provenance(media_id, source_key, source_item_key);
 CREATE INDEX idx_fts_dirty_order ON fts_dirty(category, queued_at_ms, root_id);
 CREATE INDEX idx_cloud_pending ON cloud_journal(expanded_at_ms, journal_id);
-

@@ -275,24 +275,7 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
     if subname.trim().is_empty() {
         return Err(LibraryError::InvalidInput("tag name is empty".into()));
     }
-    let namespace_id = if let Some(id) = transaction
-        .query_row(
-            "SELECT namespace_id FROM tag_namespace WHERE display_name = ?1",
-            [namespace],
-            |row| row.get::<_, u32>(0),
-        )
-        .optional()?
-    {
-        id
-    } else {
-        let id = LibraryDatabase::allocate_id(transaction)?;
-        transaction.execute(
-            "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
-             VALUES (?1, ?2, ?3)",
-            params![id, Uuid::new_v4().to_string(), namespace],
-        )?;
-        id
-    };
+    let namespace_id = ensure_namespace(transaction, namespace)?;
     if let Some(id) = transaction
         .query_row(
             "SELECT tag_id FROM tag_definition WHERE namespace_id = ?1 AND subname = ?2",
@@ -310,6 +293,28 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
         params![tag_id, Uuid::new_v4().to_string(), namespace_id, subname],
     )?;
     Ok(TagId(tag_id))
+}
+
+pub(crate) fn ensure_namespace(transaction: &Transaction<'_>, name: &str) -> Result<u32> {
+    let namespace_id = if let Some(id) = transaction
+        .query_row(
+            "SELECT namespace_id FROM tag_namespace WHERE display_name = ?1",
+            [name],
+            |row| row.get::<_, u32>(0),
+        )
+        .optional()?
+    {
+        id
+    } else {
+        let id = LibraryDatabase::allocate_id(transaction)?;
+        transaction.execute(
+            "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+             VALUES (?1, ?2, ?3)",
+            params![id, Uuid::new_v4().to_string(), name],
+        )?;
+        id
+    };
+    Ok(namespace_id)
 }
 
 fn mime_family(mime: &str) -> &str {

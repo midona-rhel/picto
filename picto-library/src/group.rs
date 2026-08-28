@@ -684,7 +684,7 @@ fn settle_folders(
     Ok(count)
 }
 
-fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
+pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
     for members in Arc::make_mut(&mut snapshot.root_kinds).values_mut() {
         *members -= roots;
     }

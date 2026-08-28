@@ -134,6 +134,10 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
         .query(&query(ItemScope::Inbox), &PageRequest::default())
         .unwrap();
     assert_eq!(inbox_page.items[0].root_id, inbox);
+    let counts = library.counts().unwrap();
+    assert_eq!(counts.all, 1);
+    assert_eq!(counts.inbox, 1);
+    assert_eq!(counts.tags.values().copied().sum::<u64>(), 1);
 
     library
         .add_tag(
@@ -190,6 +194,25 @@ fn lifecycle_boundaries_and_bitmap_tag_mutations_are_exact() {
             .total,
         1
     );
+}
+
+#[test]
+fn tag_rename_changes_only_the_dictionary() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("tagged", Lifecycle::Active, &["old:name"]))
+        .unwrap();
+    let before = library.projections().snapshot();
+    let tag_id = before.tag_ids_by_name["old:name"];
+    let members = before.tags[&tag_id].clone();
+
+    library.rename_tag(tag_id, "new:name").unwrap();
+    let after = library.projections().snapshot();
+    assert!(!after.tag_ids_by_name.contains_key("old:name"));
+    assert_eq!(after.tag_ids_by_name["new:name"], tag_id);
+    assert_eq!(after.tags[&tag_id], members);
+    assert!(after.tags[&tag_id].contains(root.0));
 }
 
 #[test]
@@ -583,4 +606,85 @@ fn collections_are_one_root_and_media_filters_use_only_the_cover() {
             },
         )
         .unwrap();
+}
+
+#[test]
+fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let shared_hash = "shared-content";
+    let mut first_import = imported("delete-first", Lifecycle::Active, &["creator:one"]);
+    first_import.facts.content_hash = shared_hash.into();
+    let mut second_import = imported("delete-second", Lifecycle::Active, &["creator:two"]);
+    second_import.facts.content_hash = shared_hash.into();
+    let (first, _) = library.ingest(&first_import).unwrap();
+    let (second, _) = library.ingest(&second_import).unwrap();
+
+    let first_target = SelectionTarget::Explicit {
+        root_ids: vec![first],
+    };
+    library
+        .set_lifecycle(&first_target, Lifecycle::Trash)
+        .unwrap();
+    let history_before_delete = library.history().state().entries;
+    let (_, cleanup) = library
+        .permanently_delete(&first_target, 1_700_000_000_500)
+        .unwrap();
+    assert!(cleanup.is_empty());
+    assert_eq!(library.history().state().entries, history_before_delete);
+
+    let second_target = SelectionTarget::Explicit {
+        root_ids: vec![second],
+    };
+    library
+        .set_lifecycle(&second_target, Lifecycle::Trash)
+        .unwrap();
+    let history_before_delete = library.history().state().entries;
+    let (_, cleanup) = library
+        .permanently_delete(&second_target, 1_700_000_000_600)
+        .unwrap();
+    assert_eq!(cleanup.len(), 1);
+    assert_eq!(cleanup[0].file_path, first_import.file_path);
+    assert_eq!(library.history().state().entries, history_before_delete);
+    assert_eq!(library.counts().unwrap().trash, 0);
+
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM deletion_tombstone", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    2
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM blob_cleanup_queue", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    1
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    drop(library);
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(reopened.counts().unwrap().trash, 0);
+    assert_eq!(reopened.history().state().entries, 0);
 }

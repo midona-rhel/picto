@@ -67,6 +67,10 @@ fn main() -> picto_library::Result<()> {
     })?;
     let summary_elapsed = summary_started.elapsed();
 
+    let counts_started = Instant::now();
+    let counts = library.counts()?;
+    let counts_elapsed = counts_started.elapsed();
+
     let tag_started = Instant::now();
     library.add_tag(
         &SelectionTarget::Query {
@@ -116,6 +120,8 @@ fn main() -> picto_library::Result<()> {
     );
     println!("selection_summary_ms={:.3}", millis(summary_elapsed));
     println!("selection_count={}", summary.selected_count);
+    println!("sidebar_counts_ms={:.3}", millis(counts_elapsed));
+    println!("sidebar_active_count={}", counts.all);
     println!("add_tag_all_ms={:.3}", millis(tag_elapsed));
     println!("lifecycle_all_ms={:.3}", millis(lifecycle_elapsed));
     let checkpoint_started = Instant::now();

@@ -14,7 +14,7 @@ use crate::model::{
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
 use crate::publication::{MutationReceipt, PublicationCoordinator};
-use crate::query::{PageRequest, RootPage, RootQuery};
+use crate::query::{LibraryCounts, PageRequest, RootPage, RootQuery};
 use crate::selection::{SelectionSummary, SelectionTarget};
 use crate::smart::SmartFolderRecord;
 use crate::{LibraryDatabase, LibraryError, Result};
@@ -111,6 +111,14 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| crate::query::page(connection, &snapshot, query, page),
+        )
+    }
+
+    pub fn counts(&self) -> Result<LibraryCounts> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |_, snapshot| Ok(crate::query::counts(&snapshot)),
         )
     }
 
@@ -499,6 +507,63 @@ impl Library {
         self.tag_mutation(target, name, true)
     }
 
+    pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
+        let name = required_name("tag", name)?;
+        let (namespace, subname) = name.split_once(':').unwrap_or(("", name.as_str()));
+        if subname.trim().is_empty() {
+            return Err(LibraryError::InvalidInput("tag name is empty".into()));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let (receipt, _, ()) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let old_name = snapshot
+                    .tag_ids_by_name
+                    .iter()
+                    .find_map(|(name, id)| (*id == tag_id).then_some(name.clone()))
+                    .ok_or_else(|| LibraryError::NotFound(format!("tag {}", tag_id.0)))?;
+                if snapshot
+                    .tag_ids_by_name
+                    .get(&name)
+                    .is_some_and(|existing| *existing != tag_id)
+                {
+                    return Err(LibraryError::InvalidInput(format!(
+                        "tag {name} already exists"
+                    )));
+                }
+                let namespace_id = ingest::ensure_namespace(transaction, namespace)?;
+                transaction.execute(
+                    "UPDATE tag_definition SET namespace_id = ?2, subname = ?3 WHERE tag_id = ?1",
+                    rusqlite::params![tag_id.0, namespace_id, subname],
+                )?;
+                let mut next = (*snapshot).clone();
+                let names = Arc::make_mut(&mut next.tag_ids_by_name);
+                names.remove(&old_name);
+                names.insert(name.clone(), tag_id);
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["tags".into(), "navigation".into(), "smart-folders".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok(receipt)
+    }
+
     pub fn create_folder(
         &self,
         name: &str,
@@ -678,6 +743,246 @@ impl Library {
         )?;
         push_history(&history, history_entry);
         Ok((roots, receipt))
+    }
+
+    pub fn permanently_delete(
+        &self,
+        target: &SelectionTarget,
+        deleted_at_ms: i64,
+    ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
+        let target = target.clone();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let ((receipt, cleanup), _, ()) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let roots = crate::selection::resolve(transaction, &snapshot, &target)?;
+                if roots.is_empty() {
+                    return Err(LibraryError::InvalidInput(
+                        "permanent deletion requires at least one root".into(),
+                    ));
+                }
+                if !roots.is_subset(snapshot.lifecycle(Lifecycle::Trash)) {
+                    return Err(LibraryError::InvalidInput(
+                        "only Trash roots can be permanently deleted".into(),
+                    ));
+                }
+
+                let mut media_ids = RoaringBitmap::new();
+                let mut collection_ids = Vec::new();
+                for root_id in &roots {
+                    let root_id = RootId(root_id);
+                    if let Some(members) = snapshot.collection_orders.get(&root_id) {
+                        collection_ids.push(root_id);
+                        media_ids.extend(members.iter().map(|media| media.0));
+                    } else {
+                        media_ids.insert(root_id.0);
+                    }
+                }
+                let mut item_ids = roots.clone();
+                item_ids |= &media_ids;
+                stage_delete_ids(transaction, "delete_root", &roots)?;
+                stage_delete_ids(transaction, "delete_media", &media_ids)?;
+                stage_delete_ids(transaction, "delete_item", &item_ids)?;
+
+                let mut files = std::collections::HashMap::new();
+                {
+                    let mut statement = transaction.prepare_cached(
+                        "SELECT file.file_id, file.file_path
+                         FROM media_item media
+                         JOIN media_file file ON file.file_id = media.file_id
+                         WHERE media.media_id = ?1",
+                    )?;
+                    for media_id in &media_ids {
+                        let (file_id, file_path) = statement.query_row([media_id], |row| {
+                            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+                        })?;
+                        files.entry(file_id).or_insert(file_path);
+                    }
+                }
+                transaction.execute(
+                    "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
+                     SELECT item.stable_key, ?1, ?2
+                     FROM library_item item JOIN temp.delete_item selected
+                         ON selected.local_id = item.local_id
+                     ON CONFLICT(stable_key) DO UPDATE SET
+                         revision = excluded.revision,
+                         deleted_at_ms = excluded.deleted_at_ms",
+                    rusqlite::params![revision as i64, deleted_at_ms],
+                )?;
+                transaction.execute(
+                    "DELETE FROM root_fts WHERE CAST(root_id AS INTEGER) IN
+                         (SELECT local_id FROM temp.delete_root)",
+                    [],
+                )?;
+                transaction.execute(
+                    "DELETE FROM library_root WHERE root_id IN
+                         (SELECT local_id FROM temp.delete_root)",
+                    [],
+                )?;
+                for collection_id in &collection_ids {
+                    ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
+                }
+                transaction.execute(
+                    "DELETE FROM media_item WHERE media_id IN
+                         (SELECT local_id FROM temp.delete_media)",
+                    [],
+                )?;
+                transaction.execute(
+                    "DELETE FROM library_item WHERE local_id IN
+                         (SELECT local_id FROM temp.delete_item)",
+                    [],
+                )?;
+
+                let mut cleanup = Vec::new();
+                for (file_id, file_path) in files {
+                    let referenced = transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
+                        [file_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !referenced {
+                        transaction.execute(
+                            "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
+                             VALUES (?1, ?2, ?3)
+                             ON CONFLICT(file_id) DO NOTHING",
+                            rusqlite::params![file_id, file_path, revision as i64],
+                        )?;
+                        cleanup.push(crate::PendingBlobCleanup {
+                            file_id: crate::FileId(file_id),
+                            file_path,
+                        });
+                    }
+                }
+
+                let mut next = (*snapshot).clone();
+                for lifecycle in Lifecycle::ALL {
+                    let values = Arc::make_mut(&mut next.lifecycle)
+                        .entry(lifecycle)
+                        .or_default();
+                    if !(&*values & &roots).is_empty() {
+                        *values -= &roots;
+                        bitmap::replace(
+                            transaction,
+                            revision,
+                            BitmapKey {
+                                domain: BitmapDomain::Lifecycle,
+                                key_id: lifecycle.bitmap_key(),
+                            },
+                            values,
+                        )?;
+                    }
+                }
+                for rating in Rating::ALL {
+                    let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
+                    if !(&*values & &roots).is_empty() {
+                        *values -= &roots;
+                        bitmap::replace(
+                            transaction,
+                            revision,
+                            BitmapKey {
+                                domain: BitmapDomain::Rating,
+                                key_id: rating.bitmap_key(),
+                            },
+                            values,
+                        )?;
+                    }
+                }
+                let changed_tags = next
+                    .tags
+                    .iter()
+                    .filter_map(|(tag_id, members)| {
+                        (!((members & &roots).is_empty())).then_some(*tag_id)
+                    })
+                    .collect::<Vec<_>>();
+                for tag_id in changed_tags {
+                    let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
+                    *members -= &roots;
+                    bitmap::replace(
+                        transaction,
+                        revision,
+                        BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
+                        },
+                        members,
+                    )?;
+                }
+                let changed_folders = next
+                    .folder_orders
+                    .iter()
+                    .filter_map(|(folder_id, order)| {
+                        order
+                            .iter()
+                            .any(|root| roots.contains(root.0))
+                            .then_some(*folder_id)
+                    })
+                    .collect::<Vec<_>>();
+                for folder_id in changed_folders {
+                    let mut order = next.folder_orders[&folder_id].as_ref().clone();
+                    order.retain(|root| !roots.contains(root.0));
+                    ordering::replace(
+                        transaction,
+                        revision,
+                        OrderOwnerKind::Folder,
+                        folder_id.0,
+                        &order.iter().map(|root| root.0).collect::<Vec<_>>(),
+                    )?;
+                    Arc::make_mut(&mut next.folder_orders)
+                        .insert(folder_id, Arc::new(order.clone()));
+                    Arc::make_mut(&mut next.folders)
+                        .insert(folder_id, order.iter().map(|root| root.0).collect());
+                }
+                for collection_id in &collection_ids {
+                    Arc::make_mut(&mut next.collection_orders).remove(collection_id);
+                }
+                for media_id in &media_ids {
+                    if let Some(owner) =
+                        Arc::make_mut(&mut next.media_owner).get_mut(media_id as usize)
+                    {
+                        *owner = None;
+                    }
+                }
+                crate::group::remove_root_projections(&mut next, &roots);
+                crate::smart::settle_affected(transaction, &mut next, &roots)?;
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
+                    rusqlite::params![
+                        revision as i64,
+                        crate::bitmap::encode(&roots)?,
+                        deleted_at_ms
+                    ],
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "roots".into(),
+                        "sidebar".into(),
+                        "tags".into(),
+                        "folders".into(),
+                        "collections".into(),
+                        "search".into(),
+                    ],
+                    roots.iter().map(RootId),
+                );
+                Ok((
+                    (receipt.clone(), cleanup),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok((receipt, cleanup))
     }
 
     fn tag_mutation(
@@ -1494,4 +1799,31 @@ fn load_root_text(
                 .map_err(Into::into)
         })
         .collect()
+}
+
+fn stage_delete_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    ids: &RoaringBitmap,
+) -> Result<()> {
+    let table = match table {
+        "delete_root" | "delete_media" | "delete_item" => table,
+        _ => {
+            return Err(LibraryError::InvalidInput(format!(
+                "unsupported deletion staging table {table}"
+            )))
+        }
+    };
+    transaction.execute_batch(&format!(
+        "CREATE TEMP TABLE IF NOT EXISTS {table} (
+             local_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM {table};"
+    ))?;
+    let mut insert =
+        transaction.prepare_cached(&format!("INSERT INTO temp.{table}(local_id) VALUES (?1)"))?;
+    for id in ids {
+        insert.execute([id])?;
+    }
+    Ok(())
 }

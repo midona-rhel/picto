@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 use roaring::RoaringBitmap;
 use rusqlite::{params_from_iter, types::Value, Connection};
@@ -72,6 +73,49 @@ pub struct RootPage {
     pub next_cursor: Option<String>,
     pub total: u64,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryCounts {
+    pub all: u64,
+    pub inbox: u64,
+    pub trash: u64,
+    pub tags: HashMap<crate::TagId, u64>,
+    pub folders: HashMap<FolderId, u64>,
+    pub smart_folders: HashMap<SmartFolderId, u64>,
+    pub untagged: u64,
+    pub uncategorized: u64,
+    pub revision: u64,
+}
+
+pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
+    let active = snapshot.active();
+    let tags = snapshot
+        .tags
+        .iter()
+        .map(|(tag_id, roots)| (*tag_id, (roots & active).len()))
+        .collect();
+    let folders = snapshot
+        .folders
+        .iter()
+        .map(|(folder_id, roots)| (*folder_id, (roots & active).len()))
+        .collect();
+    let smart_folders = snapshot
+        .smart_results
+        .iter()
+        .map(|(smart_folder_id, roots)| (SmartFolderId(*smart_folder_id), roots.len()))
+        .collect();
+    LibraryCounts {
+        all: active.len(),
+        inbox: snapshot.lifecycle(Lifecycle::Inbox).len(),
+        trash: snapshot.lifecycle(Lifecycle::Trash).len(),
+        tags,
+        folders,
+        smart_folders,
+        untagged: (active & &snapshot.tag_count.between(Some(0), Some(0))).len(),
+        uncategorized: (active & &snapshot.folder_count.between(Some(0), Some(0))).len(),
+        revision: snapshot.revision,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
