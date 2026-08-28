@@ -59,10 +59,13 @@ pub struct RootSummary {
     pub kind: RootKind,
     pub name: String,
     pub cover_media_id: crate::MediaId,
+    pub content_hash: String,
     pub mime: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub duration_ms: Option<u64>,
+    pub frame_count: Option<u32>,
+    pub palette: Vec<LabColor>,
     pub imported_at_ms: i64,
     pub captured_at_ms: Option<i64>,
     pub modified_at_ms: i64,
@@ -789,9 +792,10 @@ fn load_summaries(
 ) -> Result<Vec<RootSummary>> {
     let mut statement = connection.prepare_cached(
         "SELECT root.root_id, item.item_kind, root.name, root.cover_media_id,
-                file.mime, file.width, file.height, file.duration_ms,
-                root.imported_at_ms, root.captured_at_ms, root.modified_at_ms,
-                root.media_count, root.total_size_bytes
+                file.content_hash, file.mime, file.width, file.height, file.duration_ms,
+                file.frame_count, file.palette_json, root.imported_at_ms,
+                root.captured_at_ms, root.modified_at_ms, root.media_count,
+                root.total_size_bytes
          FROM library_root root
          JOIN library_item item ON item.local_id = root.root_id
          JOIN media_item media ON media.media_id = root.cover_media_id
@@ -811,15 +815,24 @@ fn load_summaries(
                 },
                 name: row.get(2)?,
                 cover_media_id: crate::MediaId(row.get(3)?),
-                mime: row.get(4)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                duration_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
-                imported_at_ms: row.get(8)?,
-                captured_at_ms: row.get(9)?,
-                modified_at_ms: row.get(10)?,
-                media_count: row.get(11)?,
-                total_size_bytes: row.get::<_, i64>(12)? as u64,
+                content_hash: row.get(4)?,
+                mime: row.get(5)?,
+                width: row.get(6)?,
+                height: row.get(7)?,
+                duration_ms: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+                frame_count: row.get(9)?,
+                palette: serde_json::from_str(&row.get::<_, String>(10)?).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        10,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?,
+                imported_at_ms: row.get(11)?,
+                captured_at_ms: row.get(12)?,
+                modified_at_ms: row.get(13)?,
+                media_count: row.get(14)?,
+                total_size_bytes: row.get::<_, i64>(15)? as u64,
                 rating: rating_for(snapshot, id),
             })
         })?);
