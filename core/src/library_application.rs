@@ -300,6 +300,17 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn duplicate_folder(
+        &self,
+        folder_id: picto_library::FolderId,
+    ) -> Result<picto_library::CreatedFolder, String> {
+        let (folder_id, receipt) = self
+            .library
+            .duplicate_folder(folder_id)
+            .map_err(|error| error.to_string())?;
+        Ok(picto_library::CreatedFolder { folder_id, receipt })
+    }
+
     pub fn set_folder_metadata(
         &self,
         input: &picto_library::FolderMetadataInput,
@@ -432,6 +443,15 @@ impl LibraryApplication {
         self
             .library
             .reorder_folder_items(input.folder_id, &input.root_ids)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn sort_folder_tree(
+        &self,
+        input: &picto_library::SortFolderTreeInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .sort_folder_tree(input.folder_id, input.descending, input.recursive)
             .map_err(|error| error.to_string())
     }
 

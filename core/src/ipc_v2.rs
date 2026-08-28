@@ -125,6 +125,10 @@ pub fn dispatch_library(
             let input: LibraryRenameFolderInput = parse(args_json)?;
             read(application.rename_folder(input.folder_id, &input.name)?)
         }
+        "folders.duplicate" => {
+            let input: LibraryFolderInput = parse(args_json)?;
+            read(application.duplicate_folder(input.folder_id)?)
+        }
         "folders.metadata.set" => {
             let input: picto_library::FolderMetadataInput = parse(args_json)?;
             read(application.set_folder_metadata(&input)?)
@@ -152,6 +156,10 @@ pub fn dispatch_library(
         "folders.reorder" => {
             let input: picto_library::ReorderFolderChildrenInput = parse(args_json)?;
             read(application.reorder_folder_children(&input)?)
+        }
+        "folders.sort_tree" => {
+            let input: picto_library::SortFolderTreeInput = parse(args_json)?;
+            read(application.sort_folder_tree(&input)?)
         }
         "folders.items.reorder" => {
             let input: picto_library::ReorderFolderRootsInput = parse(args_json)?;
@@ -1945,6 +1953,35 @@ mod tests {
         .unwrap();
         let created: serde_json::Value = serde_json::from_str(&created).unwrap();
         let folder_id = created["folder_id"].as_i64().unwrap();
+        for name in ["Zulu", "Alpha"] {
+            dispatch_library(
+                &application,
+                "folders.create",
+                &serde_json::json!({"name": name, "parent_id": folder_id}).to_string(),
+            )
+            .unwrap()
+            .unwrap();
+        }
+        dispatch_library(
+            &application,
+            "folders.sort_tree",
+            &serde_json::json!({
+                "folder_id": folder_id,
+                "descending": false,
+                "recursive": true,
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let duplicate = dispatch_library(
+            &application,
+            "folders.duplicate",
+            &format!(r#"{{"folder_id":{folder_id}}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let duplicate: picto_library::CreatedFolder = serde_json::from_str(&duplicate).unwrap();
         dispatch_library(
             &application,
             "folders.auto_tags.set",
@@ -2022,10 +2059,27 @@ mod tests {
             .unwrap()
             .unwrap();
         let navigation: serde_json::Value = serde_json::from_str(&navigation).unwrap();
-        assert_eq!(navigation["folders"][0]["folder_id"], folder_id);
-        assert_eq!(navigation["folders"][0]["cover_root_id"], root_id.0);
-        assert_eq!(navigation["folders"][0]["watch_enabled"], true);
-        assert_eq!(navigation["folders"][0]["watch_subfolders"], true);
+        let folders = navigation["folders"].as_array().unwrap();
+        let original = folders
+            .iter()
+            .find(|folder| folder["folder_id"] == folder_id)
+            .unwrap();
+        assert_eq!(original["cover_root_id"], root_id.0);
+        assert_eq!(original["watch_enabled"], true);
+        assert_eq!(original["watch_subfolders"], true);
+        let children = folders
+            .iter()
+            .filter(|folder| folder["parent_id"] == folder_id)
+            .map(|folder| folder["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(children, vec!["Alpha", "Zulu"]);
+        assert_eq!(
+            folders
+                .iter()
+                .filter(|folder| folder["parent_id"] == duplicate.folder_id.0)
+                .count(),
+            2
+        );
         assert_eq!(
             navigation["smart_folders"][0]["view"]["filter"]["kind"],
             "all"

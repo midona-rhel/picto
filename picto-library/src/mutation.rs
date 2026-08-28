@@ -2168,6 +2168,117 @@ impl Library {
         Ok((folder_id, receipt))
     }
 
+    pub fn duplicate_folder(&self, source_id: FolderId) -> Result<(FolderId, MutationReceipt)> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let ((duplicate_id, receipt), _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let source = load_folder_definition(transaction, source_id)?
+                    .ok_or_else(|| LibraryError::NotFound(format!("folder {source_id}")))?;
+                let duplicate_name = unique_folder_copy_name(
+                    transaction,
+                    source.parent_id,
+                    &format!("{} copy", source.name),
+                )?;
+                let root_display_order = transaction.query_row(
+                    "SELECT COALESCE(MAX(display_order) + 1, 0)
+                     FROM folder_definition WHERE parent_id IS ?1",
+                    [source.parent_id.map(|id| id.0)],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let rows = load_folder_clone_rows(transaction, source_id)?;
+                let mut replacements = HashMap::<FolderId, FolderId>::new();
+                let mut changes = Vec::with_capacity(rows.len());
+                let mut next = (*snapshot).clone();
+                let mut duplicate_id = None;
+                for row in rows {
+                    let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
+                    let parent_id = if row.folder_id == source_id {
+                        source.parent_id
+                    } else {
+                        row.parent_id.and_then(|id| replacements.get(&id).copied())
+                    };
+                    let name = if row.folder_id == source_id {
+                        duplicate_name.clone()
+                    } else {
+                        row.name.clone()
+                    };
+                    let display_order = if row.folder_id == source_id {
+                        root_display_order
+                    } else {
+                        row.display_order
+                    };
+                    transaction.execute(
+                        "INSERT INTO folder_definition
+                             (folder_id, stable_key, parent_id, name, icon, color, notes,
+                              auto_tag_ids, display_order)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        rusqlite::params![
+                            folder_id.0,
+                            uuid::Uuid::new_v4().to_string(),
+                            parent_id.map(|id| id.0),
+                            name,
+                            row.icon,
+                            row.color,
+                            row.notes,
+                            row.auto_tag_ids,
+                            display_order,
+                        ],
+                    )?;
+                    let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "duplicated folder {} disappeared",
+                            folder_id.0
+                        ))
+                    })?;
+                    changes.push(SemanticChange::FolderDefinition {
+                        folder_id,
+                        before: None,
+                        after: Some(Box::new(after)),
+                    });
+                    replacements.insert(row.folder_id, folder_id);
+                    Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
+                    Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
+                    if row.folder_id == source_id {
+                        duplicate_id = Some(folder_id);
+                    }
+                }
+                let duplicate_id = duplicate_id.ok_or_else(|| {
+                    LibraryError::InvalidState("folder clone produced no root".into())
+                })?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.duplicate",
+                    None,
+                    serde_json::json!({"source_id": source_id.0, "folder_id": duplicate_id.0}),
+                    now_ms(),
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok(((duplicate_id, receipt.clone()), PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "folders.duplicate",
+                        "Duplicate folder",
+                        SemanticChange::Compound(changes),
+                    )),
+                }))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok((duplicate_id, receipt))
+    }
+
     pub fn set_folder_metadata(
         &self,
         folder_id: FolderId,
@@ -2483,6 +2594,105 @@ impl Library {
                         }),
                     },
                 ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn sort_folder_tree(
+        &self,
+        folder_id: FolderId,
+        descending: bool,
+        recursive: bool,
+    ) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                require_folder(transaction, folder_id)?;
+                let parent_ids = if recursive {
+                    load_folder_subtree(transaction, &[folder_id])?
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![folder_id]
+                };
+                let mut changes = Vec::new();
+                let mut update = transaction.prepare_cached(
+                    "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
+                )?;
+                for parent_id in parent_ids {
+                    let children = load_folder_children(transaction, Some(parent_id))?;
+                    let mut states = children
+                        .iter()
+                        .map(|id| {
+                            load_folder_definition(transaction, *id)?.ok_or_else(|| {
+                                LibraryError::InvalidState(format!(
+                                    "folder {} disappeared during sort",
+                                    id.0
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    states.sort_by(|left, right| {
+                        let ordering = left
+                            .name
+                            .to_lowercase()
+                            .cmp(&right.name.to_lowercase())
+                            .then_with(|| left.folder_id.cmp(&right.folder_id));
+                        if descending { ordering.reverse() } else { ordering }
+                    });
+                    for (display_order, before) in states.into_iter().enumerate() {
+                        if before.display_order == display_order as i64 {
+                            continue;
+                        }
+                        update.execute(rusqlite::params![before.folder_id.0, display_order as i64])?;
+                        let after = load_folder_definition(transaction, before.folder_id)?
+                            .ok_or_else(|| LibraryError::InvalidState(format!(
+                                "folder {} disappeared during sort",
+                                before.folder_id.0
+                            )))?;
+                        changes.push(SemanticChange::FolderDefinition {
+                            folder_id: before.folder_id,
+                            before: Some(Box::new(before)),
+                            after: Some(Box::new(after)),
+                        });
+                    }
+                }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.sort_tree",
+                    None,
+                    serde_json::json!({
+                        "folder_id": folder_id.0,
+                        "descending": descending,
+                        "recursive": recursive,
+                    }),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["folders".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((receipt.clone(), PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!changes.is_empty()).then(|| HistoryEntry::for_command(
+                        "folders.sort_tree",
+                        "Sort folders",
+                        SemanticChange::Compound(changes),
+                    )),
+                }))
             },
             move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
@@ -5661,6 +5871,80 @@ fn load_folder_children(
         })?
         .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
     Ok(values)
+}
+
+fn unique_folder_copy_name(
+    connection: &rusqlite::Connection,
+    parent_id: Option<FolderId>,
+    base: &str,
+) -> Result<String> {
+    for suffix in 1..=10_000 {
+        let candidate = if suffix == 1 {
+            base.to_owned()
+        } else {
+            format!("{base} {suffix}")
+        };
+        let exists = connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM folder_definition
+                 WHERE parent_id IS ?1 AND name = ?2
+             )",
+            rusqlite::params![parent_id.map(|id| id.0), candidate],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(LibraryError::InvalidState(
+        "could not allocate a unique folder copy name".into(),
+    ))
+}
+
+fn load_folder_clone_rows(
+    connection: &rusqlite::Connection,
+    root_id: FolderId,
+) -> Result<Vec<FolderDefinitionState>> {
+    let mut statement = connection.prepare(
+        "WITH RECURSIVE subtree(folder_id, depth) AS (
+             SELECT ?1, 0
+             UNION ALL
+             SELECT child.folder_id, subtree.depth + 1
+             FROM folder_definition child
+             JOIN subtree ON child.parent_id = subtree.folder_id
+         )
+         SELECT folder.stable_key, folder.parent_id, folder.name, folder.icon,
+                folder.color, folder.notes, folder.auto_tag_ids, folder.cover_root_id,
+                folder.watch_path, folder.watch_enabled, folder.watch_subfolders,
+                folder.display_order, folder.folder_id
+         FROM subtree
+         JOIN folder_definition folder ON folder.folder_id = subtree.folder_id
+         ORDER BY subtree.depth, folder.parent_id, folder.display_order, folder.folder_id",
+    )?;
+    let rows = statement
+        .query_map([root_id.0], |row| {
+            Ok(FolderDefinitionState {
+                folder_id: FolderId(row.get(12)?),
+                stable_key: row.get(0)?,
+                parent_id: row.get::<_, Option<u32>>(1)?.map(FolderId),
+                name: row.get(2)?,
+                icon: row.get(3)?,
+                color: row.get(4)?,
+                notes: row.get(5)?,
+                auto_tag_ids: row.get(6)?,
+                // Clones have no memberships, so covers and watches are intentionally not copied.
+                cover_root_id: None,
+                watch_path: None,
+                watch_enabled: false,
+                watch_subfolders: false,
+                display_order: row.get(11)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    if rows.is_empty() {
+        return Err(LibraryError::NotFound(format!("folder {root_id}")));
+    }
+    Ok(rows)
 }
 
 fn load_folder_subtree(

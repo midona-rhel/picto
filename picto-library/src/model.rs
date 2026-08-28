@@ -292,6 +292,13 @@ pub struct ReorderFolderRootsInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SortFolderTreeInput {
+    pub folder_id: FolderId,
+    pub descending: bool,
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceIdentity {
     pub source_key: String,
     pub source_item_key: String,
