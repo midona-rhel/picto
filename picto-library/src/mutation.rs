@@ -283,6 +283,35 @@ impl Library {
         )
     }
 
+    pub fn folder_auto_tags(&self, folder_id: FolderId) -> Result<Vec<String>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                require_folder(connection, folder_id)?;
+                let ids = ingest::folder_auto_tags(connection, folder_id)?;
+                let names_by_id = snapshot
+                    .tag_ids_by_name
+                    .iter()
+                    .map(|(name, tag_id)| (*tag_id, name.as_str()))
+                    .collect::<HashMap<_, _>>();
+                ids.iter()
+                    .map(|tag_id| {
+                        names_by_id.get(&crate::TagId(tag_id)).map_or_else(
+                            || {
+                                Err(LibraryError::InvalidState(format!(
+                                    "folder {} references missing auto-tag {tag_id}",
+                                    folder_id.0
+                                )))
+                            },
+                            |name| Ok((*name).to_owned()),
+                        )
+                    })
+                    .collect()
+            },
+        )
+    }
+
     pub fn tags(&self) -> Result<Vec<TagRecord>> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,

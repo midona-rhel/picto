@@ -307,6 +307,316 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn create_folder(
+        &self,
+        input: &crate::folders_v2::CreateFolderInput,
+    ) -> Result<
+        (
+            crate::folders_v2::FolderId,
+            crate::folders_v2::FolderMutationReceipt,
+        ),
+        String,
+    > {
+        let parent_id = input
+            .parent_id
+            .map(|id| checked_local_id(id.0, "folder").map(picto_library::FolderId))
+            .transpose()?;
+        let (folder_id, receipt) = self
+            .library
+            .create_folder(&input.name, parent_id)
+            .map_err(|error| error.to_string())?;
+        let folder_id = crate::folders_v2::FolderId(i64::from(folder_id.0));
+        Ok((
+            folder_id,
+            folder_receipt(receipt, vec![folder_id], Vec::new(), None),
+        ))
+    }
+
+    pub fn rename_folder(
+        &self,
+        folder_id: crate::folders_v2::FolderId,
+        name: &str,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let folder_id = checked_folder_id(folder_id)?;
+        let receipt = self
+            .library
+            .rename_folder(folder_id, name)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            receipt,
+            vec![crate::folders_v2::FolderId(i64::from(folder_id.0))],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn set_folder_metadata(
+        &self,
+        input: &crate::folders_v2::FolderMetadataInput,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let folder_id = checked_folder_id(input.folder_id)?;
+        let receipt = self
+            .library
+            .set_folder_metadata(
+                folder_id,
+                input.icon.as_deref(),
+                input.color.as_deref(),
+                input.notes.as_deref(),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            receipt,
+            vec![input.folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn folder_auto_tags(
+        &self,
+        folder_id: crate::folders_v2::FolderId,
+    ) -> Result<Vec<String>, String> {
+        self.library
+            .folder_auto_tags(checked_folder_id(folder_id)?)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_folder_auto_tags(
+        &self,
+        input: &crate::folders_v2::SetFolderAutoTagsInput,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let snapshot = self.library.projections().snapshot();
+        let mut tag_ids = input
+            .tags
+            .iter()
+            .map(|name| {
+                let name = name.trim();
+                snapshot
+                    .tag_ids_by_name
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("Auto-tag {name} does not exist"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        tag_ids.sort_unstable();
+        tag_ids.dedup();
+        drop(snapshot);
+        let receipt = self
+            .library
+            .set_folder_auto_tags(
+                checked_folder_id(input.folder_id)?,
+                tag_ids,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            receipt,
+            vec![input.folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn move_folder(
+        &self,
+        folder_id: crate::folders_v2::FolderId,
+        parent_id: Option<crate::folders_v2::FolderId>,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let folder = checked_folder_id(folder_id)?;
+        let parent = parent_id.map(checked_folder_id).transpose()?;
+        let receipt = self
+            .library
+            .move_folder(folder, parent)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(receipt, vec![folder_id], Vec::new(), None))
+    }
+
+    pub fn reorder_folder_children(
+        &self,
+        input: &crate::folders_v2::ReorderFolderChildrenInput,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let parent_id = input.parent_id.map(checked_folder_id).transpose()?;
+        let folder_ids = input
+            .folder_ids
+            .iter()
+            .copied()
+            .map(checked_folder_id)
+            .collect::<Result<Vec<_>, String>>()?;
+        let receipt = self
+            .library
+            .reorder_folder_children(parent_id, &folder_ids)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            receipt,
+            input.folder_ids.clone(),
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn reorder_folder_items(
+        &self,
+        input: &crate::folders_v2::ReorderFolderItemsInput,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let root_ids = input
+            .item_ids
+            .iter()
+            .map(|id| checked_root_id(id.0))
+            .collect::<Result<Vec<_>, String>>()?;
+        let receipt = self
+            .library
+            .reorder_folder_items(checked_folder_id(input.folder_id)?, &root_ids)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            receipt,
+            vec![input.folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn sort_folder_items_by_name(
+        &self,
+        folder_id: crate::folders_v2::FolderId,
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let receipt = self
+            .library
+            .sort_folder_items_by_name(checked_folder_id(folder_id)?)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(receipt, vec![folder_id], Vec::new(), None))
+    }
+
+    pub fn delete_folders(
+        &self,
+        folder_ids: &[crate::folders_v2::FolderId],
+    ) -> Result<crate::folders_v2::FolderMutationReceipt, String> {
+        let ids = folder_ids
+            .iter()
+            .copied()
+            .map(checked_folder_id)
+            .collect::<Result<Vec<_>, String>>()?;
+        let result = self
+            .library
+            .delete_folders(&ids)
+            .map_err(|error| error.to_string())?;
+        Ok(folder_receipt(
+            result.receipt,
+            Vec::new(),
+            result
+                .deleted_folder_ids
+                .into_iter()
+                .map(|id| crate::folders_v2::FolderId(i64::from(id.0)))
+                .collect(),
+            result
+                .fallback_folder_id
+                .map(|id| crate::folders_v2::FolderId(i64::from(id.0))),
+        ))
+    }
+
+    pub fn create_smart_folder(
+        &self,
+        input: &crate::navigation_v2::CreateSmartFolderInput,
+    ) -> Result<(i64, crate::navigation_v2::SmartFolderMutationReceipt), String> {
+        let input = crate::library_v1::smart_folder_input(&self.library, input)?;
+        let (smart_folder_id, receipt) = self
+            .library
+            .create_smart_folder(input)
+            .map_err(|error| error.to_string())?;
+        Ok((
+            i64::from(smart_folder_id.0),
+            smart_receipt(receipt, vec![smart_folder_id], Vec::new(), None),
+        ))
+    }
+
+    pub fn update_smart_folder(
+        &self,
+        smart_folder_id: i64,
+        input: &crate::navigation_v2::CreateSmartFolderInput,
+    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+        let smart_folder_id = checked_smart_folder_id(smart_folder_id)?;
+        let input = crate::library_v1::smart_folder_input(&self.library, input)?;
+        let receipt = self
+            .library
+            .update_smart_folder(smart_folder_id, input)
+            .map_err(|error| error.to_string())?;
+        Ok(smart_receipt(
+            receipt,
+            vec![smart_folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn move_smart_folder(
+        &self,
+        smart_folder_id: i64,
+        parent_id: Option<i64>,
+    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+        let smart_folder_id = checked_smart_folder_id(smart_folder_id)?;
+        let mut record = self
+            .library
+            .smart_folders()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|record| record.smart_folder_id == smart_folder_id)
+            .ok_or_else(|| format!("Smart folder {} does not exist", smart_folder_id.0))?;
+        record.parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
+        let receipt = self
+            .library
+            .update_smart_folder(
+                smart_folder_id,
+                picto_library::SmartFolderInput {
+                    name: record.name,
+                    parent_id: record.parent_id,
+                    icon: record.icon,
+                    color: record.color,
+                    notes: record.notes,
+                    view: record.view,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(smart_receipt(
+            receipt,
+            vec![smart_folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn reorder_smart_folder_children(
+        &self,
+        parent_id: Option<i64>,
+        smart_folder_ids: &[i64],
+    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+        let parent_id = parent_id.map(checked_smart_folder_id).transpose()?;
+        let ids = smart_folder_ids
+            .iter()
+            .copied()
+            .map(checked_smart_folder_id)
+            .collect::<Result<Vec<_>, String>>()?;
+        let receipt = self
+            .library
+            .reorder_smart_folder_children(parent_id, &ids)
+            .map_err(|error| error.to_string())?;
+        Ok(smart_receipt(receipt, ids, Vec::new(), None))
+    }
+
+    pub fn delete_smart_folder(
+        &self,
+        smart_folder_id: i64,
+    ) -> Result<crate::navigation_v2::SmartFolderMutationReceipt, String> {
+        let result = self
+            .library
+            .delete_smart_folder(checked_smart_folder_id(smart_folder_id)?)
+            .map_err(|error| error.to_string())?;
+        Ok(smart_receipt(
+            result.receipt,
+            Vec::new(),
+            result.deleted_smart_folder_ids,
+            result.fallback_smart_folder_id,
+        ))
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self
@@ -456,6 +766,50 @@ fn prepare_root(root: &Path) -> Result<PathBuf, String> {
 
 fn checked_root_id(value: i64) -> Result<RootId, String> {
     checked_local_id(value, "root").map(RootId)
+}
+
+fn checked_folder_id(
+    value: crate::folders_v2::FolderId,
+) -> Result<picto_library::FolderId, String> {
+    checked_local_id(value.0, "folder").map(picto_library::FolderId)
+}
+
+fn checked_smart_folder_id(value: i64) -> Result<picto_library::SmartFolderId, String> {
+    checked_local_id(value, "smart folder").map(picto_library::SmartFolderId)
+}
+
+fn folder_receipt(
+    receipt: picto_library::MutationReceipt,
+    folder_ids: Vec<crate::folders_v2::FolderId>,
+    deleted_folder_ids: Vec<crate::folders_v2::FolderId>,
+    fallback_folder_id: Option<crate::folders_v2::FolderId>,
+) -> crate::folders_v2::FolderMutationReceipt {
+    crate::folders_v2::FolderMutationReceipt {
+        receipt: crate::library_v1::receipt(receipt),
+        folder_ids,
+        deleted_folder_ids,
+        fallback_folder_id,
+    }
+}
+
+fn smart_receipt(
+    receipt: picto_library::MutationReceipt,
+    smart_folder_ids: Vec<picto_library::SmartFolderId>,
+    deleted_smart_folder_ids: Vec<picto_library::SmartFolderId>,
+    fallback_smart_folder_id: Option<picto_library::SmartFolderId>,
+) -> crate::navigation_v2::SmartFolderMutationReceipt {
+    crate::navigation_v2::SmartFolderMutationReceipt {
+        receipt: crate::library_v1::receipt(receipt),
+        smart_folder_ids: smart_folder_ids
+            .into_iter()
+            .map(|id| i64::from(id.0))
+            .collect(),
+        deleted_smart_folder_ids: deleted_smart_folder_ids
+            .into_iter()
+            .map(|id| i64::from(id.0))
+            .collect(),
+        fallback_smart_folder_id: fallback_smart_folder_id.map(|id| i64::from(id.0)),
+    }
 }
 
 fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {

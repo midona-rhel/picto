@@ -97,6 +97,74 @@ pub fn dispatch_library(
             let input: crate::operations_v2::ReorderCollectionInput = parse(args_json)?;
             read(application.reorder_collection(&input)?)
         }
+        "folders.create" => {
+            let input: crate::folders_v2::CreateFolderInput = parse(args_json)?;
+            let (folder_id, receipt) = application.create_folder(&input)?;
+            read(CreatedFolder { folder_id, receipt })
+        }
+        "folders.rename" => {
+            let input: RenameFolderInput = parse(args_json)?;
+            read(application.rename_folder(input.folder_id, &input.name)?)
+        }
+        "folders.metadata.set" => {
+            let input: FolderMetadataInput = parse(args_json)?;
+            read(application.set_folder_metadata(&input)?)
+        }
+        "folders.auto_tags.get" => {
+            let input: FolderInput = parse(args_json)?;
+            read(application.folder_auto_tags(input.folder_id)?)
+        }
+        "folders.auto_tags.set" => {
+            let input: SetFolderAutoTagsInput = parse(args_json)?;
+            read(application.set_folder_auto_tags(&input)?)
+        }
+        "folders.move" => {
+            let input: MoveFolderInput = parse(args_json)?;
+            read(application.move_folder(input.folder_id, input.parent_id)?)
+        }
+        "folders.reorder" => {
+            let input: crate::folders_v2::ReorderFolderChildrenInput = parse(args_json)?;
+            read(application.reorder_folder_children(&input)?)
+        }
+        "folders.items.reorder" => {
+            let input: ReorderFolderItemsInput = parse(args_json)?;
+            read(application.reorder_folder_items(&input)?)
+        }
+        "folders.items.sort_name" => {
+            let input: FolderInput = parse(args_json)?;
+            read(application.sort_folder_items_by_name(input.folder_id)?)
+        }
+        "folders.delete" => {
+            let input: FolderIdsInput = parse(args_json)?;
+            read(application.delete_folders(&input.folder_ids)?)
+        }
+        "smart_folders.create" => {
+            let input: CreateSmartFolderInput = parse(args_json)?;
+            let (smart_folder_id, receipt) = application.create_smart_folder(&input)?;
+            read(CreatedSmartFolder {
+                smart_folder_id,
+                receipt,
+            })
+        }
+        "smart_folders.update" => {
+            let input: UpdateSmartFolderInput = parse(args_json)?;
+            read(application.update_smart_folder(input.smart_folder_id, &input.value)?)
+        }
+        "smart_folders.move" => {
+            let input: MoveSmartFolderInput = parse(args_json)?;
+            read(application.move_smart_folder(input.smart_folder_id, input.parent_id)?)
+        }
+        "smart_folders.reorder" => {
+            let input: ReorderSmartFoldersInput = parse(args_json)?;
+            read(
+                application
+                    .reorder_smart_folder_children(input.parent_id, &input.smart_folder_ids)?,
+            )
+        }
+        "smart_folders.delete" => {
+            let input: SmartFolderInput = parse(args_json)?;
+            read(application.delete_smart_folder(input.smart_folder_id)?)
+        }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
@@ -1672,6 +1740,84 @@ mod tests {
                 .total,
             2
         );
+    }
+
+    #[test]
+    fn greenfield_dispatch_routes_folder_and_smart_folder_mutations() {
+        let (_directory, application, root_id) = greenfield_fixture();
+        for add in [true, false] {
+            dispatch_library(
+                &application,
+                "items.apply_tags",
+                &format!(
+                    r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["auto:known"],"add":{add}}}"#,
+                    root_id.0
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        }
+        let created = dispatch_library(
+            &application,
+            "folders.create",
+            r#"{"name":"Automatic","parent_id":null}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+        let folder_id = created["folder_id"].as_i64().unwrap();
+        dispatch_library(
+            &application,
+            "folders.auto_tags.set",
+            &format!(r#"{{"folder_id":{folder_id},"tags":["auto:known"]}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(dispatch_library(
+            &application,
+            "folders.auto_tags.set",
+            &format!(r#"{{"folder_id":{folder_id},"tags":["auto:missing"]}}"#),
+        )
+        .unwrap_err()
+        .contains("does not exist"));
+        dispatch_library(
+            &application,
+            "items.set_folder",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"folder_id":{folder_id},"present":true}}"#,
+                root_id.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            application
+                .library()
+                .details(root_id)
+                .unwrap()
+                .tag_ids
+                .len(),
+            1
+        );
+
+        let smart = dispatch_library(
+            &application,
+            "smart_folders.create",
+            r#"{"name":"Everything","parent_id":null,"predicate":{"groups":[]},"icon":null,"color":null,"notes":null,"sort_field":"imported_at","sort_order":"descending"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let smart: serde_json::Value = serde_json::from_str(&smart).unwrap();
+        let smart_folder_id = smart["smart_folder_id"].as_i64().unwrap();
+        assert_eq!(application.library().smart_folders().unwrap()[0].count, 1);
+        dispatch_library(
+            &application,
+            "smart_folders.delete",
+            &format!(r#"{{"smart_folder_id":{smart_folder_id}}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(application.library().smart_folders().unwrap().is_empty());
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {
