@@ -151,35 +151,38 @@ pub fn page(
         .as_deref()
         .map(serde_json::from_str)
         .transpose()?;
-    let (ids, next_cursor) = match query.view.sort.field {
-        SortField::FolderOrder => page_folder_order(snapshot, query, &matches, limit, cursor)?,
-        SortField::Rating => page_rating(snapshot, &matches, &query.view.sort, limit, cursor)?,
-        SortField::Random => page_random(&matches, &query.view.sort, limit, cursor)?,
-        SortField::Name => scan_text(connection, &matches, &query.view.sort, limit, cursor)?,
-        SortField::ImportedAt => scan_integer(
-            connection,
-            "root.imported_at_ms",
-            &matches,
-            &query.view.sort,
-            limit,
-            cursor,
-        )?,
-        SortField::CapturedAt => scan_integer(
-            connection,
-            "COALESCE(root.captured_at_ms, -1)",
-            &matches,
-            &query.view.sort,
-            limit,
-            cursor,
-        )?,
-        SortField::TotalSize => scan_integer(
-            connection,
-            "root.total_size_bytes",
-            &matches,
-            &query.view.sort,
-            limit,
-            cursor,
-        )?,
+    let (ids, next_cursor) = match query.scope {
+        ItemScope::RecentlyViewed => page_recent_order(connection, &matches, limit, cursor)?,
+        _ => match query.view.sort.field {
+            SortField::FolderOrder => page_folder_order(snapshot, query, &matches, limit, cursor)?,
+            SortField::Rating => page_rating(snapshot, &matches, &query.view.sort, limit, cursor)?,
+            SortField::Random => page_random(&matches, &query.view.sort, limit, cursor)?,
+            SortField::Name => scan_text(connection, &matches, &query.view.sort, limit, cursor)?,
+            SortField::ImportedAt => scan_integer(
+                connection,
+                "root.imported_at_ms",
+                &matches,
+                &query.view.sort,
+                limit,
+                cursor,
+            )?,
+            SortField::CapturedAt => scan_integer(
+                connection,
+                "COALESCE(root.captured_at_ms, -1)",
+                &matches,
+                &query.view.sort,
+                limit,
+                cursor,
+            )?,
+            SortField::TotalSize => scan_integer(
+                connection,
+                "root.total_size_bytes",
+                &matches,
+                &query.view.sort,
+                limit,
+                cursor,
+            )?,
+        },
     };
     let items = load_summaries(connection, snapshot, &ids)?;
     Ok(RootPage {
@@ -540,6 +543,72 @@ fn page_folder_order(
         .then(|| serde_json::to_string(&Cursor::Vector { index }))
         .transpose()?;
     Ok((output, next))
+}
+
+fn page_recent_order(
+    connection: &Connection,
+    matches: &RoaringBitmap,
+    limit: usize,
+    cursor: Option<Cursor>,
+) -> Result<(Vec<RootId>, Option<String>)> {
+    let mut scan_cursor = match cursor {
+        Some(Cursor::Integer { value, root_id }) => Some((value, root_id)),
+        None => None,
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match recently viewed order".into(),
+            ))
+        }
+    };
+    let mut output = Vec::with_capacity(limit);
+    loop {
+        let rows = if let Some((viewed_at_ms, root_id)) = scan_cursor {
+            let mut statement = connection.prepare_cached(
+                "SELECT root_id, viewed_at_ms FROM recent_view
+                 WHERE viewed_at_ms < ?1 OR (viewed_at_ms = ?1 AND root_id < ?2)
+                 ORDER BY viewed_at_ms DESC, root_id DESC LIMIT ?3",
+            )?;
+            let values = statement
+                .query_map(
+                    rusqlite::params![viewed_at_ms, root_id, SCAN_CHUNK as i64],
+                    |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)),
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            values
+        } else {
+            let mut statement = connection.prepare_cached(
+                "SELECT root_id, viewed_at_ms FROM recent_view
+                 ORDER BY viewed_at_ms DESC, root_id DESC LIMIT ?1",
+            )?;
+            let values = statement
+                .query_map([SCAN_CHUNK as i64], |row| {
+                    Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            values
+        };
+        if rows.is_empty() {
+            return Ok((output, None));
+        }
+        for (root_id, viewed_at_ms) in &rows {
+            scan_cursor = Some((*viewed_at_ms, *root_id));
+            if matches.contains(*root_id) {
+                output.push(RootId(*root_id));
+                if output.len() == limit {
+                    return Ok((
+                        output,
+                        Some(serde_json::to_string(&Cursor::Integer {
+                            value: *viewed_at_ms,
+                            root_id: *root_id,
+                        })?),
+                    ));
+                }
+            }
+        }
+        if rows.len() < SCAN_CHUNK {
+            return Ok((output, None));
+        }
+    }
 }
 
 fn load_summaries(

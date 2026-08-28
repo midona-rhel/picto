@@ -103,6 +103,10 @@ pub enum SemanticChange {
         before: String,
         after: String,
     },
+    RecentViews {
+        before: Arc<Vec<(RootId, i64)>>,
+        after: Arc<Vec<(RootId, i64)>>,
+    },
     Structure {
         affected: Arc<RoaringBitmap>,
         before: StructuralState,
@@ -158,6 +162,7 @@ impl SemanticChange {
                 before.serialized_size() + after.serialized_size() + 32
             }
             Self::FolderName { before, after, .. } => before.len() + after.len() + 32,
+            Self::RecentViews { before, after } => (before.len() + after.len()) * 16 + 32,
             Self::Structure {
                 affected,
                 before,

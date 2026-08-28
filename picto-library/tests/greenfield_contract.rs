@@ -1373,6 +1373,79 @@ fn organizing_a_collection_is_reversible_without_persisted_history() {
 }
 
 #[test]
+fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (older, _) = library
+        .ingest(&imported("recent-older", Lifecycle::Active, &[]))
+        .unwrap();
+    let (newer, _) = library
+        .ingest(&imported("recent-newer", Lifecycle::Active, &[]))
+        .unwrap();
+    let (inbox, _) = library
+        .ingest(&imported("recent-inbox", Lifecycle::Inbox, &[]))
+        .unwrap();
+    library.record_recent_view(older, 100).unwrap();
+    library.record_recent_view(inbox, 300).unwrap();
+    library.record_recent_view(newer, 200).unwrap();
+
+    let recent = library
+        .query(
+            &RootQuery {
+                scope: ItemScope::RecentlyViewed,
+                view: ViewQuerySpec {
+                    filter: FilterExpr::default(),
+                    sort: ItemSort {
+                        field: SortField::FolderOrder,
+                        direction: SortDirection::Ascending,
+                        random_seed: None,
+                    },
+                },
+            },
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        recent
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![newer, older]
+    );
+
+    library.clear_recent_views().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::RecentlyViewed), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::RecentlyViewed), &PageRequest::default())
+            .unwrap()
+            .total,
+        2
+    );
+    library.redo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .query(&query(ItemScope::RecentlyViewed), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+
+    drop(library);
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(reopened.history().state().entries, 0);
+}
+
+#[test]
 fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");

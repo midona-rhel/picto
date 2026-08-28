@@ -137,6 +137,91 @@ impl Library {
         )
     }
 
+    pub fn record_recent_view(
+        &self,
+        root_id: RootId,
+        viewed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let (receipt, _, _) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let exists = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM library_root WHERE root_id = ?1)",
+                    [root_id.0],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !exists {
+                    return Err(LibraryError::NotFound(format!("root {root_id}")));
+                }
+                transaction.execute(
+                    "INSERT INTO recent_view (root_id, viewed_at_ms) VALUES (?1, ?2)
+                     ON CONFLICT(root_id) DO UPDATE SET viewed_at_ms = excluded.viewed_at_ms",
+                    rusqlite::params![root_id.0, viewed_at_ms],
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["recently-viewed".into()],
+                    vec![root_id],
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        Ok(receipt)
+    }
+
+    pub fn clear_recent_views(&self) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = load_recent_views(transaction)?;
+                transaction.execute("DELETE FROM recent_view", [])?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["recently-viewed".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (!before.is_empty()).then(|| {
+                            HistoryEntry::new(
+                                "Clear recently viewed",
+                                SemanticChange::RecentViews {
+                                    before: Arc::new(before),
+                                    after: Arc::new(Vec::new()),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
     pub fn smart_folders(&self) -> Result<Vec<SmartFolderRecord>> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
@@ -3033,6 +3118,18 @@ fn apply_semantic_change(
             resources.insert("folders".into());
             resources.insert("navigation".into());
         }
+        SemanticChange::RecentViews { before, after } => {
+            let replacement = if use_after { after } else { before };
+            transaction.execute("DELETE FROM recent_view", [])?;
+            let mut statement = transaction.prepare_cached(
+                "INSERT INTO recent_view (root_id, viewed_at_ms) VALUES (?1, ?2)",
+            )?;
+            for (root_id, viewed_at_ms) in replacement.iter() {
+                statement.execute(rusqlite::params![root_id.0, viewed_at_ms])?;
+            }
+            resources.insert("recently-viewed".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::Structure {
             affected: changed_roots,
             before,
@@ -3090,6 +3187,17 @@ fn apply_semantic_change(
         }
     }
     Ok(())
+}
+
+fn load_recent_views(connection: &rusqlite::Connection) -> Result<Vec<(RootId, i64)>> {
+    let mut statement = connection.prepare(
+        "SELECT root_id, viewed_at_ms FROM recent_view
+         ORDER BY viewed_at_ms DESC, root_id DESC",
+    )?;
+    let values = statement
+        .query_map([], |row| Ok((RootId(row.get(0)?), row.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    Ok(values)
 }
 
 fn restore_structure(
