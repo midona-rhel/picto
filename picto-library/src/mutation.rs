@@ -2069,6 +2069,64 @@ impl Library {
         self.remove_tag_definition(source, Some(destination), changed_at_ms)
     }
 
+    pub fn delete_unused_tags(&self) -> Result<MutationReceipt> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let tag_ids = transaction
+                    .prepare("SELECT tag_id FROM tag_definition ORDER BY tag_id")?
+                    .query_map([], |row| row.get::<_, u32>(0).map(crate::TagId))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let unused = tag_ids
+                    .into_iter()
+                    .filter(|tag_id| snapshot.tags.get(tag_id).is_none_or(|roots| roots.is_empty()))
+                    .collect::<Vec<_>>();
+                let mut next = (*snapshot).clone();
+                let mut changes = Vec::new();
+                for tag_id in &unused {
+                    let (_, tag_changes) = remove_tag_in_transaction(
+                        transaction,
+                        &mut next,
+                        *tag_id,
+                        None,
+                        revision,
+                    )?;
+                    changes.extend(tag_changes);
+                }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "tag.delete_unused",
+                    None,
+                    serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
+                    now_ms(),
+                )?;
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["tags".into(), "navigation".into(), "smart-folders".into()],
+                    Vec::new(),
+                );
+                Ok((receipt.clone(), PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!changes.is_empty()).then(|| HistoryEntry::for_command(
+                        "tags.delete_unused",
+                        "Delete unused tags",
+                        SemanticChange::Compound(changes),
+                    )),
+                }))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
     pub fn create_folder(
         &self,
         name: &str,
@@ -3851,126 +3909,14 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let source_state = load_tag_definition(transaction, source)?
-                    .ok_or_else(|| LibraryError::NotFound(format!("tag {}", source.0)))?;
-                if let Some(destination) = destination {
-                    if load_tag_definition(transaction, destination)?.is_none() {
-                        return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
-                    }
-                }
-                let source_members = snapshot
-                    .tags
-                    .get(&source)
-                    .map(|members| members.to_bitmap())
-                    .unwrap_or_default();
                 let mut next = (*snapshot).clone();
-
-                let mut history_changes = Vec::new();
-                let folder_ids = {
-                    let mut statement =
-                        transaction.prepare("SELECT folder_id FROM folder_definition")?;
-                    let ids = statement
-                        .query_map([], |row| row.get::<_, u32>(0))?
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    ids
-                };
-                for folder_id in folder_ids.into_iter().map(FolderId) {
-                    let before = ingest::folder_auto_tags(transaction, folder_id)?;
-                    if !before.contains(source.0) {
-                        continue;
-                    }
-                    let mut after = before.clone();
-                    after.remove(source.0);
-                    if let Some(destination) = destination {
-                        after.insert(destination.0);
-                    }
-                    transaction.execute(
-                        "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
-                        rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
-                    )?;
-                    history_changes.push(SemanticChange::FolderAutoTags {
-                        folder_id,
-                        before: Arc::new(before),
-                        after: Arc::new(after),
-                    });
-                }
-                if let Some(destination) = destination {
-                    let before = next
-                        .tags
-                        .get(&destination)
-                        .map(|members| members.to_bitmap())
-                        .unwrap_or_default();
-                    let mut after = before.clone();
-                    after |= &source_members;
-                    if before != after {
-                        bitmap::replace(
-                            transaction,
-                            revision,
-                            BitmapKey {
-                                domain: BitmapDomain::Tag,
-                                key_id: destination.0,
-                            },
-                            &after,
-                        )?;
-                        Arc::make_mut(&mut next.tags).insert(destination, after.clone().into());
-                        history_changes.push(SemanticChange::Bitmap {
-                            key: BitmapKey {
-                                domain: BitmapDomain::Tag,
-                                key_id: destination.0,
-                            },
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        });
-                    }
-                }
-
-                bitmap::replace(
-                    transaction,
-                    revision,
-                    BitmapKey {
-                        domain: BitmapDomain::Tag,
-                        key_id: source.0,
-                    },
-                    &RoaringBitmap::new(),
-                )?;
-                transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [source.0])?;
-                Arc::make_mut(&mut next.tags).remove(&source);
-                Arc::make_mut(&mut next.tag_ids_by_name).remove(&source_state.full_name);
-
-                let destination_members = destination
-                    .and_then(|tag_id| next.tags.get(&tag_id))
-                    .map(|members| members.to_bitmap())
-                    .unwrap_or_default();
-                let counts = Arc::make_mut(&mut next.tag_count);
-                for root_id in &source_members {
-                    let loses_assignment = destination.is_none()
-                        || destination_members.contains(root_id)
-                            && snapshot
-                                .tags
-                                .get(&destination.unwrap())
-                                .is_some_and(|members| members.contains(root_id));
-                    if loses_assignment {
-                        let current = counts.value(root_id).unwrap_or(0);
-                        counts.insert(root_id, current.saturating_sub(1));
-                    }
-                }
-                let query_changes = crate::smart::rewrite_tag_references(
+                let (source_members, history_changes) = remove_tag_in_transaction(
                     transaction,
                     &mut next,
                     source,
                     destination,
+                    revision,
                 )?;
-
-                history_changes.insert(
-                    0,
-                    SemanticChange::TagDefinition {
-                        before: Some(source_state),
-                        after: None,
-                        before_members: Arc::new(source_members.clone()),
-                        after_members: Arc::new(RoaringBitmap::new()),
-                        queries: Arc::new(query_changes),
-                    },
-                );
                 transaction.execute(
                     "INSERT INTO cloud_journal
                          (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
@@ -5644,6 +5590,116 @@ fn rename_tag_definition(
     names.remove(&old_name);
     names.insert(name.to_owned(), tag_id);
     Ok(())
+}
+
+fn remove_tag_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    source: crate::TagId,
+    destination: Option<crate::TagId>,
+    revision: u64,
+) -> Result<(RoaringBitmap, Vec<SemanticChange>)> {
+    let source_state = load_tag_definition(transaction, source)?
+        .ok_or_else(|| LibraryError::NotFound(format!("tag {}", source.0)))?;
+    if let Some(destination) = destination {
+        if load_tag_definition(transaction, destination)?.is_none() {
+            return Err(LibraryError::NotFound(format!("tag {}", destination.0)));
+        }
+    }
+    let source_members = snapshot
+        .tags
+        .get(&source)
+        .map(|members| members.to_bitmap())
+        .unwrap_or_default();
+    let destination_before = destination
+        .and_then(|tag_id| snapshot.tags.get(&tag_id))
+        .map(|members| members.to_bitmap())
+        .unwrap_or_default();
+    let mut history_changes = Vec::new();
+
+    let folder_ids = transaction
+        .prepare("SELECT folder_id FROM folder_definition")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for folder_id in folder_ids.into_iter().map(FolderId) {
+        let before = ingest::folder_auto_tags(transaction, folder_id)?;
+        if !before.contains(source.0) {
+            continue;
+        }
+        let mut after = before.clone();
+        after.remove(source.0);
+        if let Some(destination) = destination {
+            after.insert(destination.0);
+        }
+        transaction.execute(
+            "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
+            rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
+        )?;
+        history_changes.push(SemanticChange::FolderAutoTags {
+            folder_id,
+            before: Arc::new(before),
+            after: Arc::new(after),
+        });
+    }
+
+    if let Some(destination) = destination {
+        let mut after = destination_before.clone();
+        after |= &source_members;
+        if destination_before != after {
+            bitmap::replace(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: destination.0,
+                },
+                &after,
+            )?;
+            Arc::make_mut(&mut snapshot.tags).insert(destination, after.clone().into());
+            history_changes.push(SemanticChange::Bitmap {
+                key: BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: destination.0,
+                },
+                before: Arc::new(destination_before.clone()),
+                after: Arc::new(after),
+            });
+        }
+    }
+
+    bitmap::replace(
+        transaction,
+        revision,
+        BitmapKey {
+            domain: BitmapDomain::Tag,
+            key_id: source.0,
+        },
+        &RoaringBitmap::new(),
+    )?;
+    transaction.execute("DELETE FROM tag_definition WHERE tag_id = ?1", [source.0])?;
+    Arc::make_mut(&mut snapshot.tags).remove(&source);
+    Arc::make_mut(&mut snapshot.tag_ids_by_name).remove(&source_state.full_name);
+
+    let counts = Arc::make_mut(&mut snapshot.tag_count);
+    for root_id in &source_members {
+        if destination.is_none() || destination_before.contains(root_id) {
+            let current = counts.value(root_id).unwrap_or(0);
+            counts.insert(root_id, current.saturating_sub(1));
+        }
+    }
+    let query_changes =
+        crate::smart::rewrite_tag_references(transaction, snapshot, source, destination)?;
+    history_changes.insert(
+        0,
+        SemanticChange::TagDefinition {
+            before: Some(source_state),
+            after: None,
+            before_members: Arc::new(source_members.clone()),
+            after_members: Arc::new(RoaringBitmap::new()),
+            queries: Arc::new(query_changes),
+        },
+    );
+    Ok((source_members, history_changes))
 }
 
 fn load_namespace_name(

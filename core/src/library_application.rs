@@ -661,6 +661,12 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn delete_unused_tags(&self) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .delete_unused_tags()
+            .map_err(|error| error.to_string())
+    }
+
     pub fn delete_items(
         &self,
         target: &picto_library::selection::SelectionTarget,

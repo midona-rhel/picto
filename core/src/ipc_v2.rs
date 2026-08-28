@@ -212,6 +212,7 @@ pub fn dispatch_library(
             let input: LibraryTagInput = parse(args_json)?;
             read(application.delete_tag(input.tag_id)?)
         }
+        "tags.delete_unused" => read(application.delete_unused_tags()?),
         "duplicates.resolve" => {
             let input: LibraryResolveDuplicateInput = parse(args_json)?;
             read(application.resolve_duplicate(
@@ -2164,6 +2165,34 @@ mod tests {
             .unwrap()
             .tag_ids
             .is_empty());
+
+        for add in [true, false] {
+            dispatch_library(
+                &application,
+                "items.apply_tags",
+                &format!(
+                    r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"tags":["unused:temporary"],"add":{add}}}"#,
+                    root_id.0
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        }
+        assert_eq!(
+            dispatch_library(&application, "tags.unused_count", "{}")
+                .unwrap()
+                .unwrap(),
+            "1"
+        );
+        dispatch_library(&application, "tags.delete_unused", "{}")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dispatch_library(&application, "tags.unused_count", "{}")
+                .unwrap()
+                .unwrap(),
+            "0"
+        );
     }
 
     #[test]
