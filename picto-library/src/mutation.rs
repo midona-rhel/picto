@@ -814,6 +814,76 @@ impl Library {
         Ok((folder_id, receipt))
     }
 
+    pub fn set_folder_auto_tags(
+        &self,
+        folder_id: FolderId,
+        tag_ids: Vec<crate::TagId>,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        let after = tag_ids
+            .into_iter()
+            .map(|tag_id| tag_id.0)
+            .collect::<RoaringBitmap>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let before = ingest::folder_auto_tags(transaction, folder_id)?;
+                for tag_id in &after {
+                    let exists = transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)",
+                        [tag_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !exists {
+                        return Err(LibraryError::NotFound(format!("tag {tag_id}")));
+                    }
+                }
+                transaction.execute(
+                    "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
+                    rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
+                )?;
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, 'folder.auto_tags', NULL, ?2, ?3)",
+                    rusqlite::params![
+                        revision as i64,
+                        serde_json::json!({"folder_id": folder_id.0}).to_string(),
+                        changed_at_ms
+                    ],
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt =
+                    PublicationCoordinator::receipt(revision, vec!["folders".into()], Vec::new());
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: (before != after).then(|| {
+                            HistoryEntry::new(
+                                "Change folder auto-tags",
+                                SemanticChange::FolderAutoTags {
+                                    folder_id,
+                                    before: Arc::new(before),
+                                    after: Arc::new(after.clone()),
+                                },
+                            )
+                        }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
     pub fn add_to_folder(
         &self,
         target: &SelectionTarget,
@@ -1404,6 +1474,34 @@ impl Library {
                 let mut next = (*snapshot).clone();
 
                 let mut history_changes = Vec::new();
+                let folder_ids = {
+                    let mut statement =
+                        transaction.prepare("SELECT folder_id FROM folder_definition")?;
+                    let ids = statement
+                        .query_map([], |row| row.get::<_, u32>(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    ids
+                };
+                for folder_id in folder_ids.into_iter().map(FolderId) {
+                    let before = ingest::folder_auto_tags(transaction, folder_id)?;
+                    if !before.contains(source.0) {
+                        continue;
+                    }
+                    let mut after = before.clone();
+                    after.remove(source.0);
+                    if let Some(destination) = destination {
+                        after.insert(destination.0);
+                    }
+                    transaction.execute(
+                        "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
+                        rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
+                    )?;
+                    history_changes.push(SemanticChange::FolderAutoTags {
+                        folder_id,
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
+                }
                 if let Some(destination) = destination {
                     let before = next.tags.get(&destination).cloned().unwrap_or_default();
                     let mut after = before.clone();
@@ -1832,6 +1930,7 @@ impl Library {
                 let after_bitmap = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
                 let before_bitmap = before.iter().map(|root| root.0).collect::<RoaringBitmap>();
                 let changed = &before_bitmap ^ &after_bitmap;
+                let added = &after_bitmap - &before_bitmap;
                 Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(after.clone()));
                 Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone());
                 let counts = Arc::make_mut(&mut next.folder_count);
@@ -1846,16 +1945,67 @@ impl Library {
                         },
                     );
                 }
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &changed,
-                    crate::predicate::DependencyChange::Folder(folder_id),
-                )?;
+                let mut history_changes = vec![SemanticChange::Order {
+                    owner_kind: OrderOwnerKind::Folder,
+                    owner_id: folder_id.0,
+                    before: Arc::new(before.iter().map(|root| root.0).collect()),
+                    after: Arc::new(after.iter().map(|root| root.0).collect()),
+                }];
+                let mut auto_tagged = false;
+                if add && !added.is_empty() {
+                    for tag_id in ingest::folder_auto_tags(transaction, folder_id)? {
+                        let tag_id = crate::TagId(tag_id);
+                        let before = next.tags.get(&tag_id).cloned().unwrap_or_default();
+                        let mut after = before.clone();
+                        after |= &added;
+                        let tag_changed = &before ^ &after;
+                        if tag_changed.is_empty() {
+                            continue;
+                        }
+                        bitmap::replace(
+                            transaction,
+                            revision,
+                            BitmapKey {
+                                domain: BitmapDomain::Tag,
+                                key_id: tag_id.0,
+                            },
+                            &after,
+                        )?;
+                        Arc::make_mut(&mut next.tags).insert(tag_id, after.clone());
+                        let counts = Arc::make_mut(&mut next.tag_count);
+                        for root_id in &tag_changed {
+                            let current = counts.value(root_id).unwrap_or(0);
+                            counts.insert(root_id, current + 1);
+                        }
+                        history_changes.push(SemanticChange::Bitmap {
+                            key: BitmapKey {
+                                domain: BitmapDomain::Tag,
+                                key_id: tag_id.0,
+                            },
+                            before: Arc::new(before),
+                            after: Arc::new(after),
+                        });
+                        auto_tagged = true;
+                    }
+                }
+                if auto_tagged {
+                    crate::smart::settle_affected(transaction, &mut next, &changed)?;
+                } else {
+                    crate::smart::settle_affected_for(
+                        transaction,
+                        &mut next,
+                        &changed,
+                        crate::predicate::DependencyChange::Folder(folder_id),
+                    )?;
+                }
                 next.revision = revision;
+                let mut resources = vec!["roots".into(), "folders".into(), "sidebar".into()];
+                if auto_tagged {
+                    resources.push("tags".into());
+                }
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec!["roots".into(), "folders".into(), "sidebar".into()],
+                    resources,
                     changed.iter().map(RootId),
                 );
                 let history = HistoryEntry::new(
@@ -1864,12 +2014,7 @@ impl Library {
                     } else {
                         "Remove from folder"
                     },
-                    SemanticChange::Order {
-                        owner_kind: OrderOwnerKind::Folder,
-                        owner_id: folder_id.0,
-                        before: Arc::new(before.iter().map(|root| root.0).collect()),
-                        after: Arc::new(after.iter().map(|root| root.0).collect()),
-                    },
+                    SemanticChange::Compound(history_changes),
                 );
                 Ok((
                     receipt.clone(),
@@ -2420,6 +2565,29 @@ fn apply_semantic_change(
             resources.insert("tags".into());
             resources.insert("navigation".into());
             resources.insert("smart-folders".into());
+        }
+        SemanticChange::FolderAutoTags {
+            folder_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before.as_ref(), after.as_ref())
+            } else {
+                (after.as_ref(), before.as_ref())
+            };
+            let current = ingest::folder_auto_tags(transaction, *folder_id)?;
+            if &current != expected {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because folder {} auto-tags changed",
+                    folder_id.0
+                )));
+            }
+            transaction.execute(
+                "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
+                rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(replacement)?],
+            )?;
+            resources.insert("folders".into());
         }
         SemanticChange::Compound(changes) => {
             if use_after {

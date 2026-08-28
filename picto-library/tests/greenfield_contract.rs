@@ -242,6 +242,10 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     let snapshot = library.projections().snapshot();
     let source = snapshot.tag_ids_by_name["source"];
     let destination = snapshot.tag_ids_by_name["destination"];
+    let (auto_folder, _) = library.create_folder("Auto source", None).unwrap();
+    library
+        .set_folder_auto_tags(auto_folder, vec![source], 1_700_000_000_650)
+        .unwrap();
     let (smart_folder, _) = library
         .create_smart_folder(
             "Source",
@@ -270,6 +274,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     assert_eq!(merged.tags[&destination].len(), 2);
     assert_eq!(root_tag_count(&library, first), 1);
     assert_eq!(root_tag_count(&library, second), 1);
+    assert_eq!(folder_auto_tags(&library, auto_folder), vec![destination.0]);
     assert_eq!(
         library
             .query(&smart_query, &PageRequest::default())
@@ -284,6 +289,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
     assert_eq!(restored.tags[&destination].len(), 1);
     assert_eq!(root_tag_count(&library, first), 1);
     assert_eq!(root_tag_count(&library, second), 2);
+    assert_eq!(folder_auto_tags(&library, auto_folder), vec![source.0]);
     assert_eq!(
         library
             .query(&smart_query, &PageRequest::default())
@@ -367,6 +373,28 @@ fn root_tag_count(library: &Library, root_id: picto_library::RootId) -> usize {
         .count()
 }
 
+fn folder_auto_tags(library: &Library, folder_id: picto_library::FolderId) -> Vec<u32> {
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                let payload = connection.query_row(
+                    "SELECT auto_tag_ids FROM folder_definition WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )?;
+                if payload.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let tags =
+                    roaring::RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload))?;
+                Ok(tags.iter().collect())
+            },
+        )
+        .unwrap()
+}
+
 #[test]
 fn folder_vector_is_the_only_folder_membership_authority() {
     let directory = TempDir::new().unwrap();
@@ -408,6 +436,43 @@ fn folder_vector_is_the_only_folder_membership_authority() {
         vec![first, second]
     );
     assert_eq!(library.projections().snapshot().folders[&folder].len(), 2);
+}
+
+#[test]
+fn folder_auto_tags_apply_once_on_assignment_and_participate_in_memory_history() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (seed, _) = library
+        .ingest(&imported("auto-seed", Lifecycle::Active, &["auto:folder"]))
+        .unwrap();
+    let tag_id = library.projections().snapshot().tag_ids_by_name["auto:folder"];
+    let (folder, _) = library.create_folder("Automatic", None).unwrap();
+    library
+        .set_folder_auto_tags(folder, vec![tag_id], 1_700_000_003_000)
+        .unwrap();
+
+    let mut imported_into_folder = imported("auto-ingest", Lifecycle::Active, &[]);
+    imported_into_folder.folders = vec![folder];
+    let (ingested, _) = library.ingest(&imported_into_folder).unwrap();
+    assert_eq!(root_tag_count(&library, ingested), 1);
+
+    let (manual, _) = library
+        .ingest(&imported("auto-manual", Lifecycle::Active, &[]))
+        .unwrap();
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![manual],
+    };
+    library.add_to_folder(&target, folder).unwrap();
+    assert_eq!(root_tag_count(&library, manual), 1);
+    library.undo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, manual), 0);
+    assert!(!library.projections().snapshot().folders[&folder].contains(manual.0));
+    library.redo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, manual), 1);
+
+    library.remove_from_folder(&target, folder).unwrap();
+    assert_eq!(root_tag_count(&library, manual), 1);
+    assert_eq!(root_tag_count(&library, seed), 1);
 }
 
 #[test]

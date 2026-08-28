@@ -130,16 +130,31 @@ pub(crate) fn insert_one(
 
     let mut assigned_folders = 0u64;
     for folder_id in &input.folders {
-        let exists = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1)",
-            [folder_id.0],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !exists {
-            return Err(LibraryError::InvalidInput(format!(
-                "folder {} does not exist",
-                folder_id.0
-            )));
+        let auto_tags = folder_auto_tags(transaction, *folder_id)?;
+        for tag_id in auto_tags {
+            let tag_id = TagId(tag_id);
+            let exists = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)",
+                [tag_id.0],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                return Err(LibraryError::InvalidState(format!(
+                    "folder {} references missing auto-tag {}",
+                    folder_id.0, tag_id.0
+                )));
+            }
+            if Arc::make_mut(&mut snapshot.tags)
+                .entry(tag_id)
+                .or_default()
+                .insert(root_id.0)
+            {
+                assigned_tags += 1;
+                bitmap_keys.push(BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                });
+            }
         }
         let folder_orders = Arc::make_mut(&mut snapshot.folder_orders);
         let order = folder_orders
@@ -315,6 +330,28 @@ pub(crate) fn ensure_namespace(transaction: &Transaction<'_>, name: &str) -> Res
         id
     };
     Ok(namespace_id)
+}
+
+pub(crate) fn folder_auto_tags(
+    transaction: &Transaction<'_>,
+    folder_id: FolderId,
+) -> Result<roaring::RoaringBitmap> {
+    let payload = transaction
+        .query_row(
+            "SELECT auto_tag_ids FROM folder_definition WHERE folder_id = ?1",
+            [folder_id.0],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?
+        .ok_or_else(|| LibraryError::NotFound(format!("folder {}", folder_id.0)))?;
+    if payload.is_empty() {
+        return Ok(roaring::RoaringBitmap::new());
+    }
+    roaring::RoaringBitmap::deserialize_from(&mut std::io::Cursor::new(payload)).map_err(Into::into)
+}
+
+pub(crate) fn encode_folder_auto_tags(tags: &roaring::RoaringBitmap) -> Result<Vec<u8>> {
+    bitmap::encode(tags)
 }
 
 fn mime_family(mime: &str) -> &str {

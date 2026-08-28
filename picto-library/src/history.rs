@@ -70,6 +70,11 @@ pub enum SemanticChange {
         after_members: Arc<RoaringBitmap>,
         queries: Arc<Vec<SavedQueryChange>>,
     },
+    FolderAutoTags {
+        folder_id: crate::FolderId,
+        before: Arc<RoaringBitmap>,
+        after: Arc<RoaringBitmap>,
+    },
     Compound(Vec<SemanticChange>),
 }
 
@@ -115,6 +120,9 @@ impl SemanticChange {
                                 + 16
                         })
                         .sum::<usize>()
+            }
+            Self::FolderAutoTags { before, after, .. } => {
+                before.serialized_size() + after.serialized_size() + 32
             }
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
