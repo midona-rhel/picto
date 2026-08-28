@@ -64,7 +64,12 @@ impl PublicationCoordinator {
         }
         MutationReceipt {
             revision,
-            resources: resources.into_iter().collect(),
+            resources: resources
+                .into_iter()
+                .map(|resource| public_resource(&resource).to_owned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             item_ids,
         }
     }
@@ -118,5 +123,39 @@ impl PublicationCoordinator {
 
     pub fn unsubscribe(&self, id: u64) {
         self.subscribers.lock().remove(&id);
+    }
+}
+
+fn public_resource(resource: &str) -> &str {
+    match resource {
+        "roots" | "media" | "collections" | "ratings" | "search" => "library",
+        "navigation" => "sidebar",
+        "smart-folders" => "smart_folders",
+        "recently-viewed" => "recently_viewed",
+        value => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipts_expose_only_renderer_resource_names() {
+        let receipt = PublicationCoordinator::receipt(
+            2,
+            [
+                "roots".into(),
+                "media".into(),
+                "smart-folders".into(),
+                "navigation".into(),
+                "recently-viewed".into(),
+            ],
+            [RootId(1)],
+        );
+        assert_eq!(
+            receipt.resources,
+            vec!["library", "recently_viewed", "sidebar", "smart_folders"]
+        );
     }
 }
