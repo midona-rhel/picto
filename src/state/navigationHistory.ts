@@ -16,7 +16,7 @@ import {
 } from './grid';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
 import { createEmptyItemFilters } from '../shared/lib/itemFilters';
-import type { ItemSort } from '../shared/types/generated/application/ItemSort';
+import type { ItemSort } from '../shared/types/canonical';
 import type { GridScrollPosition } from '../shared/types/gridScroll';
 import { subscriptionsSelectionAtom, type SubscriptionsSelection } from './subscriptionsWorkspace';
 import {

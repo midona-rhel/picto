@@ -3,7 +3,7 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput } from '../../shared/ui/GlassInput';
 import styles from './BatchRenameModal.module.css';
 
-type RenameItem = { item_id: number; name: string };
+type RenameItem = { root_id: number; name: string };
 type Mode = 'format' | 'replace';
 
 export function buildBatchRenamePreview(
@@ -17,7 +17,7 @@ export function buildBatchRenamePreview(
       ? item.name.split(pattern).join(replacement)
       : pattern.split('*').join(item.name)
         .replace(/%N{1,4}/g, (token: string) => String(sequence).padStart(token.length - 1, '0'));
-    return { item_id: item.item_id, name: name.trim() };
+    return { root_id: item.root_id, name: name.trim() };
   });
 }
 
@@ -65,7 +65,7 @@ export function BatchRenameModal({ open, items, onClose, onRename }: {
         <GlassInput value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" />
       </div>}
       <div className={styles.preview} aria-label="Rename preview">
-        {preview.map((item, index) => <div className={styles.previewRow} key={item.item_id}>
+        {preview.map((item, index) => <div className={styles.previewRow} key={item.root_id}>
           <span title={items[index].name}>{items[index].name}</span>
           <span title={item.name}>{item.name || 'Invalid empty name'}</span>
         </div>)}

@@ -14,8 +14,8 @@ function splitTag(tag: string): { namespace: string; subtag: string } {
 
 function formatTag(tag: CanonicalTagRecord): string {
   return !tag.namespace || tag.namespace === 'general'
-    ? tag.subtag
-    : `${tag.namespace}:${tag.subtag}`;
+    ? tag.subname
+    : `${tag.namespace}:${tag.subname}`;
 }
 
 export function TagTokenInput({
@@ -55,9 +55,9 @@ export function TagTokenInput({
       return;
     }
     timerRef.current = setTimeout(() => {
-      void tagsController.getPaginated({ search: value, limit: 12 }).then(({ items }) => {
+      void tagsController.getPaginated({ search: value, limit: 12 }).then(({ tags }) => {
         const existing = new Set(values);
-        const next = items.filter((item) => !existing.has(formatTag(item))).slice(0, 8);
+        const next = tags.filter((item) => !existing.has(formatTag(item))).slice(0, 8);
         setResults(next);
         setOpen(next.length > 0);
         setSelectedIndex(0);
@@ -138,7 +138,7 @@ export function TagTokenInput({
         >
           {results.map((result, index) => (
             <button
-              key={`${result.namespace}:${result.subtag}`}
+              key={`${result.namespace}:${result.subname}`}
               className={`${styles.result} ${index === selectedIndex ? styles.resultSelected : ''}`}
               onMouseDown={(event) => {
                 event.preventDefault();
@@ -146,7 +146,7 @@ export function TagTokenInput({
               }}
               type="button"
             >
-              <TagChip namespace={result.namespace} subtag={result.subtag} />
+              <TagChip namespace={result.namespace} subtag={result.subname} />
             </button>
           ))}
         </div>,

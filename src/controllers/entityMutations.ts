@@ -18,9 +18,7 @@ import {
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
 import { loadInspectorData } from './inspectorController';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
-import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
-import type { SelectionSummary } from '../shared/types/generated/application/SelectionSummary';
+import type { EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
@@ -28,12 +26,12 @@ import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
 
-function singleTarget(itemId: number): ItemTarget {
-  return { kind: 'explicit', item_ids: [itemId] };
+function singleTarget(itemId: number): EntityTarget {
+  return { kind: 'explicit', root_ids: [itemId] };
 }
 
-function maybeReloadSingleItem(target: ItemTarget): void {
-  const itemIds = target.kind === 'explicit' ? target.item_ids : [];
+function maybeReloadSingleItem(target: EntityTarget): void {
+  const itemIds = target.kind === 'explicit' ? target.root_ids : [];
   if (itemIds.length === 1) {
     void loadInspectorData(itemIds[0]);
   }
@@ -44,8 +42,8 @@ export function settleSelectionAfterMutation(): void {
   store.set(clearSelectionAtom);
 }
 
-export async function setTargetRating(target: ItemTarget, rating: number): Promise<void> {
-  await patchMediaEntities(target, { rating });
+export async function setTargetRating(target: EntityTarget, rating: number): Promise<void> {
+  await patchMediaEntities(target, { rating: ratingName(rating) });
   await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
@@ -56,24 +54,24 @@ export async function setItemName(itemId: number, name: string): Promise<void> {
   void loadInspectorData(itemId);
 }
 
-export async function setItemNames(renames: Array<{ item_id: number; name: string }>): Promise<void> {
+export async function setItemNames(renames: Array<{ root_id: number; name: string }>): Promise<void> {
   await renameItems(renames);
   await announceUndoableMutation('items.rename_many');
 }
 
-export async function setTargetNotes(target: ItemTarget, notes: string): Promise<void> {
+export async function setTargetNotes(target: EntityTarget, notes: string): Promise<void> {
   await patchMediaEntities(target, { notes: notes.trim() || null });
   await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
 
-export async function setTargetSourceUrls(target: ItemTarget, urls: string[]): Promise<void> {
+export async function setTargetSourceUrls(target: EntityTarget, urls: string[]): Promise<void> {
   await patchMediaEntities(target, { source_urls: urls });
   await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
 
-export async function addTargetTags(target: ItemTarget, tags: string[]): Promise<void> {
+export async function addTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'add', tags);
   await announceUndoableMutation('items.apply_tags');
@@ -81,26 +79,26 @@ export async function addTargetTags(target: ItemTarget, tags: string[]): Promise
   maybeReloadSingleItem(target);
 }
 
-export async function removeTargetTags(target: ItemTarget, tags: string[]): Promise<void> {
+export async function removeTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'remove', tags);
   await announceUndoableMutation('items.apply_tags');
   maybeReloadSingleItem(target);
 }
 
-export async function setTargetLifecycle(target: ItemTarget, lifecycle: Lifecycle): Promise<void> {
+export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecycle): Promise<void> {
   await setItemLifecycle(target, lifecycle);
   await announceUndoableMutation('items.set_lifecycle');
   settleSelectionAfterMutation();
 }
 
-export async function permanentlyDeleteTarget(target: ItemTarget): Promise<void> {
+export async function permanentlyDeleteTarget(target: EntityTarget): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
     await deleteItems(target);
 
     if (target.kind === 'explicit') {
-      const deletedIds = new Set(target.item_ids);
+      const deletedIds = new Set(target.root_ids);
       const viewer = store.get(viewerSessionAtom);
       const quickLook = store.get(quickLookSessionAtom);
       if (viewer && deletedIds.has(viewer.currentItemId)) store.set(viewerSessionAtom, null);
@@ -113,7 +111,7 @@ export async function permanentlyDeleteTarget(target: ItemTarget): Promise<void>
 }
 
 export async function updateTargetFolderMembership(
-  target: ItemTarget,
+  target: EntityTarget,
   folderId: number,
   operation: 'add' | 'remove',
 ): Promise<void> {
@@ -123,7 +121,7 @@ export async function updateTargetFolderMembership(
   maybeReloadSingleItem(target);
 }
 
-export async function getTargetSelectionSummary(target: ItemTarget): Promise<SelectionSummary> {
+export async function getTargetSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return getSelectionSummary(target);
 }
 
@@ -146,4 +144,8 @@ export async function removeItemFromFolder(itemId: number, folderId: number): Pr
 
 export async function setItemSourceUrls(itemId: number, urls: string[]): Promise<void> {
   await setTargetSourceUrls(singleTarget(itemId), urls);
+}
+
+function ratingName(value: number): Rating {
+  return (['unrated', 'one', 'two', 'three', 'four', 'five'][value] ?? 'unrated') as Rating;
 }

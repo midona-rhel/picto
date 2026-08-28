@@ -12,19 +12,24 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height = 100): CanonicalEntityGridItem {
   return {
-    item_id: itemId,
+    root_id: itemId,
     kind: 'media',
     lifecycle: 'active',
     name: `item-${itemId}`,
-    display_file_hash: fileHash,
-    display_mime_type: 'image/jpeg',
-    pixel_width: width,
-    pixel_height: height,
+    cover_media_id: itemId,
+    content_hash: fileHash,
+    mime: 'image/jpeg',
+    width,
+    height,
     duration_ms: null,
     frame_count: null,
-    dominant_color_hex: null,
-    rating: null,
+    palette: [],
+    imported_at_ms: itemId,
+    captured_at_ms: null,
+    modified_at_ms: itemId,
+    rating: 'unrated',
     media_count: 1,
+    total_size_bytes: 100,
   };
 }
 
@@ -115,7 +120,7 @@ describe('grid scroll restoration', () => {
 
 describe('collectThumbnailActivation', () => {
   it('keeps fonts visible without scheduling a raster thumbnail decode', () => {
-    const source = [item(10), { ...item(11), display_mime_type: 'font/ttf' }];
+    const source = [item(10), { ...item(11), mime: 'font/ttf' }];
     const model = new GridLayoutRuntime().update(source, {
       width: 500, targetSize: 180, gap: 16, viewMode: 'grid', textHeight: 20, scrollbarWidth: 8,
     });

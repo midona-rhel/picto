@@ -65,7 +65,7 @@ describe('dragController folder ordering', () => {
     );
 
     expect(setTargetLifecycleMock).toHaveBeenCalledWith(
-      { kind: 'explicit', item_ids: [2, 3] },
+      { kind: 'explicit', root_ids: [2, 3] },
       'trash',
     );
   });
@@ -79,7 +79,7 @@ describe('dragController folder ordering', () => {
 
     expect(settleSelectionAfterMutationMock).toHaveBeenCalledOnce();
     expect(updateFolderMembershipMock).toHaveBeenCalledWith(
-      { kind: 'explicit', item_ids: [2, 3] },
+      { kind: 'explicit', root_ids: [2, 3] },
       9,
       'add',
     );

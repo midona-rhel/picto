@@ -117,11 +117,11 @@ export async function executeTutorialActions(actions: readonly TutorialAction[] 
     } else if (action.type === 'select_first') {
       await waitUntil(() => store.get(gridItemsAtom).length > 0, 15_000);
       const first = store.get(gridItemsAtom)[0];
-      if (first) store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([first.item_id]), anchor: { kind: 'item', id: first.item_id } });
+      if (first) store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([first.root_id]), anchor: { kind: 'item', id: first.root_id } });
     } else if (action.type === 'select_first_kind') {
       await waitUntil(() => store.get(gridItemsAtom).some((entry) => entry.kind === action.kind), 15_000);
       const item = store.get(gridItemsAtom).find((entry) => entry.kind === action.kind);
-      if (item) store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([item.item_id]), anchor: { kind: 'item', id: item.item_id } });
+      if (item) store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([item.root_id]), anchor: { kind: 'item', id: item.root_id } });
     } else if (action.type === 'viewer') {
       if (action.mode === 'close') {
         store.set(viewerSessionAtom, null);
@@ -129,45 +129,45 @@ export async function executeTutorialActions(actions: readonly TutorialAction[] 
       } else {
         const items = store.get(gridItemsAtom);
         const selected = [...store.get(gridSelectionAtom).itemIds][0];
-        const currentIndex = Math.max(0, items.findIndex((entry) => entry.item_id === selected));
+        const currentIndex = Math.max(0, items.findIndex((entry) => entry.root_id === selected));
         const first = items[currentIndex];
         if (!first) continue;
-        const session = { currentIndex, currentItemId: first.item_id };
+        const session = { currentIndex, currentItemId: first.root_id };
         store.set(viewerSessionAtom, action.mode === 'detail' ? session : null);
         store.set(quickLookSessionAtom, action.mode === 'quick-look' ? session : null);
       }
     } else if (action.type === 'set_first_lifecycle') {
       const first = store.get(gridItemsAtom)[0];
       if (first) {
-        lastLifecycleItemId = first.item_id;
-        await invoke('items.set_lifecycle', { target: { kind: 'explicit', item_ids: [first.item_id] }, lifecycle: action.lifecycle });
-        await waitUntil(() => !store.get(gridItemsAtom).some((entry) => entry.item_id === first.item_id), 5_000).catch(() => undefined);
+        lastLifecycleItemId = first.root_id;
+        await invoke('items.set_lifecycle', { target: { kind: 'explicit', root_ids: [first.root_id] }, lifecycle: action.lifecycle });
+        await waitUntil(() => !store.get(gridItemsAtom).some((entry) => entry.root_id === first.root_id), 5_000).catch(() => undefined);
       }
     } else if (action.type === 'restore_last_lifecycle') {
-      if (lastLifecycleItemId != null) await invoke('items.set_lifecycle', { target: { kind: 'explicit', item_ids: [lastLifecycleItemId] }, lifecycle: action.lifecycle });
+      if (lastLifecycleItemId != null) await invoke('items.set_lifecycle', { target: { kind: 'explicit', root_ids: [lastLifecycleItemId] }, lifecycle: action.lifecycle });
     } else if (action.type === 'set_tutorial_subscription_runs') {
       await setTutorialSubscriptionRuns(action.count);
     } else if (action.type === 'restore_rejected_item') {
       const first = store.get(gridItemsAtom)[0];
-      if (first) await invoke('items.set_lifecycle', { target: { kind: 'explicit', item_ids: [first.item_id] }, lifecycle: 'active' });
+      if (first) await invoke('items.set_lifecycle', { target: { kind: 'explicit', root_ids: [first.root_id] }, lifecycle: 'active' });
     } else if (action.type === 'set_tutorial_folder_membership') {
       const selected = [...store.get(gridSelectionAtom).itemIds][0];
       if (selected == null) continue;
       const navigation = await invoke<{ folders: Array<{ folder_id: number }> }>('navigation.get', {});
       for (const folder of navigation.folders.slice(0, 2)) {
-        await invoke('items.set_folder', { target: { kind: 'explicit', item_ids: [selected] }, folder_id: folder.folder_id, present: action.present });
+        await invoke('items.set_folder', { target: { kind: 'explicit', root_ids: [selected] }, folder_id: folder.folder_id, present: action.present });
       }
     } else if (action.type === 'set_tutorial_tag') {
       const selected = [...store.get(gridSelectionAtom).itemIds][0];
-      if (selected != null) await invoke('items.apply_tags', { target: { kind: 'explicit', item_ids: [selected] }, tags: ['general:guided tour'], add: action.present });
+      if (selected != null) await invoke('items.apply_tags', { target: { kind: 'explicit', root_ids: [selected] }, tags: ['general:guided tour'], add: action.present });
     } else if (action.type === 'set_tutorial_collection_order') {
       const selected = store.get(viewerSessionAtom)?.currentItemId ?? [...store.get(gridSelectionAtom).itemIds][0];
       if (selected == null) continue;
-      const details = await invoke<{ kind: string; media: Array<{ media_item_id: number }> }>('items.details', { item_id: selected });
-      if (details.kind === 'collection' && details.media.length > 1) {
-        const original = originalCollectionOrder.get(selected) ?? details.media.map((entry) => entry.media_item_id);
+      const details = await invoke<{ root: { kind: string }; media: Array<{ media_id: number }> }>('items.details', { root_id: selected });
+      if (details.root.kind === 'collection' && details.media.length > 1) {
+        const original = originalCollectionOrder.get(selected) ?? details.media.map((entry) => entry.media_id);
         originalCollectionOrder.set(selected, original);
-        await invoke('items.reorder_collection', { collection_id: selected, media_item_ids: action.reversed ? [...original].reverse() : original });
+        await invoke('items.reorder_collection', { collection_id: selected, media_ids: action.reversed ? [...original].reverse() : original });
       }
     }
   }

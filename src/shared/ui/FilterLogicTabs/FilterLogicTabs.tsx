@@ -1,5 +1,5 @@
 import { IconEqual, IconLayersIntersect, IconLayersUnion } from '@tabler/icons-react';
-import type { FilterMatchMode } from '../../types/generated/application/FilterMatchMode';
+import type { SetMatchMode } from '../../types/canonical';
 import styles from './FilterLogicTabs.module.css';
 import { KbdTooltip } from '../KbdTooltip';
 
@@ -10,8 +10,8 @@ const OPTIONS = [
 ] as const;
 
 export function FilterLogicTabs({ value, onChange }: {
-  value: FilterMatchMode;
-  onChange: (value: FilterMatchMode) => void;
+  value: SetMatchMode;
+  onChange: (value: SetMatchMode) => void;
 }) {
   return (
     <div className={styles.root} role="group" aria-label="Filter matching rule">

@@ -65,10 +65,10 @@ export function resolveViewerIndex(
   session: ViewerSession,
   items: CanonicalEntityGridItem[],
 ): number {
-  if (items[session.currentIndex]?.item_id === session.currentItemId) {
+  if (items[session.currentIndex]?.root_id === session.currentItemId) {
     return session.currentIndex;
   }
-  const byId = items.findIndex((item) => item.item_id === session.currentItemId);
+  const byId = items.findIndex((item) => item.root_id === session.currentItemId);
   if (byId >= 0) return byId;
   // Current entity vanished (deleted/moved out of scope): stay near position.
   return Math.min(session.currentIndex, Math.max(items.length - 1, 0));
@@ -86,7 +86,7 @@ export function createViewerSession(
   items: CanonicalEntityGridItem[],
   itemId: number,
 ): ViewerSession | null {
-  const index = items.findIndex((item) => item.item_id === itemId);
+  const index = items.findIndex((item) => item.root_id === itemId);
   if (index < 0) return null;
   return { currentIndex: index, currentItemId: itemId };
 }
@@ -99,5 +99,5 @@ export function navigateViewerSession(
 ): ViewerSession | null {
   const nextIndex = resolveViewerIndex(session, items) + delta;
   if (nextIndex < 0 || nextIndex >= items.length) return null;
-  return { currentIndex: nextIndex, currentItemId: items[nextIndex].item_id };
+  return { currentIndex: nextIndex, currentItemId: items[nextIndex].root_id };
 }

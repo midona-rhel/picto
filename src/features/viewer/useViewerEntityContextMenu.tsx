@@ -11,12 +11,14 @@ import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectP
 import { confirmModalAtom, exportModalAtom } from '../../state/modals';
 import type { ItemKind } from '../../shared/types/generated/application/ItemKind';
 import type { Lifecycle } from '../../shared/types/generated/application/Lifecycle';
-import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
+import type { EntityTarget } from '../../shared/types/canonical';
 import type { FlashPlaybackController } from './document/FlashPlayer';
 import type { CurrentFrameCapture } from './currentFrameCapture';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { reverseImageSearch } from '../../platform/shellApi';
+import { tagsController } from '../../controllers/tagsController';
+import { tagName } from '../tags/tagContextMenu';
 
 interface ViewerEntityContextMenuOptions {
   hash: string | null;
@@ -105,7 +107,7 @@ export function useViewerEntityContextMenu({
 
   const open = useCallback((event: MouseEvent) => {
     if (!hash) return;
-    const target: ItemTarget | null = itemId == null ? null : { kind: 'explicit', item_ids: [itemId] };
+    const target: EntityTarget | null = itemId == null ? null : { kind: 'explicit', root_ids: [itemId] };
     const menuKind = kind ?? 'media';
     const canAutoTag = menuKind === 'media' && Boolean(mime?.startsWith('image/'));
     const commonEntries = buildTileContextMenu({
@@ -142,8 +144,11 @@ export function useViewerEntityContextMenu({
         : undefined,
       onCopyTags: target ? () => {
         void viewerController.getItemDetails(itemId!).then((details) => {
-          filesController.copyText(JSON.stringify(details.aggregate_tags));
-          (window as any).__pictoClipboardTags = details.aggregate_tags;
+          void tagsController.getById(details.tag_ids).then((records) => {
+            const tags = records.map(tagName);
+            filesController.copyText(JSON.stringify(tags));
+            (window as any).__pictoClipboardTags = tags;
+          });
         });
       } : undefined,
       onPasteTags: target ? () => {

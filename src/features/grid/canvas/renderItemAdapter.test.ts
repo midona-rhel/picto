@@ -7,19 +7,24 @@ function item(
   kind: CanonicalEntityGridItem['kind'] = 'media',
 ): CanonicalEntityGridItem {
   return {
-    item_id: itemId,
+    root_id: itemId,
     kind,
     lifecycle: 'active',
-    name: null,
-    display_file_hash: displayFileHash,
-    display_mime_type: 'image/png',
-    pixel_width: 100,
-    pixel_height: 100,
+    name: '',
+    cover_media_id: itemId,
+    content_hash: displayFileHash,
+    mime: 'image/png',
+    width: 100,
+    height: 100,
     duration_ms: null,
     frame_count: null,
-    dominant_color_hex: null,
-    rating: null,
+    palette: [],
+    imported_at_ms: itemId,
+    captured_at_ms: null,
+    modified_at_ms: itemId,
+    rating: 'unrated',
     media_count: 1,
+    total_size_bytes: 100,
   };
 }
 
@@ -59,9 +64,9 @@ describe('adaptGridItem', () => {
 
   it('gives audio waveform tiles two-to-one geometry', () => {
     const audio = item(30, 'audio-file');
-    audio.display_mime_type = 'audio/mpeg';
-    audio.pixel_width = null;
-    audio.pixel_height = null;
+    audio.mime = 'audio/mpeg';
+    audio.width = null;
+    audio.height = null;
 
     expect(adaptGridItem(audio).aspectRatio).toBe(2);
   });

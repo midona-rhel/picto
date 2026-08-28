@@ -1,18 +1,84 @@
 /**
  * Canonical backend contract types.
  *
- * These types match the Rust backend serialization exactly (PBI-572 naming).
- * They are the contract for all rebuilt frontend slices.
+ * These types mirror `picto_library` serialization exactly. Presentation
+ * models belong at their consumer; IPC never uses the legacy item DTOs.
  */
-import type { ItemPage } from './generated/application/ItemPage';
-import type { ItemQuery } from './generated/application/ItemQuery';
-import type { ItemScope } from './generated/application/ItemScope';
-import type { ItemSummary } from './generated/application/ItemSummary';
-import type { ItemTarget } from './generated/application/ItemTarget';
 
 // ── Entity types ─────────────────────────────────────────────────
 
-export type CanonicalEntityGridItem = ItemSummary;
+export type RootKind = 'media' | 'collection';
+export type Lifecycle = 'active' | 'inbox' | 'trash';
+export type Rating = 'unrated' | 'one' | 'two' | 'three' | 'four' | 'five';
+
+export interface LabColor {
+  l: number;
+  a: number;
+  b: number;
+  weight: number;
+}
+
+export interface CanonicalEntityGridItem {
+  root_id: number;
+  kind: RootKind;
+  lifecycle: Lifecycle;
+  name: string;
+  cover_media_id: number;
+  content_hash: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  frame_count: number | null;
+  palette: LabColor[];
+  imported_at_ms: number;
+  captured_at_ms: number | null;
+  modified_at_ms: number;
+  media_count: number;
+  total_size_bytes: number;
+  rating: Rating;
+}
+
+export interface MediaRecord {
+  media_id: number;
+  media_name: string;
+  file_id: number;
+  file_path: string;
+  facts: {
+    mime: string;
+    size_bytes: number;
+    width: number | null;
+    height: number | null;
+    duration_ms: number | null;
+    frame_count: number | null;
+    content_hash: string;
+    perceptual_hash: string | null;
+    palette: LabColor[];
+  };
+}
+
+export interface CanonicalEntityDetails {
+  root: {
+    root_id: number;
+    stable_key: string;
+    kind: RootKind;
+    name: string;
+    notes: string | null;
+    source_urls: string[];
+    cover_media_id: number;
+    imported_at_ms: number;
+    captured_at_ms: number | null;
+    modified_at_ms: number;
+    media_count: number;
+    total_size_bytes: number;
+  };
+  lifecycle: Lifecycle;
+  rating: Rating;
+  folder_ids: number[];
+  tag_ids: number[];
+  media: MediaRecord[];
+  revision: number;
+}
 
 export interface CanonicalTagInfo {
   tag_id: number;
@@ -22,65 +88,97 @@ export interface CanonicalTagInfo {
 
 export interface CanonicalTagRecord {
   tag_id: number;
+  namespace_id: number;
   namespace: string;
-  subtag: string;
-  file_count: number;
+  subname: string;
+  active_count: number;
+  assignment_count: number;
 }
 
 export interface TagPage {
-  items: CanonicalTagRecord[];
+  tags: CanonicalTagRecord[];
   next_cursor: string | null;
+  revision: number;
 }
 
 export interface CanonicalNamespaceSummary {
-  namespace: string;
-  count: number;
+  namespace_id: number;
+  name: string;
+  tag_count: number;
 }
-
-export const TAG_PROVENANCE_MANUAL = 1n << 0n;
-export const TAG_PROVENANCE_AI = 1n << 1n;
-export const TAG_PROVENANCE_UNKNOWN = 1n << 2n;
-export const TAG_PROVENANCE_LOCAL_TOOL = 1n << 3n;
 
 export interface CanonicalFolderInfo {
   folder_id: number;
   name: string;
 }
 
-export interface CanonicalDominantColor {
-  hex: string;
-  l: number;
-  a: number;
-  b: number;
-}
-
-
-export interface CanonicalEntityDetails {
-  entity_hash: string;
-  name: string | null;
-  mime_type: string;
-  size_bytes: number;
-  pixel_width: number | null;
-  pixel_height: number | null;
-  duration_ms: number | null;
-  frame_count: number | null;
-  status: number;
-  rating: number | null;
-  notes: string | null;
-  source_urls: string[] | null;
-  date_created: string;
-  date_added: string;
-  date_modified: string;
-  dominant_color_hex: string | null;
-  dominant_colors: CanonicalDominantColor[] | null;
-  perceptual_hash: string | null;
-  tags: CanonicalTagInfo[];
-  folders: CanonicalFolderInfo[];
-}
-
 // ── Query types ──────────────────────────────────────────────────
 
-export type BaseScope = ItemScope;
+export type BaseScope =
+  | { kind: 'all' }
+  | { kind: 'inbox' }
+  | { kind: 'trash' }
+  | { kind: 'recently_viewed' }
+  | { kind: 'untagged' }
+  | { kind: 'uncategorized' }
+  | { kind: 'folder'; folder_id: number }
+  | { kind: 'smart_folder'; smart_folder_id: number };
+
+export type SetMatchMode = 'any' | 'all' | 'exact';
+export type TextField = 'global' | 'name' | 'notes' | 'source_url';
+export type FilterClause =
+  | { clause: 'tags'; tag_ids: number[]; mode: SetMatchMode }
+  | { clause: 'folders'; folder_ids: number[]; mode: SetMatchMode }
+  | { clause: 'ratings'; ratings: Rating[] }
+  | { clause: 'mime'; values: string[]; families: string[] }
+  | { clause: 'imported_at'; minimum_ms: number | null; maximum_ms: number | null }
+  | { clause: 'modified_at'; minimum_ms: number | null; maximum_ms: number | null }
+  | { clause: 'captured_at'; minimum_ms: number | null; maximum_ms: number | null }
+  | { clause: 'width'; minimum: number | null; maximum: number | null }
+  | { clause: 'height'; minimum: number | null; maximum: number | null }
+  | { clause: 'duration'; minimum_ms: number | null; maximum_ms: number | null }
+  | { clause: 'total_size'; minimum_bytes: number | null; maximum_bytes: number | null }
+  | { clause: 'notes_present'; present: boolean }
+  | { clause: 'source_urls_present'; present: boolean }
+  | { clause: 'color'; color: LabColor; delta_e: number }
+  | { clause: 'text'; field: TextField; query: string };
+
+export type FilterExpr =
+  | { kind: 'all'; value: FilterExpr[] }
+  | { kind: 'any'; value: FilterExpr[] }
+  | { kind: 'not'; value: FilterExpr }
+  | { kind: 'clause'; value: FilterClause };
+
+export type SortField =
+  | 'imported_at'
+  | 'captured_at'
+  | 'name'
+  | 'rating'
+  | 'total_size'
+  | 'random'
+  | 'folder_order';
+export type SortDirection = 'ascending' | 'descending';
+export interface ItemSort {
+  field: SortField;
+  direction: SortDirection;
+  random_seed: string | null;
+}
+export interface ViewQuerySpec {
+  filter: FilterExpr;
+  sort: ItemSort;
+}
+export interface EntityViewQuery {
+  scope: BaseScope;
+  view: ViewQuerySpec;
+}
+export interface EntityViewPage {
+  items: CanonicalEntityGridItem[];
+  next_cursor: string | null;
+  total: number;
+  media_count: number;
+  total_size_bytes: number;
+  revision: number;
+}
 
 export type FilterOp = 'eq' | 'gte' | 'lte' | 'gt' | 'lt';
 
@@ -122,9 +220,6 @@ export interface QueryPage {
   limit?: number;
   cursor?: string | null;
 }
-
-export type EntityViewQuery = ItemQuery;
-export type EntityViewPage = ItemPage;
 
 // ── Sidebar types ────────────────────────────────────────────────
 
@@ -191,46 +286,72 @@ export interface SmartFolderCommandPayload {
 
 // ── Selection types ──────────────────────────────────────────────
 
-export interface SelectionTagCount {
-  tag: string;
-  count: number;
-}
-
-export interface SelectionSummaryStats {
-  total_size_bytes: number | null;
-  media_count: number;
-  all_media_are_images: boolean;
-  rating_stats: { min: number | null; max: number | null; shared: number | null } | null;
-}
-
-export interface SelectionFolderInfo {
-  folder_id: number;
-  name: string;
-}
-
 export interface SelectionSummary {
-  total_count: number;
   selected_count: number;
+  total_size_bytes: number;
+  media_count: number;
+  shared_rating: Rating | null;
+  minimum_rating: Rating | null;
+  maximum_rating: Rating | null;
+  shared_tags: number[];
+  shared_folders: number[];
   sample_hashes: string[];
-  shared_tags: SelectionTagCount[];
-  shared_folders: SelectionFolderInfo[];
+  collection_candidates: Array<{
+    collection_id: number;
+    label: string;
+    member_count: number;
+  }>;
   shared_notes: string | null;
   has_notes: boolean;
   shared_source_urls: string[] | null;
   has_source_urls: boolean;
-  stats: SelectionSummaryStats;
-  pending: boolean;
-  generated_at: string;
+  all_selected_roots_have_images: boolean;
+  revision: number;
 }
 
 // ── Bulk target types ────────────────────────────────────────────
 
-export type EntityTarget = ItemTarget;
+export type EntityTarget =
+  | { kind: 'explicit'; root_ids: number[] }
+  | { kind: 'query'; query: EntityViewQuery; excluded_root_ids: number[] }
+  | {
+      kind: 'range';
+      query: EntityViewQuery;
+      anchor_root_id: number;
+      focus_root_id: number;
+    };
+
+export interface OrganizeCollectionInput {
+  target: EntityTarget;
+  cover_root_id: number;
+  winning_collection_id: number | null;
+  name: string | null;
+}
+
+export interface OrganizeCollectionResult {
+  collection_id: number;
+  receipt: MutationReceipt;
+}
+
+export interface DetachCollectionInput {
+  collection_id: number;
+  media_ids: number[];
+  target_lifecycle: Lifecycle | null;
+}
+
+export interface ReorderCollectionInput {
+  collection_id: number;
+  media_ids: number[];
+}
+
+export interface MutationReceipt {
+  revision: number;
+  resources: string[];
+  item_ids: number[];
+}
 
 export interface MediaEntityPatch {
-  name?: string | null;
-  /** Plain text notes. */
   notes?: string | null;
-  rating?: number | null;
+  rating?: Rating;
   source_urls?: string[] | null;
 }

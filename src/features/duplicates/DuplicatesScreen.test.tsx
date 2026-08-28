@@ -9,7 +9,7 @@ import {
   scanDuplicates,
   type DuplicatePair,
 } from '../../platform/duplicateApi';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
+import type { CanonicalEntityDetails } from '../../shared/types/canonical';
 import { clearNotifications } from '../../shared/lib/notifications';
 import { NotificationHost } from '../../shared/ui/NotificationHost/NotificationHost';
 import { DuplicatesScreen, DuplicatesToolbar } from './DuplicatesScreen';
@@ -64,35 +64,43 @@ function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePai
   };
 }
 
-function details(itemId: number, hash: string, name: string): ItemDetails {
+function details(itemId: number, hash: string, name: string): CanonicalEntityDetails {
   return {
-    item_id: itemId,
-    kind: 'media',
-    lifecycle: 'active',
-    label: name,
-    cover_media_item_id: null,
-    folder_ids: [],
-    media: [{
-      media_item_id: itemId,
-      file_hash: hash,
-      mime_type: 'image/png',
-      dominant_color_hex: null,
-      dominant_colors: [],
-      size_bytes: 1_024,
-      pixel_width: 100,
-      pixel_height: 100,
-      duration_ms: null,
-      frame_count: null,
+    root: {
+      root_id: itemId,
+      stable_key: `root-${itemId}`,
+      kind: 'media',
       name,
       notes: null,
-      rating: null,
       source_urls: [],
-      captured_at: null,
-      imported_at: '2026-01-01T00:00:00Z',
-      position: 0,
-      tags: [],
+      cover_media_id: itemId,
+      imported_at_ms: Date.parse('2026-01-01T00:00:00Z'),
+      captured_at_ms: null,
+      modified_at_ms: Date.parse('2026-01-01T00:00:00Z'),
+      media_count: 1,
+      total_size_bytes: 1_024,
+    },
+    lifecycle: 'active',
+    rating: 'unrated',
+    folder_ids: [],
+    tag_ids: [],
+    media: [{
+      media_id: itemId,
+      media_name: name,
+      file_id: itemId,
+      file_path: `/media/${hash}`,
+      facts: {
+        mime: 'image/png',
+        size_bytes: 1_024,
+        width: 100,
+        height: 100,
+        duration_ms: null,
+        frame_count: null,
+        content_hash: hash,
+        perceptual_hash: null,
+        palette: [],
+      },
     }],
-    aggregate_tags: [],
     revision: 1,
   };
 }
@@ -208,10 +216,13 @@ describe('DuplicatesScreen', () => {
       const group = details(11, 'left', 'Member image');
       return {
         ...group,
-        item_id: 100,
-        kind: 'collection',
-        label: 'Source post',
-        media: group.media.map((media) => ({ ...media, media_item_id: 11 })),
+        root: {
+          ...group.root,
+          root_id: 100,
+          stable_key: 'root-100',
+          kind: 'collection',
+          name: 'Source post',
+        },
       };
     });
 

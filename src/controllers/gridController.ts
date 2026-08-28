@@ -4,11 +4,10 @@ import { getDefaultStore } from 'jotai';
 import { queryItems } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
-import type { ItemSort } from '../shared/types/generated/application/ItemSort';
-import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
-import { itemFiltersEqual } from '../shared/lib/itemFilters';
+import { compileGridQuery, itemFiltersEqual } from '../shared/lib/itemFilters';
 import {
   currentGridQueryAtom,
   gridSessionAtom,
@@ -84,7 +83,7 @@ function preferenceSortField(value: string | null): SortField {
     case 'captured_at':
     case 'name':
     case 'rating':
-    case 'size':
+    case 'total_size':
     case 'random':
     case 'folder_order':
       return value;
@@ -134,20 +133,17 @@ function cloneFilters(filters: QueryFilters): QueryFilters {
   };
 }
 
-function queryForSession(session: GridSessionSnapshot): ItemQuery {
-  const searchText = session.searchText.trim();
-  return {
-    scope: session.scope,
-    filters: {
-      ...session.filters,
-      text: searchText || session.filters.text || null,
-    },
-    sort: {
+function queryForSession(session: GridSessionSnapshot): EntityViewQuery {
+  return compileGridQuery(
+    session.scope,
+    session.filters,
+    {
       field: session.sort.field,
       direction: session.sort.direction,
       random_seed: session.sort.randomSeed ?? null,
     },
-  };
+    session.searchText,
+  );
 }
 
 class GridSessionController {
@@ -209,16 +205,13 @@ class GridSessionController {
         () => queryVersion === this.queryVersion,
       );
       if (result == null) throw new Error('Grid navigation was superseded');
-      if (result.visible_item_count == null || result.total_size_bytes == null) {
-        throw new Error('The first grid page did not include exact totals');
-      }
       return {
         scopeKey,
         session: {
           ...session,
           items: result.items,
           cursor: result.next_cursor,
-          totalCount: result.visible_item_count,
+          totalCount: result.total,
           totalSizeBytes: result.total_size_bytes,
           revision: result.revision,
           status: 'idle',
@@ -330,14 +323,11 @@ class GridSessionController {
         () => queryVersion === this.queryVersion && store.get(gridSessionAtom).generation === generation,
       );
       if (result == null) return;
-      if (result.visible_item_count == null || result.total_size_bytes == null) {
-        throw new Error('The first grid page did not include exact totals');
-      }
       const current = store.get(gridSessionAtom);
       updateSession({
         items: reuseStablePageItems(current.items, result.items),
         cursor: result.next_cursor,
-        totalCount: result.visible_item_count,
+        totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
         revision: result.revision,
         status: 'idle',
@@ -365,7 +355,7 @@ class GridSessionController {
         return;
       }
       const items = [...current.items, ...result.items];
-      const totalCount = current.totalCount ?? result.visible_item_count ?? items.length;
+      const totalCount = current.totalCount ?? result.total;
       updateSession({
         items,
         cursor: result.next_cursor,
@@ -397,17 +387,14 @@ class GridSessionController {
       if (result == null) return false;
       const current = store.get(gridSessionAtom);
       if (current.generation !== generation || !current.active) return false;
-      if (result.visible_item_count == null || result.total_size_bytes == null) {
-        throw new Error('The reconciled grid page did not include exact totals');
-      }
-      const previousById = new Map(current.items.map((item) => [item.item_id, item]));
+      const previousById = new Map(current.items.map((item) => [item.root_id, item]));
       const items = result.items.map((item) => {
-        const previous = previousById.get(item.item_id);
+        const previous = previousById.get(item.root_id);
         return previous != null && itemSummaryEqual(previous, item) ? previous : item;
       });
       const desiredLength = current.cursor == null
-        ? result.visible_item_count
-        : Math.min(current.items.length, result.visible_item_count);
+        ? result.total
+        : Math.min(current.items.length, result.total);
       let nextCursor = result.next_cursor;
       let resultRevision = result.revision;
       while (items.length < desiredLength && nextCursor != null) {
@@ -421,12 +408,12 @@ class GridSessionController {
           || append.revision < libraryInvalidation.latestRevision('library')) {
           return this.reconcile();
         }
-        const knownIds = new Set(items.map((item) => item.item_id));
+        const knownIds = new Set(items.map((item) => item.root_id));
         for (const item of append.items) {
-          if (knownIds.has(item.item_id)) continue;
-          const previous = previousById.get(item.item_id);
+          if (knownIds.has(item.root_id)) continue;
+          const previous = previousById.get(item.root_id);
           items.push(previous != null && itemSummaryEqual(previous, item) ? previous : item);
-          knownIds.add(item.item_id);
+          knownIds.add(item.root_id);
         }
         nextCursor = append.next_cursor;
         resultRevision = Math.max(resultRevision, append.revision);
@@ -435,8 +422,8 @@ class GridSessionController {
       items.length = Math.min(items.length, desiredLength);
       updateSession({
         items,
-        cursor: items.length < result.visible_item_count ? nextCursor : null,
-        totalCount: result.visible_item_count,
+        cursor: items.length < result.total ? nextCursor : null,
+        totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
         revision: resultRevision,
         error: null,
@@ -456,7 +443,7 @@ class GridSessionController {
 
   private setFiltersNow(filters: QueryFilters): void {
     if (itemFiltersEqual(store.get(gridSessionAtom).filters, filters)) return;
-    updateSession({ filters: { ...filters, include_tags: [...filters.include_tags], exclude_tags: [...filters.exclude_tags] } });
+    updateSession({ filters: cloneFilters(filters) });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
     void this.loadFirstPage({ preserveItems: true });
@@ -506,7 +493,7 @@ class GridSessionController {
   }
 
   private async queryFirstPageUntilCurrent(
-    query: ItemQuery,
+    query: EntityViewQuery,
     isCurrent: () => boolean,
   ) {
     while (isCurrent()) {
@@ -522,17 +509,17 @@ function itemSummaryEqual(
   left: GridSessionSnapshot['items'][number],
   right: GridSessionSnapshot['items'][number],
 ): boolean {
-  return left.item_id === right.item_id
+  return left.root_id === right.root_id
     && left.kind === right.kind
     && left.lifecycle === right.lifecycle
     && left.name === right.name
-    && left.display_file_hash === right.display_file_hash
-    && left.display_mime_type === right.display_mime_type
-    && left.pixel_width === right.pixel_width
-    && left.pixel_height === right.pixel_height
+    && left.content_hash === right.content_hash
+    && left.mime === right.mime
+    && left.width === right.width
+    && left.height === right.height
     && left.duration_ms === right.duration_ms
     && left.frame_count === right.frame_count
-    && left.dominant_color_hex === right.dominant_color_hex
+    && JSON.stringify(left.palette) === JSON.stringify(right.palette)
     && left.rating === right.rating
     && left.media_count === right.media_count;
 }
@@ -541,9 +528,9 @@ function reuseStablePageItems(
   previous: GridSessionSnapshot['items'],
   incoming: GridSessionSnapshot['items'],
 ): GridSessionSnapshot['items'] {
-  const previousById = new Map(previous.map((item) => [item.item_id, item]));
+  const previousById = new Map(previous.map((item) => [item.root_id, item]));
   const stable = incoming.map((item) => {
-    const existing = previousById.get(item.item_id);
+    const existing = previousById.get(item.root_id);
     return existing != null && itemSummaryEqual(existing, item) ? existing : item;
   });
   return stable.length === previous.length

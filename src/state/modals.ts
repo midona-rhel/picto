@@ -3,7 +3,7 @@
  */
 
 import { atom } from 'jotai';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { EntityTarget } from '../shared/types/canonical';
 
 // ── Confirm modal ──
 export interface ConfirmModalState {
@@ -81,7 +81,7 @@ export const exportModalAtom = atom<ExportModalState>({ open: false, fileCount: 
 
 export interface BatchRenameModalState {
   open: boolean;
-  items: Array<{ item_id: number; name: string }>;
+  items: Array<{ root_id: number; name: string }>;
 }
 export const batchRenameModalAtom = atom<BatchRenameModalState>({ open: false, items: [] });
 
@@ -156,7 +156,8 @@ export interface GroupCandidate {
 
 export interface GroupOrganizerModalState {
   open: boolean;
-  target: ItemTarget | null;
+  target: EntityTarget | null;
+  coverRootId: number | null;
   groups: GroupCandidate[];
   onComplete?: (groupId: number) => void;
 }
@@ -164,5 +165,6 @@ export interface GroupOrganizerModalState {
 export const groupOrganizerModalAtom = atom<GroupOrganizerModalState>({
   open: false,
   target: null,
+  coverRootId: null,
   groups: [],
 });

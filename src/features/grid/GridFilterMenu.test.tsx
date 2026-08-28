@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ItemFilters } from '../../shared/types/generated/application/ItemFilters';
+import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { gridFilterLockedAtom, gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
@@ -21,8 +21,8 @@ describe('countActiveGridFilters', () => {
       ratings: [3],
       include_mime_types: ['image/jpeg'],
       color_hex: '#123456',
-      include_tags: ['favorite'],
-      exclude_tags: ['spoiler'],
+      include_tags: [{ tag_id: 1, name: 'favorite' }],
+      exclude_tags: [{ tag_id: 2, name: 'spoiler' }],
       include_folder_ids: [1],
     })).toBe(6);
   });
@@ -82,7 +82,7 @@ describe('GridFilterToolbar', () => {
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      filters: { ...emptyFilters, include_tags: ['favorite'], ratings: [5] },
+      filters: { ...emptyFilters, include_tags: [{ tag_id: 1, name: 'favorite' }], ratings: [5] },
     });
     const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
     render(<GridFilterToolbar />);
@@ -97,7 +97,7 @@ describe('GridFilterToolbar', () => {
 
   it('saves and reapplies a named filter without losing bigint ranges', () => {
     const store = getDefaultStore();
-    const active = { ...emptyFilters, include_tags: ['favorite'], min_size_bytes: 2_000_000n };
+    const active = { ...emptyFilters, include_tags: [{ tag_id: 1, name: 'favorite' }], min_size_bytes: 2_000_000n };
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: active });
     const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
@@ -109,7 +109,7 @@ describe('GridFilterToolbar', () => {
     fireEvent.click(screen.getByText('Large favorites'));
 
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({
-      include_tags: ['favorite'],
+      include_tags: [{ tag_id: 1, name: 'favorite' }],
       min_size_bytes: 2_000_000n,
     }));
   });

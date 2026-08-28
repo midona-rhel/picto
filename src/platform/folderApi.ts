@@ -5,9 +5,8 @@ import type { ExportFormat } from '../shared/types/generated/application/ExportF
 import type { ExportResult } from '../shared/types/generated/application/ExportResult';
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
-import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
-import { createEmptyItemFilters } from '../shared/lib/itemFilters';
+import type { EntityTarget, Lifecycle } from '../shared/types/canonical';
+import { compileGridQuery, createEmptyItemFilters } from '../shared/lib/itemFilters';
 
 export function createFolder(params: {
   name: string;
@@ -28,7 +27,7 @@ export function deleteFolders(folderIds: number[]): Promise<FolderMutationReceip
   return invoke<FolderMutationReceipt>('folders.delete', { folder_ids: folderIds });
 }
 
-export function removeEntitiesFromFolder(folderId: number, target: ItemTarget): Promise<unknown> {
+export function removeEntitiesFromFolder(folderId: number, target: EntityTarget): Promise<unknown> {
   return invoke('items.set_folder', { folder_id: folderId, target, present: false });
 }
 
@@ -83,7 +82,7 @@ export function sortFolderTree(
 }
 
 export function updateFolderMembership(
-  target: ItemTarget,
+  target: EntityTarget,
   folderId: number,
   operation: 'add' | 'remove',
 ): Promise<unknown> {
@@ -116,13 +115,13 @@ export async function getFolderCover(folderId: number): Promise<{ entity_hash: s
     { folder_id: folderId },
   );
   if (explicit) return explicit;
-  const page = await queryItems({
-    scope: { kind: 'folder', folder_id: folderId },
-    filters: createEmptyItemFilters(),
-    sort: { field: 'folder_order', direction: 'ascending', random_seed: null },
-  }, { cursor: null, limit: 1 });
+  const page = await queryItems(compileGridQuery(
+    { kind: 'folder', folder_id: folderId },
+    createEmptyItemFilters(),
+    { field: 'folder_order', direction: 'ascending', random_seed: null },
+  ), { cursor: null, limit: 1 });
   const item = page.items[0];
-  return item ? { entity_hash: item.display_file_hash, mime_type: item.display_mime_type } : null;
+  return item ? { entity_hash: item.content_hash, mime_type: item.mime } : null;
 }
 
 export function setFolderCover(folderId: number, itemId: number): Promise<FolderMutationReceipt> {
@@ -159,7 +158,7 @@ export function addMedia(paths: string[], params: {
   });
 }
 
-export function exportMedia(target: ItemTarget, config: {
+export function exportMedia(target: EntityTarget, config: {
   output_dir: string;
   format?: ExportFormat | null;
   quality?: number | null;

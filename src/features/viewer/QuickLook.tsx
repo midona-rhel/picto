@@ -28,6 +28,7 @@ import { usePreviewPreferences } from './usePreviewPreferences';
 export interface QuickLookProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
+  metadataRootId?: number | null;
   totalCount?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
@@ -40,13 +41,14 @@ interface QuickLookContentProps extends QuickLookProps {
 }
 
 export function QuickLookContent({
-  items, currentIndex, onNavigate, onClose, onLoadMore, onReady, thumbnailReady = false,
+  items, currentIndex, metadataRootId, onNavigate, onClose, onLoadMore, onReady, thumbnailReady = false,
 }: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
-  const currentItemId = currentItem?.item_id ?? 0;
-  const currentHash = currentItem?.display_file_hash ?? '';
-  useRecordMediaView(currentItemId);
-  const currentMime = currentItem?.display_mime_type ?? '';
+  const currentItemId = currentItem?.root_id ?? 0;
+  const currentHash = currentItem?.content_hash ?? '';
+  const mutationRootId = metadataRootId === undefined ? currentItemId : metadataRootId;
+  useRecordMediaView(mutationRootId ?? 0);
+  const currentMime = currentItem?.mime ?? '';
   const previewPreferences = usePreviewPreferences();
   const rendererKind = detailRendererKind(currentMime);
   const isImage = rendererKind === 'image';
@@ -55,13 +57,13 @@ export function QuickLookContent({
   const thumbHash = currentHash;
   const contextMenu = useViewerEntityContextMenu({
     hash: currentHash || null,
-    itemId: currentItem?.item_id,
+    itemId: mutationRootId ?? undefined,
     kind: currentItem?.kind,
     lifecycle: currentItem?.lifecycle,
     name: currentItem?.name,
     mime: currentMime,
-    width: currentItem?.pixel_width,
-    height: currentItem?.pixel_height,
+    width: currentItem?.width,
+    height: currentItem?.height,
   });
 
   // Refs
@@ -74,14 +76,14 @@ export function QuickLookContent({
     const r: string[] = [];
     const prev = items[currentIndex - 1];
     const next = items[currentIndex + 1];
-    if (prev) r.push(prev.display_file_hash);
-    if (next) r.push(next.display_file_hash);
+    if (prev) r.push(prev.content_hash);
+    if (next) r.push(next.content_hash);
     return r;
   }, [items, currentIndex]);
 
   const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
-    thumbnailHash: currentItem?.display_file_hash ?? null,
+    thumbnailHash: currentItem?.content_hash ?? null,
     mime: currentMime,
     isVideo: !isImage,
     neighborHashes,
@@ -93,11 +95,11 @@ export function QuickLookContent({
 
   // Image size from displayed item
   const displayedItem = pipeline.displayedHash
-    ? items.find((it) => it.display_file_hash === pipeline.displayedHash) ?? currentItem
+    ? items.find((it) => it.content_hash === pipeline.displayedHash) ?? currentItem
     : currentItem;
   const imageSize = useMemo<ImageSize | null>(() => {
-    if (!displayedItem?.pixel_width || !displayedItem?.pixel_height) return null;
-    return { width: displayedItem.pixel_width, height: displayedItem.pixel_height };
+    if (!displayedItem?.width || !displayedItem?.height) return null;
+    return { width: displayedItem.width, height: displayedItem.height };
   }, [pipeline.displayedHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zoom/pan
@@ -147,7 +149,8 @@ export function QuickLookContent({
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, copyDef)) {
         e.preventDefault();
-        void filesController.copyTarget({ kind: 'explicit', item_ids: [currentItemId] });
+        if (metadataRootId === undefined) void filesController.copyTarget({ kind: 'explicit', root_ids: [currentItemId] });
+        else if (currentHash) void filesController.copyFileForHash(currentHash);
         return;
       }
       if (isImage && matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
@@ -158,7 +161,7 @@ export function QuickLookContent({
       for (let rating = 0; rating <= 5; rating += 1) {
         if (!matchesShortcutDef(e, getShortcut(`rate.${rating}`)!)) continue;
         e.preventDefault();
-        void entityMutations.setItemRating(currentItemId, rating);
+        if (mutationRootId != null) void entityMutations.setItemRating(mutationRootId, rating);
         return;
       }
   }, { priority: 60 });
@@ -216,7 +219,7 @@ export function QuickLookContent({
 
 export function QuickLook(props: QuickLookProps) {
   const [contentReady, setContentReady] = useState(false);
-  const currentItemId = props.items[props.currentIndex]?.item_id ?? 0;
+  const currentItemId = props.items[props.currentIndex]?.root_id ?? 0;
   const markReady = useCallback(() => setContentReady(true), []);
 
   return (

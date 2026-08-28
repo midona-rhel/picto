@@ -1,6 +1,5 @@
 import { atom } from 'jotai';
-import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { EntityTarget, EntityViewQuery } from '../shared/types/canonical';
 import { currentGridQueryAtom, gridItemsAtom, gridTotalCountAtom } from './grid';
 
 export type SelectionMode = 'explicit' | 'query_results';
@@ -9,7 +8,7 @@ export interface GridSelection {
   mode: SelectionMode;
   itemIds: Set<number>;
   excludedItemIds: Set<number>;
-  query?: ItemQuery | null;
+  query?: EntityViewQuery | null;
   queryTotalCount?: number | null;
   folderNodeIds: Set<string>;
   anchor: { kind: 'item'; id: number } | { kind: 'folder'; id: string } | null;
@@ -23,7 +22,7 @@ export type GridSelectionAction =
   | { type: 'replace_folders'; ids: Set<string>; anchor?: string | null }
   | { type: 'toggle_folder'; id: string }
   | { type: 'marquee'; itemIds: Set<number>; folderNodeIds: Set<string>; additive: boolean }
-  | { type: 'select_all'; totalCount: number; query?: ItemQuery }
+  | { type: 'select_all'; totalCount: number; query?: EntityViewQuery }
   | { type: 'toggle_query_item'; itemId: number; totalCount: number }
   | { type: 'set_anchor'; anchor: GridSelection['anchor'] };
 
@@ -137,7 +136,7 @@ export const loadedSelectedItemIdsAtom = atom((get) => {
   if (selection.mode === 'explicit') return new Set(selection.itemIds);
   return new Set(
     get(gridItemsAtom)
-      .map((item) => item.item_id)
+      .map((item) => item.root_id)
       .filter((itemId) => !selection.excludedItemIds.has(itemId)),
   );
 });
@@ -200,7 +199,7 @@ export const selectionCountAtom = atom((get) => {
   return selection.itemIds.size;
 });
 
-export const selectionTargetAtom = atom<ItemTarget | null>((get) => {
+export const selectionTargetAtom = atom<EntityTarget | null>((get) => {
   if (get(selectionCountAtom) <= 0) return null;
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'query_results') {
@@ -208,10 +207,10 @@ export const selectionTargetAtom = atom<ItemTarget | null>((get) => {
     return {
       kind: 'query',
       query: selection.query,
-      excluded_item_ids: [...selection.excludedItemIds],
+      excluded_root_ids: [...selection.excludedItemIds],
     };
   }
-  return { kind: 'explicit', item_ids: [...selection.itemIds] };
+  return { kind: 'explicit', root_ids: [...selection.itemIds] };
 });
 
 export const selectionFingerprintAtom = atom((get) => {

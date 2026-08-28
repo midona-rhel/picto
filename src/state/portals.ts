@@ -3,25 +3,31 @@
  */
 
 import { atom } from 'jotai';
-import type { FilterMatchMode } from '../shared/types/generated/application/FilterMatchMode';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { EntityTarget, SetMatchMode } from '../shared/types/canonical';
+import type { TagFilterChoice } from '../shared/lib/itemFilters';
 
 export interface PortalState {
   open: boolean;
-  target?: ItemTarget;
+  target?: EntityTarget;
   anchor?: { x: number; y: number } | null;
   anchorPlacement?: 'left' | 'below' | 'above';
   selectedTags?: string[];
   excludedTags?: string[];
+  selectedTagFilters?: TagFilterChoice[];
+  excludedTagFilters?: TagFilterChoice[];
   selectedFolderIds?: number[];
   excludedFolderIds?: number[];
-  filterMatchMode?: FilterMatchMode;
+  filterMatchMode?: SetMatchMode;
   availableFolderIds?: number[];
   onApplyTags?: (tags: string[]) => void;
-  onApplyTagFilter?: (includedTags: string[], excludedTags: string[], mode: FilterMatchMode) => void;
+  onApplyTagFilter?: (
+    includedTags: TagFilterChoice[],
+    excludedTags: TagFilterChoice[],
+    mode: SetMatchMode,
+  ) => void;
   onApplyFolders?: (folderIds: number[]) => void;
   onApplyFolderParent?: (folderId: number | null) => void;
-  onApplyFolderFilter?: (includedFolderIds: number[], excludedFolderIds: number[], mode: FilterMatchMode) => void;
+  onApplyFolderFilter?: (includedFolderIds: number[], excludedFolderIds: number[], mode: SetMatchMode) => void;
 }
 
 const closed: PortalState = { open: false, anchor: null };

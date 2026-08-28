@@ -7,15 +7,13 @@ import { DetailMediaRenderer } from '../viewer/document/DetailMediaRenderer';
 import { detailRendererKind } from '../viewer/document/detailRendererKind';
 import { CanvasGrid } from '../grid/canvas/CanvasGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
-import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
-import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
+import type { CanonicalEntityDetails, CanonicalEntityGridItem, MediaRecord } from '../../shared/types/canonical';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { detachItems, reorderGroup, ungroup } from '../../platform/entityApi';
 import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
-import { batchRenameModalAtom, confirmModalAtom, exportModalAtom } from '../../state/modals';
+import { confirmModalAtom, exportModalAtom } from '../../state/modals';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
@@ -29,6 +27,8 @@ import * as entityMutations from '../../controllers/entityMutations';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { reverseImageSearch } from '../../platform/shellApi';
+import { tagsController } from '../../controllers/tagsController';
+import { tagName } from '../tags/tagContextMenu';
 
 export interface GroupSurfaceProps {
   groupId: number;
@@ -40,21 +40,26 @@ export interface GroupSurfaceProps {
   onClose: () => void;
 }
 
-function memberToGridItem(details: ItemDetails, media: MediaDetails): CanonicalEntityGridItem {
+function memberToGridItem(details: CanonicalEntityDetails, media: MediaRecord): CanonicalEntityGridItem {
   return {
-    item_id: media.media_item_id,
+    root_id: media.media_id,
     kind: 'media',
     lifecycle: details.lifecycle,
-    name: media.name,
-    display_file_hash: media.file_hash,
-    display_mime_type: media.mime_type,
-    pixel_width: media.pixel_width,
-    pixel_height: media.pixel_height,
-    duration_ms: media.duration_ms,
-    frame_count: media.frame_count,
-    dominant_color_hex: media.dominant_color_hex,
-    rating: media.rating,
+    name: media.media_name,
+    cover_media_id: media.media_id,
+    content_hash: media.facts.content_hash,
+    mime: media.facts.mime,
+    width: media.facts.width,
+    height: media.facts.height,
+    duration_ms: media.facts.duration_ms,
+    frame_count: media.facts.frame_count,
+    palette: media.facts.palette,
+    imported_at_ms: details.root.imported_at_ms,
+    captured_at_ms: details.root.captured_at_ms,
+    modified_at_ms: details.root.modified_at_ms,
+    rating: details.rating,
     media_count: 1,
+    total_size_bytes: media.facts.size_bytes,
   };
 }
 
@@ -178,26 +183,26 @@ interface GroupDeferredMediaProps {
 
 function GroupImage({ item, loadFullMedia, onRequest, onVisible }: GroupDeferredMediaProps) {
   const [fullVisible, setFullVisible] = useState(false);
-  const frameRef = useDeferredVisibleMedia(item.item_id, loadFullMedia, onRequest, onVisible);
+  const frameRef = useDeferredVisibleMedia(item.root_id, loadFullMedia, onRequest, onVisible);
   useEffect(() => {
     if (!loadFullMedia) setFullVisible(false);
   }, [loadFullMedia]);
-  const aspectRatio = item.pixel_width && item.pixel_height
-    ? `${item.pixel_width} / ${item.pixel_height}`
+  const aspectRatio = item.width && item.height
+    ? `${item.width} / ${item.height}`
     : undefined;
 
   return (
     <div ref={frameRef} className={styles.imageFrame} style={{ aspectRatio }}>
       <ThumbnailImage
         className={styles.thumbnailImage}
-        src={mediaThumbnailUrl(item.display_file_hash)}
+        src={mediaThumbnailUrl(item.content_hash)}
         alt=""
         draggable={false}
       />
       {loadFullMedia && (
         <img
           className={`${styles.fullImage} ${fullVisible ? styles.fullImageVisible : ''}`}
-          src={mediaFileUrl(item.display_file_hash, item.display_mime_type)}
+          src={mediaFileUrl(item.content_hash, item.mime)}
           alt={item.name ?? ''}
           decoding="async"
           onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
@@ -213,9 +218,9 @@ function GroupImage({ item, loadFullMedia, onRequest, onVisible }: GroupDeferred
 }
 
 function GroupDeferredRenderer({ item, loadFullMedia, onRequest, onVisible }: GroupDeferredMediaProps) {
-  const frameRef = useDeferredVisibleMedia(item.item_id, loadFullMedia, onRequest, onVisible);
-  const aspectRatio = item.pixel_width && item.pixel_height
-    ? `${item.pixel_width} / ${item.pixel_height}`
+  const frameRef = useDeferredVisibleMedia(item.root_id, loadFullMedia, onRequest, onVisible);
+  const aspectRatio = item.width && item.height
+    ? `${item.width} / ${item.height}`
     : undefined;
 
   return (
@@ -223,15 +228,15 @@ function GroupDeferredRenderer({ item, loadFullMedia, onRequest, onVisible }: Gr
       {!loadFullMedia && (
         <ThumbnailImage
           className={styles.deferredThumbnail}
-          src={mediaThumbnailUrl(item.display_file_hash)}
+          src={mediaThumbnailUrl(item.content_hash)}
           alt=""
           draggable={false}
         />
       )}
       {loadFullMedia && (
         <DetailMediaRenderer
-          hash={item.display_file_hash}
-          mimeType={item.display_mime_type}
+          hash={item.content_hash}
+          mimeType={item.mime}
           displayName={item.name}
           mediaKeyboardShortcutsEnabled={false}
           mediaAutoPlay={false}
@@ -252,7 +257,7 @@ export function GroupSurface({
   onNavigateRoot,
   onClose,
 }: GroupSurfaceProps) {
-  const [details, setDetails] = useState<ItemDetails | null>(
+  const [details, setDetails] = useState<CanonicalEntityDetails | null>(
     () => viewerController.takePrefetchedItemDetails?.(groupId) ?? null,
   );
   const skipInitialRefreshRef = useRef(details !== null);
@@ -271,26 +276,21 @@ export function GroupSurface({
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const setAiPortal = useSetAtom(aiTaggerPortalAtom);
   const setExportModal = useSetAtom(exportModalAtom);
-  const setBatchRenameModal = useSetAtom(batchRenameModalAtom);
   const members = useMemo(
     () => details?.media.map((media) => memberToGridItem(details, media)) ?? [],
-    [details],
-  );
-  const mediaByItemId = useMemo(
-    () => new Map(details?.media.map((media) => [media.media_item_id, media]) ?? []),
     [details],
   );
 
   const refresh = useCallback(async () => {
     try {
       const next = await viewerController.getItemDetails(groupId);
-      if (next.kind !== 'collection') {
+      if (next.root.kind !== 'collection') {
         onClose();
         return;
       }
       setDetails(next);
       setSelectedItemIds((current) => {
-        const memberIds = new Set(next.media.map((media) => media.media_item_id));
+        const memberIds = new Set(next.media.map((media) => media.media_id));
         return new Set([...current].filter((itemId) => memberIds.has(itemId)));
       });
       setError(null);
@@ -329,7 +329,7 @@ export function GroupSurface({
   }, [details, initialMode, mode, onClose, onNavigateRoot, presentation, rootCurrentIndex, rootTotal, setDisplayControls, setDisplayState, viewerIndex]);
 
   const selectedItems = useMemo(
-    () => members.filter((item) => selectedItemIds.has(item.item_id)),
+    () => members.filter((item) => selectedItemIds.has(item.root_id)),
     [members, selectedItemIds],
   );
 
@@ -353,26 +353,23 @@ export function GroupSurface({
       }
       if (mode === 'editor' && matchesShortcutDef(event, quickLookDef) && selectedItems.length === 1) {
         event.preventDefault();
-        setQuickLookIndex(members.findIndex((item) => item.item_id === selectedItems[0].item_id));
+        setQuickLookIndex(members.findIndex((item) => item.root_id === selectedItems[0].root_id));
         return true;
       }
       if (mode === 'editor' && matchesShortcutDef(event, selectAllDef) && members.length > 0) {
         event.preventDefault();
-        setSelectedItemIds(new Set(members.map((item) => item.item_id)));
-        setSelectionAnchorId(members[0]?.item_id ?? null);
+        setSelectedItemIds(new Set(members.map((item) => item.root_id)));
+        setSelectionAnchorId(members[0]?.root_id ?? null);
         return true;
       }
       if (mode === 'editor' && matchesShortcutDef(event, copyDef) && selectedItems.length > 0) {
         event.preventDefault();
-        void filesController.copyTarget({
-          kind: 'explicit',
-          item_ids: selectedItems.map((item) => item.item_id),
-        });
+        void filesController.copyHashes(selectedItems.map((item) => item.content_hash));
         return true;
       }
       if (mode === 'reader' && matchesShortcutDef(event, copyDef)) {
         event.preventDefault();
-        void filesController.copyTarget({ kind: 'explicit', item_ids: [groupId] });
+        void filesController.copyTarget({ kind: 'explicit', root_ids: [groupId] });
         return true;
       }
       if (mode === 'editor' && selectedItems.length > 0 && matchesShortcutDef(event, removeMembersDef)) {
@@ -394,7 +391,7 @@ export function GroupSurface({
       onClose();
       return true;
   }, { enabled: viewerIndex === null && quickLookIndex === null, priority: 30 });
-  const memberIds = useMemo(() => members.map((item) => item.item_id), [members]);
+  const memberIds = useMemo(() => members.map((item) => item.root_id), [members]);
 
   useEffect(() => {
     if (selectionAnchorId !== null && !memberIds.includes(selectionAnchorId)) {
@@ -414,11 +411,6 @@ export function GroupSurface({
     setSelectionAnchorId(next.anchorId);
   }, [memberIds, selectedItemIds, selectionAnchorId]);
 
-  const selectAll = useCallback(() => {
-    setSelectedItemIds(new Set(memberIds));
-    setSelectionAnchorId(memberIds[0] ?? null);
-  }, [memberIds]);
-
   const deselectAll = useCallback(() => {
     setSelectedItemIds(new Set());
     setSelectionAnchorId(null);
@@ -432,7 +424,7 @@ export function GroupSurface({
     try {
       await detachItems({
         collection_id: groupId,
-        media_item_ids: selected.map((item) => item.item_id),
+        media_ids: selected.map((item) => item.root_id),
         target_lifecycle: targetLifecycle,
       });
       await announceUndoableMutation('collections.detach');
@@ -450,27 +442,24 @@ export function GroupSurface({
     position: { x: number; y: number },
     selectionEnabled: boolean,
   ) => {
-    const selected = selectionEnabled && selectedItemIds.has(item.item_id) ? selectedItems : [item];
+    const selected = selectionEnabled && selectedItemIds.has(item.root_id) ? selectedItems : [item];
     if (selectionEnabled) {
-      setSelectedItemIds(new Set(selected.map((selectedItem) => selectedItem.item_id)));
-      if (!selectedItemIds.has(item.item_id)) setSelectionAnchorId(item.item_id);
+      setSelectedItemIds(new Set(selected.map((selectedItem) => selectedItem.root_id)));
+      if (!selectedItemIds.has(item.root_id)) setSelectionAnchorId(item.root_id);
     }
-    const openIndex = members.findIndex((member) => member.item_id === item.item_id);
-    const target = { kind: 'explicit' as const, item_ids: selected.map((entry) => entry.item_id) };
+    const openIndex = members.findIndex((member) => member.root_id === item.root_id);
+    const target = { kind: 'explicit' as const, root_ids: [groupId] };
     const single = selected.length === 1 ? selected[0] : null;
-    const copiedTags = selected.length === 0 ? [] : selected
-      .map((entry) => new Set(mediaByItemId.get(entry.item_id)?.tags ?? []))
-      .reduce((shared, tags) => new Set([...shared].filter((tag) => tags.has(tag))));
     const entries = buildTileContextMenu({
       surface: selectionEnabled ? 'grid' : 'viewer',
       selectionCount: selected.length,
       querySelectionActive: false,
-      aiTagEnabled: selected.every((entry) => entry.display_mime_type.startsWith('image/')),
+      aiTagEnabled: selected.every((entry) => entry.mime.startsWith('image/')),
       singleSelected: single != null,
-      singleHash: single?.display_file_hash ?? null,
+      singleHash: single?.content_hash ?? null,
       singleKind: single?.kind ?? null,
       singleName: single?.name ?? null,
-      singleMime: single?.display_mime_type ?? null,
+      singleMime: single?.mime ?? null,
       containsGroup: false,
       scopeKind: null,
       statusFilter: null,
@@ -479,17 +468,17 @@ export function GroupSurface({
       onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
       onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
       onOpenNewWindow: single ? () => { void windowController.openDetailWindow({
-        hash: single.display_file_hash,
-        width: single.pixel_width,
-        height: single.pixel_height,
+        hash: single.content_hash,
+        width: single.width,
+        height: single.height,
       }); } : undefined,
       onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
-      onCopySelection: () => { void filesController.copyTarget(target); },
-      onCopySelectionPaths: () => { void filesController.copyTargetPaths(target); },
+      onCopySelection: () => { void filesController.copyHashes(selected.map((entry) => entry.content_hash)); },
+      onCopySelectionPaths: () => { void filesController.copyHashPaths(selected.map((entry) => entry.content_hash)); },
       onCopySelectionNames: () => filesController.copyText(
         selected.map((entry) => entry.name ?? 'Untitled').join('\n'),
       ),
-      onCopySelectionLinks: () => { void filesController.copyTargetLinks(target); },
+      onCopySelectionLinks: () => { void filesController.copyHashLinks(selected.map((entry) => entry.content_hash)); },
       onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
       onCopyName: (name) => filesController.copyText(name),
       onCopyLink: (link) => filesController.copyText(link),
@@ -497,9 +486,11 @@ export function GroupSurface({
       onOpenTagSelect: () => setTagPortal({ open: true, target, anchor: inspectorAnchor() }),
       onOpenAiTagger: () => setAiPortal({ open: true, target, anchor: inspectorAnchor() }),
       onCopyTags: () => {
-        const tags = [...copiedTags];
-        filesController.copyText(JSON.stringify(tags));
-        (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags = tags;
+        void tagsController.getById(details?.tag_ids ?? []).then((records) => {
+          const tags = records.map((tag) => tagName(tag));
+          filesController.copyText(JSON.stringify(tags));
+          (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags = tags;
+        });
       },
       onPasteTags: () => {
         const tags = (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags;
@@ -517,25 +508,21 @@ export function GroupSurface({
           if (outputDir) await filesController.exportMedia(target, { output_dir: outputDir, format: 'original' });
         })();
       },
-      onBatchRename: selected.length > 1 ? () => setBatchRenameModal({
-        open: true,
-        items: selected.map((entry) => ({ item_id: entry.item_id, name: entry.name ?? 'Untitled' })),
-      }) : undefined,
       onSearchByImage: (engine, hash) => {
         void reverseImageSearch(hash, engine).catch((reason) => showErrorNotification({
           title: 'Reverse image search failed',
           message: reason instanceof Error ? reason.message : String(reason),
         }));
       },
-      onRegenerateThumbnails: () => { void filesController.regenerateThumbnailsBatch(selected.map((entry) => entry.display_file_hash)); },
+      onRegenerateThumbnails: () => { void filesController.regenerateThumbnailsBatch(selected.map((entry) => entry.content_hash)); },
       onSetLibraryCover: single ? (hash) => {
         void openCurrentLibraryCoverPicker({
-          media_item_id: single.item_id,
+          media_item_id: single.root_id,
           file_hash: hash,
           name: single.name,
-          pixel_width: single.pixel_width,
-          pixel_height: single.pixel_height,
-          mime_type: single.display_mime_type,
+          pixel_width: single.width,
+          pixel_height: single.height,
+          mime_type: single.mime,
         }).catch((reason) => showErrorNotification({
           title: 'Could not set library cover',
           message: reason instanceof Error ? reason.message : String(reason),
@@ -552,7 +539,7 @@ export function GroupSurface({
     if (trashIndex >= 0) entries.splice(trashIndex, 0, { separator: true }, removeEntry);
     else entries.push({ separator: true }, removeEntry);
     contextMenu.openAt(position, entries);
-  }, [contextMenu, deselectAll, detachMembers, mediaByItemId, members, selectAll, selectedItemIds, selectedItems, setAiPortal, setBatchRenameModal, setExportModal, setFolderPortal, setTagPortal]);
+  }, [contextMenu, details?.tag_ids, detachMembers, groupId, members, selectedItemIds, selectedItems, setAiPortal, setExportModal, setFolderPortal, setTagPortal]);
 
   const confirmUngroup = useCallback(() => {
     setConfirmModal({
@@ -583,7 +570,7 @@ export function GroupSurface({
 
   const saveOrder = useCallback(async (orderedItemIds: number[]) => {
     try {
-      await reorderGroup({ collection_id: groupId, media_item_ids: orderedItemIds });
+      await reorderGroup({ collection_id: groupId, media_ids: orderedItemIds });
       await announceUndoableMutation('collections.reorder');
       await refresh();
     } catch (reason) {
@@ -597,7 +584,7 @@ export function GroupSurface({
   if (!details) return null;
 
   return (
-    <section className={styles.surface} aria-label={details.label ?? 'Group'}>
+    <section className={styles.surface} aria-label={details.root.name || 'Group'}>
       {error && <div className={styles.inlineError}>{error}</div>}
 
       {mode === 'editor' ? (
@@ -619,7 +606,7 @@ export function GroupSurface({
                 setSelectionAnchorId(itemIds.size === 1 ? itemIds.values().next().value ?? null : null);
               }}
               onTileClick={(_index, item, event) => {
-                selectMember(item.item_id, event);
+                selectMember(item.root_id, event);
               }}
               onTileDoubleClick={(index) => setViewerIndex(index)}
               onTileContextMenu={(_index, item, position) => openMemberMenu(item, position, true)}
@@ -645,8 +632,8 @@ export function GroupSurface({
               {members.map((item, index) => (
                 <figure
                   className={styles.member}
-                  data-group-member={item.item_id}
-                  key={item.item_id}
+                  data-group-member={item.root_id}
+                  key={item.root_id}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -654,17 +641,17 @@ export function GroupSurface({
                   }}
                   onDoubleClick={() => setViewerIndex(index)}
                 >
-                  {detailRendererKind(item.display_mime_type) !== 'image' ? (
+                  {detailRendererKind(item.mime) !== 'image' ? (
                     <GroupDeferredRenderer
                       item={item}
-                      loadFullMedia={warmMedia.loadedItemIds.has(item.item_id)}
+                      loadFullMedia={warmMedia.loadedItemIds.has(item.root_id)}
                       onRequest={warmMedia.request}
                       onVisible={warmMedia.touch}
                     />
                   ) : (
                     <GroupImage
                       item={item}
-                      loadFullMedia={warmMedia.loadedItemIds.has(item.item_id)}
+                      loadFullMedia={warmMedia.loadedItemIds.has(item.root_id)}
                       onRequest={warmMedia.request}
                       onVisible={warmMedia.touch}
                     />
@@ -702,6 +689,7 @@ export function GroupSurface({
         <QuickLook
           items={members}
           currentIndex={quickLookIndex}
+          metadataRootId={groupId}
           totalCount={members.length}
           onNavigate={(delta) => setQuickLookIndex((index) => Math.max(
             0,

@@ -11,8 +11,7 @@ import type {
   CanonicalEntityGridItem,
   SidebarNodeDto,
 } from '../shared/types/canonical';
-import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
-import type { ItemFilters } from '../shared/types/generated/application/ItemFilters';
+import type { ItemFilters } from '../shared/lib/itemFilters';
 import { gridActiveAtom } from './grid';
 import { displayedSurfaceNodeIdAtom } from './navigation';
 import {
@@ -97,7 +96,7 @@ export const subfolderPreviewAtom = atom<{
   totalCount: number | null;
   totalSizeBytes: number | null;
 } | null>(null);
-export const displayedInspectorItemDetailsAtom = atom<ItemDetails | null>(null);
+export const displayedInspectorItemDetailsAtom = atom<import('../shared/types/canonical').CanonicalEntityDetails | null>(null);
 export const inspectorLoadingAtom = atom(false);
 export const inspectorErrorAtom = atom<string | null>(null);
 

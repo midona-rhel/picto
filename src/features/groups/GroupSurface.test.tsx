@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GroupSurface, retainWarmGroupMedia } from './GroupSurface';
 import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
+import type { CanonicalEntityDetails } from '../../shared/types/canonical';
 
 const mocks = vi.hoisted(() => ({
   getItemDetails: vi.fn(),
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   copyFilePath: vi.fn(),
   copyText: vi.fn(),
   regenerateThumbnailsBatch: vi.fn(),
+  getTagsById: vi.fn(),
   openLibraryCoverPicker: vi.fn(() => Promise.resolve()),
   detailMediaRenderer: vi.fn(),
 }));
@@ -42,6 +43,9 @@ vi.mock('../../controllers/filesController', () => ({
     copyText: mocks.copyText,
     regenerateThumbnailsBatch: mocks.regenerateThumbnailsBatch,
   },
+}));
+vi.mock('../../controllers/tagsController', () => ({
+  tagsController: { getById: mocks.getTagsById },
 }));
 vi.mock('../../controllers/windowController', () => ({
   windowController: { openDetailWindow: mocks.openDetailWindow },
@@ -73,12 +77,12 @@ vi.mock('../viewer/document/DetailMediaRenderer', () => ({
 }));
 vi.mock('../grid/canvas/CanvasGrid', () => ({
   CanvasGrid: (props: {
-    items: Array<{ item_id: number; display_file_hash: string }>;
+    items: Array<{ root_id: number; content_hash: string }>;
     onReorder?: (ids: number[]) => void;
-    onTileClick?: (index: number, item: { item_id: number }, event?: React.MouseEvent) => void;
+    onTileClick?: (index: number, item: { root_id: number }, event?: React.MouseEvent) => void;
     onTileContextMenu?: (
       index: number,
-      item: { item_id: number },
+      item: { root_id: number },
       position: { x: number; y: number },
     ) => void;
     onMarqueeSelectionChange?: (selection: { itemIds: Set<number>; folderNodeIds: Set<string> }) => void;
@@ -86,18 +90,18 @@ vi.mock('../grid/canvas/CanvasGrid', () => ({
     <div data-testid="canvas-grid">
       {props.items.map((item, index) => (
         <button
-          key={item.item_id}
+          key={item.root_id}
           type="button"
-          data-testid={`grid-item-${item.item_id}`}
+          data-testid={`grid-item-${item.root_id}`}
           onClick={(event) => props.onTileClick?.(index, item, event)}
           onContextMenu={() => props.onTileContextMenu?.(index, item, { x: 10, y: 10 })}
         >
-          {item.display_file_hash}
+          {item.content_hash}
         </button>
       ))}
       <button
         type="button"
-        onClick={() => props.onReorder?.([...props.items].reverse().map((item) => item.item_id))}
+        onClick={() => props.onReorder?.([...props.items].reverse().map((item) => item.root_id))}
       >
         Reorder
       </button>
@@ -156,15 +160,26 @@ vi.mock('../../shared/ui/ContextMenu', () => {
   };
 });
 
-function details(): ItemDetails {
+function details(): CanonicalEntityDetails {
   return {
-    item_id: 7,
-    kind: 'collection',
+    root: {
+      root_id: 7,
+      stable_key: 'root-7',
+      kind: 'collection',
+      name: 'Ordered set',
+      notes: null,
+      source_urls: [],
+      cover_media_id: 1,
+      imported_at_ms: 1,
+      captured_at_ms: null,
+      modified_at_ms: 1,
+      media_count: 3,
+      total_size_bytes: 30,
+    },
     lifecycle: 'active',
-    label: 'Ordered set',
-    cover_media_item_id: 1,
+    rating: 'unrated',
     folder_ids: [],
-    aggregate_tags: [],
+    tag_ids: [],
     revision: 1,
     media: [
       media(1, 'one', 'image/png', 0),
@@ -174,26 +189,23 @@ function details(): ItemDetails {
   };
 }
 
-function media(itemId: number, hash: string, mimeType: string, position: number) {
+function media(itemId: number, hash: string, mimeType: string, _position: number) {
   return {
-    media_item_id: itemId,
-    file_hash: hash,
-    mime_type: mimeType,
-    dominant_color_hex: null,
-    dominant_colors: [],
-    size_bytes: 10,
-    pixel_width: 100,
-    pixel_height: 200,
-    duration_ms: null,
-    frame_count: null,
-    name: `Item ${itemId}`,
-    notes: null,
-    rating: null,
-    source_urls: [],
-    captured_at: null,
-    imported_at: '2026-08-23T00:00:00Z',
-    position,
-    tags: [],
+    media_id: itemId,
+    media_name: `Item ${itemId}`,
+    file_id: itemId,
+    file_path: `/media/${hash}`,
+    facts: {
+      mime: mimeType,
+      size_bytes: 10,
+      width: 100,
+      height: 200,
+      duration_ms: null,
+      frame_count: null,
+      content_hash: hash,
+      perceptual_hash: null,
+      palette: [],
+    },
   };
 }
 
@@ -205,6 +217,14 @@ beforeEach(() => {
   mocks.detachItems.mockResolvedValue({});
   mocks.reorderGroup.mockResolvedValue({});
   mocks.ungroup.mockResolvedValue({});
+  mocks.getTagsById.mockImplementation((tagIds: number[]) => Promise.resolve(tagIds.map((tagId) => ({
+    tag_id: tagId,
+    namespace_id: tagId === 1 ? 1 : 0,
+    namespace: tagId === 1 ? 'creator' : '',
+    subname: tagId === 1 ? 'alice' : 'favorite',
+    active_count: 1,
+    assignment_count: 1,
+  }))));
 });
 
 async function enterEditor() {
@@ -368,7 +388,7 @@ describe('GroupSurface', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Reorder' }));
     await waitFor(() => expect(mocks.reorderGroup).toHaveBeenCalledWith({
       collection_id: 7,
-      media_item_ids: [3, 2, 1],
+      media_ids: [3, 2, 1],
     }));
   });
 
@@ -382,7 +402,7 @@ describe('GroupSurface', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove 2 from Group' }));
     await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
       collection_id: 7,
-      media_item_ids: [1, 2],
+      media_ids: [1, 2],
       target_lifecycle: null,
     }));
     expect(onClose).toHaveBeenCalledOnce();
@@ -400,7 +420,7 @@ describe('GroupSurface', () => {
     fireEvent.click(trash);
     await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
       collection_id: 7,
-      media_item_ids: [2],
+      media_ids: [2],
       target_lifecycle: 'trash',
     }));
   });
@@ -424,7 +444,7 @@ describe('GroupSurface', () => {
     fireEvent.keyDown(window, { key: 'Delete' });
     await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
       collection_id: 7,
-      media_item_ids: [1, 2],
+      media_ids: [1, 2],
       target_lifecycle: null,
     }));
     expect(onClose).toHaveBeenCalledOnce();
@@ -458,7 +478,7 @@ describe('GroupSurface', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove from Group' }));
     await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
       collection_id: 7,
-      media_item_ids: [2],
+      media_ids: [2],
       target_lifecycle: null,
     }));
   });
@@ -525,14 +545,14 @@ describe('GroupSurface', () => {
     expect(mocks.regenerateThumbnailsBatch).toHaveBeenCalledWith(['two']);
   });
 
-  it('copies tags from the selected group member', async () => {
+  it('copies tags owned by the collection root', async () => {
     const next = details();
-    next.media[1].tags = ['creator:alice', 'favorite'];
+    next.tag_ids = [1, 2];
     mocks.getItemDetails.mockResolvedValue(next);
     render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
     fireEvent.click(await screen.findByRole('button', { name: 'Copy Tags' }));
-    expect(mocks.copyText).toHaveBeenCalledWith('["creator:alice","favorite"]');
+    await waitFor(() => expect(mocks.copyText).toHaveBeenCalledWith('["creator:alice","favorite"]'));
   });
 
   it('confirms before dissolving the whole group', async () => {

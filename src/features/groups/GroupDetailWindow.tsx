@@ -27,8 +27,8 @@ export function GroupDetailWindow({ groupId }: { groupId: number }) {
     void viewerController.prefetchItemDetails(groupId)
       .then((details) => {
         if (cancelled) return;
-        if (details.kind !== 'collection') throw new Error('The selected item is not a group.');
-        setTitle(details.label ?? 'Group');
+        if (details.root.kind !== 'collection') throw new Error('The selected item is not a group.');
+        setTitle(details.root.name || 'Group');
         setReady(true);
       })
       .catch((reason) => {

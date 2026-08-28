@@ -3,6 +3,7 @@ import { gridActiveAtom, gridSessionAtom, gridTransitionPhaseAtom } from '../sta
 import { gridController } from '../controllers/gridController';
 import { libraryInvalidation } from './libraryInvalidation';
 import { listenDominantColorChanged } from '../shared/lib/thumbnailChanges';
+import { hexToLab, labToHex } from '../shared/lib/labColor';
 
 const store = getDefaultStore();
 const RECONCILE_INTERVAL_MS = 2_000;
@@ -63,11 +64,13 @@ export function startGridSettle(): () => void {
     }
     let changed = false;
     const items = session.items.map((item) => {
-      if (item.display_file_hash !== fileHash || item.dominant_color_hex === dominantColorHex) {
+      if (item.content_hash !== fileHash || labToHex(item.palette[0]) === dominantColorHex) {
         return item;
       }
       changed = true;
-      return { ...item, dominant_color_hex: dominantColorHex };
+      return dominantColorHex == null
+        ? { ...item, palette: [] }
+        : { ...item, palette: [hexToLab(dominantColorHex), ...item.palette.slice(1)] };
     });
     if (changed) store.set(gridSessionAtom, { ...session, items });
   }).then((remove) => {

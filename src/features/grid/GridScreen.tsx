@@ -78,15 +78,15 @@ import {
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
+import { tagsController } from '../../controllers/tagsController';
+import { tagName } from '../tags/tagContextMenu';
 import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, pasteImport, requestMediaImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
-import type { Lifecycle } from '../../shared/types/generated/application/Lifecycle';
-import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
-import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
+import type { CanonicalEntityGridItem, EntityTarget, Lifecycle } from '../../shared/types/canonical';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
@@ -103,7 +103,7 @@ import {
 } from '../folders/folderContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { IconPicker } from '../../shared/ui/IconPicker';
-import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { readRecentItems } from '../../shared/hooks/useRecentItems';
 import type { GridScrollPosition } from '../../shared/types/gridScroll';
 import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
@@ -113,15 +113,15 @@ const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
   querySelectionActive: boolean,
   itemIds: Set<number>,
-  items: Array<{ item_id: number; display_mime_type: string }>,
+  items: Array<{ root_id: number; mime: string }>,
 ): boolean {
   if (querySelectionActive || itemIds.size === 0) {
     return false;
   }
-  const selectedItems = items.filter((item) => itemIds.has(item.item_id));
+  const selectedItems = items.filter((item) => itemIds.has(item.root_id));
   return (
     selectedItems.length === itemIds.size &&
-    selectedItems.every((item) => item.display_mime_type.startsWith('image/'))
+    selectedItems.every((item) => item.mime.startsWith('image/'))
   );
 }
 
@@ -398,15 +398,15 @@ export function GridScreen({
       if (!selectedItemIds) return;
       const curItems = itemsRef.current;
       const lightImages = selectedItemIds
-        .map((itemId: number) => curItems.find((i: any) => i.item_id === itemId))
+        .map((itemId: number) => curItems.find((i: any) => i.root_id === itemId))
         .filter(Boolean)
         .map((i: any) => ({
-          item_id: i.item_id,
-          hash: i.display_file_hash,
+          item_id: i.root_id,
+          hash: i.content_hash,
           name: i.name,
-          mime: i.display_mime_type,
-          width: i.pixel_width,
-          height: i.pixel_height,
+          mime: i.mime,
+          width: i.width,
+          height: i.height,
         }));
       picto.events.emitTo(label, 'detail-images', {
         images: lightImages,
@@ -450,9 +450,9 @@ export function GridScreen({
       open();
       return;
     }
-    void viewerController.prefetchItemDetails(item.item_id)
+    void viewerController.prefetchItemDetails(item.root_id)
       .then((details) => {
-        if (details.kind !== 'collection') throw new Error('The selected item is no longer a group.');
+        if (details.root.kind !== 'collection') throw new Error('The selected item is no longer a group.');
         open();
       })
       .catch((reason) => showErrorNotification({
@@ -469,37 +469,38 @@ export function GridScreen({
     afterViewerItemReady(item, () => {
       setGroupInitialMode(item.kind === 'collection' ? mode : 'reader');
       setQuickLookSession(null);
-      setViewerSession(createViewerSession(sourceItems, item.item_id));
+      setViewerSession(createViewerSession(sourceItems, item.root_id));
     });
   }, [afterViewerItemReady, setQuickLookSession, setViewerSession]);
 
   const openGridItemInWindow = useCallback((
     item: CanonicalEntityGridItem,
-    selectedItemIds: number[] = [item.item_id],
+    selectedItemIds: number[] = [item.root_id],
   ) => {
     if (item.kind === 'collection') {
-      void windowController.openDetailWindow({ item_id: item.item_id });
+      void windowController.openDetailWindow({ item_id: item.root_id });
       return;
     }
-    if (!item.display_file_hash) return;
-    const label = `detail-${item.display_file_hash.slice(0, 12)}`;
+    if (!item.content_hash) return;
+    const label = `detail-${item.content_hash.slice(0, 12)}`;
     detailWindowSelectionRef.current.set(label, selectedItemIds);
     void windowController.openDetailWindow({
-      hash: item.display_file_hash,
-      width: item.pixel_width ?? null,
-      height: item.pixel_height ?? null,
+      hash: item.content_hash,
+      width: item.width ?? null,
+      height: item.height ?? null,
     });
   }, []);
 
-  const organizeSelection = useCallback(async (target: ItemTarget) => {
+  const organizeSelection = useCallback(async (target: EntityTarget, coverRootId: number) => {
     try {
       const summary = await entityMutations.getTargetSelectionSummary(target);
-      const groups = summary.selected_collection_candidates;
+      const groups = summary.collection_candidates;
       if (groups.length === 1) {
         await organizeIntoGroup({
           target,
-          label: null,
+          cover_root_id: coverRootId,
           winning_collection_id: groups[0].collection_id,
+          name: null,
         });
         await announceUndoableMutation('collections.organize');
         clearSelection();
@@ -508,6 +509,7 @@ export function GridScreen({
       setGroupOrganizerModal({
         open: true,
         target,
+        coverRootId,
         groups,
         onComplete: () => clearSelection(),
       });
@@ -561,8 +563,8 @@ export function GridScreen({
       const singleItemId = count === 1 ? [...itemIds][0] : null;
       const singleItem = singleItemId == null
         ? null
-        : curItems.find((item) => item.item_id === singleItemId) ?? null;
-      const singleFileHash = singleItem?.display_file_hash ?? null;
+        : curItems.find((item) => item.root_id === singleItemId) ?? null;
+      const singleFileHash = singleItem?.content_hash ?? null;
       const canAutoTag = supportsExplicitImageAutoTagging(
         querySelectionActiveRef.current,
         itemIds,
@@ -583,7 +585,7 @@ export function GridScreen({
 
       if (matchesShortcutDef(e, defs.copy) && count > 0 && !querySelectionActiveRef.current) {
         e.preventDefault();
-        void filesController.copyTarget({ kind: 'explicit', item_ids: [...itemIds] })
+        void filesController.copyTarget({ kind: 'explicit', root_ids: [...itemIds] })
           .catch((reason) => showErrorNotification({
             title: 'Could not copy selection',
             message: reason instanceof Error ? reason.message : String(reason),
@@ -638,7 +640,7 @@ export function GridScreen({
       if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
         e.preventDefault();
         const selectedArr = [...itemIds];
-        const item = singleItem ?? curItems.find((candidate) => candidate.item_id === selectedArr[0]);
+        const item = singleItem ?? curItems.find((candidate) => candidate.root_id === selectedArr[0]);
         if (!item) return;
         openGridItemInWindow(item, selectedArr);
         return;
@@ -680,7 +682,7 @@ export function GridScreen({
           if (rating && matchesShortcutDef(e, rating)) {
           e.preventDefault();
           void entityMutations.setTargetRating(
-            { kind: 'explicit', item_ids: [...itemIds] },
+            { kind: 'explicit', root_ids: [...itemIds] },
             digit,
           );
           return;
@@ -707,13 +709,13 @@ export function GridScreen({
 
   const commitInboxReview = useCallback(async (itemId: number, decision: InboxReviewDecision) => {
     const currentItems = itemsRef.current;
-    const currentIndex = currentItems.findIndex((item) => item.item_id === itemId);
+    const currentIndex = currentItems.findIndex((item) => item.root_id === itemId);
     inboxReviewNextItemIdRef.current = currentIndex < 0
       ? null
-      : currentItems[currentIndex + 1]?.item_id ?? currentItems[currentIndex - 1]?.item_id ?? null;
+      : currentItems[currentIndex + 1]?.root_id ?? currentItems[currentIndex - 1]?.root_id ?? null;
     inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
     await entityMutations.setTargetLifecycle(
-      { kind: 'explicit', item_ids: [itemId] },
+      { kind: 'explicit', root_ids: [itemId] },
       decision === 'accept' ? 'active' : 'trash',
     );
   }, []);
@@ -722,12 +724,12 @@ export function GridScreen({
     if (!quickLookSession) return;
     const next = navigateViewerSession(quickLookSession, items, delta);
     if (!next) return;
-    const nextItem = items.find((item) => item.item_id === next.currentItemId);
+    const nextItem = items.find((item) => item.root_id === next.currentItemId);
     if (!nextItem) return;
     afterViewerItemReady(nextItem, () => {
       setQuickLookSession(next);
       dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
-      const index = items.findIndex((item) => item.item_id === next.currentItemId);
+      const index = items.findIndex((item) => item.root_id === next.currentItemId);
       if (index >= 0) scrollToItem(index, 'center');
     });
   }, [afterViewerItemReady, dispatchSelection, items, quickLookSession, scrollToItem, setQuickLookSession]);
@@ -736,7 +738,7 @@ export function GridScreen({
     setQuickLookSession(null);
     if (exitItemId == null) return;
     dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
-    scrollToItem(items.findIndex((item) => item.item_id === exitItemId));
+    scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setQuickLookSession]);
 
   const navigateRootDetail = useCallback((delta: number) => {
@@ -752,7 +754,7 @@ export function GridScreen({
       }
       return;
     }
-    const nextItem = items.find((item) => item.item_id === next.currentItemId);
+    const nextItem = items.find((item) => item.root_id === next.currentItemId);
     if (!nextItem) return;
     afterViewerItemReady(nextItem, () => {
       pendingDetailNavigationRef.current = null;
@@ -770,7 +772,7 @@ export function GridScreen({
       if (!cursor) pendingDetailNavigationRef.current = null;
       return;
     }
-    const nextItem = items.find((item) => item.item_id === loadedNext.currentItemId);
+    const nextItem = items.find((item) => item.root_id === loadedNext.currentItemId);
     if (!nextItem) return;
     afterViewerItemReady(nextItem, () => {
       pendingDetailNavigationRef.current = null;
@@ -790,7 +792,7 @@ export function GridScreen({
     setGroupInitialMode('reader');
     if (exitItemId == null) return;
     dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
-    scrollToItem(items.findIndex((item) => item.item_id === exitItemId));
+    scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
   const advanceAfterInboxReview = useCallback(() => {
@@ -809,7 +811,7 @@ export function GridScreen({
       return;
     }
 
-    const nextItem = itemsRef.current.find((item) => item.item_id === next.currentItemId);
+    const nextItem = itemsRef.current.find((item) => item.root_id === next.currentItemId);
     if (!nextItem) return;
     afterViewerItemReady(nextItem, () => {
       if (inboxReviewModeRef.current === 'quicklook') setQuickLookSession(next);
@@ -1138,12 +1140,12 @@ export function GridScreen({
                 fileCount: folder.count ?? 0,
                 target: {
                   kind: 'query',
-                  query: {
-                    scope: { kind: 'folder', folder_id: folderId },
-                    filters: createEmptyItemFilters(),
-                    sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-                  },
-                  excluded_item_ids: [],
+                  query: compileGridQuery(
+                    { kind: 'folder', folder_id: folderId },
+                    createEmptyItemFilters(),
+                    { field: 'imported_at', direction: 'descending', random_seed: null },
+                  ),
+                  excluded_root_ids: [],
                 },
               });
             },
@@ -1189,7 +1191,7 @@ export function GridScreen({
         onRenameCommit={(idx, name) => {
           setRenamingIndex(null);
           const item = items[idx];
-          if (item && name) void entityMutations.setItemName(item.item_id, name);
+          if (item && name) void entityMutations.setItemName(item.root_id, name);
         }}
         onRenameCancel={() => setRenamingIndex(null)}
         onFirstPaint={loading ? undefined : onFirstPaint}
@@ -1198,16 +1200,16 @@ export function GridScreen({
           onScrollPositionChange?.(position);
         }}
         onTileClick={(index, item, event) => {
-          const itemId = item.item_id;
+          const itemId = item.root_id;
           if (event?.shiftKey && selection.anchor?.kind === 'item') {
-            const anchorIndex = items.findIndex((entry) => entry.item_id === selection.anchor!.id);
+            const anchorIndex = items.findIndex((entry) => entry.root_id === selection.anchor!.id);
             const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
             const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
             const base = (event.metaKey || event.ctrlKey)
               ? new Set(selectedItemIds)
               : new Set<number>();
             for (let i = from; i <= to; i++) {
-              if (items[i]) base.add(items[i].item_id);
+              if (items[i]) base.add(items[i].root_id);
             }
             dispatchSelection({ type: 'range_items', itemIds: base });
           } else if (event?.metaKey || event?.ctrlKey) {
@@ -1220,7 +1222,7 @@ export function GridScreen({
         }}
         onTileDoubleClick={(_index, item) => {
           if (controlPreferences.gridDoubleClickAction === 'external' && item.kind === 'media') {
-            void filesController.openDefaultAppForHash(item.display_file_hash);
+            void filesController.openDefaultAppForHash(item.content_hash);
           } else {
             openGridItem(item, items);
           }
@@ -1259,9 +1261,9 @@ export function GridScreen({
           let effectiveSelectionMode = selectionMode;
           let effectiveSelectionCount = selectionCount;
           let effectiveQuerySelectionActive = querySelectionActive;
-          if (!selectedItemIds.has(item.item_id)) {
-            effectiveItemIds = new Set([item.item_id]);
-            dispatchSelection({ type: 'replace_items', itemIds: effectiveItemIds, anchor: item.item_id });
+          if (!selectedItemIds.has(item.root_id)) {
+            effectiveItemIds = new Set([item.root_id]);
+            dispatchSelection({ type: 'replace_items', itemIds: effectiveItemIds, anchor: item.root_id });
             effectiveSelectionMode = 'explicit';
             effectiveSelectionCount = 1;
             effectiveQuerySelectionActive = false;
@@ -1269,16 +1271,16 @@ export function GridScreen({
 
           // Derive context for menu builder
           const selCount = effectiveSelectionCount;
-          const selectedItems = items.filter((it) => effectiveItemIds.has(it.item_id));
+          const selectedItems = items.filter((it) => effectiveItemIds.has(it.root_id));
           const singleItem = effectiveSelectionMode === 'explicit'
             && selCount === 1
-            && effectiveItemIds.has(item.item_id)
+            && effectiveItemIds.has(item.root_id)
             ? item
             : null;
           const canAutoTag = effectiveSelectionMode === 'explicit'
             && selectedItems.length === effectiveItemIds.size
             && selectedItems.every((selected) => selected.kind === 'media')
-            && selectedItems.every((selected) => selected.display_mime_type.startsWith('image/'));
+            && selectedItems.every((selected) => selected.mime.startsWith('image/'));
           const containsGroup = selectedItems.some((selected) => selected.kind === 'collection');
           const effectiveTarget = resolveContextMenuTarget(
             effectiveQuerySelectionActive,
@@ -1300,7 +1302,7 @@ export function GridScreen({
             .map((value) => Number.parseInt(value, 10))
             .map((folderId) => sidebarNodes.find((node) => node.id === `folder:${folderId}`))
             .find((node) => node != null);
-          const canOpenWith = singleItem?.kind === 'media' && Boolean(singleItem.display_file_hash);
+          const canOpenWith = singleItem?.kind === 'media' && Boolean(singleItem.content_hash);
           const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
           const isWindows = /Win/.test(navigator.platform);
           const openWithPending = canOpenWith && isMac;
@@ -1329,7 +1331,7 @@ export function GridScreen({
             querySelectionActive: effectiveQuerySelectionActive,
             aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
-            singleHash: singleItem?.display_file_hash ?? null,
+            singleHash: singleItem?.content_hash ?? null,
             singleKind: singleItem?.kind ?? null,
             containsGroup,
             scopeKind,
@@ -1363,20 +1365,20 @@ export function GridScreen({
               : undefined,
             onCopyName: (name) => { filesController.copyText(name); },
             singleName: singleItem?.name ?? null,
-            singleMime: singleItem?.display_mime_type ?? null,
+            singleMime: singleItem?.mime ?? null,
             onCopyLink: (link) => filesController.copyText(link),
             onRename: singleItem ? () => {
-              const idx = items.findIndex((i) => i.item_id === singleItem.item_id);
+              const idx = items.findIndex((i) => i.root_id === singleItem.root_id);
               if (idx >= 0) setRenamingIndex(idx);
             } : undefined,
             onBatchRename: effectiveSelectionMode === 'explicit' && selectedItems.length > 1
               ? () => store.set(batchRenameModalAtom, {
                   open: true,
-                  items: selectedItems.map((item) => ({ item_id: item.item_id, name: item.name ?? 'Untitled' })),
+                  items: selectedItems.map((item) => ({ root_id: item.root_id, name: item.name ?? 'Untitled' })),
                 })
               : undefined,
             onOrganizeGroup: effectiveTarget && selCount > 1
-              ? () => { void organizeSelection(effectiveTarget); }
+              ? () => { void organizeSelection(effectiveTarget, selectedItems[0].root_id); }
               : undefined,
             onEditGroup: singleItem?.kind === 'collection'
               ? () => openGridItem(singleItem, items, 'editor')
@@ -1389,7 +1391,7 @@ export function GridScreen({
                     message: 'Every member will return to the library as a separate item. Files and metadata will not be deleted.',
                     confirmLabel: 'Ungroup',
                     onConfirm: () => {
-                      void ungroup(singleItem.item_id)
+                      void ungroup(singleItem.root_id)
                         .then(() => announceUndoableMutation('collections.ungroup'))
                         .then(() => clearSelection())
                         .catch((reason) => showErrorNotification({
@@ -1401,17 +1403,17 @@ export function GridScreen({
                 }
               : undefined,
             onRegenerateThumbnails: () => {
-              const hashes = selectedItems.map((selected) => selected.display_file_hash);
+              const hashes = selectedItems.map((selected) => selected.content_hash);
               void filesController.regenerateThumbnailsBatch(hashes);
             },
             onSetLibraryCover: (hash) => {
               void openCurrentLibraryCoverPicker(singleItem ? {
-                media_item_id: singleItem.item_id,
+                media_item_id: singleItem.root_id,
                 file_hash: hash,
                 name: singleItem.name,
-                pixel_width: singleItem.pixel_width,
-                pixel_height: singleItem.pixel_height,
-                mime_type: singleItem.display_mime_type,
+                pixel_width: singleItem.width,
+                pixel_height: singleItem.height,
+                mime_type: singleItem.mime,
               } : null).catch((reason) => showErrorNotification({
                 title: 'Could not set library cover',
                 message: reason instanceof Error ? reason.message : String(reason),
@@ -1419,7 +1421,7 @@ export function GridScreen({
             },
             onSetFolderCover: gridScope.kind === 'folder' && singleItem
               ? () => {
-                  void foldersController.setCover(gridScope.folder_id, singleItem.item_id)
+                  void foldersController.setCover(gridScope.folder_id, singleItem.root_id)
                     .catch((reason) => showErrorNotification({
                       title: 'Could not set folder cover',
                       message: reason instanceof Error ? reason.message : String(reason),
@@ -1429,9 +1431,12 @@ export function GridScreen({
             onCopyTags: () => {
               if (!effectiveTarget) return;
               const tags = singleItem
-                ? viewerController.getItemDetails(singleItem.item_id).then((details) => details?.aggregate_tags ?? [])
+                ? viewerController.getItemDetails(singleItem.root_id)
+                  .then((details) => tagsController.getById(details.tag_ids))
+                  .then((records) => records.map(tagName))
                 : entityMutations.getTargetSelectionSummary(effectiveTarget)
-                  .then((summary) => summary.shared_tags.map((entry) => entry.tag));
+                  .then((summary) => tagsController.getById(summary.shared_tags))
+                  .then((records) => records.map(tagName));
               void tags.then((tagStrings) => {
                 filesController.copyText(JSON.stringify(tagStrings));
                 (window as any).__pictoClipboardTags = tagStrings;
@@ -1501,8 +1506,8 @@ export function GridScreen({
             onReject: () => { void setSelectionLifecycle('trash', effectiveTarget); },
           });
           const menuId = contextMenu.openAt(pos, entries);
-          if (openWithPending && singleItem?.display_file_hash) {
-            const hash = singleItem.display_file_hash;
+          if (openWithPending && singleItem?.content_hash) {
+            const hash = singleItem.content_hash;
             void filesController.getOpenWithOptionsForHash(hash)
               .then((resolvedOptions) => {
                 const replacement = buildEntityOpenContextEntries({
@@ -1533,13 +1538,13 @@ export function GridScreen({
       </div>
       {viewerSession && viewerItem?.kind === 'collection' ? (
         <GroupSurface
-          key={`${viewerItem.item_id}:${groupInitialMode}`}
-          groupId={viewerItem.item_id}
+          key={`${viewerItem.root_id}:${groupInitialMode}`}
+          groupId={viewerItem.root_id}
           initialMode={groupInitialMode}
           rootCurrentIndex={viewerIndex}
           rootTotal={totalCount ?? items.length}
           onNavigateRoot={navigateRootDetail}
-          onClose={() => closeRootDetail(viewerItem.item_id)}
+          onClose={() => closeRootDetail(viewerItem.root_id)}
         />
       ) : null}
 

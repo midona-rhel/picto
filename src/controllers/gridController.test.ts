@@ -1,7 +1,6 @@
 import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ItemPage } from '../shared/types/generated/application/ItemPage';
-import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
+import type { CanonicalEntityGridItem, EntityViewPage, EntityViewQuery } from '../shared/types/canonical';
 import {
   currentGridQueryAtom,
   gridCursorAtom,
@@ -44,50 +43,63 @@ import { gridController } from './gridController';
 
 const store = getDefaultStore();
 
-function item(id: number): ItemSummary {
+function item(id: number): CanonicalEntityGridItem {
   return {
-    item_id: id,
+    root_id: id,
     kind: 'media',
     lifecycle: 'active',
     name: `Item ${id}`,
-    display_file_hash: `file-${id}`,
-    display_mime_type: 'image/jpeg',
-    pixel_width: 100,
-    pixel_height: 100,
+    cover_media_id: id,
+    content_hash: `file-${id}`,
+    mime: 'image/jpeg',
+    width: 100,
+    height: 100,
     duration_ms: null,
     frame_count: null,
-    dominant_color_hex: null,
-    rating: null,
+    palette: [],
+    imported_at_ms: id,
+    captured_at_ms: null,
+    modified_at_ms: id,
     media_count: 1,
+    total_size_bytes: 100,
+    rating: 'unrated',
   };
 }
 
 function page(
-  items: ItemSummary[],
+  items: CanonicalEntityGridItem[],
   visibleCount: number,
   nextCursor: string | null = items.length < visibleCount
-    ? `cursor-after-${items[items.length - 1]?.item_id ?? 0}`
+    ? `cursor-after-${items[items.length - 1]?.root_id ?? 0}`
     : null,
-): ItemPage {
+): EntityViewPage {
   return {
     items,
     next_cursor: nextCursor,
     revision: 1,
-    visible_item_count: visibleCount,
-    visible_media_count: visibleCount,
+    total: visibleCount,
+    media_count: visibleCount,
     total_size_bytes: visibleCount * 100,
   };
 }
 
-function appendPage(items: ItemSummary[], nextCursor: string | null = null): ItemPage {
+function appendPage(items: CanonicalEntityGridItem[], nextCursor: string | null = null): EntityViewPage {
   return {
     items,
     next_cursor: nextCursor,
     revision: 1,
-    visible_item_count: null,
-    visible_media_count: null,
-    total_size_bytes: null,
+    total: items.length,
+    media_count: items.length,
+    total_size_bytes: items.length * 100,
   };
+}
+
+function queryText(query: EntityViewQuery): string | null {
+  const expressions = query.view.filter.kind === 'all' ? query.view.filter.value : [query.view.filter];
+  const text = expressions.find((expression) => (
+    expression.kind === 'clause' && expression.value.clause === 'text'
+  ));
+  return text?.kind === 'clause' && text.value.clause === 'text' ? text.value.query : null;
 }
 
 describe('gridController pagination', () => {
@@ -127,8 +139,8 @@ describe('gridController pagination', () => {
     getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
       ? { view_mode: 'grid', target_size: 333 }
       : { show_subfolders: false });
-    let resolvePage: ((value: ItemPage) => void) | undefined;
-    queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+    let resolvePage: ((value: EntityViewPage) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => {
       resolvePage = resolve;
     }));
     store.set(gridSelectionAtom, {
@@ -144,7 +156,7 @@ describe('gridController pagination', () => {
 
     expect(store.get(gridLoadingAtom)).toBe(false);
     expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'all' });
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1]);
     expect(store.get(gridTotalCountAtom)).toBe(2);
     expect(store.get(gridSessionAtom).view).toEqual(expect.objectContaining({ mode: 'waterfall' }));
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([1]));
@@ -152,7 +164,7 @@ describe('gridController pagination', () => {
     resolvePage?.(page([item(7)], 1));
     const prepared = await navigation;
     expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'all' });
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1]);
     expect(store.get(gridSessionAtom).view.mode).toBe('waterfall');
     expect(prepared.session.view).toEqual(expect.objectContaining({
       mode: 'grid',
@@ -162,7 +174,7 @@ describe('gridController pagination', () => {
 
     gridController.commitNavigation(prepared);
     expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'folder', folder_id: 7 });
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([7]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([7]);
     expect(store.get(gridLoadingAtom)).toBe(false);
     expect(store.get(gridSessionAtom).view).toEqual(expect.objectContaining({
       mode: 'grid',
@@ -180,7 +192,7 @@ describe('gridController pagination', () => {
 
     await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
 
-    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+    expect(queryItemsMock.mock.calls[0][0].view.sort).toEqual({
       field: 'name',
       direction: 'ascending',
       random_seed: null,
@@ -194,7 +206,7 @@ describe('gridController pagination', () => {
       sort: { field: 'random', direction: 'ascending', random_seed: 'visit-1' },
     });
 
-    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+    expect(queryItemsMock.mock.calls[0][0].view.sort).toEqual({
       field: 'random',
       direction: 'ascending',
       random_seed: 'visit-1',
@@ -238,7 +250,7 @@ describe('gridController pagination', () => {
       sort: { field: 'name', direction: 'descending', random_seed: null },
     });
 
-    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+    expect(queryItemsMock.mock.calls[0][0].view.sort).toEqual({
       field: 'imported_at',
       direction: 'ascending',
       random_seed: null,
@@ -248,7 +260,7 @@ describe('gridController pagination', () => {
 
     await gridController.navigateTo({ kind: 'inbox' });
 
-    expect(queryItemsMock.mock.calls[1][0].sort).toEqual({
+    expect(queryItemsMock.mock.calls[1][0].view.sort).toEqual({
       field: 'imported_at',
       direction: 'ascending',
       random_seed: null,
@@ -262,7 +274,7 @@ describe('gridController pagination', () => {
 
     expect(queryItemsMock).toHaveBeenCalledTimes(1);
     expect(queryItemsMock.mock.calls[0][1]).toEqual({ cursor: 'cursor-after-1', limit: 500 });
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1, 2]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2]);
     expect(store.get(gridCursorAtom)).toBeNull();
     expect(store.get(gridTotalCountAtom)).toBe(2);
     expect(store.get(gridTotalSizeBytesAtom)).toBe(200);
@@ -283,14 +295,14 @@ describe('gridController pagination', () => {
       'cursor-after-1',
       'cursor-after-2',
     ]);
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1, 2, 3]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2, 3]);
     expect(store.get(gridErrorAtom)).toBeNull();
     expect(store.get(gridLoadingAtom)).toBe(false);
   });
 
   it('deduplicates concurrent requests for the same cursor', async () => {
-    let resolvePage: ((value: ItemPage) => void) | undefined;
-    queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => { resolvePage = resolve; }));
+    let resolvePage: ((value: EntityViewPage) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => { resolvePage = resolve; }));
 
     const first = gridController.loadNextPage();
     const second = gridController.loadNextPage();
@@ -298,7 +310,7 @@ describe('gridController pagination', () => {
     await Promise.all([first, second]);
 
     expect(queryItemsMock).toHaveBeenCalledTimes(1);
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1, 2]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2]);
   });
 
   it('keeps the cursor after an append failure so pagination can retry', async () => {
@@ -322,18 +334,12 @@ describe('gridController pagination', () => {
 
     const query = queryItemsMock.mock.calls[0][0];
     expect(query).toEqual(store.get(currentGridQueryAtom));
-    expect(query).toMatchObject({
+    expect(query).toEqual({
       scope: { kind: 'all' },
-      filters: {
-        include_tags: [],
-        exclude_tags: [],
-        ratings: [],
-        include_mime_types: [],
-        exclude_mime_types: [],
-        text: null,
-        color_hex: null,
+      view: {
+        filter: { kind: 'all', value: [] },
+        sort: { field: 'imported_at', direction: 'descending', random_seed: null },
       },
-      sort: { field: 'imported_at', direction: 'descending', random_seed: null },
     });
     expect('entity_hash' in query).toBe(false);
     expect('page' in query).toBe(false);
@@ -356,8 +362,16 @@ describe('gridController pagination', () => {
 
     expect(target).toEqual({
       kind: 'query',
-      query: expect.objectContaining({ filters: expect.objectContaining({ text: 'before' }) }),
-      excluded_item_ids: [],
+      query: expect.objectContaining({
+        view: expect.objectContaining({
+          filter: expect.objectContaining({
+            value: expect.arrayContaining([
+              { kind: 'clause', value: { clause: 'text', field: 'global', query: 'before' } },
+            ]),
+          }),
+        }),
+      }),
+      excluded_root_ids: [],
     });
     expect(store.get(selectionTargetAtom)).toEqual(target);
   });
@@ -410,8 +424,8 @@ describe('gridController pagination', () => {
       generation: 4,
       status: 'idle',
     });
-    let resolvePage: ((value: ItemPage) => void) | undefined;
-    queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+    let resolvePage: ((value: EntityViewPage) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => {
       resolvePage = resolve;
     }));
 
@@ -478,9 +492,9 @@ describe('gridController pagination', () => {
       { cursor: null, limit: 500 },
       { cursor: 'cursor-after-501', limit: 1 },
     ]);
-    expect(store.get(gridSessionAtom).items.map((entry) => entry.item_id)).not.toContain(1);
+    expect(store.get(gridSessionAtom).items.map((entry) => entry.root_id)).not.toContain(1);
     const reconciled = store.get(gridSessionAtom).items;
-    expect(reconciled[reconciled.length - 1]?.item_id).toBe(502);
+    expect(reconciled[reconciled.length - 1]?.root_id).toBe(502);
   });
 
   it('settles search after 100 ms of inactivity', async () => {
@@ -493,15 +507,15 @@ describe('gridController pagination', () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(queryItemsMock).toHaveBeenCalledOnce();
-    expect(queryItemsMock.mock.calls[0][0].filters.text).toBe('alice');
+    expect(queryText(queryItemsMock.mock.calls[0][0])).toBe('alice');
     vi.useRealTimers();
   });
 
   it('coalesces settled text while a native search is still running', async () => {
     vi.useFakeTimers();
-    let resolveFirst: ((value: ItemPage) => void) | undefined;
+    let resolveFirst: ((value: EntityViewPage) => void) | undefined;
     queryItemsMock
-      .mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+      .mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => {
         resolveFirst = resolve;
       }))
       .mockResolvedValueOnce(page([item(2)], 1));
@@ -518,15 +532,15 @@ describe('gridController pagination', () => {
 
     resolveFirst?.(page([item(1)], 1));
     await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));
-    expect(queryItemsMock.mock.calls[1][0].filters.text).toBe('carol');
+    expect(queryText(queryItemsMock.mock.calls[1][0])).toBe('carol');
     vi.useRealTimers();
   });
 
   it('does not commit a superseded search response', async () => {
     vi.useFakeTimers();
-    let resolveFirst: ((value: ItemPage) => void) | undefined;
+    let resolveFirst: ((value: EntityViewPage) => void) | undefined;
     queryItemsMock
-      .mockImplementationOnce(() => new Promise<ItemPage>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValueOnce(page([item(3)], 1));
 
     gridController.setSearchText('old');
@@ -536,8 +550,8 @@ describe('gridController pagination', () => {
     resolveFirst?.(page([item(2)], 1));
 
     await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([3]));
-    expect(queryItemsMock.mock.calls[1][0].filters.text).toBe('new');
+    await vi.waitFor(() => expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([3]));
+    expect(queryText(queryItemsMock.mock.calls[1][0])).toBe('new');
     vi.useRealTimers();
   });
 
@@ -550,7 +564,7 @@ describe('gridController pagination', () => {
     await gridController.loadFirstPage();
 
     expect(queryItemsMock).toHaveBeenCalledTimes(2);
-    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([2]);
+    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([2]);
     expect(store.get(gridSessionAtom).revision).toBe(5);
   });
 });

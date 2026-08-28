@@ -231,7 +231,7 @@ describe('workspace surface coordinator', () => {
     const store = getDefaultStore();
     const filters = {
       ...store.get(gridSessionAtom).filters,
-      include_tags: ['character:alice'],
+      include_tags: [{ tag_id: 1, name: 'character:alice' }],
     };
     store.set(activeNodeIdAtom, 'system:tag_manager');
     store.set(displayedSurfaceNodeIdAtom, 'system:tag_manager');

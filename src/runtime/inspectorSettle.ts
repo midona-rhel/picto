@@ -22,7 +22,7 @@ export function startInspectorSettle(): () => void {
     // The delete command settles viewer/selection state after IPC success. Its
     // invalidation can arrive first, while the deleted item is still displayed.
     if (store.get(permanentDeletesInFlightAtom) > 0) return;
-    const itemId = store.get(displayedInspectorItemDetailsAtom)?.item_id ?? lastItemId;
+    const itemId = store.get(displayedInspectorItemDetailsAtom)?.root.root_id ?? lastItemId;
     if (payload?.item_ids.length && !payload.item_ids.includes(itemId ?? -1)) return;
     if (itemId != null) void loadInspectorData(itemId);
   });

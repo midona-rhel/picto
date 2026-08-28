@@ -1,9 +1,9 @@
 import { invoke } from '../platform/ipc';
-import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
+import type { CanonicalEntityDetails } from '../shared/types/canonical';
 
 interface PrefetchedItemDetails {
-  promise: Promise<ItemDetails>;
-  value: ItemDetails | null;
+  promise: Promise<CanonicalEntityDetails>;
+  value: CanonicalEntityDetails | null;
   expiresAt: ReturnType<typeof setTimeout> | null;
 }
 
@@ -16,16 +16,16 @@ function clearPrefetchedItemDetails(itemId: number, entry: PrefetchedItemDetails
 }
 
 export const viewerController = {
-  getItemDetails(itemId: number): Promise<ItemDetails> {
-    return invoke<ItemDetails>('items.details', { item_id: itemId });
+  getItemDetails(rootId: number): Promise<CanonicalEntityDetails> {
+    return invoke<CanonicalEntityDetails>('items.details', { root_id: rootId });
   },
 
-  prefetchItemDetails(itemId: number): Promise<ItemDetails> {
+  prefetchItemDetails(itemId: number): Promise<CanonicalEntityDetails> {
     const existing = prefetchedItemDetails.get(itemId);
     if (existing) return existing.promise;
 
     let entry: PrefetchedItemDetails;
-    const promise = invoke<ItemDetails>('items.details', { item_id: itemId })
+    const promise = invoke<CanonicalEntityDetails>('items.details', { root_id: itemId })
       .then((details) => {
         entry.value = details;
         entry.expiresAt = setTimeout(() => clearPrefetchedItemDetails(itemId, entry), 5_000);
@@ -40,7 +40,7 @@ export const viewerController = {
     return entry.promise;
   },
 
-  takePrefetchedItemDetails(itemId: number): ItemDetails | null {
+  takePrefetchedItemDetails(itemId: number): CanonicalEntityDetails | null {
     const entry = prefetchedItemDetails.get(itemId);
     if (!entry?.value) return null;
     // React Strict Mode evaluates state initializers twice before committing.
@@ -50,6 +50,6 @@ export const viewerController = {
   },
 
   recordMediaView(itemId: number): Promise<unknown> {
-    return invoke('items.record_view', { item_id: itemId });
+    return invoke('items.record_view', { root_id: itemId });
   },
 };

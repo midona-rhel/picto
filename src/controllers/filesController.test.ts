@@ -125,7 +125,7 @@ describe('original export picker', () => {
     (window as any).picto = {
       dialog: { open: vi.fn().mockResolvedValue('/tmp/export') },
     };
-    const target = { kind: 'explicit' as const, item_ids: [7] };
+    const target = { kind: 'explicit' as const, root_ids: [7] };
 
     await chooseAndExportOriginals(target);
 
@@ -148,7 +148,7 @@ describe('multi-file clipboard text', () => {
       },
       clipboard: { writeText },
     };
-    const target = { kind: 'explicit' as const, item_ids: [7] };
+    const target = { kind: 'explicit' as const, root_ids: [7] };
 
     await filesController.copyTargetPaths(target);
     expect(writeText).toHaveBeenLastCalledWith('/library/first.jpg\n/library/second.png');

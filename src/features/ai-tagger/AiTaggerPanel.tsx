@@ -27,11 +27,10 @@ import {
   aiTaggerUnload,
   type AiModelStatus,
   type AiTagPrediction,
-  type MediaPrediction,
+  type RootPrediction,
 } from '../../platform/aiTaggerApi';
 import { viewerController } from '../../controllers/viewerController';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
-import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
+import type { CanonicalEntityDetails, MediaRecord } from '../../shared/types/canonical';
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
@@ -43,6 +42,7 @@ import styles from './AiTaggerPanel.module.css';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { TitlebarRangeSlider } from '../../shared/ui/TitlebarControls';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { labToHex } from '../../shared/lib/labColor';
 
 type ViewMode = 'suggested' | 'below';
 
@@ -67,11 +67,11 @@ interface RunProgress {
 interface ReviewRoot {
   rootItemId: number;
   label: string;
-  imageMedia: MediaDetails[];
-  previewMedia: MediaDetails;
+  imageMedia: MediaRecord[];
+  previewMedia: MediaRecord;
 }
 
-function predictionTags(prediction: MediaPrediction | undefined, runModels: Set<string>): ReviewTag[] {
+function predictionTags(prediction: RootPrediction | undefined, runModels: Set<string>): ReviewTag[] {
   if (!prediction) return [];
   const byKey = new Map<string, ReviewTag>();
   for (const tag of prediction.predictions as AiTagPrediction[]) {
@@ -93,12 +93,12 @@ function predictionTags(prediction: MediaPrediction | undefined, runModels: Set<
   return [...byKey.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
-function mergePredictionResults(previous: MediaPrediction[], incoming: MediaPrediction[], replacedModels: Set<string>): MediaPrediction[] {
-  const byItem = new Map(previous.map((entry) => [entry.mediaItemId, entry]));
+function mergePredictionResults(previous: RootPrediction[], incoming: RootPrediction[], replacedModels: Set<string>): RootPrediction[] {
+  const byItem = new Map(previous.map((entry) => [entry.root_id, entry]));
   for (const next of incoming) {
-    const current = byItem.get(next.mediaItemId);
-    byItem.set(next.mediaItemId, {
-      mediaItemId: next.mediaItemId,
+    const current = byItem.get(next.root_id);
+    byItem.set(next.root_id, {
+      root_id: next.root_id,
       predictions: [
         ...(current?.predictions ?? []).filter((tag) => !replacedModels.has(tag.model)),
         ...next.predictions,
@@ -109,25 +109,16 @@ function mergePredictionResults(previous: MediaPrediction[], incoming: MediaPred
   return [...byItem.values()];
 }
 
-function reviewRoot(details: ItemDetails): ReviewRoot | null {
-  const imageMedia = details.media.filter((media) => media.mime_type.startsWith('image/'));
+function reviewRoot(details: CanonicalEntityDetails): ReviewRoot | null {
+  const imageMedia = details.media.filter((media) => media.facts.mime.startsWith('image/'));
   if (imageMedia.length === 0) return null;
-  const previewMedia = imageMedia.find((media) => media.media_item_id === details.cover_media_item_id)
+  const previewMedia = imageMedia.find((media) => media.media_id === details.root.cover_media_id)
     ?? imageMedia[0];
   return {
-    rootItemId: details.item_id,
-    label: details.label || previewMedia.name || `Item ${details.item_id}`,
+    rootItemId: details.root.root_id,
+    label: details.root.name || previewMedia.media_name || `Item ${details.root.root_id}`,
     imageMedia,
     previewMedia,
-  };
-}
-
-function combineRootPrediction(rootItemId: number, predictions: MediaPrediction[]): MediaPrediction {
-  const errors = predictions.flatMap((prediction) => prediction.error ? [prediction.error] : []);
-  return {
-    mediaItemId: rootItemId,
-    predictions: predictions.flatMap((prediction) => prediction.predictions),
-    error: errors.length > 0 ? errors.join('; ') : null,
   };
 }
 
@@ -148,7 +139,7 @@ export function AiTaggerPanel() {
   const [query, setQuery] = useState('');
   const [models, setModels] = useState<AiModelStatus[]>([]);
   const [runModels, setRunModels] = useState<Set<string>>(new Set());
-  const [predictions, setPredictions] = useState<MediaPrediction[]>([]);
+  const [predictions, setPredictions] = useState<RootPrediction[]>([]);
   const [reviewRoots, setReviewRoots] = useState<ReviewRoot[]>([]);
   const [activeItemId, setActiveItemId] = useState<number | null>(null);
   const [progress, setProgress] = useState<RunProgress>({ done: 0, total: 0, currentItemId: null });
@@ -164,7 +155,7 @@ export function AiTaggerPanel() {
   const runGenerationRef = useRef(0);
   const runningRef = useRef(false);
 
-  const itemIds = useMemo(() => (target?.kind === 'explicit' ? target.item_ids : []), [target]);
+  const itemIds = useMemo(() => (target?.kind === 'explicit' ? target.root_ids : []), [target]);
   const itemFingerprint = itemIds.join('\n');
 
   const closePortal = useCallback(() => {
@@ -187,15 +178,16 @@ export function AiTaggerPanel() {
     if (reset) setPredictions([]);
 
     try {
-      const failures: MediaPrediction[] = [];
+      const failures: RootPrediction[] = [];
       let done = 0;
       for (const slug of orderedSlugs) {
         for (const root of roots) {
           if (generation !== runGenerationRef.current) return;
           setProgress({ done, total, currentItemId: root.rootItemId });
-          const output = await aiTagPredict(root.imageMedia.map((media) => media.media_item_id), [slug]);
+          const output = await aiTagPredict([root.rootItemId], [slug]);
           if (generation !== runGenerationRef.current) return;
-          const combined = combineRootPrediction(root.rootItemId, output.predictions);
+          const combined = output.predictions[0];
+          if (!combined) continue;
           setPredictions((previous) => mergePredictionResults(previous, [combined], new Set([slug])));
           setActiveItemId((current) => current ?? root.rootItemId);
           if (combined.error) failures.push(combined);
@@ -289,11 +281,11 @@ export function AiTaggerPanel() {
 
   const reviewItemIds = useMemo(() => reviewRoots.length > 0
     ? reviewRoots.map((root) => root.rootItemId)
-    : predictions.map((prediction) => prediction.mediaItemId), [predictions, reviewRoots]);
+    : predictions.map((prediction) => prediction.root_id), [predictions, reviewRoots]);
   const activeIndex = Math.max(0, reviewItemIds.indexOf(activeItemId ?? reviewItemIds[0]));
   const activeRoot = reviewRoots.find((root) => root.rootItemId === activeItemId) ?? reviewRoots[activeIndex] ?? null;
   const activeMedia = activeRoot?.previewMedia ?? null;
-  const activePrediction = predictions.find((prediction) => prediction.mediaItemId === activeItemId);
+  const activePrediction = predictions.find((prediction) => prediction.root_id === activeItemId);
 
   const moveActive = useCallback((delta: number) => {
     if (reviewItemIds.length === 0) return;
@@ -334,11 +326,11 @@ export function AiTaggerPanel() {
 
   const assignments = useMemo(() => predictions.flatMap((prediction) => {
     const tags = predictionTags(prediction, runModels)
-      .filter((tag) => isChecked(prediction.mediaItemId, tag))
+      .filter((tag) => isChecked(prediction.root_id, tag))
       .map((tag) => tag.key);
-    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.mediaItemId);
+    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.root_id);
     return tags.length > 0 && root
-      ? [{ media_item_id: root.imageMedia[0].media_item_id, tags }]
+      ? [{ root_id: root.rootItemId, tags }]
       : [];
   }), [isChecked, predictions, reviewRoots, runModels]);
   const checkedCount = assignments.reduce((total, assignment) => total + assignment.tags.length, 0);
@@ -370,7 +362,7 @@ export function AiTaggerPanel() {
     const keys = new Set<string>();
     for (const prediction of predictions) {
       for (const tag of prediction.predictions) {
-        if (tag.model === model.slug) keys.add(`${prediction.mediaItemId}\u0000${tag.namespace}:${tag.tag}`);
+        if (tag.model === model.slug) keys.add(`${prediction.root_id}\u0000${tag.namespace}:${tag.tag}`);
       }
     }
     return [model.slug, keys.size];
@@ -468,8 +460,8 @@ export function AiTaggerPanel() {
             </KbdTooltip>
           </div>
           <div className={inspectorStyles.preview}>
-            <div className={inspectorStyles.previewFrame} style={{ background: activeMedia?.dominant_color_hex ?? undefined }}>
-              {activeMedia ? <ThumbnailImage src={mediaThumbnailUrl(activeMedia.file_hash)} alt="" className={inspectorStyles.previewImage} draggable={false} /> : <div className={styles.previewEmpty}>Preparing preview…</div>}
+            <div className={inspectorStyles.previewFrame} style={{ background: labToHex(activeMedia?.facts.palette[0]) ?? undefined }}>
+              {activeMedia ? <ThumbnailImage src={mediaThumbnailUrl(activeMedia.facts.content_hash)} alt="" className={inspectorStyles.previewImage} draggable={false} /> : <div className={styles.previewEmpty}>Preparing preview…</div>}
               <div className={inspectorStyles.previewGlass} />
               {activeIsRunning && <div className={styles.previewStatus}>Analyzing this item…</div>}
             </div>
@@ -479,7 +471,7 @@ export function AiTaggerPanel() {
           <div className={styles.thumbnailRail} aria-label="Selected items">
             {reviewRoots.map((root, index) => (
               <KbdTooltip key={root.rootItemId} label={`Review item ${index + 1}`}><button type="button" className={`${styles.thumbnailButton} ${root.rootItemId === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(root.rootItemId)} aria-label={`Review item ${index + 1}`}>
-                <ThumbnailImage src={mediaThumbnailUrl(root.previewMedia.file_hash)} alt="" draggable={false} />
+                <ThumbnailImage src={mediaThumbnailUrl(root.previewMedia.facts.content_hash)} alt="" draggable={false} />
               </button></KbdTooltip>
             ))}
           </div>
@@ -492,7 +484,7 @@ export function AiTaggerPanel() {
               : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific library items to auto tag</div>
                 : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this item…' : running ? 'Waiting for this item…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
                   : visibleTags.map((tag) => {
-                    const itemId = activeItemId ?? activePrediction?.mediaItemId;
+                    const itemId = activeItemId ?? activePrediction?.root_id;
                     if (itemId == null) return null;
                     const checked = isChecked(itemId, tag);
                     const evidence = [...tag.models]

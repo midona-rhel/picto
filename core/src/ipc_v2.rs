@@ -60,6 +60,10 @@ pub fn dispatch_library(
             )?)
         }
         "tags.namespace_counts" => read(application.tag_namespace_counts()?),
+        "tags.get_many" => {
+            let input: LibraryTagIdsInput = parse(args_json)?;
+            read(application.tags_by_id(&input.tag_ids)?)
+        }
         "tags.unused_count" => read(application.unused_tag_count()?),
         "duplicates.list" => {
             let input: LimitInput = parse(args_json)?;
@@ -1790,6 +1794,10 @@ struct LibraryRootInput {
 #[derive(Deserialize)]
 struct LibraryTargetInput {
     target: picto_library::selection::SelectionTarget,
+}
+#[derive(Deserialize)]
+struct LibraryTagIdsInput {
+    tag_ids: Vec<picto_library::TagId>,
 }
 #[derive(Deserialize)]
 struct LibraryLifecycleInput {

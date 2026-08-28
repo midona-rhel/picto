@@ -30,7 +30,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
 
     const isGroupToImage = displayedItem?.kind === 'collection'
       && requestedItem.kind !== 'collection'
-      && detailRendererKind(requestedItem.display_mime_type) === 'image';
+      && detailRendererKind(requestedItem.mime) === 'image';
     if (!isGroupToImage) {
       setDecodedThumbnailItemId(null);
       setDisplayedIndex(props.currentIndex);
@@ -41,7 +41,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
     const image = new Image();
     const commit = () => {
       if (cancelled) return;
-      setDecodedThumbnailItemId(requestedItem.item_id);
+      setDecodedThumbnailItemId(requestedItem.root_id);
       setDisplayedIndex(props.currentIndex);
     };
     image.onload = () => {
@@ -49,7 +49,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
       else commit();
     };
     image.onerror = commit;
-    image.src = mediaThumbnailUrl(requestedItem.display_file_hash);
+    image.src = mediaThumbnailUrl(requestedItem.content_hash);
     return () => { cancelled = true; };
   }, [displayedIndex, props.currentIndex, props.items]);
 
@@ -64,21 +64,21 @@ export function GridQuickLook(props: GridQuickLookProps) {
       canPrevious={displayedIndex > 0}
       canNext={displayedIndex < props.items.length - 1}
       onNavigate={props.onNavigate}
-      onClose={() => props.onClose(currentItem.item_id)}
+      onClose={() => props.onClose(currentItem.root_id)}
     >
       {currentItem.kind === 'collection' ? (
         <GroupQuickLookContent
-          groupId={currentItem.item_id}
+          groupId={currentItem.root_id}
           currentIndex={displayedIndex}
           totalCount={totalCount}
           onNavigate={props.onNavigate}
-          onClose={() => props.onClose(currentItem.item_id)}
+          onClose={() => props.onClose(currentItem.root_id)}
         />
       ) : (
         <QuickLookContent
           {...props}
           currentIndex={displayedIndex}
-          thumbnailReady={decodedThumbnailItemId === currentItem.item_id}
+          thumbnailReady={decodedThumbnailItemId === currentItem.root_id}
           onReady={markMediaReady}
         />
       )}

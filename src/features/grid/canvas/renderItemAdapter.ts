@@ -1,4 +1,5 @@
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
+import { labToHex } from '../../../shared/lib/labColor';
 
 export interface CanvasRenderItem {
   itemId: number;
@@ -21,23 +22,23 @@ export interface CanvasRenderItem {
 }
 
 export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
-  const aspectRatio = item.pixel_width && item.pixel_height
-    ? item.pixel_width / item.pixel_height
-    : item.display_mime_type.startsWith('audio/') ? 2 : null;
+  const aspectRatio = item.width && item.height
+    ? item.width / item.height
+    : item.mime.startsWith('audio/') ? 2 : null;
 
   return {
-    itemId: item.item_id,
+    itemId: item.root_id,
     kind: item.kind,
-    displayFileHash: item.display_file_hash,
-    hash: String(item.item_id),
-    thumbnailHash: item.display_file_hash,
+    displayFileHash: item.content_hash,
+    hash: String(item.root_id),
+    thumbnailHash: item.content_hash,
     name: item.name,
-    mime: item.display_mime_type,
-    width: item.pixel_width,
-    height: item.pixel_height,
-    rating: item.rating,
+    mime: item.mime,
+    width: item.width,
+    height: item.height,
+    rating: ['unrated', 'one', 'two', 'three', 'four', 'five'].indexOf(item.rating) || null,
     durationMs: item.duration_ms,
-    dominantColor: item.dominant_color_hex,
+    dominantColor: labToHex(item.palette[0]),
     aspectRatio,
     numFrames: item.frame_count,
     mediaCount: item.media_count,
@@ -52,6 +53,6 @@ export function resolveRenderedGridItem(
 ): { index: number; item: CanonicalEntityGridItem } | null {
   const itemId = renderedItems[renderedIndex]?.itemId;
   if (itemId == null) return null;
-  const index = sourceItems.findIndex((item) => item.item_id === itemId);
+  const index = sourceItems.findIndex((item) => item.root_id === itemId);
   return index < 0 ? null : { index, item: sourceItems[index] };
 }

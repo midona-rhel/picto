@@ -48,9 +48,13 @@ type EditorAction =
   | { kind: 'merge' }
   | { kind: 'delete' }
   | null;
-type GroupAction = { kind: 'rename' | 'delete'; namespace: string } | null;
+type GroupAction = {
+  kind: 'rename' | 'delete';
+  namespaceId: number;
+  namespace: string;
+} | null;
 
-function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subtag'>): string {
+function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subname'>): string {
   return tagName(tag);
 }
 
@@ -91,7 +95,7 @@ function RelationPicker({ title, excludeTagId, onChoose, onClose }: RelationPick
       limit: PICKER_PAGE_SIZE,
     }).then((page) => {
       if (generation !== requestGeneration.current) return;
-      setResults(page.items.filter((item) => item.tag_id !== excludeTagId));
+      setResults(page.tags.filter((item) => item.tag_id !== excludeTagId));
     }).catch((reason: unknown) => {
       if (generation === requestGeneration.current) setError(errorMessage(reason));
     }).finally(() => {
@@ -124,8 +128,8 @@ function RelationPicker({ title, excludeTagId, onChoose, onClose }: RelationPick
               onClick={() => onChoose(tag)}
               type="button"
             >
-              <TagChip namespace={tag.namespace} subtag={tag.subtag} />
-              <span className={styles.pickerCount}>{tag.file_count}</span>
+              <TagChip namespace={tag.namespace} subtag={tag.subname} />
+              <span className={styles.pickerCount}>{tag.active_count}</span>
             </button>
           ))}
         </div>
@@ -198,8 +202,8 @@ function TagEditorModal({
         <div className={styles.editorIntro}>
           <div className={styles.editorIcon}><IconBookmark size={18} /></div>
           <div>
-            <TagChip namespace={tag.namespace} subtag={tag.subtag} />
-            <div className={styles.editorCount}>{tag.file_count} media items</div>
+            <TagChip namespace={tag.namespace} subtag={tag.subname} />
+            <div className={styles.editorCount}>{tag.active_count} media items</div>
           </div>
         </div>
 
@@ -291,7 +295,7 @@ export function TagManagerScreen() {
       limit: PAGE_SIZE,
     }).then((page) => {
       if (cancelled || generation !== listGeneration.current) return;
-      setTags(page.items);
+      setTags(page.tags);
       setCursor(page.next_cursor);
       setViewEpoch((value) => value + 1);
     }).catch((reason: unknown) => {
@@ -354,7 +358,7 @@ export function TagManagerScreen() {
       limit: PAGE_SIZE,
     }).then((page) => {
       if (generation !== listGeneration.current) return;
-      setTags((current) => [...current, ...page.items]);
+      setTags((current) => [...current, ...page.tags]);
       setCursor(page.next_cursor);
     }).catch((reason: unknown) => {
       if (generation === listGeneration.current) setError(errorMessage(reason));
@@ -376,8 +380,8 @@ export function TagManagerScreen() {
 
   const expectedTagCount = useMemo(() => {
     if (query.trim()) return tags.length;
-    if (namespace === null) return namespaces.reduce((sum, item) => sum + item.count, 0);
-    return namespaces.find((item) => item.namespace === namespace)?.count ?? tags.length;
+    if (namespace === null) return namespaces.reduce((sum, item) => sum + item.tag_count, 0);
+    return namespaces.find((item) => item.name === namespace)?.tag_count ?? tags.length;
   }, [namespace, namespaces, query, tags.length]);
 
   const virtualItemCount = cursor || loading
@@ -448,8 +452,8 @@ export function TagManagerScreen() {
   const namespaceLabel = (value: string) => value || 'general';
   const sortedNamespaces = useMemo(
     () => namespaces
-      .filter((group) => group.namespace !== '' && group.namespace !== 'general')
-      .sort((left, right) => tagGroupOrder(left.namespace) - tagGroupOrder(right.namespace)),
+      .filter((group) => group.name !== '' && group.name !== 'general')
+      .sort((left, right) => tagGroupOrder(left.name) - tagGroupOrder(right.name)),
     [namespaces],
   );
   const openTagContextMenu = useCallback((event: React.MouseEvent, tag: CanonicalTagRecord) => {
@@ -499,18 +503,26 @@ export function TagManagerScreen() {
       {
         label: 'Show Tags in Group',
         icon: <IconBookmark size={16} />,
-        action: () => handleNamespaceChange(group.namespace),
+        action: () => handleNamespaceChange(group.name),
       },
       { separator: true },
       {
         label: 'Rename Group…',
         icon: <IconEdit size={16} />,
-        action: () => setGroupAction({ kind: 'rename', namespace: group.namespace }),
+        action: () => setGroupAction({
+          kind: 'rename',
+          namespaceId: group.namespace_id,
+          namespace: group.name,
+        }),
       },
       {
         label: 'Delete Group',
         icon: <IconTrash size={16} />,
-        action: () => setGroupAction({ kind: 'delete', namespace: group.namespace }),
+        action: () => setGroupAction({
+          kind: 'delete',
+          namespaceId: group.namespace_id,
+          namespace: group.name,
+        }),
       },
     ]);
   }, [contextMenu, handleNamespaceChange]);
@@ -530,23 +542,23 @@ export function TagManagerScreen() {
             type="button"
           >
             <span className={styles.groupIdentity}><IconBookmarks size={16} /><span>All tags</span></span>
-            <span className={styles.namespaceCount}>{namespaces.reduce((sum, item) => sum + item.count, 0)}</span>
+            <span className={styles.namespaceCount}>{namespaces.reduce((sum, item) => sum + item.tag_count, 0)}</span>
           </button>
           {sortedNamespaces.map((item) => {
-            const GroupIcon = tagGroupPresentation(item.namespace).icon;
+            const GroupIcon = tagGroupPresentation(item.name).icon;
             return (
               <button
-                className={`${styles.namespaceItem} ${namespace === item.namespace ? styles.namespaceItemActive : ''}`}
-                key={item.namespace || '__general__'}
-                onClick={() => handleNamespaceChange(item.namespace)}
+                className={`${styles.namespaceItem} ${namespace === item.name ? styles.namespaceItemActive : ''}`}
+                key={item.namespace_id}
+                onClick={() => handleNamespaceChange(item.name)}
                 onContextMenu={(event) => openGroupContextMenu(event, item)}
                 type="button"
               >
-                <span className={styles.groupIdentity} style={{ color: tagGroupColor(item.namespace) }}>
+                <span className={styles.groupIdentity} style={{ color: tagGroupColor(item.name) }}>
                   <GroupIcon size={16} />
-                  <span className={styles.groupName}>{namespaceLabel(item.namespace)}</span>
+                  <span className={styles.groupName}>{namespaceLabel(item.name)}</span>
                 </span>
-                <span className={styles.namespaceCount}>{item.count}</span>
+                <span className={styles.namespaceCount}>{item.tag_count}</span>
               </button>
             );
           })}
@@ -610,7 +622,7 @@ export function TagManagerScreen() {
                         {tagPreferences.starredTags.includes(tagKey(tag)) && (
                           <IconStar aria-label="Starred" className={styles.starredIcon} size={12} fill="currentColor" />
                         )}
-                        <span className={styles.tagCardCount}>({tag.file_count})</span>
+                        <span className={styles.tagCardCount}>({tag.active_count})</span>
                       </button>
                     );
                   })}
@@ -669,7 +681,7 @@ export function TagManagerScreen() {
           onClose={() => setGroupAction(null)}
           onRename={(newNamespace) => {
             const previousNamespace = groupAction.namespace;
-            void runMutation(() => tagsController.renameGroup(previousNamespace, newNamespace))
+            void runMutation(() => tagsController.renameGroup(groupAction.namespaceId, newNamespace))
               .then((succeeded) => {
                 if (!succeeded) return;
                 setGroupAction(null);
@@ -684,7 +696,7 @@ export function TagManagerScreen() {
           onClose={() => setGroupAction(null)}
           onConfirm={() => {
             const deletedNamespace = groupAction.namespace;
-            void runMutation(() => tagsController.deleteGroup(deletedNamespace))
+            void runMutation(() => tagsController.deleteGroup(groupAction.namespaceId))
               .then((succeeded) => {
                 if (!succeeded) return;
                 setGroupAction(null);

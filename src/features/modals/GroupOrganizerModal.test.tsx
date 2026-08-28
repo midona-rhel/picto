@@ -6,7 +6,7 @@ import { GroupOrganizerModal } from './GroupOrganizerModal';
 const organizeIntoGroup = vi.hoisted(() => vi.fn());
 vi.mock('../../platform/entityApi', () => ({ organizeIntoGroup }));
 
-const target = { kind: 'explicit' as const, item_ids: [1, 2] };
+const target = { kind: 'explicit' as const, root_ids: [1, 2] };
 
 beforeEach(() => {
   organizeIntoGroup.mockReset();
@@ -21,6 +21,7 @@ describe('GroupOrganizerModal', () => {
       <GroupOrganizerModal
         open
         target={target}
+        coverRootId={1}
         groups={[]}
         onClose={onClose}
         onComplete={onComplete}
@@ -34,7 +35,8 @@ describe('GroupOrganizerModal', () => {
 
     await waitFor(() => expect(organizeIntoGroup).toHaveBeenCalledWith({
       target,
-      label: 'Chapter one',
+      cover_root_id: 1,
+      name: 'Chapter one',
       winning_collection_id: null,
     }));
     expect(onComplete).toHaveBeenCalledWith(9);
@@ -46,6 +48,7 @@ describe('GroupOrganizerModal', () => {
       <GroupOrganizerModal
         open
         target={target}
+        coverRootId={1}
         groups={[
           { collection_id: 7, label: 'Left', member_count: 2 },
           { collection_id: 8, label: 'Right', member_count: 4 },
@@ -59,7 +62,8 @@ describe('GroupOrganizerModal', () => {
 
     await waitFor(() => expect(organizeIntoGroup).toHaveBeenCalledWith({
       target,
-      label: null,
+      cover_root_id: 1,
+      name: null,
       winning_collection_id: 8,
     }));
   });

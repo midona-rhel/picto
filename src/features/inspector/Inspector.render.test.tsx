@@ -30,6 +30,19 @@ vi.mock('../../controllers/entityMutations', () => ({
   setTargetSourceUrls: vi.fn(),
   updateTargetFolderMembership: vi.fn(),
 }));
+vi.mock('../../controllers/tagsController', () => ({
+  tagsController: {
+    getNamespaceSummary: vi.fn().mockResolvedValue([]),
+    getById: vi.fn((ids: number[]) => Promise.resolve(ids.map((tagId) => ({
+      tag_id: tagId,
+      namespace_id: tagId === 102 ? 2 : 0,
+      namespace: tagId === 102 ? 'creator' : '',
+      subname: tagId === 100 ? 'member-tag' : tagId === 101 ? 'shared' : 'Example',
+      active_count: 1,
+      assignment_count: 1,
+    })))),
+  },
+}));
 
 import { Inspector } from './Inspector';
 import * as entityMutations from '../../controllers/entityMutations';
@@ -49,20 +62,32 @@ import {
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 import { confirmModalAtom, exportModalAtom } from '../../state/modals';
+import { hexToLab } from '../../shared/lib/labColor';
 
 const entity = {
-  item_id: 1, kind: 'media', lifecycle: 'active', label: 'Example', cover_media_item_id: null,
-  folder_ids: [], aggregate_tags: [], revision: 1,
-  media: [{ media_item_id: 1, file_hash: 'file-1', mime_type: 'image/jpeg', dominant_color_hex: '#123456', dominant_colors: ['#123456', '#abcdef'],
-    size_bytes: 100, pixel_width: 20, pixel_height: 10, duration_ms: null, frame_count: null,
-    name: 'Example', notes: null, rating: null, source_urls: [],
-    captured_at: '2026-01-01', imported_at: '2026-01-02', position: 0, tags: [] }],
+  root: {
+    root_id: 1, stable_key: 'root-1', kind: 'media', name: 'Example', notes: null,
+    source_urls: [], cover_media_id: 1, imported_at_ms: Date.parse('2026-01-02'),
+    captured_at_ms: Date.parse('2026-01-01'), modified_at_ms: Date.parse('2026-01-03'),
+    media_count: 1, total_size_bytes: 100,
+  },
+  lifecycle: 'active', rating: 'unrated', folder_ids: [], tag_ids: [], revision: 1,
+  media: [{
+    media_id: 1, media_name: 'Example', file_id: 1, file_path: '/media/file-1',
+    facts: { mime: 'image/jpeg', size_bytes: 100, width: 20, height: 10, duration_ms: null,
+      frame_count: null, content_hash: 'file-1', perceptual_hash: null,
+      palette: [hexToLab('#123456'), hexToLab('#abcdef')] },
+  }],
 };
 
 const group = {
-  item_id: 10, kind: 'collection', lifecycle: 'active', label: 'Album', cover_media_item_id: 11,
-  folder_ids: [7], aggregate_tags: ['general:member-tag'], revision: 1,
-  media: [entity.media[0], { ...entity.media[0], media_item_id: 12, file_hash: 'file-2', mime_type: 'video/mp4', position: 1 }],
+  ...entity,
+  root: { ...entity.root, root_id: 10, stable_key: 'root-10', kind: 'collection', name: 'Album', cover_media_id: 1, media_count: 2, total_size_bytes: 200 },
+  folder_ids: [7], tag_ids: [100],
+  media: [entity.media[0], {
+    ...entity.media[0], media_id: 12, media_name: 'Second', file_id: 12,
+    facts: { ...entity.media[0].facts, content_hash: 'file-2', mime: 'video/mp4' },
+  }],
 };
 
 function renderInspector({
@@ -90,7 +115,7 @@ function renderInspector({
     [inspectorErrorAtom, error],
     [displayedInspectorItemDetailsAtom, data],
     [scopeInspectorViewModelAtom, scope],
-    [sidebarNodesAtom, []],
+    [sidebarNodesAtom, [{ id: 'folder:7', kind: 'folder', name: 'Shared folder', color: null }]],
     [gridItemsAtom, []],
     [selectionTargetAtom, selectionTarget],
     [selectionCountAtom, selectionCount ?? (target && (target as { kind?: string }).kind === 'multi' ? 2 : 0)],
@@ -139,7 +164,7 @@ describe('Inspector presentation branches', () => {
     for (const entry of cases) {
       const view = renderInspector(entry);
       assertStableAnchors(
-        entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created'] : [],
+        entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created', 'Date modified'] : [],
         entry.target.kind === 'multi' ? ['notes', 'source'] : undefined,
       );
       const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
@@ -163,11 +188,11 @@ describe('Inspector presentation branches', () => {
       target: { kind: 'item', itemId: 1 },
       data: {
         ...entity,
-        media: [{
-          ...entity.media[0],
+        root: {
+          ...entity.root,
           notes: 'Inspector notes',
           source_urls: ['https://example.com/source'],
-        }],
+        },
       },
     });
 
@@ -252,7 +277,7 @@ describe('Inspector presentation branches', () => {
       totalCount: 1,
       totalSizeBytes: null,
       searchText: '',
-      previewItems: [{ display_file_hash: 'file-1' }],
+      previewItems: [{ content_hash: 'file-1', mime: 'image/jpeg', palette: [] }],
       description: 'All items.',
       folder: null,
       smartFolder: null,
@@ -266,7 +291,7 @@ describe('Inspector presentation branches', () => {
   it('shows a font specimen directly instead of treating a font as broken', () => {
     const fontEntity = {
       ...entity,
-      media: [{ ...entity.media[0], file_hash: 'font-1', mime_type: 'font/ttf' }],
+      media: [{ ...entity.media[0], facts: { ...entity.media[0].facts, content_hash: 'font-1', mime: 'font/ttf' } }],
     };
     renderInspector({ target: { kind: 'item', itemId: 1 }, data: fontEntity });
 
@@ -280,7 +305,7 @@ describe('Inspector presentation branches', () => {
     let resolveSummary: ((value: never) => void) | undefined;
     const summaryPromise = new Promise((resolve) => { resolveSummary = resolve; });
     vi.mocked(entityMutations.getTargetSelectionSummary).mockReturnValue(summaryPromise as never);
-    const selectionTarget = { kind: 'query', query: { scope: { kind: 'all' }, filters: {}, sort: {} }, excluded_item_ids: [] };
+    const selectionTarget = { kind: 'query', query: { scope: { kind: 'all' }, filters: {}, sort: {} }, excluded_root_ids: [] };
     const view = renderInspector({
       target: { kind: 'multi', count: 2, selectionMode: 'query_results' },
       selectionTarget,
@@ -297,21 +322,21 @@ describe('Inspector presentation branches', () => {
 
     await act(async () => {
       resolveSummary?.({
-        total_count: 2,
         selected_count: 2,
+        total_size_bytes: 300,
+        media_count: 2,
+        shared_rating: 'three',
+        minimum_rating: 'three',
+        maximum_rating: 'three',
         sample_hashes: ['file-1', 'file-2'],
-        shared_tags: [{ tag: 'general:shared', count: 2 }],
-        shared_folders: [{ folder_id: 7, name: 'Shared folder' }],
+        shared_tags: [101],
+        shared_folders: [7],
+        collection_candidates: [],
         shared_notes: 'Shared note',
         has_notes: true,
         shared_source_urls: ['https://example.com/shared'],
         has_source_urls: true,
-        stats: {
-          total_size_bytes: 300,
-          media_count: 2,
-          all_media_are_images: true,
-          rating_stats: { min: 3, max: 3, shared: 3 },
-        },
+        all_selected_roots_have_images: true,
         revision: 4,
       } as never);
       await summaryPromise;
@@ -329,27 +354,27 @@ describe('Inspector presentation branches', () => {
 
   it('stacks six recent previews from 30% to full opacity with the newest on top', async () => {
     vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue({
-      total_count: 6,
       selected_count: 6,
+      total_size_bytes: 600,
+      media_count: 6,
+      shared_rating: null,
+      minimum_rating: null,
+      maximum_rating: null,
       sample_hashes: ['file-1', 'file-2', 'file-3', 'file-4', 'file-5', 'file-6'],
       shared_tags: [],
       shared_folders: [],
+      collection_candidates: [],
       shared_notes: null,
       has_notes: false,
       shared_source_urls: [],
       has_source_urls: false,
-      stats: {
-        total_size_bytes: 600,
-        media_count: 6,
-        all_media_are_images: true,
-        rating_stats: { min: null, max: null, shared: null },
-      },
+      all_selected_roots_have_images: true,
       revision: 4,
     } as never);
 
     const view = renderInspector({
       target: { kind: 'multi', count: 6, selectionMode: 'explicit' },
-      selectionTarget: { kind: 'explicit', item_ids: [1, 2, 3, 4, 5, 6] },
+      selectionTarget: { kind: 'explicit', root_ids: [1, 2, 3, 4, 5, 6] },
       selectionCount: 6,
     });
 
@@ -366,25 +391,25 @@ describe('Inspector presentation branches', () => {
 
   it('confirms before replacing existing notes or sources across a selection', async () => {
     const summary = {
-      total_count: 2,
       selected_count: 2,
+      total_size_bytes: 300,
+      media_count: 2,
+      shared_rating: null,
+      minimum_rating: null,
+      maximum_rating: null,
       sample_hashes: ['file-1', 'file-2'],
       shared_tags: [],
       shared_folders: [],
+      collection_candidates: [],
       shared_notes: 'Existing note',
       has_notes: true,
       shared_source_urls: ['https://example.com/old'],
       has_source_urls: true,
-      stats: {
-        total_size_bytes: 300,
-        media_count: 2,
-        all_media_are_images: true,
-        rating_stats: { min: null, max: null, shared: null },
-      },
+      all_selected_roots_have_images: true,
       revision: 4,
     };
     vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue(summary as never);
-    const selectionTarget = { kind: 'explicit', item_ids: [1, 2] };
+    const selectionTarget = { kind: 'explicit', root_ids: [1, 2] };
     const view = renderInspector({
       target: { kind: 'multi', count: 2, selectionMode: 'explicit' },
       selectionTarget,
@@ -426,7 +451,7 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
-  it('renders a group from ordered replacement media details', () => {
+  it('renders a group from ordered replacement media details', async () => {
     renderInspector({ target: { kind: 'item', itemId: 10 }, data: group });
     expect(screen.getByText('Album')).toBeInTheDocument();
     expect(document.querySelector('[data-inspector-format-label]')).toHaveAttribute('aria-label', 'Group');
@@ -434,7 +459,7 @@ describe('Inspector presentation branches', () => {
     expect(document.querySelector('[data-inspector-format-label]')).not.toHaveTextContent('JPG');
     expect(document.querySelector('[data-inspector-core-property="Items"]')).toHaveTextContent('2');
     expect(document.querySelector('[data-inspector-core-property="Type"]')).toHaveTextContent('Mixed');
-    expect(screen.getByText('member-tag')).toBeInTheDocument();
+    expect(await screen.findByText('member-tag')).toBeInTheDocument();
   });
 
   it('renders full empty Tags/Folders controls and opens the existing selector portals', () => {
@@ -464,13 +489,14 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
-  it('uses compact icon-only add controls when Tags and Folders are populated', () => {
+  it('uses compact icon-only add controls when Tags and Folders are populated', async () => {
     const populated = {
       ...entity,
-      aggregate_tags: ['creator:Example'],
+      tag_ids: [100],
       folder_ids: [1],
     };
     const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: populated });
+    await screen.findByText('member-tag');
 
     const addTags = screen.getByRole('button', { name: 'Add Tags' });
     const addFolder = screen.getByRole('button', { name: 'Add to Folder' });
@@ -506,7 +532,7 @@ describe('Inspector presentation branches', () => {
     expect(getDefaultStore().get(exportModalAtom)).toEqual({
       open: true,
       fileCount: 1,
-      target: { kind: 'explicit', item_ids: [1] },
+      target: { kind: 'explicit', root_ids: [1] },
     });
     view.unmount();
   });

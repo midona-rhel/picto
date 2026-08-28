@@ -24,14 +24,12 @@ import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import * as entityMutations from '../../controllers/entityMutations';
 import { tagsController } from '../../controllers/tagsController';
-import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
+import type { CanonicalTagRecord, CanonicalNamespaceSummary, SetMatchMode } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
 import styles from './TagSelectPanel.module.css';
-import { commonItemTags } from '../../shared/lib/itemDetails';
 import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
 import { showTagItems } from '../../controllers/gridNavigationController';
 import { showErrorNotification } from '../../shared/lib/notifications';
@@ -55,9 +53,11 @@ function tagRecord(name: string): CanonicalTagRecord {
   const separator = name.indexOf(':');
   return {
     tag_id: 0,
+    namespace_id: 0,
     namespace: separator < 0 ? '' : name.slice(0, separator),
-    subtag: separator < 0 ? name : name.slice(separator + 1),
-    file_count: 0,
+    subname: separator < 0 ? name : name.slice(separator + 1),
+    active_count: 0,
+    assignment_count: 0,
   };
 }
 
@@ -71,6 +71,8 @@ export function TagSelectPanel() {
   const anchorPosition = portalState.anchor ?? null;
   const customTags = portalState.selectedTags;
   const customExcludedTags = portalState.excludedTags;
+  const selectedTagFilters = portalState.selectedTagFilters;
+  const excludedTagFilters = portalState.excludedTagFilters;
   const onApplyTags = portalState.onApplyTags;
   const onApplyTagFilter = portalState.onApplyTagFilter;
   const closePortal = useCallback(() => setPortalState({ open: false }), [setPortalState]);
@@ -84,12 +86,13 @@ export function TagSelectPanel() {
   const [showCounts, setShowCounts] = useState(() => localStorage.getItem('picto-tag-picker-counts') !== 'false');
   const [query, setQuery] = useState('');
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
+  const [assignedTagKeys, setAssignedTagKeys] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
+  const [matchMode, setMatchMode] = useState<SetMatchMode>('any');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('all');
   const [activeNamespace, setActiveNamespace] = useState<string | null>(null);
   const [focusIdx, setFocusIdx] = useState(-1);
@@ -102,9 +105,34 @@ export function TagSelectPanel() {
   const tagPreferences = useTagPreferences();
 
   // Tags already on the selected entity (for "Selected" sidebar mode)
-  const entityTagKeys = useMemo(() => {
-    return customTags ? new Set(customTags) : commonItemTags(entityData);
-  }, [customTags, entityData]);
+  const entityTagKeys = useMemo(() => selectedTagFilters
+    ? new Set(selectedTagFilters.map((tag) => tag.name))
+    : customTags ? new Set(customTags) : assignedTagKeys,
+  [assignedTagKeys, customTags, selectedTagFilters]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tagIds = entityData?.tag_ids ?? [];
+    if (!open || customTags || selectedTagFilters || tagIds.length === 0) {
+      setAssignedTagKeys(new Set());
+      return;
+    }
+    void tagsController.getById(tagIds).then((records) => {
+      if (!cancelled) setAssignedTagKeys(new Set(records.map(tagName)));
+    }).catch(() => {
+      if (!cancelled) setAssignedTagKeys(new Set());
+    });
+    return () => { cancelled = true; };
+  }, [customTags, entityData?.tag_ids.join(','), open, selectedTagFilters]);
+
+  const tagChoices = useMemo(() => new Map([
+    ...(selectedTagFilters ?? []).map((tag) => [tag.name, tag] as const),
+    ...(excludedTagFilters ?? []).map((tag) => [tag.name, tag] as const),
+    ...tags.filter((tag) => tag.tag_id > 0).map((tag) => [formatTag(tag), {
+      tag_id: tag.tag_id,
+      name: formatTag(tag),
+    }] as const),
+  ]), [excludedTagFilters, selectedTagFilters, tags]);
 
   // Load initial tags + namespaces
   const loadTags = useCallback((search: string, ns?: string | null) => {
@@ -118,7 +146,7 @@ export function TagSelectPanel() {
     };
     void tagsController.getPaginated(params).then((result) => {
       if (generation !== requestGenerationRef.current) return;
-      setTags(result.items);
+      setTags(result.tags);
       setCursor(result.next_cursor);
       setFocusIdx(-1);
     }).catch(() => {});
@@ -139,7 +167,7 @@ export function TagSelectPanel() {
       if (generation !== requestGenerationRef.current) return;
       setTags((prev) => {
         const known = new Set(prev.map((tag) => tag.tag_id));
-        return [...prev, ...result.items.filter((tag) => !known.has(tag.tag_id))];
+        return [...prev, ...result.tags.filter((tag) => !known.has(tag.tag_id))];
       });
       setCursor(result.next_cursor);
     }).finally(() => {
@@ -174,14 +202,14 @@ export function TagSelectPanel() {
       setQuery('');
       setSettingsOpen(false);
       setSelectedTags(new Set(entityTagKeys));
-      setExcluded(new Set(customExcludedTags ?? []));
+      setExcluded(new Set(excludedTagFilters?.map((tag) => tag.name) ?? customExcludedTags ?? []));
       setMatchMode(portalState.filterMatchMode ?? 'any');
       setSidebarMode('all');
       setActiveNamespace(null);
       setFocusIdx(-1);
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, customExcludedTags, portalState.filterMatchMode]); // entityTagKeys is the opening snapshot
+  }, [open, customExcludedTags, excludedTagFilters, portalState.filterMatchMode]); // entityTagKeys is the opening snapshot
 
   // Display tags — "selected" mode shows entity's tags directly (not from paginated search)
   const displayTags = useMemo(() => {
@@ -190,7 +218,7 @@ export function TagSelectPanel() {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);
-        return a.subtag.localeCompare(b.subtag);
+        return a.subname.localeCompare(b.subname);
       });
     }
     if (sidebarMode === 'starred') {
@@ -204,8 +232,8 @@ export function TagSelectPanel() {
   // Namespace groups for sidebar
   const nsGroups = useMemo(() => {
     return namespaces
-      .filter((group) => group.namespace !== '' && group.namespace !== 'general')
-      .sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace));
+      .filter((group) => group.name !== '' && group.name !== 'general')
+      .sort((a, b) => tagGroupOrder(a.name) - tagGroupOrder(b.name));
   }, [namespaces]);
 
   const columnCount = layout === 'grid' ? 2 : 1;
@@ -246,43 +274,50 @@ export function TagSelectPanel() {
     });
   }, []);
 
-  const toggleTag = useCallback((tag: string) => {
+  const selectedChoices = useCallback((names: Set<string>) => [...names]
+    .map((name) => tagChoices.get(name))
+    .filter((tag): tag is NonNullable<typeof tag> => tag != null), [tagChoices]);
+
+  const toggleTag = useCallback((tag: CanonicalTagRecord) => {
+    const name = formatTag(tag);
+    if (onApplyTagFilter && tag.tag_id <= 0) return;
     const nextSelected = new Set(selectedTags);
     const nextExcluded = new Set(excluded);
-    const removing = nextSelected.delete(tag);
-    if (!removing) nextSelected.add(tag);
-    nextExcluded.delete(tag);
+    const removing = nextSelected.delete(name);
+    if (!removing) nextSelected.add(name);
+    nextExcluded.delete(name);
     setSelectedTags(nextSelected);
     setExcluded(nextExcluded);
 
     if (onApplyTagFilter) {
-      onApplyTagFilter([...nextSelected], [...nextExcluded], matchMode);
+      onApplyTagFilter(selectedChoices(nextSelected), selectedChoices(nextExcluded), matchMode);
       return;
     }
     if (onApplyTags) {
       onApplyTags([...nextSelected]);
     } else if (target) {
       void (removing
-        ? entityMutations.removeTargetTags(target, [tag])
-        : entityMutations.addTargetTags(target, [tag]));
+        ? entityMutations.removeTargetTags(target, [name])
+        : entityMutations.addTargetTags(target, [name]));
     }
-  }, [excluded, matchMode, onApplyTagFilter, onApplyTags, selectedTags, target]);
+  }, [excluded, matchMode, onApplyTagFilter, onApplyTags, selectedChoices, selectedTags, target]);
 
-  const toggleExcludedTag = useCallback((tag: string) => {
-    if (!onApplyTagFilter) return;
+  const toggleExcludedTag = useCallback((tag: CanonicalTagRecord) => {
+    if (!onApplyTagFilter || tag.tag_id <= 0) return;
+    const name = formatTag(tag);
     const nextSelected = new Set(selectedTags);
     const nextExcluded = new Set(excluded);
-    nextSelected.delete(tag);
-    if (!nextExcluded.delete(tag)) nextExcluded.add(tag);
+    nextSelected.delete(name);
+    if (!nextExcluded.delete(name)) nextExcluded.add(name);
     setSelectedTags(nextSelected);
     setExcluded(nextExcluded);
-    onApplyTagFilter([...nextSelected], [...nextExcluded], matchMode);
-  }, [excluded, matchMode, onApplyTagFilter, selectedTags]);
+    onApplyTagFilter(selectedChoices(nextSelected), selectedChoices(nextExcluded), matchMode);
+  }, [excluded, matchMode, onApplyTagFilter, selectedChoices, selectedTags]);
 
-  const changeMatchMode = useCallback((mode: FilterMatchMode) => {
+  const changeMatchMode = useCallback((mode: SetMatchMode) => {
     setMatchMode(mode);
-    onApplyTagFilter?.([...selectedTags], [...excluded], mode);
-  }, [excluded, onApplyTagFilter, selectedTags]);
+    onApplyTagFilter?.(selectedChoices(selectedTags), selectedChoices(excluded), mode);
+  }, [excluded, onApplyTagFilter, selectedChoices, selectedTags]);
 
   // Keyboard
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -301,15 +336,15 @@ export function TagSelectPanel() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const idx = focusIdx >= 0 ? focusIdx : 0;
-      if (navigableTags[idx]) toggleTag(formatTag(navigableTags[idx]));
+      if (navigableTags[idx]) toggleTag(navigableTags[idx]);
     } else if (e.key === 'Tab') {
       e.preventDefault();
       if (sidebarMode === 'all') {
-        if (nsGroups.length > 0) { setSidebarMode('namespace'); setActiveNamespace(nsGroups[0].namespace); }
+        if (nsGroups.length > 0) { setSidebarMode('namespace'); setActiveNamespace(nsGroups[0].name); }
         else setSidebarMode('selected');
       } else if (sidebarMode === 'namespace') {
-        const idx = nsGroups.findIndex((g) => g.namespace === activeNamespace);
-        if (idx < nsGroups.length - 1) setActiveNamespace(nsGroups[idx + 1].namespace);
+        const idx = nsGroups.findIndex((g) => g.name === activeNamespace);
+        if (idx < nsGroups.length - 1) setActiveNamespace(nsGroups[idx + 1].name);
         else setSidebarMode('selected');
       } else {
         setSidebarMode('all');
@@ -396,7 +431,7 @@ export function TagSelectPanel() {
           >
             <span className={styles.sidebarName}>All</span>
             <span className={styles.sidebarBadge}>
-              {namespaces.reduce((sum, n) => sum + n.count, 0).toLocaleString()}
+              {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
             </span>
           </div>
           <div
@@ -409,13 +444,13 @@ export function TagSelectPanel() {
           {tagPreferences.showTagGroups && nsGroups.length > 0 && <div className={styles.sidebarSep} />}
           {tagPreferences.showTagGroups && nsGroups.map((ns) => (
             <div
-              key={ns.namespace || '__general'}
-              className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.namespace ? styles.sidebarItemActive : ''}`}
-              onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.namespace); }}
+              key={ns.namespace_id}
+              className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.name ? styles.sidebarItemActive : ''}`}
+              onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.name); }}
             >
-              <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.namespace) }} />
-              <span className={styles.sidebarName}>{ns.namespace || 'general'}</span>
-              <span className={styles.sidebarBadge}>{ns.count.toLocaleString()}</span>
+              <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.name) }} />
+              <span className={styles.sidebarName}>{ns.name || 'general'}</span>
+              <span className={styles.sidebarBadge}>{ns.tag_count.toLocaleString()}</span>
             </div>
           ))}
         </div>
@@ -451,12 +486,12 @@ export function TagSelectPanel() {
                           style={{
                             '--tag-color': tagGroupColor(tag.namespace),
                           } as React.CSSProperties}
-                          onClick={() => toggleTag(fullTag)}
+                          onClick={() => toggleTag(tag)}
                           onContextMenu={(event) => {
                         if (onApplyTagFilter) {
                           event.preventDefault();
                           event.stopPropagation();
-                          toggleExcludedTag(fullTag);
+                          toggleExcludedTag(tag);
                           return;
                         }
                         contextMenu.open(event, buildCommonTagContextEntries({
@@ -492,9 +527,9 @@ export function TagSelectPanel() {
                             fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}
                           />
                           <span className={styles.tagName}>
-                            {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
+                            {query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)}
                           </span>
-                          {showCounts ? <span className={styles.tagBadge}>({(tag.file_count ?? 0).toLocaleString()})</span> : null}
+                          {showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
                         </div>
                       );
                     })}

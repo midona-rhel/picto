@@ -89,8 +89,9 @@ export function ModalLayer() {
       <GroupOrganizerModal
         open={groupOrganizer.open}
         target={groupOrganizer.target}
+        coverRootId={groupOrganizer.coverRootId}
         groups={groupOrganizer.groups}
-        onClose={() => setGroupOrganizer({ open: false, target: null, groups: [] })}
+        onClose={() => setGroupOrganizer({ open: false, target: null, coverRootId: null, groups: [] })}
         onComplete={groupOrganizer.onComplete}
       />
 

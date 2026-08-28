@@ -25,8 +25,7 @@ import {
 } from '../../platform/duplicateApi';
 import type { CandidateSide } from '../../shared/types/generated/application/CandidateSide';
 import type { FileQuality } from '../../shared/types/generated/application/FileQuality';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
-import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
+import type { CanonicalEntityDetails, MediaRecord } from '../../shared/types/canonical';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { showErrorNotification, showInfoNotification, showWarningNotification } from '../../shared/lib/notifications';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
@@ -118,8 +117,8 @@ interface LoadPairsOptions {
 }
 
 interface SideState {
-  item: ItemDetails | null;
-  media: MediaDetails | null;
+  item: CanonicalEntityDetails | null;
+  media: MediaRecord | null;
 }
 
 interface PairDetails {
@@ -166,8 +165,8 @@ function similarityLabel(pair: DuplicatePair): string {
   return `${similarity.toFixed(pair.distance < 10 ? 2 : 1)}% similar`;
 }
 
-function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | null {
-  return details.media.find((media) => media.file_hash === fileHash) ?? details.media[0] ?? null;
+function mediaForFile(details: CanonicalEntityDetails, fileHash: string): MediaRecord | null {
+  return details.media.find((media) => media.facts.content_hash === fileHash) ?? details.media[0] ?? null;
 }
 
 function sideIdentity(side: CandidateSide): number | null {
@@ -303,7 +302,7 @@ function MediaCard({
               assetKey={file.file_hash}
               thumbnailUrl={thumbnailUrl}
               fullResolutionUrl={fullResolutionUrl}
-              alt={media?.name ?? file.file_hash}
+              alt={media?.media_name ?? file.file_hash}
               pairKey={pairKey}
               pairThumbnailsReady={pairThumbnailsReady}
               onThumbnailReady={() => onThumbnailReady(side, pairKey)}
@@ -315,21 +314,21 @@ function MediaCard({
         )}
       </div>
       <div className={styles.metadata}>
-        <div className={styles.mediaName} title={media?.name ?? file.file_hash}>
-          {media?.name ?? file.file_hash}
+        <div className={styles.mediaName} title={media?.media_name ?? file.file_hash}>
+          {media?.media_name ?? file.file_hash}
         </div>
         <PropertyRow label="Resolution" value={dimensions(file)} />
         <PropertyRow label="Size" value={formatBytes(file.size_bytes)} />
         <PropertyRow label="Format" value={file.mime_type} />
-        <PropertyRow label="Rating" value={media?.rating == null ? 'Unrated' : String(media.rating)} />
-        <PropertyRow label="Tags" value={String(media?.tags.length ?? 0)} />
+        <PropertyRow label="Rating" value={details.item?.rating ?? 'Unrated'} />
+        <PropertyRow label="Tags" value={String(details.item?.tag_ids.length ?? 0)} />
         <PropertyRow
           label="Created"
-          value={media?.captured_at ? new Date(media.captured_at).toLocaleDateString() : 'Unknown'}
+          value={details.item?.root.captured_at_ms ? new Date(details.item.root.captured_at_ms).toLocaleDateString() : 'Unknown'}
         />
-        <PropertyRow label="Added" value={media ? new Date(media.imported_at).toLocaleDateString() : 'Unknown'} />
-        {details.item?.kind === 'collection' && (
-          <PropertyRow label="Group" value={details.item.label ?? `Group ${details.item.item_id}`} />
+        <PropertyRow label="Added" value={details.item ? new Date(details.item.root.imported_at_ms).toLocaleDateString() : 'Unknown'} />
+        {details.item?.root.kind === 'collection' && (
+          <PropertyRow label="Group" value={details.item.root.name || `Group ${details.item.root.root_id}`} />
         )}
         <PropertyRow label="Occurrences" value={String(occurrenceCount)} />
       </div>

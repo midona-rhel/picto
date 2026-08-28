@@ -74,7 +74,7 @@ describe('navigateToNode', () => {
     navigateToNode('system:inbox');
     const before = createEmptyItemFilters();
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: before });
-    navigateWithGridFilters('system:inbox', { ...before, include_tags: ['artist:alice'] });
+    navigateWithGridFilters('system:inbox', { ...before, include_tags: [{ tag_id: 1, name: 'artist:alice' }] });
     store.set(pendingGridIntentAtom, null);
 
     goBack();
@@ -88,7 +88,7 @@ describe('navigateToNode', () => {
   });
 
   it('marks direct filtered navigation as a fresh top-level visit', () => {
-    const filters = { ...createEmptyItemFilters(), include_tags: ['artist:alice'] };
+    const filters = { ...createEmptyItemFilters(), include_tags: [{ tag_id: 1, name: 'artist:alice' }] };
 
     navigateWithGridFilters('system:active', filters);
 
@@ -110,7 +110,7 @@ describe('navigateToNode', () => {
   });
 
   it('carries locked filters into the next grid scope and its history entry', () => {
-    const filters = { ...createEmptyItemFilters(), include_tags: ['favorite'] };
+    const filters = { ...createEmptyItemFilters(), include_tags: [{ tag_id: 1, name: 'favorite' }] };
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters });
     store.set(gridFilterLockedAtom, true);
 
@@ -125,7 +125,7 @@ describe('navigateToNode', () => {
 
   it('keeps a manager selected while its filtered grid is open and Back restores the manager', () => {
     navigateToNode('system:tag_manager');
-    const filters = { ...createEmptyItemFilters(), include_tags: ['artist:alice'] };
+    const filters = { ...createEmptyItemFilters(), include_tags: [{ tag_id: 1, name: 'artist:alice' }] };
 
     navigateWithGridFilters('system:active', filters, 'system:tag_manager');
 

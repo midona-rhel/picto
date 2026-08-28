@@ -21,9 +21,14 @@ import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSect
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
 import { InspectorField, InspectorFieldGroup, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
-import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
-import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
-import type { SelectionSummary } from '../../shared/types/generated/application/SelectionSummary';
+import type {
+  CanonicalEntityDetails,
+  CanonicalNamespaceSummary,
+  CanonicalTagRecord,
+  EntityTarget,
+  Rating,
+  SelectionSummary,
+} from '../../shared/types/canonical';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -44,7 +49,7 @@ import { confirmModalAtom, exportModalAtom } from '../../state/modals';
 import { navigateToNode, navigateWithGridFilters } from '../../state/navigationHistory';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { InspectorAddIcon, InspectorExportIcon } from '../../shared/ui/icons/toolbar-icons';
-import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { showTagItems } from '../../controllers/gridNavigationController';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { filesController } from '../../controllers/filesController';
@@ -56,12 +61,13 @@ import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { buildCommonTagContextEntries } from '../tags/tagContextMenu';
 import { setTagStarred, useTagPreferences } from '../tags/tagPreferences';
 import { tagsController } from '../../controllers/tagsController';
-import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
+import { tagName } from '../tags/tagContextMenu';
 import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { formatLabelForMime } from '../grid/canvas/primitives';
 import { GroupIcon } from '../../shared/ui/icons/group-icons';
+import { labToHex } from '../../shared/lib/labColor';
 
 const store = getDefaultStore();
 
@@ -81,10 +87,10 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1073741824).toFixed(2)} GB`;
 }
 
-function fmtDate(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
-  catch { return iso; }
+function fmtDate(value: number | string | null | undefined): string | null {
+  if (value == null || value === '') return null;
+  try { return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+  catch { return String(value); }
 }
 
 function fmtDuration(ms: number): string {
@@ -112,16 +118,41 @@ function hexToRgb(hex: string | null | undefined): [number, number, number] {
   return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
 }
 
-function parseTag(t: string) {
+function parseTag(t: string, tagId = 0) {
   const i = t.indexOf(':');
-  return i > 0 ? { ns: t.slice(0, i), sub: t.slice(i + 1), raw: t } : { ns: '', sub: t, raw: t };
+  return i > 0
+    ? { tagId, ns: t.slice(0, i), sub: t.slice(i + 1), raw: t }
+    : { tagId, ns: '', sub: t, raw: t };
+}
+
+function ratingNumber(rating: Rating | null | undefined): number {
+  return ({ unrated: 0, one: 1, two: 2, three: 3, four: 4, five: 5 } as const)[rating ?? 'unrated'];
+}
+
+function useResolvedTags(tagIds: readonly number[]): CanonicalTagRecord[] {
+  const key = tagIds.join(',');
+  const [records, setRecords] = useState<CanonicalTagRecord[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (tagIds.length === 0) {
+      setRecords([]);
+      return;
+    }
+    void tagsController.getById([...tagIds]).then((next) => {
+      if (!cancelled) setRecords(next);
+    }).catch(() => {
+      if (!cancelled) setRecords([]);
+    });
+    return () => { cancelled = true; };
+  }, [key]);
+  return records;
 }
 
 function selectionSupportsAiTagging(
-  target: ItemTarget | null | undefined,
+  target: EntityTarget | null | undefined,
   summary: SelectionSummary | null,
 ): boolean {
-  return Boolean(target && summary?.stats.all_media_are_images);
+  return Boolean(target && summary?.all_selected_roots_have_images);
 }
 
 // ── Portal opener ───────────────────────────────────────────────
@@ -466,15 +497,12 @@ function useSelectionSummary() {
   };
 }
 
-function itemDetailsDisplay(details: ItemDetails) {
-  const primary = details.media[0] ?? null;
-  const totalSize = details.media.reduce((total, media) => total + media.size_bytes, 0);
-  const mimeTypes = [...new Set(details.media.map((media) => media.mime_type))];
-  const ratings = details.media.map((media) => media.rating);
-  const sharedRating = ratings.length > 0 && ratings.every((rating) => rating === ratings[0])
-    ? ratings[0]
-    : null;
-  return { primary, totalSize, mimeTypes, sharedRating };
+function itemDetailsDisplay(details: CanonicalEntityDetails) {
+  const primary = details.media.find((media) => media.media_id === details.root.cover_media_id)
+    ?? details.media[0]
+    ?? null;
+  const mimeTypes = [...new Set(details.media.map((media) => media.facts.mime))];
+  return { primary, mimeTypes };
 }
 
 type CorePropertyLabel =
@@ -541,7 +569,7 @@ type InspectorSkeletonProps = {
   showSource?: boolean;
   rating?: { value: number; onChange?: (rating: number) => void };
   coreProperties: CoreProperty[];
-  tags: Array<{ ns: string; sub: string; raw: string }>;
+  tags: Array<{ tagId: number; ns: string; sub: string; raw: string }>;
   showTags?: boolean;
   onRemoveTag?: (raw: string) => void;
   folders: Array<{ id: number; name: string; color: string | null }>;
@@ -689,7 +717,7 @@ function navigateToFolder(folderId: number) {
   navigateToNode(`folder:${folderId}`);
 }
 
-function InspectorExportAction({ target, count }: { target: ItemTarget; count: number }) {
+function InspectorExportAction({ target, count }: { target: EntityTarget; count: number }) {
   return (
     <div className={styles.flowAction} data-inspector-property-action="export">
       <InspectorActionButton
@@ -720,6 +748,8 @@ export function Inspector() {
     showLoading: showSummaryLoading,
     failed: summaryFailed,
   } = useSelectionSummary();
+  const singleTagRecords = useResolvedTags(entityData?.tag_ids ?? []);
+  const sharedTagRecords = useResolvedTags(summary?.shared_tags ?? []);
 
   if (inspectorTarget.kind === 'none') return null;
 
@@ -728,47 +758,49 @@ export function Inspector() {
     if (!entityData) return <UnavailableInspectorSkeleton status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
 
     const d = entityData;
-    const { primary, totalSize, mimeTypes, sharedRating } = itemDetailsDisplay(d);
-    const tags = [...(d.aggregate_tags ?? [])]
-      .map(parseTag)
+    const { primary, mimeTypes } = itemDetailsDisplay(d);
+    const tags = singleTagRecords
+      .map((tag) => parseTag(tagName(tag), tag.tag_id))
       .sort((a, b) => tagKey(a.ns, a.sub).localeCompare(tagKey(b.ns, b.sub)));
     const folders = (d.folder_ids ?? []).map((folderId) => {
       const n = sidebarNodes.find((s) => s.id === `folder:${folderId}`);
       return { id: folderId, name: n?.name ?? `Folder ${folderId}`, color: n?.color ?? null };
     });
-    const palette = primary?.dominant_colors ?? [];
+    const palette = primary?.facts.palette.map(labToHex).filter((color): color is string => color !== null) ?? [];
+    const background = palette[0] ?? null;
+    const rootId = d.root.root_id;
     return <InspectorSkeleton
       preview={<Preview
-        hashes={primary ? [primary.file_hash] : []}
-        backgrounds={primary ? [primary.dominant_color_hex] : []}
+        hashes={primary ? [primary.facts.content_hash] : []}
+        backgrounds={primary ? [background] : []}
         type="single"
-        formatLabel={d.kind === 'collection'
+        formatLabel={d.root.kind === 'collection'
           ? <GroupIcon size={14} />
-          : primary ? formatLabelForMime(primary.mime_type) : undefined}
-        fontHashes={primary?.mime_type.startsWith('font/') ? new Set([primary.file_hash]) : undefined}
+          : primary ? formatLabelForMime(primary.facts.mime) : undefined}
+        fontHashes={primary?.facts.mime.startsWith('font/') ? new Set([primary.facts.content_hash]) : undefined}
       />}
       palette={palette}
-      name={{ value: d.label ?? primary?.name ?? '', onCommit: (value) => { void entityMutations.setItemName(d.item_id, value); } }}
-      notes={{ value: primary?.notes ?? '', onCommit: (value) => { void entityMutations.setItemNotes(d.item_id, value); } }}
-      source={{ urls: primary?.source_urls ?? [], onChange: (urls) => { void entityMutations.setItemSourceUrls(d.item_id, urls); } }}
-      rating={{ value: sharedRating ?? 0, onChange: (rating) => entityMutations.setItemRating(d.item_id, rating) }}
+      name={{ value: d.root.name, onCommit: (value) => { void entityMutations.setItemName(rootId, value); } }}
+      notes={{ value: d.root.notes ?? '', onCommit: (value) => { void entityMutations.setItemNotes(rootId, value); } }}
+      source={{ urls: d.root.source_urls, onChange: (urls) => { void entityMutations.setItemSourceUrls(rootId, urls); } }}
+      rating={{ value: ratingNumber(d.rating), onChange: (rating) => entityMutations.setItemRating(rootId, rating) }}
       coreProperties={normalizedCoreProperties({
-        Items: { value: d.media.length.toLocaleString() },
-        Dimensions: { value: primary?.pixel_width && primary.pixel_height ? `${primary.pixel_width} × ${primary.pixel_height}` : '—' },
-        Size: { value: fmtSize(totalSize) },
+        Items: { value: d.root.media_count.toLocaleString() },
+        Dimensions: { value: primary?.facts.width && primary.facts.height ? `${primary.facts.width} × ${primary.facts.height}` : '—' },
+        Size: { value: fmtSize(d.root.total_size_bytes) },
         Type: { value: mimeTypes.length === 1 ? fmtExt(mimeTypes[0]) : 'Mixed', title: mimeTypes.join(', ') },
-        Duration: { value: primary?.duration_ms != null && primary.duration_ms > 0 ? fmtDuration(primary.duration_ms) : '—' },
-        'Date added': { value: fmtDate(primary?.imported_at) ?? '—' },
-        'Date created': { value: fmtDate(primary?.captured_at) ?? '—' },
-        'Date modified': { value: '—' },
+        Duration: { value: primary?.facts.duration_ms != null && primary.facts.duration_ms > 0 ? fmtDuration(primary.facts.duration_ms) : '—' },
+        'Date added': { value: fmtDate(d.root.imported_at_ms) ?? '—' },
+        'Date created': { value: fmtDate(d.root.captured_at_ms) ?? '—' },
+        'Date modified': { value: fmtDate(d.root.modified_at_ms) ?? '—' },
       })}
       tags={tags}
-      onRemoveTag={(raw) => { void entityMutations.removeItemTags(d.item_id, [raw]); }}
+      onRemoveTag={(raw) => { void entityMutations.removeItemTags(rootId, [raw]); }}
       folders={folders}
-      onRemoveFolder={(folderId) => { void entityMutations.removeItemFromFolder(d.item_id, folderId); }}
+      onRemoveFolder={(folderId) => { void entityMutations.removeItemFromFolder(rootId, folderId); }}
       onNavigateFolder={navigateToFolder}
-      propertyAction={d.media.length > 0 ? <InspectorExportAction target={{ kind: 'explicit', item_ids: [d.item_id] }} count={d.media.length} /> : undefined}
-      action={<InspectorAutoTagAction count={d.media.length} enabled={d.media.length > 0 && d.media.every((media) => media.mime_type.startsWith('image/'))} />}
+      propertyAction={d.media.length > 0 ? <InspectorExportAction target={{ kind: 'explicit', root_ids: [rootId] }} count={d.media.length} /> : undefined}
+      action={<InspectorAutoTagAction count={d.media.length} enabled={d.media.some((media) => media.facts.mime.startsWith('image/'))} />}
     />;
   }
 
@@ -776,10 +808,10 @@ export function Inspector() {
   if (inspectorTarget.kind === 'multi') {
     // Use backend count when available — it's in sync with the tags/folders data
     const count = summary?.selected_count ?? inspectorTarget.count;
-    const tags = (summary?.shared_tags ?? []).map((t) => parseTag(t.tag));
-    const folders = (summary?.shared_folders ?? []).map((f) => {
-      const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
-      return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
+    const tags = sharedTagRecords.map((tag) => parseTag(tagName(tag), tag.tag_id));
+    const folders = (summary?.shared_folders ?? []).map((folderId) => {
+      const n = sidebarNodes.find((s) => s.id === `folder:${folderId}`);
+      return { id: folderId, name: n?.name ?? `Folder ${folderId}`, color: n?.color ?? null };
     });
     const previewHashes = summary?.sample_hashes ?? [];
     const commitNotes = selTarget ? (notes: string) => {
@@ -806,14 +838,14 @@ export function Inspector() {
       selectionCount={count}
       notes={{ value: summary?.shared_notes ?? '', onCommit: commitNotes, readOnly: summaryPending }}
       source={{ urls: summary?.shared_source_urls ?? [], onChange: commitSources, unavailable: summaryPending }}
-      rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => entityMutations.setTargetRating(selTarget, rating) : undefined }}
+      rating={{ value: ratingNumber(summary?.shared_rating), onChange: selTarget ? (rating) => entityMutations.setTargetRating(selTarget, rating) : undefined }}
       coreProperties={normalizedCoreProperties({
         Media: summaryPending
           ? { value: '', loading: true, showLoading: showSummaryLoading }
-          : { value: summary ? summary.stats.media_count.toLocaleString() : '—' },
+          : { value: summary ? summary.media_count.toLocaleString() : '—' },
         Size: summaryPending
           ? { value: '', loading: true, showLoading: showSummaryLoading }
-          : { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },
+          : { value: summary ? fmtSize(summary.total_size_bytes) : '—' },
       })}
       tags={tags}
       onRemoveTag={selTarget ? (raw) => { void entityMutations.removeTargetTags(selTarget, [raw]); } : undefined}
@@ -862,12 +894,12 @@ export function Inspector() {
 
   return <InspectorSkeleton
     preview={<Preview
-      hashes={scopeVM.previewItems.map((item) => item.display_file_hash)}
-      backgrounds={scopeVM.previewItems.map((item) => item.dominant_color_hex)}
+      hashes={scopeVM.previewItems.map((item) => item.content_hash)}
+      backgrounds={scopeVM.previewItems.map((item) => labToHex(item.palette[0]) ?? null)}
       type="collage"
       fontHashes={new Set(scopeVM.previewItems
-        .filter((item) => item.display_mime_type?.startsWith('font/'))
-        .map((item) => item.display_file_hash))}
+        .filter((item) => item.mime.startsWith('font/'))
+        .map((item) => item.content_hash))}
     />}
     palette={[]}
     name={{ value: node.name, readOnly: isSystem, onCommit: canEdit ? (value) => { void saveName(value); } : undefined }}
@@ -887,12 +919,12 @@ export function Inspector() {
       count={scopeVM.totalCount}
       target={{
         kind: 'query',
-        query: {
-          scope: exportScope,
-          filters: createEmptyItemFilters(),
-          sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-        },
-        excluded_item_ids: [],
+        query: compileGridQuery(
+          exportScope,
+          createEmptyItemFilters(),
+          { field: 'imported_at', direction: 'descending', random_seed: null },
+        ),
+        excluded_root_ids: [],
       }}
     /> : undefined}
   />;
@@ -964,7 +996,7 @@ function SummarySpinner({ label }: { label: string }) {
 }
 
 function TagsSection({ tags, onRemove, editable = true, pending = false, showLoading = false }: {
-  tags: Array<{ ns: string; sub: string; raw: string }>;
+  tags: Array<{ tagId: number; ns: string; sub: string; raw: string }>;
   onRemove?: (raw: string) => void;
   editable?: boolean;
   pending?: boolean;
@@ -997,7 +1029,7 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
               chipMenu.openAt(
                 { x: e.clientX, y: e.clientY },
                 buildCommonTagContextEntries({
-                  tag: { namespace: t.ns, subtag: t.sub },
+                  tag: { tag_id: t.tagId, namespace: t.ns, subname: t.sub },
                   namespaces,
                   starred: tagPreferences.starredTags.includes(t.raw),
                   onFilter: showTagItems,

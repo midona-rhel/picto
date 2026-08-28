@@ -24,7 +24,7 @@ import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import { tagGroupColor, tagGroupOrder } from '../tags/tagGroupPresentation';
 import styles from './TagSelectModal.module.css';
-import { commonItemTags } from '../../shared/lib/itemDetails';
+import { tagName } from '../tags/tagContextMenu';
 
 type SidebarMode = 'recent' | 'selected' | 'all' | 'namespace';
 const PAGE_SIZE = 100;
@@ -34,9 +34,11 @@ function tagRecord(name: string): CanonicalTagRecord {
   const separator = name.indexOf(':');
   return {
     tag_id: 0,
+    namespace_id: 0,
     namespace: separator < 0 ? '' : name.slice(0, separator),
-    subtag: separator < 0 ? name : name.slice(separator + 1),
-    file_count: 0,
+    subname: separator < 0 ? name : name.slice(separator + 1),
+    active_count: 0,
+    assignment_count: 0,
   };
 }
 
@@ -52,6 +54,7 @@ export function TagSelectModal() {
   const [recentTagKeys, recordRecent] = useRecentItems('picto-recent-tags');
   const [query, setQuery] = useState('');
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
+  const [entityTagKeys, setEntityTagKeys] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
@@ -64,9 +67,20 @@ export function TagSelectModal() {
   const listRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const entityTagKeys = useMemo(() => {
-    return commonItemTags(entityData);
-  }, [entityData]);
+  useEffect(() => {
+    let cancelled = false;
+    const tagIds = entityData?.tag_ids ?? [];
+    if (!open || tagIds.length === 0) {
+      setEntityTagKeys(new Set());
+      return;
+    }
+    void tagsController.getById(tagIds).then((records) => {
+      if (!cancelled) setEntityTagKeys(new Set(records.map(tagName)));
+    }).catch(() => {
+      if (!cancelled) setEntityTagKeys(new Set());
+    });
+    return () => { cancelled = true; };
+  }, [entityData?.tag_ids.join(','), open]);
 
   const loadTags = useCallback((search: string, ns?: string | null) => {
     void tagsController.getPaginated({
@@ -74,7 +88,7 @@ export function TagSelectModal() {
       search: search.trim() || null,
       namespace: ns ?? null,
     }).then((result) => {
-      setTags(result.items);
+      setTags(result.tags);
       setCursor(result.next_cursor);
       setFocusIdx(-1);
     }).catch(() => {});
@@ -90,7 +104,7 @@ export function TagSelectModal() {
       namespace: ns,
       cursor,
     }).then((result) => {
-      setTags((prev) => [...prev, ...result.items]);
+      setTags((prev) => [...prev, ...result.tags]);
       setCursor(result.next_cursor);
       setLoadingMore(false);
     }).catch(() => { setLoadingMore(false); });
@@ -133,11 +147,11 @@ export function TagSelectModal() {
 
   const displayTags = useMemo(() => {
     if (sidebarMode === 'selected') {
-      return (entityData?.aggregate_tags ?? []).map(tagRecord).sort((a, b) => {
+      return [...entityTagKeys].map(tagRecord).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);
-        return a.subtag.localeCompare(b.subtag);
+        return a.subname.localeCompare(b.subname);
       });
     }
     if (sidebarMode === 'recent') {
@@ -151,20 +165,20 @@ export function TagSelectModal() {
       return result;
     }
     return tags;
-  }, [tags, sidebarMode, entityData, recentTagKeys]);
+  }, [tags, sidebarMode, entityTagKeys, recentTagKeys]);
 
   const nsGroups = useMemo(() =>
-    [...namespaces].sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace)),
+    [...namespaces].sort((a, b) => tagGroupOrder(a.name) - tagGroupOrder(b.name)),
   [namespaces]);
 
   const estimatedTotal = useMemo(() => {
     if (sidebarMode === 'selected' || sidebarMode === 'recent') return displayTags.length;
     if (query.trim()) return displayTags.length;
     if (sidebarMode === 'namespace' && activeNamespace != null) {
-      const ns = namespaces.find((n) => n.namespace === activeNamespace);
-      return ns ? ns.count : displayTags.length;
+      const ns = namespaces.find((n) => n.name === activeNamespace);
+      return ns ? ns.tag_count : displayTags.length;
     }
-    const total = namespaces.reduce((sum, n) => sum + n.count, 0);
+    const total = namespaces.reduce((sum, n) => sum + n.tag_count, 0);
     return total > 0 ? total : displayTags.length;
   }, [sidebarMode, activeNamespace, namespaces, displayTags.length, query]);
 
@@ -233,11 +247,11 @@ export function TagSelectModal() {
     } else if (e.key === 'Tab') {
       e.preventDefault();
       if (sidebarMode === 'all') {
-        if (nsGroups.length > 0) { setSidebarMode('namespace'); setActiveNamespace(nsGroups[0].namespace); }
+        if (nsGroups.length > 0) { setSidebarMode('namespace'); setActiveNamespace(nsGroups[0].name); }
         else setSidebarMode('selected');
       } else if (sidebarMode === 'namespace') {
-        const idx = nsGroups.findIndex((g) => g.namespace === activeNamespace);
-        if (idx < nsGroups.length - 1) setActiveNamespace(nsGroups[idx + 1].namespace);
+        const idx = nsGroups.findIndex((g) => g.name === activeNamespace);
+        if (idx < nsGroups.length - 1) setActiveNamespace(nsGroups[idx + 1].name);
         else setSidebarMode('selected');
       } else if (sidebarMode === 'selected') {
         setSidebarMode('recent');
@@ -323,19 +337,19 @@ export function TagSelectModal() {
             >
               <span className={styles.sidebarName}>All</span>
               <span className={styles.sidebarBadge}>
-                {namespaces.reduce((sum, n) => sum + n.count, 0).toLocaleString()}
+                {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
               </span>
             </div>
             {nsGroups.length > 0 && <div className={styles.sidebarSep} />}
             {nsGroups.map((ns) => (
               <div
-                key={ns.namespace || '__general'}
-                className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.namespace ? styles.sidebarItemActive : ''}`}
-                onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.namespace); }}
+                key={ns.namespace_id}
+                className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.name ? styles.sidebarItemActive : ''}`}
+                onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.name); }}
               >
-                <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.namespace) }} />
-                <span className={styles.sidebarName}>{ns.namespace || 'general'}</span>
-                <span className={styles.sidebarBadge}>{ns.count.toLocaleString()}</span>
+                <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.name) }} />
+                <span className={styles.sidebarName}>{ns.name || 'general'}</span>
+                <span className={styles.sidebarBadge}>{ns.tag_count.toLocaleString()}</span>
               </div>
             ))}
           </div>
@@ -379,9 +393,9 @@ export function TagSelectModal() {
                           <span className={styles.tagNs}>{tag.namespace}:</span>
                         )}
                         <span className={styles.tagName}>
-                          {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
+                          {query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)}
                         </span>
-                        <span className={styles.tagBadge}>{(tag.file_count ?? 0).toLocaleString()}</span>
+                        <span className={styles.tagBadge}>{tag.active_count.toLocaleString()}</span>
                       </div>
                     );
                   })}
@@ -396,7 +410,7 @@ export function TagSelectModal() {
 }
 
 function formatTag(tag: CanonicalTagRecord): string {
-  return tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
+  return tag.namespace ? `${tag.namespace}:${tag.subname}` : tag.subname;
 }
 
 function highlightMatch(text: string, q: string): React.ReactNode {

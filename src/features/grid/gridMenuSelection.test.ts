@@ -1,27 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
+import type { EntityTarget } from '../../shared/types/canonical';
 import { resolveContextMenuTarget } from './gridMenuSelection';
-import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
 
 describe('resolveContextMenuTarget', () => {
   it('captures the explicitly selected item IDs instead of a stale target', () => {
-    const staleTarget: ItemTarget = { kind: 'explicit', item_ids: [10] };
+    const staleTarget: EntityTarget = { kind: 'explicit', root_ids: [10] };
 
     expect(resolveContextMenuTarget(false, staleTarget, new Set([42, 43]))).toEqual({
       kind: 'explicit',
-      item_ids: [42, 43],
+      root_ids: [42, 43],
     });
   });
 
   it('preserves a query-wide selection instead of reducing it to loaded item IDs', () => {
-    const queryTarget: ItemTarget = {
+    const queryTarget: EntityTarget = {
       kind: 'query',
-      query: {
-        scope: { kind: 'all' },
-        filters: createEmptyItemFilters(),
-        sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-      },
-      excluded_item_ids: [9],
+      query: compileGridQuery(
+        { kind: 'all' },
+        createEmptyItemFilters(),
+        { field: 'imported_at', direction: 'descending', random_seed: null },
+      ),
+      excluded_root_ids: [9],
     };
 
     expect(resolveContextMenuTarget(true, queryTarget, new Set([1, 2]))).toBe(queryTarget);

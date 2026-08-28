@@ -5,6 +5,7 @@ import {
   getNamespaceSummary,
   getUnusedTagCount,
   getTagsPaginated,
+  getTagsById,
   mergeTags,
   renameTagGroup,
   renameTag,
@@ -27,6 +28,10 @@ export const tagsController = {
 
   getNamespaceSummary(): Promise<CanonicalNamespaceSummary[]> {
     return getNamespaceSummary();
+  },
+
+  getById(tagIds: number[]) {
+    return getTagsById(tagIds);
   },
 
   getUnusedCount(): Promise<number> {
@@ -57,14 +62,14 @@ export const tagsController = {
     return result;
   },
 
-  async renameGroup(namespace: string, newNamespace: string): Promise<unknown> {
-    const result = await renameTagGroup(namespace, newNamespace);
+  async renameGroup(namespaceId: number, name: string): Promise<unknown> {
+    const result = await renameTagGroup(namespaceId, name);
     await announceUndoableMutation('tags.group.rename');
     return result;
   },
 
-  async deleteGroup(namespace: string): Promise<unknown> {
-    const result = await deleteTagGroup(namespace);
+  async deleteGroup(namespaceId: number): Promise<unknown> {
+    const result = await deleteTagGroup(namespaceId);
     await announceUndoableMutation('tags.group.delete');
     return result;
   },

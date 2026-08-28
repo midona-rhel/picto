@@ -239,6 +239,26 @@ export const filesController = {
     if (path) await clipboardCopyFile(path);
   },
 
+  async copyHashes(hashes: string[]): Promise<void> {
+    const paths = await Promise.all(hashes.map(resolveFilePath));
+    if (paths.length === 0) throw new Error('The selection has no physical files to copy.');
+    await clipboardCopyFiles(paths);
+  },
+
+  async copyHashPaths(hashes: string[]): Promise<void> {
+    const paths = await Promise.all(hashes.map(resolveFilePath));
+    if (paths.length === 0) throw new Error('The selection has no physical file paths to copy.');
+    clipboardWriteText(paths.join('\n'));
+  },
+
+  async copyHashLinks(hashes: string[]): Promise<void> {
+    const paths = await Promise.all(hashes.map(resolveFilePath));
+    clipboardWriteText(paths.map((path, index) => {
+      const extension = path.split(/[\\/]/).pop()?.split('.').pop() ?? 'bin';
+      return `media://localhost/file/${hashes[index]}.${extension}`;
+    }).join('\n'));
+  },
+
   async copyTarget(target: EntityTarget): Promise<void> {
     const resolved = await resolveTargetFilePaths(target);
     if (resolved.length === 0) throw new Error('The selection has no physical files to copy.');

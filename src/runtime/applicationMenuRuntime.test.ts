@@ -66,7 +66,7 @@ describe('application menu runtime', () => {
     expect(store.get(exportModalAtom)).toEqual({
       open: true,
       fileCount: 1,
-      target: { kind: 'explicit', item_ids: [7] },
+      target: { kind: 'explicit', root_ids: [7] },
     });
     stop();
   });
@@ -75,7 +75,7 @@ describe('application menu runtime', () => {
     startApplicationMenuRuntime();
     mocks.listeners.get('menu:export-basic')?.();
     await vi.waitFor(() => expect(mocks.exportMedia).toHaveBeenCalledWith(
-      { kind: 'explicit', item_ids: [7] },
+      { kind: 'explicit', root_ids: [7] },
       { output_dir: '/tmp/export', format: 'original' },
     ));
   });

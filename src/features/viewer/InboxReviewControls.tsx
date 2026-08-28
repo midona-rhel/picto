@@ -9,15 +9,15 @@ import styles from './InboxReviewControls.module.css';
 
 export type InboxReviewDecision = 'accept' | 'reject';
 
-type ReviewableItem = { item_id: number; lifecycle: string } | null;
+type ReviewableItem = { root_id: number; lifecycle: string } | null;
 
 /** The viewed entity owns review eligibility, including inbox collections. */
 export function resolveInboxReviewItemId(
   viewerItem: ReviewableItem,
   quickLookItem: ReviewableItem,
 ): number | null {
-  if (quickLookItem?.lifecycle === 'inbox') return quickLookItem.item_id;
-  if (viewerItem?.lifecycle === 'inbox') return viewerItem.item_id;
+  if (quickLookItem?.lifecycle === 'inbox') return quickLookItem.root_id;
+  if (viewerItem?.lifecycle === 'inbox') return viewerItem.root_id;
   return null;
 }
 

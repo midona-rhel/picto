@@ -137,7 +137,7 @@ async function readSidebarSnapshot() {
     nodes: buildSidebarNodes(
       navigation,
       counts,
-      namespaces.reduce((total, namespace) => total + namespace.count, 0),
+      namespaces.reduce((total, namespace) => total + namespace.tag_count, 0),
     ),
     epoch: Math.max(navigationRevision, countsRevision),
   };

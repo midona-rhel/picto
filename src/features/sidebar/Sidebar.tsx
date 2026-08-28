@@ -49,13 +49,12 @@ import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { ToolbarFilterIcon } from '../../shared/ui/icons/toolbar-icons';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
-import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
+import type { BaseScope, SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
 import type { EntityTarget } from '../../shared/types/canonical';
-import type { ItemScope } from '../../shared/types/generated/application/ItemScope';
 import { filterSidebarTree } from './treeFilter';
 import * as entityMutations from '../../controllers/entityMutations';
 import { clearRecentViews } from '../../platform/entityApi';
-import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { folderPickerPortalAtom } from '../../state/portals';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
@@ -208,15 +207,15 @@ export function nextSidebarSelection(
   return next;
 }
 
-function queryTarget(scope: ItemScope): EntityTarget {
+function queryTarget(scope: BaseScope): EntityTarget {
   return {
     kind: 'query',
-    query: {
+    query: compileGridQuery(
       scope,
-      filters: createEmptyItemFilters(),
-      sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-    },
-    excluded_item_ids: [],
+      createEmptyItemFilters(),
+      { field: 'imported_at', direction: 'descending', random_seed: null },
+    ),
+    excluded_root_ids: [],
   };
 }
 

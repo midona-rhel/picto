@@ -1,7 +1,7 @@
 import { invoke } from './ipc';
 import type { DuplicateCandidate } from '../shared/types/generated/application/DuplicateCandidate';
 import type { DuplicateScanResult } from '../shared/types/generated/application/DuplicateScanResult';
-import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
+import type { CanonicalEntityDetails } from '../shared/types/canonical';
 import type { ResolutionChoice } from '../shared/types/generated/application/ResolutionChoice';
 import type { ResolutionResult } from '../shared/types/generated/application/ResolutionResult';
 
@@ -56,8 +56,8 @@ export function getDuplicatePairs(params: { limit?: number } = {}): Promise<Dupl
   });
 }
 
-export function getDuplicateItemDetails(itemId: number): Promise<ItemDetails> {
-  return invoke<ItemDetails>('items.details', { item_id: itemId });
+export function getDuplicateItemDetails(rootId: number): Promise<CanonicalEntityDetails> {
+  return invoke<CanonicalEntityDetails>('items.details', { root_id: rootId });
 }
 
 function choiceForAction(action: DuplicateAction, pair: DuplicatePair): ResolutionChoice {

@@ -1,6 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { queryItems } from '../../platform/entityApi';
 import { initialGridFilters } from '../../state/grid';
+import { compileGridQuery } from '../../shared/lib/itemFilters';
 import { libraryCoverModalAtom } from '../../state/modals';
 import type { MediaCoverCandidate, MediaCoverCandidatePage } from '../subscriptions/components/SubscriptionCoverDialog';
 
@@ -39,27 +40,21 @@ export async function loadLibraryCoverCandidates(
   if (config.currentPath !== libraryPath) {
     throw new Error('Open this library before choosing one of its media items.');
   }
-  const page = await queryItems({
-    scope: { kind: 'all' },
-    filters: {
-      ...initialGridFilters,
-      include_tags: [],
-      exclude_tags: [],
-      include_folder_ids: [],
-      exclude_folder_ids: [],
-    },
-    sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-  }, { cursor, limit: PAGE_SIZE });
+  const page = await queryItems(compileGridQuery(
+    { kind: 'all' },
+    initialGridFilters,
+    { field: 'imported_at', direction: 'descending', random_seed: null },
+  ), { cursor, limit: PAGE_SIZE });
   return {
     candidates: page.items
       .filter((item) => item.kind === 'media')
       .map((item) => ({
-        media_item_id: item.item_id,
-        file_hash: item.display_file_hash,
+        media_item_id: item.root_id,
+        file_hash: item.content_hash,
         name: item.name,
-        pixel_width: item.pixel_width,
-        pixel_height: item.pixel_height,
-        mime_type: item.display_mime_type,
+        pixel_width: item.width,
+        pixel_height: item.height,
+        mime_type: item.mime,
       })),
     next_cursor: page.next_cursor,
   };

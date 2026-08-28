@@ -8,7 +8,7 @@
 
 import { getDefaultStore } from 'jotai';
 import { invoke } from '../platform/ipc';
-import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
+import type { CanonicalEntityDetails } from '../shared/types/canonical';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -53,15 +53,15 @@ export async function loadInspectorData(itemId: number | null) {
   }, 250);
 
   try {
-    const result = await invoke<ItemDetails>('items.details', { item_id: itemId });
+    const result = await invoke<CanonicalEntityDetails>('items.details', { root_id: itemId });
     if (v !== loadVersion || !result) return;
-    const displayHash = result.media[0]?.file_hash;
+    const displayHash = result.media[0]?.facts.content_hash;
     if (displayHash) await preloadImage(`media://localhost/thumb/${displayHash}.jpg`);
     if (v !== loadVersion) return;
     if (loadingTimer) clearTimeout(loadingTimer);
     loadingTimer = null;
     store.set(displayedInspectorItemDetailsAtom, result);
-    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: result.item_id });
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: result.root.root_id });
     store.set(inspectorLoadingAtom, false);
     store.set(inspectorErrorAtom, null);
   } catch (err) {

@@ -10,9 +10,13 @@ import {
 import type { MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
 
-export interface TagMenuTarget {
+export interface TagNameParts {
   namespace: string;
-  subtag: string;
+  subname: string;
+}
+
+export interface TagMenuTarget extends TagNameParts {
+  tag_id: number;
 }
 
 export function tagNamespace(namespace: string): string | null {
@@ -20,13 +24,13 @@ export function tagNamespace(namespace: string): string | null {
   return !normalized || normalized === 'general' ? null : normalized;
 }
 
-export function tagName(tag: TagMenuTarget): string {
+export function tagName(tag: TagNameParts): string {
   const namespace = tagNamespace(tag.namespace);
-  return namespace ? `${namespace}:${tag.subtag}` : tag.subtag;
+  return namespace ? `${namespace}:${tag.subname}` : tag.subname;
 }
 
-export function tagNameInGroup(tag: TagMenuTarget, namespace: string | null): string {
-  return namespace ? `${namespace}:${tag.subtag}` : tag.subtag;
+export function tagNameInGroup(tag: TagNameParts, namespace: string | null): string {
+  return namespace ? `${namespace}:${tag.subname}` : tag.subname;
 }
 
 function copyText(value: string): void {
@@ -47,7 +51,7 @@ export function buildCommonTagContextEntries({
   tag: TagMenuTarget;
   namespaces: CanonicalNamespaceSummary[];
   starred: boolean;
-  onFilter: (tag: string) => void;
+  onFilter: (tag: { tag_id: number; name: string }) => void;
   onStarChange: (tag: string, starred: boolean) => void;
   onMoveToGroup?: (namespace: string | null) => void;
   onRemove?: () => void;
@@ -55,7 +59,7 @@ export function buildCommonTagContextEntries({
   const name = tagName(tag);
   const currentNamespace = tagNamespace(tag.namespace);
   const groupTargets = namespaces
-    .map((item) => tagNamespace(item.namespace))
+    .map((item) => tagNamespace(item.name))
     .filter((namespace): namespace is string => namespace !== null && namespace !== currentNamespace)
     .filter((namespace, index, values) => values.indexOf(namespace) === index)
     .sort((left, right) => left.localeCompare(right));
@@ -63,7 +67,8 @@ export function buildCommonTagContextEntries({
     {
       label: 'Filter Items with This Tag',
       icon: <IconSearch size={16} />,
-      action: () => onFilter(name),
+      disabled: tag.tag_id <= 0,
+      action: () => onFilter({ tag_id: tag.tag_id, name }),
     },
     {
       label: starred ? 'Remove from Starred' : 'Add to Starred',

@@ -59,59 +59,72 @@ const model = {
   sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1, dataset: 'test',
 };
 
-const prediction = (mediaItemId: number, tag = 'cat', confidence = 0.8) => ({
-  mediaItemId,
+const prediction = (rootId: number, tag = 'cat', confidence = 0.8) => ({
+  root_id: rootId,
   error: null,
   predictions: [{ tag, namespace: 'character', confidence, model: model.slug }],
 });
 
 const details = (itemId: number) => ({
-  item_id: itemId,
-  kind: 'media',
-  lifecycle: 'active',
-  label: null,
-  cover_media_item_id: null,
-  folder_ids: [],
-  aggregate_tags: [],
-  revision: 1,
-  media: [{
-    media_item_id: itemId,
-    file_hash: `hash-${itemId}`,
-    mime_type: 'image/jpeg',
-    dominant_color_hex: '#202020',
-    dominant_colors: ['#202020'],
-    size_bytes: 100,
-    pixel_width: 100,
-    pixel_height: 100,
-    duration_ms: null,
-    frame_count: null,
+  root: {
+    root_id: itemId,
+    stable_key: `root-${itemId}`,
+    kind: 'media',
     name: `Image ${itemId}`,
     notes: null,
-    rating: null,
     source_urls: [],
-    captured_at: null,
-    imported_at: '2026-01-01T00:00:00Z',
-    position: 0,
-    tags: [],
+    cover_media_id: itemId,
+    imported_at_ms: Date.parse('2026-01-01T00:00:00Z'),
+    captured_at_ms: null,
+    modified_at_ms: Date.parse('2026-01-01T00:00:00Z'),
+    media_count: 1,
+    total_size_bytes: 100,
+  },
+  lifecycle: 'active',
+  rating: 'unrated',
+  folder_ids: [],
+  tag_ids: [],
+  revision: 1,
+  media: [{
+    media_id: itemId,
+    media_name: `Image ${itemId}`,
+    file_id: itemId,
+    file_path: `/media/hash-${itemId}`,
+    facts: {
+      mime: 'image/jpeg',
+      size_bytes: 100,
+      width: 100,
+      height: 100,
+      duration_ms: null,
+      frame_count: null,
+      content_hash: `hash-${itemId}`,
+      perceptual_hash: null,
+      palette: [],
+    },
   }],
 });
 
 const collectionDetails = (itemId: number, mediaItemIds: number[]) => ({
   ...details(itemId),
-  kind: 'collection',
-  label: 'Mixed collection',
-  cover_media_item_id: mediaItemIds[0],
-  media: mediaItemIds.map((mediaItemId, position) => ({
+  root: {
+    ...details(itemId).root,
+    kind: 'collection',
+    name: 'Mixed collection',
+    cover_media_id: mediaItemIds[0],
+    media_count: mediaItemIds.length,
+    total_size_bytes: mediaItemIds.length * 100,
+  },
+  media: mediaItemIds.map((mediaItemId) => ({
     ...details(mediaItemId).media[0],
-    media_item_id: mediaItemId,
-    position,
+    media_id: mediaItemId,
+    media_name: `Image ${mediaItemId}`,
   })),
 });
 
 async function renderPanel(itemIds = [1]) {
   const store = createStore();
   store.set(mocks.portalAtom, { open: true, anchor: null });
-  store.set(mocks.targetAtom, { kind: 'explicit', item_ids: itemIds });
+  store.set(mocks.targetAtom, { kind: 'explicit', root_ids: itemIds });
   let result!: ReturnType<typeof renderWithProviders>;
   await act(async () => {
     result = renderWithProviders(<Provider store={store}><AiTaggerPanel /></Provider>);
@@ -178,8 +191,8 @@ describe('AiTaggerPanel', () => {
     expect(mocks.predict).toHaveBeenNthCalledWith(2, [2], [model.slug]);
     await user.click(screen.getByRole('button', { name: 'Apply 2 tags' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
-      { media_item_id: 1, tags: ['character:cat'] },
-      { media_item_id: 2, tags: ['character:cat'] },
+      { root_id: 1, tags: ['character:cat'] },
+      { root_id: 2, tags: ['character:cat'] },
     ]));
     expect(mocks.announce).toHaveBeenCalledWith('items.apply_ai_tags');
   });
@@ -193,8 +206,8 @@ describe('AiTaggerPanel', () => {
       cachedBackend: null,
     });
     mocks.predict.mockImplementation(async (itemIds: number[], modelSlugs: string[]) => ({
-      predictions: itemIds.map((mediaItemId) => ({
-        mediaItemId,
+      predictions: itemIds.map((rootId) => ({
+        root_id: rootId,
         error: null,
         predictions: modelSlugs.map((slug) => ({
           tag: slug === model.slug ? 'cat' : 'dog',
@@ -223,7 +236,13 @@ describe('AiTaggerPanel', () => {
   it('reviews a collection once, unions member predictions, and applies once to its root', async () => {
     mocks.details.mockResolvedValue(collectionDetails(10, [11, 12]));
     mocks.predict.mockImplementation(async (itemIds: number[]) => ({
-      predictions: itemIds.map((itemId) => prediction(itemId, itemId === 11 ? 'cat' : 'dog')),
+      predictions: itemIds.map((itemId) => ({
+        ...prediction(itemId, 'cat'),
+        predictions: [
+          ...prediction(itemId, 'cat').predictions,
+          ...prediction(itemId, 'dog').predictions,
+        ],
+      })),
       thresholds: { character: 0.35 },
     }));
     const user = setupUser();
@@ -233,12 +252,12 @@ describe('AiTaggerPanel', () => {
     expect(await screen.findByText('cat')).toBeInTheDocument();
     expect(await screen.findByText('dog')).toBeInTheDocument();
     expect(mocks.predict).toHaveBeenCalledTimes(1);
-    expect(mocks.predict).toHaveBeenCalledWith([11, 12], [model.slug]);
+    expect(mocks.predict).toHaveBeenCalledWith([10], [model.slug]);
     expect(screen.getByText('Mixed collection')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Apply 2 tags' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
-      { media_item_id: 11, tags: ['character:cat', 'character:dog'] },
+      { root_id: 10, tags: ['character:cat', 'character:dog'] },
     ]));
   });
 
@@ -257,7 +276,7 @@ describe('AiTaggerPanel', () => {
   it('uses the same run confidence for Picto namespaces', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{
-        mediaItemId: 1,
+        root_id: 1,
         error: null,
         predictions: [{ tag: 'example', namespace: 'creator', confidence: 0.3, model: model.slug }],
       }],
@@ -275,7 +294,7 @@ describe('AiTaggerPanel', () => {
   it('selects rating predictions above their threshold by default', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{
-        mediaItemId: 1,
+        root_id: 1,
         error: null,
         predictions: [{ tag: 'explicit', namespace: 'rating', confidence: 0.9, model: model.slug }],
       }],
@@ -287,7 +306,7 @@ describe('AiTaggerPanel', () => {
     expect(await screen.findByText('explicit')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
-      { media_item_id: 1, tags: ['rating:explicit'] },
+      { root_id: 1, tags: ['rating:explicit'] },
     ]));
   });
 
@@ -371,7 +390,7 @@ describe('AiTaggerPanel', () => {
     const { store } = await renderPanel([1]);
     await startRun();
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(1));
-    act(() => store.set(mocks.targetAtom, { kind: 'explicit', item_ids: [2] }));
+    act(() => store.set(mocks.targetAtom, { kind: 'explicit', root_ids: [2] }));
     await act(async () => {
       resolveFirst({ predictions: [prediction(1, 'stale')], thresholds: { character: 0.35 } });
     });
@@ -388,7 +407,7 @@ describe('AiTaggerPanel', () => {
     mocks.predict.mockImplementation(async (itemIds: number[]) => ({
       predictions: itemIds.map((itemId) => itemId === 1
         ? prediction(1, 'fresh')
-        : { mediaItemId: 2, predictions: [], error: 'unsupported media' }),
+        : { root_id: 2, predictions: [], error: 'unsupported media' }),
       thresholds: { character: 0.35 },
     }));
     await renderPanel([1, 2]);
@@ -439,7 +458,7 @@ describe('AiTaggerPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Next item' }));
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
-      { media_item_id: 2, tags: ['character:cat'] },
+      { root_id: 2, tags: ['character:cat'] },
     ]));
   });
 });

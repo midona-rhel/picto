@@ -1,6 +1,6 @@
-import type { ItemScope } from '../types/generated/application/ItemScope';
+import type { BaseScope } from '../types/canonical';
 
-const GRID_SYSTEM_SCOPES: Record<string, ItemScope> = {
+const GRID_SYSTEM_SCOPES: Record<string, BaseScope> = {
   'system:active': { kind: 'all' },
   'system:random': { kind: 'all' },
   'system:inbox': { kind: 'inbox' },
@@ -20,7 +20,7 @@ export function isNonGridNodeId(nodeId: string): boolean {
   return NON_GRID_NODES.has(nodeId);
 }
 
-export function nodeIdToGridScope(nodeId: string): ItemScope | null {
+export function nodeIdToGridScope(nodeId: string): BaseScope | null {
   if (nodeId.startsWith('folder:')) {
     const id = parseInt(nodeId.slice(7), 10);
     return { kind: 'folder', folder_id: isNaN(id) ? 0 : id };
@@ -35,7 +35,7 @@ export function nodeIdToGridScope(nodeId: string): ItemScope | null {
   return null;
 }
 
-export function scopeToGridNodeId(scope: ItemScope): string | null {
+export function scopeToGridNodeId(scope: BaseScope): string | null {
   switch (scope.kind) {
     case 'all': return 'system:active';
     case 'inbox': return 'system:inbox';

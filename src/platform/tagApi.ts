@@ -1,23 +1,9 @@
 import { invoke } from './ipc';
-import type { ListTagsInput } from '../shared/types/generated/application/ListTagsInput';
-import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
-import type { RenameTagInput } from '../shared/types/generated/application/RenameTagInput';
-import type { RenameTagGroupInput } from '../shared/types/generated/application/RenameTagGroupInput';
-import type { TagInput } from '../shared/types/generated/application/TagInput';
-import type { TagGroupInput } from '../shared/types/generated/application/TagGroupInput';
-import type { TagPage as ReplacementTagPage } from '../shared/types/generated/application/TagPage';
-import type { CanonicalNamespaceSummary, TagPage } from '../shared/types/canonical';
-
-type NamespaceCountRows = Array<[string, number]>;
-
-function toTagRecord(tag: ReplacementTagPage['tags'][number]) {
-  return {
-    tag_id: tag.tag_id,
-    namespace: tag.namespace,
-    subtag: tag.subtag,
-    file_count: tag.media_count,
-  };
-}
+import type {
+  CanonicalNamespaceSummary,
+  MutationReceipt,
+  TagPage,
+} from '../shared/types/canonical';
 
 export function getTagsPaginated(params: {
   namespace?: string | null;
@@ -25,22 +11,21 @@ export function getTagsPaginated(params: {
   cursor?: string | null;
   limit?: number;
 }): Promise<TagPage> {
-  const input: ListTagsInput = {
+  const input = {
     namespace: params.namespace ?? null,
     search: params.search ?? null,
     cursor: params.cursor ?? null,
     limit: params.limit ?? 100,
   };
-  return invoke<ReplacementTagPage>('tags.list', input).then((page) => ({
-    items: page.tags.map(toTagRecord),
-    next_cursor: page.next_cursor,
-  }));
+  return invoke<TagPage>('tags.list', input);
 }
 
 export function getNamespaceSummary(): Promise<CanonicalNamespaceSummary[]> {
-  return invoke<NamespaceCountRows>('tags.namespace_counts').then((rows) =>
-    rows.map(([namespace, count]) => ({ namespace, count })),
-  );
+  return invoke<CanonicalNamespaceSummary[]>('tags.namespace_counts');
+}
+
+export function getTagsById(tagIds: number[]): Promise<TagPage['tags']> {
+  return invoke<TagPage['tags']>('tags.get_many', { tag_ids: tagIds });
 }
 
 export function getUnusedTagCount(): Promise<number> {
@@ -48,30 +33,25 @@ export function getUnusedTagCount(): Promise<number> {
 }
 
 export function renameTag(tagId: number, newName: string): Promise<MutationReceipt> {
-  const input: RenameTagInput = { tag_id: tagId, name: newName };
-  return invoke<MutationReceipt>('tags.rename_or_merge', input);
+  return invoke<MutationReceipt>('tags.rename_or_merge', { tag_id: tagId, name: newName });
 }
 
 export function mergeTags(fromTagId: number, toTagName: string): Promise<MutationReceipt> {
-  const input: RenameTagInput = { tag_id: fromTagId, name: toTagName };
-  return invoke<MutationReceipt>('tags.rename_or_merge', input);
+  return invoke<MutationReceipt>('tags.rename_or_merge', { tag_id: fromTagId, name: toTagName });
 }
 
 export function deleteTag(tagId: number): Promise<MutationReceipt> {
-  const input: TagInput = { tag_id: tagId };
-  return invoke<MutationReceipt>('tags.delete', input);
+  return invoke<MutationReceipt>('tags.delete', { tag_id: tagId });
 }
 
 export function deleteUnusedTags(): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('tags.delete_unused', {});
 }
 
-export function renameTagGroup(namespace: string, newNamespace: string): Promise<MutationReceipt> {
-  const input: RenameTagGroupInput = { namespace, new_namespace: newNamespace };
-  return invoke<MutationReceipt>('tags.group.rename', input);
+export function renameTagGroup(namespaceId: number, name: string): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('tags.group.rename', { namespace_id: namespaceId, name });
 }
 
-export function deleteTagGroup(namespace: string): Promise<MutationReceipt> {
-  const input: TagGroupInput = { namespace };
-  return invoke<MutationReceipt>('tags.group.delete', input);
+export function deleteTagGroup(namespaceId: number): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('tags.group.delete', { namespace_id: namespaceId });
 }

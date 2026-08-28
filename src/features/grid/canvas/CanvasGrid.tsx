@@ -51,8 +51,9 @@ import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
 import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
 import { useCanvasViewport } from './useCanvasViewport';
 import styles from './CanvasGrid.module.css';
-import type { ItemScope } from '../../../shared/types/generated/application/ItemScope';
+import type { BaseScope } from '../../../shared/types/canonical';
 import { resolveRenderedGridItem } from './renderItemAdapter';
+import { labToHex } from '../../../shared/lib/labColor';
 import { gridSpacingAtom } from '../../../state/grid';
 import {
   GRID_SELECTION_COLOR,
@@ -84,16 +85,16 @@ function resolveGridScrollAnchor(args: {
     for (let index = 0; index < previousPositions.length; index++) {
       const position = previousPositions[index];
       const item = previousItems[index];
-      if (!position || (selected && (!item || !selectedItemIds.has(item.item_id)))) continue;
+      if (!position || (selected && (!item || !selectedItemIds.has(item.root_id)))) continue;
       if (position.y + position.h < scrollTop || position.y > viewportBottom) continue;
       if (position.y < bestTop) { bestTop = position.y; anchorIndex = index; }
     }
   };
   if (selectedItemIds.size > 0) findAnchor(true);
   if (anchorIndex < 0) { bestTop = Infinity; findAnchor(false); }
-  const anchorId = previousItems[anchorIndex]?.item_id;
+  const anchorId = previousItems[anchorIndex]?.root_id;
   if (anchorId == null) return null;
-  const nextIndex = nextItems.findIndex((item) => item.item_id === anchorId);
+  const nextIndex = nextItems.findIndex((item) => item.root_id === anchorId);
   const previousPosition = previousPositions[anchorIndex];
   const nextPosition = nextPositions[nextIndex];
   if (!previousPosition || !nextPosition) return null;
@@ -170,7 +171,7 @@ export interface CanvasGridProps {
   /** DOM content rendered above the canvas inside the scroll container (e.g. SubfolderGrid). */
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
-  dragSourceScope?: ItemScope | null;
+  dragSourceScope?: BaseScope | null;
   /** Intentional layout changes, such as panel visibility or the filter row, commit immediately. */
   viewportCommitKey?: unknown;
   /** Optional local reorder owner for reusable grids such as group editing. */
@@ -670,7 +671,7 @@ export function CanvasGrid({
     if (hovIdx != null && !isScrollingRef.current) {
       const hovItem = items[hovIdx];
       const hovPos = layoutModel.positions[hovIdx];
-      if (hovItem && hovPos && !hovItem.display_mime_type.startsWith('video/')) {
+      if (hovItem && hovPos && !hovItem.mime.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
         if (drawY + hovPos.h >= GRID_RESIZE_RENDER_MARGIN
           && drawY <= GRID_RESIZE_RENDER_MARGIN + vp.viewportHeight) {
@@ -853,21 +854,23 @@ export function CanvasGrid({
         setDragGhost(null);
 
         const fileHashes = state.itemIds.slice(0, 3).map((itemId) =>
-          itemsRef.current.find((item) => item.item_id === itemId)?.display_file_hash ?? '',
+          itemsRef.current.find((item) => item.root_id === itemId)?.content_hash ?? '',
         );
         const iconUrl = createNativeDragImageUrl(
           fileHashes,
           state.itemIds.length,
           (fileHash) => {
-            const item = itemsRef.current.find((candidate) => candidate.display_file_hash === fileHash);
-            if (item?.display_mime_type.startsWith('font/')) return 'font';
+            const item = itemsRef.current.find((candidate) => candidate.content_hash === fileHash);
+            if (item?.mime.startsWith('font/')) return 'font';
             const entry = pipelineRef.current?.get(fileHash);
             return entry?.state === 'error' ? 'broken' : entry?.thumb ?? null;
           },
           cachedThemeRef.current.opaqueBg,
           (fileHash) => itemsRef.current.find(
-            (candidate) => candidate.display_file_hash === fileHash,
-          )?.dominant_color_hex ?? null,
+            (candidate) => candidate.content_hash === fileHash,
+          )?.palette[0] ? labToHex(itemsRef.current.find(
+            (candidate) => candidate.content_hash === fileHash,
+          )?.palette[0]) : null,
         );
 
         setInternalDragOrigin(true);
@@ -916,7 +919,7 @@ export function CanvasGrid({
         const existingTarget = getDragState().dropTarget;
         if (rd && !existingTarget) {
           const orderedItemIds = planFolderReorder(
-            itemsRef.current.map((item) => item.item_id),
+            itemsRef.current.map((item) => item.root_id),
             new Set(getDragState().itemIds),
             rd.dropIndex,
             rd.dropSide,
@@ -1121,7 +1124,7 @@ export function CanvasGrid({
     // Hover preview: triggered when cursor is over the zoom button area
     if (idx != null && isZoomButtonHit(e.clientX, e.clientY, idx)) {
       const item = items[idx];
-      const isPreviewable = item && !item.display_mime_type.startsWith('video/');
+      const isPreviewable = item && !item.mime.startsWith('video/');
 
       // Cancel any pending hide
       if (hoverHideTimerRef.current) {
@@ -1135,9 +1138,9 @@ export function CanvasGrid({
           hoverTimerRef.current = null;
           if (item) {
             setHoverPreview((prev) =>
-              prev?.fileHash === item.display_file_hash
+              prev?.fileHash === item.content_hash
                 ? prev
-                : { fileHash: item.display_file_hash, mime: item.display_mime_type },
+                : { fileHash: item.content_hash, mime: item.mime },
             );
           }
         }, HOVER_PREVIEW_DELAY_MS);
@@ -1210,7 +1213,7 @@ export function CanvasGrid({
       const imgH = pos.h - th;
       if (pos.x + pos.w > left && pos.x < left + width &&
           pos.y + imgH > top && pos.y < top + height) {
-        itemIds.add(curItems[i].item_id);
+        itemIds.add(curItems[i].root_id);
       }
     }
     for (const id of collectHeaderMarqueeHits?.({ left, top, width, height }) ?? []) folderNodeIds.add(id);
@@ -1286,20 +1289,20 @@ export function CanvasGrid({
         const tileIdx = tileDragRef.current.tileIdx;
         const item = items[tileIdx];
         if (item) {
-          const itemId = item.item_id;
+          const itemId = item.root_id;
           const currentSelection = selectedItemIdsRef.current;
           const itemIds = currentSelection.has(itemId)
             ? [...currentSelection]
             : [itemId];
           const thumbHashes = itemIds.slice(0, 3).map((id) => {
-            return items.find((candidate) => candidate.item_id === id)?.display_file_hash ?? '';
+            return items.find((candidate) => candidate.root_id === id)?.content_hash ?? '';
           });
           const fontHashes = itemIds.slice(0, 3).flatMap((id) => {
-            const candidate = items.find((entry) => entry.item_id === id);
-            return candidate?.display_mime_type.startsWith('font/') ? [candidate.display_file_hash] : [];
+            const candidate = items.find((entry) => entry.root_id === id);
+            return candidate?.mime.startsWith('font/') ? [candidate.content_hash] : [];
           });
           const thumbnailBackgrounds = itemIds.slice(0, 3).map((id) => (
-            items.find((candidate) => candidate.item_id === id)?.dominant_color_hex ?? null
+            labToHex(items.find((candidate) => candidate.root_id === id)?.palette[0])
           ));
           startDrag(itemIds, e.clientX, e.clientY, dragSourceScope, dragOwnerIdRef.current);
           setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes: thumbHashes, thumbnailBackgrounds, fontHashes });

@@ -51,10 +51,10 @@ describe('setTargetLifecycle', () => {
   });
 
   it('clears selection after moving the selected target to Trash', async () => {
-    await setTargetLifecycle({ kind: 'explicit', item_ids: [4, 7] }, 'trash');
+    await setTargetLifecycle({ kind: 'explicit', root_ids: [4, 7] }, 'trash');
 
     expect(setItemLifecycleMock).toHaveBeenCalledWith(
-      { kind: 'explicit', item_ids: [4, 7] },
+      { kind: 'explicit', root_ids: [4, 7] },
       'trash',
     );
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
@@ -62,7 +62,7 @@ describe('setTargetLifecycle', () => {
   });
 
   it('clears selection after restoring selected items from Trash', async () => {
-    await setTargetLifecycle({ kind: 'explicit', item_ids: [4, 7] }, 'active');
+    await setTargetLifecycle({ kind: 'explicit', root_ids: [4, 7] }, 'active');
 
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
@@ -71,7 +71,7 @@ describe('setTargetLifecycle', () => {
     setItemLifecycleMock.mockRejectedValueOnce(new Error('trash failed'));
 
     await expect(setTargetLifecycle(
-      { kind: 'explicit', item_ids: [4, 7] },
+      { kind: 'explicit', root_ids: [4, 7] },
       'trash',
     )).rejects.toThrow('trash failed');
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
@@ -81,7 +81,7 @@ describe('setTargetLifecycle', () => {
     const { deleteItems } = await import('../platform/entityApi');
     vi.mocked(deleteItems).mockResolvedValueOnce(undefined as never);
 
-    await permanentlyDeleteTarget({ kind: 'explicit', item_ids: [4, 7] });
+    await permanentlyDeleteTarget({ kind: 'explicit', root_ids: [4, 7] });
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
@@ -94,7 +94,7 @@ describe('setTargetLifecycle', () => {
     store.set(viewerSessionAtom, { currentIndex: 0, currentItemId: 4 });
     store.set(quickLookSessionAtom, { currentIndex: 0, currentItemId: 4 });
 
-    const deletion = permanentlyDeleteTarget({ kind: 'explicit', item_ids: [4] });
+    const deletion = permanentlyDeleteTarget({ kind: 'explicit', root_ids: [4] });
     expect(store.get(permanentDeletesInFlightAtom)).toBe(1);
     expect(store.get(viewerSessionAtom)?.currentItemId).toBe(4);
 
@@ -111,7 +111,7 @@ describe('setTargetLifecycle', () => {
     vi.mocked(deleteItems).mockRejectedValueOnce(new Error('delete failed'));
 
     await expect(permanentlyDeleteTarget(
-      { kind: 'explicit', item_ids: [4, 7] },
+      { kind: 'explicit', root_ids: [4, 7] },
     )).rejects.toThrow('delete failed');
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
     expect(store.get(permanentDeletesInFlightAtom)).toBe(0);
@@ -130,8 +130,8 @@ describe('setTargetLifecycle', () => {
     await setItemRating(4, 5);
 
     expect(patchMediaEntities).toHaveBeenCalledWith(
-      { kind: 'explicit', item_ids: [4] },
-      { rating: 5 },
+      { kind: 'explicit', root_ids: [4] },
+      { rating: 'five' },
     );
   });
 });

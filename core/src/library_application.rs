@@ -666,6 +666,17 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn tags_by_id(
+        &self,
+        tag_ids: &[picto_library::TagId],
+    ) -> Result<Vec<picto_library::TagRecord>, String> {
+        let wanted = tag_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+        self.library
+            .tags()
+            .map(|tags| tags.into_iter().filter(|tag| wanted.contains(&tag.tag_id)).collect())
+            .map_err(|error| error.to_string())
+    }
+
     pub fn unused_tag_count(&self) -> Result<u64, String> {
         Ok(self.library
             .tags()

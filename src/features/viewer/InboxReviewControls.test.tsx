@@ -26,15 +26,15 @@ describe('InboxReviewControls', () => {
 
   it('shows review controls for the viewed inbox entity, including groups', () => {
     expect(resolveInboxReviewItemId(
-      { item_id: 42, lifecycle: 'inbox' },
+      { root_id: 42, lifecycle: 'inbox' },
       null,
     )).toBe(42);
     expect(resolveInboxReviewItemId(
       null,
-      { item_id: 99, lifecycle: 'inbox' },
+      { root_id: 99, lifecycle: 'inbox' },
     )).toBe(99);
     expect(resolveInboxReviewItemId(
-      { item_id: 42, lifecycle: 'active' },
+      { root_id: 42, lifecycle: 'active' },
       null,
     )).toBeNull();
   });

@@ -5,7 +5,7 @@ import {
   IconFile, IconFilterPlus, IconFolder, IconLink, IconLock, IconLockOpen, IconNotes,
   IconPhoto, IconRestore, IconStar, IconX,
 } from '@tabler/icons-react';
-import type { ItemFilters } from '../../shared/types/generated/application/ItemFilters';
+import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { ContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { gridController } from '../../controllers/gridController';
 import { gridFilterLockedAtom, gridFiltersAtom, gridFilterToolbarOpenAtom, gridItemsAtom } from '../../state/grid';
@@ -495,8 +495,8 @@ export function GridFilterToolbar() {
       anchor: { x: rect.left, y: rect.bottom + 4 },
       anchorPlacement: 'below',
       filterMatchMode: filters.tag_match_mode,
-      selectedTags: filters.include_tags,
-      excludedTags: filters.exclude_tags,
+      selectedTagFilters: filters.include_tags,
+      excludedTagFilters: filters.exclude_tags,
       onApplyTagFilter: (includeTags, excludeTags, mode) => update({
         include_tags: includeTags,
         exclude_tags: excludeTags,
@@ -549,14 +549,17 @@ export function GridFilterToolbar() {
 
   if (!open) return null;
 
-  const tagLabels = [...filters.include_tags, ...filters.exclude_tags.map((tag) => `Not ${tag}`)];
+  const tagLabels = [
+    ...filters.include_tags.map((tag) => tag.name),
+    ...filters.exclude_tags.map((tag) => `Not ${tag.name}`),
+  ];
   const folderNames = new Map(folderNodes.map((node) => [Number(node.id.slice(7)), node.name]));
   const folderLabels = [
     ...filters.include_folder_ids.map((id) => folderNames.get(id) ?? `Folder ${id}`),
     ...filters.exclude_folder_ids.map((id) => `Not ${folderNames.get(id) ?? `Folder ${id}`}`),
   ];
   const mimeTypes = [...new Set([
-    ...items.map((item) => item.display_mime_type),
+    ...items.map((item) => item.mime),
     ...filters.include_mime_types,
     ...filters.exclude_mime_types,
   ])].filter(Boolean).sort((left, right) => mimeLabel(left).localeCompare(mimeLabel(right)));

@@ -38,27 +38,35 @@ vi.mock('../../platform/settingsApi', () => ({
 
 const firstTag: CanonicalTagRecord = {
   tag_id: 1,
+  namespace_id: 1,
   namespace: 'character',
-  subtag: 'alice',
-  file_count: 4,
+  subname: 'alice',
+  active_count: 4,
+  assignment_count: 4,
 };
 const zeroTag: CanonicalTagRecord = {
   tag_id: 2,
+  namespace_id: 1,
   namespace: 'character',
-  subtag: 'unused',
-  file_count: 0,
+  subname: 'unused',
+  active_count: 0,
+  assignment_count: 0,
 };
 const nextTag: CanonicalTagRecord = {
   tag_id: 3,
+  namespace_id: 2,
   namespace: 'creator',
-  subtag: 'bob',
-  file_count: 2,
+  subname: 'bob',
+  active_count: 2,
+  assignment_count: 2,
 };
 const staleTag: CanonicalTagRecord = {
   tag_id: 4,
+  namespace_id: 3,
   namespace: 'stale',
-  subtag: 'wrong-result',
-  file_count: 1,
+  subname: 'wrong-result',
+  active_count: 1,
+  assignment_count: 1,
 };
 
 let invalidateTags: (() => void) | undefined;
@@ -67,8 +75,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   invalidateTags = undefined;
   mocks.getNamespaceSummary.mockResolvedValue([
-    { namespace: 'character', count: 2 },
-    { namespace: 'creator', count: 1 },
+    { namespace_id: 1, name: 'character', tag_count: 2 },
+    { namespace_id: 2, name: 'creator', tag_count: 1 },
   ]);
   mocks.getUnusedCount.mockResolvedValue(1);
   mocks.rename.mockResolvedValue(undefined);
@@ -84,9 +92,9 @@ beforeEach(() => {
     return vi.fn();
   });
   mocks.getPaginated.mockImplementation(async ({ cursor, search }: { cursor?: string | null; search?: string | null }) => {
-    if (search) return { items: [nextTag], next_cursor: null };
-    if (cursor) return { items: [nextTag], next_cursor: null };
-    return { items: [firstTag, zeroTag], next_cursor: 'opaque-cursor' };
+    if (search) return { tags: [nextTag], next_cursor: null, revision: 1 };
+    if (cursor) return { tags: [nextTag], next_cursor: null, revision: 1 };
+    return { tags: [firstTag, zeroTag], next_cursor: 'opaque-cursor', revision: 1 };
   });
 });
 
@@ -184,8 +192,8 @@ describe('TagManagerScreen', () => {
 
   it('keeps ungrouped tags in All without exposing a misleading General group', async () => {
     mocks.getNamespaceSummary.mockResolvedValue([
-      { namespace: '', count: 2 },
-      { namespace: 'creator', count: 1 },
+      { namespace_id: 0, name: '', tag_count: 2 },
+      { namespace_id: 2, name: 'creator', tag_count: 1 },
     ]);
     await renderScreen();
 
@@ -201,11 +209,11 @@ describe('TagManagerScreen', () => {
 
   it('ignores a stale load-more response after a filter reset', async () => {
     const user = setupUser();
-    let resolveStale: ((page: { items: CanonicalTagRecord[]; next_cursor: null }) => void) | undefined;
+    let resolveStale: ((page: { tags: CanonicalTagRecord[]; next_cursor: null; revision: number }) => void) | undefined;
     mocks.getPaginated.mockImplementation(({ cursor, search }: { cursor?: string | null; search?: string | null }) => {
       if (cursor) return new Promise((resolve) => { resolveStale = resolve; });
-      if (search) return Promise.resolve({ items: [nextTag], next_cursor: null });
-      return Promise.resolve({ items: [firstTag, zeroTag], next_cursor: 'opaque-cursor' });
+      if (search) return Promise.resolve({ tags: [nextTag], next_cursor: null, revision: 1 });
+      return Promise.resolve({ tags: [firstTag, zeroTag], next_cursor: 'opaque-cursor', revision: 1 });
     });
     await renderScreen();
 
@@ -216,7 +224,7 @@ describe('TagManagerScreen', () => {
     await screen.findByText('creator:bob');
 
     await act(async () => {
-      resolveStale?.({ items: [staleTag], next_cursor: null });
+      resolveStale?.({ tags: [staleTag], next_cursor: null, revision: 1 });
     });
     expect(screen.queryByText('wrong-result')).not.toBeInTheDocument();
   });
@@ -299,7 +307,7 @@ describe('TagManagerScreen', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete Tag' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Filter Items with This Tag' }));
-    expect(mocks.showTagManagerItems).toHaveBeenCalledWith('character:alice');
+    expect(mocks.showTagManagerItems).toHaveBeenCalledWith({ tag_id: 1, name: 'character:alice' });
   });
 
   it('moves and ungroups tags through the canonical rename operation', async () => {
@@ -334,7 +342,7 @@ describe('TagManagerScreen', () => {
     await user.type(input, 'Cast Members');
     await user.click(within(dialog).getByRole('button', { name: 'Rename' }));
 
-    await waitFor(() => expect(mocks.renameGroup).toHaveBeenCalledWith('character', 'cast_members'));
+    await waitFor(() => expect(mocks.renameGroup).toHaveBeenCalledWith(1, 'cast_members'));
   });
 
   it('deletes a group without deleting its tags', async () => {
@@ -351,7 +359,7 @@ describe('TagManagerScreen', () => {
     expect(dialog).toHaveTextContent('no tags or media assignments will be deleted');
     await user.click(within(dialog).getByRole('button', { name: 'Delete group' }));
 
-    await waitFor(() => expect(mocks.deleteGroup).toHaveBeenCalledWith('character'));
+    await waitFor(() => expect(mocks.deleteGroup).toHaveBeenCalledWith(1));
     expect(mocks.delete).not.toHaveBeenCalled();
   });
 

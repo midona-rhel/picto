@@ -6,7 +6,7 @@
  */
 
 import { dragController } from '../../controllers/dragController';
-import type { ItemScope } from '../../shared/types/generated/application/ItemScope';
+import type { BaseScope } from '../../shared/types/canonical';
 
 // ── Types ──
 
@@ -19,7 +19,7 @@ export interface GridDragState {
   active: boolean;
   ownerId: number | null;
   itemIds: number[];
-  sourceScope: ItemScope | null;
+  sourceScope: BaseScope | null;
   startX: number;
   startY: number;
   currentX: number;
@@ -197,7 +197,7 @@ export function isInternalDragOrigin() { return internalDragOrigin; }
 
 // Saved drag data for restoring internal drag when cursor re-enters
 let savedDragItemIds: number[] = [];
-let savedDragScope: ItemScope | null = null;
+let savedDragScope: BaseScope | null = null;
 let savedDragOwnerId: number | null = null;
 
 // ── Native drag-out ──

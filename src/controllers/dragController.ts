@@ -1,7 +1,7 @@
 import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
 import { gridController } from './gridController';
 import { setTargetLifecycle, settleSelectionAfterMutation } from './entityMutations';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { EntityTarget } from '../shared/types/canonical';
 import type { DropTarget, GridDragState } from '../features/grid/dragState';
 
 const LIFECYCLE_BY_STATUS = ['inbox', 'active', 'trash'] as const;
@@ -13,7 +13,7 @@ export const dragController = {
     sourceScope: GridDragState['sourceScope'],
   ): Promise<void> {
     if (itemIds.length === 0) return;
-    const entityTarget: ItemTarget = { kind: 'explicit', item_ids: itemIds };
+    const entityTarget: EntityTarget = { kind: 'explicit', root_ids: itemIds };
 
     if (target.kind === 'folder') {
       await updateFolderMembership(entityTarget, target.folderId, 'add');

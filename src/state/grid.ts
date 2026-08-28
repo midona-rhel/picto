@@ -2,23 +2,22 @@
 
 import { atom } from 'jotai';
 import { selectAtom } from 'jotai/utils';
-import type { ItemFilters } from '../shared/types/generated/application/ItemFilters';
-import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
-import type { ItemScope } from '../shared/types/generated/application/ItemScope';
-import type { ItemSortField } from '../shared/types/generated/application/ItemSortField';
-import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
-import type { SortDirection } from '../shared/types/generated/application/SortDirection';
+import type {
+  BaseScope,
+  CanonicalEntityGridItem,
+  EntityViewQuery,
+  ItemSort,
+  SortDirection,
+  SortField,
+} from '../shared/types/canonical';
 import type { GridSpacing, GridViewMode } from '../shared/types/grid';
 import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
-import { createEmptyItemFilters } from '../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters, type ItemFilters } from '../shared/lib/itemFilters';
 
-export type SortField = ItemSortField;
-export type { SortDirection };
-export type BaseScope = ItemScope;
 export type QueryFilters = ItemFilters;
-export type CanonicalEntityGridItem = ItemSummary;
+export type { BaseScope, CanonicalEntityGridItem, SortDirection, SortField };
 
 export interface GridViewPreferences {
   mode: GridViewMode;
@@ -94,7 +93,7 @@ export const pendingGridIntentAtom = atom<GridIntent | null>(null);
 export const pendingGridNavigationAtom = atom<{
   nodeId: string;
   filters: QueryFilters;
-  sort?: ItemQuery['sort'];
+  sort?: ItemSort;
   restoreScroll?: boolean;
 } | null>(null);
 /** A grid drill-down rendered inside a manager while its sidebar node stays active. */
@@ -136,25 +135,22 @@ export const gridLoadingAtom = pick((s) => s.status === 'loading');
 export const gridErrorAtom = pick((s) => s.error);
 export const gridActiveAtom = pick((s) => s.active);
 
-export const currentGridQueryAtom = atom<ItemQuery>((get) => {
+export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
   const session = get(gridSessionAtom);
-  const searchText = session.searchText.trim();
-  return {
-    scope: session.scope,
-    filters: {
-      ...session.filters,
-      text: searchText || session.filters.text || null,
-    },
-    sort: {
+  return compileGridQuery(
+    session.scope,
+    session.filters,
+    {
       field: session.sort.field,
       direction: session.sort.direction,
       random_seed: session.sort.randomSeed ?? null,
     },
-  };
+    session.searchText,
+  );
 });
 
 export const activeGridScopeAtom = atom((get) => nodeIdToGridScope(get(activeNodeIdAtom)));
-export const gridVisibleItemIdsAtom = atom((get) => get(gridSessionAtom).items.map((item) => item.item_id));
+export const gridVisibleItemIdsAtom = atom((get) => get(gridSessionAtom).items.map((item) => item.root_id));
 export const gridReconcileContextAtom = atom((get) => ({
   scope: get(gridSessionAtom).scope,
   query: get(currentGridQueryAtom),

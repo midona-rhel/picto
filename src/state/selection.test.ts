@@ -1,7 +1,6 @@
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
-import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
-import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
 import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
@@ -17,39 +16,44 @@ import {
   selectAllResultsAtom,
 } from './selection';
 
-function buildGridItem(itemId: number, fileHash: string): ItemSummary {
+function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridItem {
   return {
-    item_id: itemId,
+    root_id: itemId,
     kind: 'media',
     lifecycle: 'active',
     name: 'Item',
-    display_file_hash: fileHash,
-    display_mime_type: 'image/jpeg',
-    pixel_width: 100,
-    pixel_height: 100,
+    cover_media_id: itemId,
+    content_hash: fileHash,
+    mime: 'image/jpeg',
+    width: 100,
+    height: 100,
     duration_ms: null,
     frame_count: null,
-    dominant_color_hex: null,
-    rating: null,
+    palette: [],
+    imported_at_ms: itemId,
+    captured_at_ms: null,
+    modified_at_ms: itemId,
+    rating: 'unrated',
     media_count: 1,
+    total_size_bytes: 100,
   };
 }
 
 describe('selection state', () => {
   it('exposes range targets without expanding unloaded renderer item IDs', () => {
     const query = createStore().get(currentGridQueryAtom);
-    const target: ItemTarget = {
+    const target: EntityTarget = {
       kind: 'range',
       query,
-      anchor_item_id: 11,
-      focus_item_id: 999_999,
+      anchor_root_id: 11,
+      focus_root_id: 999_999,
     };
 
     expect(target).toEqual({
       kind: 'range',
       query,
-      anchor_item_id: 11,
-      focus_item_id: 999_999,
+      anchor_root_id: 11,
+      focus_root_id: 999_999,
     });
     expect('item_ids' in target).toBe(false);
   });
@@ -70,7 +74,7 @@ describe('selection state', () => {
     expect(store.get(selectionTargetAtom)).toEqual({
       kind: 'query',
       query: store.get(currentGridQueryAtom),
-      excluded_item_ids: [],
+      excluded_root_ids: [],
     });
   });
 

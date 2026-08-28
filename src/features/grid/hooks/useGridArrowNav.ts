@@ -73,11 +73,11 @@ export function useGridArrowNav(opts: {
 
       // Find current position
       let current = selection.anchor?.kind === 'item'
-        ? items.findIndex((item) => item.item_id === selection.anchor!.id)
+        ? items.findIndex((item) => item.root_id === selection.anchor!.id)
         : -1;
       if (current == null || current < 0 || current >= items.length) {
         for (let i = 0; i < items.length; i++) {
-          if (selectedItemIds.has(items[i].item_id)) { current = i; break; }
+          if (selectedItemIds.has(items[i].root_id)) { current = i; break; }
         }
         if (current == null) current = 0;
       }
@@ -104,17 +104,17 @@ export function useGridArrowNav(opts: {
       if (e.shiftKey) {
         // Range select from anchor to target
         const anchorIndex = selection.anchor?.kind === 'item'
-          ? items.findIndex((item) => item.item_id === selection.anchor!.id)
+          ? items.findIndex((item) => item.root_id === selection.anchor!.id)
           : current;
         const anchor = anchorIndex >= 0 ? anchorIndex : current;
         const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
         const next = new Set<number>();
         for (let i = lo; i <= hi; i++) {
-          if (items[i]) next.add(items[i].item_id);
+          if (items[i]) next.add(items[i].root_id);
         }
         dispatchSelection({ type: 'range_items', itemIds: next });
       } else {
-        const itemId = items[target]?.item_id;
+        const itemId = items[target]?.root_id;
         if (itemId != null) dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId });
       }
 

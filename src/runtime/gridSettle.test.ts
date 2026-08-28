@@ -3,6 +3,7 @@ import { getDefaultStore } from 'jotai';
 import { gridController } from '../controllers/gridController';
 import { gridSessionAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { startGridSettle } from './gridSettle';
+import { labToHex } from '../shared/lib/labColor';
 
 const { callbacks, derivative } = vi.hoisted(() => ({
   callbacks: new Map<string, () => void>(),
@@ -119,26 +120,31 @@ describe('grid invalidation', () => {
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       items: [{
-        item_id: 7,
+        root_id: 7,
         kind: 'media',
         lifecycle: 'active',
         name: 'image',
-        display_file_hash: 'hash-7',
-        display_mime_type: 'image/jpeg',
-        pixel_width: 100,
-        pixel_height: 100,
+        cover_media_id: 7,
+        content_hash: 'hash-7',
+        mime: 'image/jpeg',
+        width: 100,
+        height: 100,
         duration_ms: null,
         frame_count: null,
-        dominant_color_hex: null,
-        rating: null,
+        palette: [],
+        imported_at_ms: 1,
+        captured_at_ms: null,
+        modified_at_ms: 1,
+        rating: 'unrated',
         media_count: 1,
+        total_size_bytes: 100,
       }],
     });
     const stop = startGridSettle();
 
     derivative.onColor?.({ fileHash: 'hash-7', dominantColorHex: '#123456' });
 
-    expect(store.get(gridSessionAtom).items[0].dominant_color_hex).toBe('#123456');
+    expect(labToHex(store.get(gridSessionAtom).items[0].palette[0])).toBe('#123456');
     expect(reconcile).not.toHaveBeenCalled();
     stop();
   });

@@ -3,13 +3,14 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { organizeIntoGroup } from '../../platform/entityApi';
 import type { GroupCandidate } from '../../state/modals';
-import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
+import type { EntityTarget } from '../../shared/types/canonical';
 import styles from './GroupOrganizerModal.module.css';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 
 interface GroupOrganizerModalProps {
   open: boolean;
-  target: ItemTarget | null;
+  target: EntityTarget | null;
+  coverRootId: number | null;
   groups: GroupCandidate[];
   onClose: () => void;
   onComplete?: (groupId: number) => void;
@@ -18,6 +19,7 @@ interface GroupOrganizerModalProps {
 export function GroupOrganizerModal({
   open,
   target,
+  coverRootId,
   groups,
   onClose,
   onComplete,
@@ -37,7 +39,7 @@ export function GroupOrganizerModal({
   }, [groups, open]);
 
   const canSubmit = Boolean(
-    target
+    target && coverRootId != null
     && !saving
     && (choosingWinner ? winnerId != null : name.trim().length > 0),
   );
@@ -49,14 +51,15 @@ export function GroupOrganizerModal({
   );
 
   const submit = async () => {
-    if (!target || !canSubmit) return;
+    if (!target || coverRootId == null || !canSubmit) return;
     setSaving(true);
     setError(null);
     try {
       const result = await organizeIntoGroup({
         target,
-        label: choosingWinner ? null : name.trim(),
+        cover_root_id: coverRootId,
         winning_collection_id: winner?.collection_id ?? null,
+        name: choosingWinner ? null : name.trim(),
       });
       await announceUndoableMutation('collections.organize');
       onComplete?.(result.collection_id);

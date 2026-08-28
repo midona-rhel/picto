@@ -52,12 +52,12 @@ export function MediaView({
   items, currentIndex, totalCount, backLabel, recordItemId, ratingItemId, onNavigate, onClose, onLoadMore,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
-  const currentItemId = currentItem?.item_id ?? 0;
-  const currentHash = currentItem?.display_file_hash ?? '';
+  const currentItemId = currentItem?.root_id ?? 0;
+  const currentHash = currentItem?.content_hash ?? '';
   const effectiveRecordItemId = recordItemId === undefined ? currentItemId : recordItemId;
   const effectiveRatingItemId = ratingItemId === undefined ? currentItemId : ratingItemId;
   useRecordMediaView(effectiveRecordItemId);
-  const currentMime = currentItem?.display_mime_type ?? '';
+  const currentMime = currentItem?.mime ?? '';
   const previewPreferences = usePreviewPreferences();
   const rendererKind = detailRendererKind(currentMime);
   const isImage = rendererKind === 'image';
@@ -75,14 +75,14 @@ export function MediaView({
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
   const contextMenu = useViewerEntityContextMenu({
-    hash: currentItem?.display_file_hash ?? null,
+    hash: currentItem?.content_hash ?? null,
     itemId: effectiveRatingItemId,
     kind: currentItem?.kind,
     lifecycle: currentItem?.lifecycle,
     name: currentItem?.name,
     mime: currentMime,
-    width: currentItem?.pixel_width,
-    height: currentItem?.pixel_height,
+    width: currentItem?.width,
+    height: currentItem?.height,
     flashPlayback: rendererKind === 'flash' ? flashPlayback : null,
     captureCurrentFrame,
   });
@@ -99,14 +99,14 @@ export function MediaView({
     const r: string[] = [];
     const prev = items[currentIndex - 1];
     const next = items[currentIndex + 1];
-    if (prev) r.push(prev.display_file_hash);
-    if (next) r.push(next.display_file_hash);
+    if (prev) r.push(prev.content_hash);
+    if (next) r.push(next.content_hash);
     return r;
   }, [items, currentIndex]);
 
   const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
-    thumbnailHash: currentItem?.display_file_hash ?? null,
+    thumbnailHash: currentItem?.content_hash ?? null,
     mime: currentMime,
     isVideo: !isImage,
     neighborHashes,
@@ -114,11 +114,11 @@ export function MediaView({
 
   // ── Image size — derived from the DISPLAYED item, not the requested one ──
   const displayedItem = pipeline.displayedHash
-    ? items.find((it) => it.display_file_hash === pipeline.displayedHash) ?? currentItem
+    ? items.find((it) => it.content_hash === pipeline.displayedHash) ?? currentItem
     : currentItem;
   const imageSize = useMemo<ImageSize | null>(() => {
-    if (!displayedItem?.pixel_width || !displayedItem?.pixel_height) return null;
-    return { width: displayedItem.pixel_width, height: displayedItem.pixel_height };
+    if (!displayedItem?.width || !displayedItem?.height) return null;
+    return { width: displayedItem.width, height: displayedItem.height };
   }, [pipeline.displayedHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const imageSizeRef = useRef(imageSize);
@@ -214,7 +214,7 @@ export function MediaView({
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, copyDef)) {
         e.preventDefault();
-        void filesController.copyTarget({ kind: 'explicit', item_ids: [currentItemId] });
+        void filesController.copyTarget({ kind: 'explicit', root_ids: [currentItemId] });
         return;
       }
       const activeZoom = usesRendererZoom ? pdfZoomControls : isImage ? {
