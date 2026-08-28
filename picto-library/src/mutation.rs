@@ -12,7 +12,7 @@ use crate::history::{
 };
 use crate::ingest;
 use crate::model::{
-    FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
+    FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
     PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderId,
 };
 use crate::ordering::{self, OrderOwnerKind};
@@ -1468,6 +1468,166 @@ impl Library {
             },
         )?;
         self.reorder_folder_items(folder_id, &ordered)
+    }
+
+    pub fn delete_folders(&self, folder_ids: &[FolderId]) -> Result<FolderDeleteResult> {
+        if folder_ids.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one folder is required".into(),
+            ));
+        }
+        let requested = folder_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (result, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let subtree = load_folder_subtree(transaction, &requested)?;
+                let present = subtree
+                    .iter()
+                    .map(|(folder_id, _)| *folder_id)
+                    .collect::<BTreeSet<_>>();
+                if requested
+                    .iter()
+                    .any(|folder_id| !present.contains(folder_id))
+                {
+                    return Err(LibraryError::NotFound(
+                        "one or more selected folders do not exist".into(),
+                    ));
+                }
+                let definitions = subtree
+                    .iter()
+                    .map(|(folder_id, depth)| {
+                        load_folder_definition(transaction, *folder_id)?
+                            .map(|definition| (definition, *depth))
+                            .ok_or_else(|| {
+                                LibraryError::InvalidState(format!(
+                                    "folder {} disappeared during deletion",
+                                    folder_id.0
+                                ))
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let fallback_folder_id = if requested.len() == 1 {
+                    let mut parent = definitions
+                        .iter()
+                        .find(|(definition, _)| definition.folder_id == requested[0])
+                        .and_then(|(definition, _)| definition.parent_id);
+                    while parent.is_some_and(|folder_id| present.contains(&folder_id)) {
+                        parent = definitions
+                            .iter()
+                            .find(|(definition, _)| Some(definition.folder_id) == parent)
+                            .and_then(|(definition, _)| definition.parent_id);
+                    }
+                    parent
+                } else {
+                    None
+                };
+
+                let mut next = (*snapshot).clone();
+                let mut affected = RoaringBitmap::new();
+                let mut history_changes = Vec::new();
+                for (definition, _) in &definitions {
+                    let before = next
+                        .folder_orders
+                        .get(&definition.folder_id)
+                        .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if !before.is_empty() {
+                        history_changes.push(SemanticChange::Order {
+                            owner_kind: OrderOwnerKind::Folder,
+                            owner_id: definition.folder_id.0,
+                            before: Arc::new(before.clone()),
+                            after: Arc::new(Vec::new()),
+                        });
+                    }
+                    let members = before.iter().copied().collect::<RoaringBitmap>();
+                    affected |= &members;
+                    let counts = Arc::make_mut(&mut next.folder_count);
+                    for root_id in &members {
+                        let current = counts.value(root_id).unwrap_or(0);
+                        counts.insert(root_id, current.saturating_sub(1));
+                    }
+                    ordering::delete(transaction, OrderOwnerKind::Folder, definition.folder_id.0)?;
+                    Arc::make_mut(&mut next.folder_orders).remove(&definition.folder_id);
+                    Arc::make_mut(&mut next.folders).remove(&definition.folder_id);
+                }
+
+                let mut child_first = definitions.clone();
+                child_first.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+                for (definition, _) in &child_first {
+                    transaction.execute(
+                        "DELETE FROM folder_definition WHERE folder_id = ?1",
+                        [definition.folder_id.0],
+                    )?;
+                    history_changes.push(SemanticChange::FolderDefinition {
+                        folder_id: definition.folder_id,
+                        before: Some(Box::new(definition.clone())),
+                        after: None,
+                    });
+                }
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &affected,
+                    crate::predicate::DependencyChange::Folders,
+                )?;
+                next.revision = revision;
+                let deleted_folder_ids = definitions
+                    .iter()
+                    .map(|(definition, _)| definition.folder_id)
+                    .collect::<Vec<_>>();
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "folder.delete",
+                    None,
+                    serde_json::json!({
+                        "folder_ids": deleted_folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
+                    }),
+                    now_ms(),
+                )?;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "folders".into(),
+                        "navigation".into(),
+                        "sidebar".into(),
+                        "smart-folders".into(),
+                    ],
+                    if affected.len() <= 256 {
+                        affected.iter().map(RootId).collect()
+                    } else {
+                        Vec::new()
+                    },
+                );
+                Ok((
+                    FolderDeleteResult {
+                        deleted_folder_ids,
+                        fallback_folder_id,
+                        receipt: receipt.clone(),
+                    },
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::new(
+                            "Delete folders",
+                            SemanticChange::Compound(history_changes),
+                        )),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(result)
     }
 
     fn update_folder_definition<F>(
@@ -4091,6 +4251,43 @@ fn load_folder_children(
         .query_map([parent_id.map(|id| id.0)], |row| {
             row.get::<_, u32>(0).map(FolderId)
         })?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    Ok(values)
+}
+
+fn load_folder_subtree(
+    transaction: &rusqlite::Transaction<'_>,
+    requested: &[FolderId],
+) -> Result<Vec<(FolderId, u32)>> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_selected_folder (
+             folder_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_selected_folder;",
+    )?;
+    {
+        let mut insert = transaction
+            .prepare_cached("INSERT INTO picto_selected_folder(folder_id) VALUES (?1)")?;
+        for folder_id in requested {
+            insert.execute([folder_id.0])?;
+        }
+    }
+    let mut statement = transaction.prepare(
+        "WITH RECURSIVE subtree(folder_id, depth) AS (
+             SELECT folder.folder_id, 0
+             FROM folder_definition folder
+             JOIN picto_selected_folder selected
+               ON selected.folder_id = folder.folder_id
+             UNION
+             SELECT child.folder_id, parent.depth + 1
+             FROM folder_definition child
+             JOIN subtree parent ON child.parent_id = parent.folder_id
+         )
+         SELECT folder_id, MAX(depth) FROM subtree
+         GROUP BY folder_id ORDER BY folder_id",
+    )?;
+    let values = statement
+        .query_map([], |row| Ok((FolderId(row.get(0)?), row.get::<_, u32>(1)?)))?
         .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
     Ok(values)
 }

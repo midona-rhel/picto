@@ -154,6 +154,7 @@ pub(crate) enum DependencyChange {
     Rating,
     Tag(TagId),
     Folder(FolderId),
+    Folders,
     RootText,
     CoverFacts,
 }
@@ -174,6 +175,7 @@ pub(crate) fn depends_on(expression: &FilterExpr, change: DependencyChange) -> b
             (FilterClause::Folders { folder_ids, .. }, DependencyChange::Folder(folder_id)) => {
                 folder_ids.contains(&folder_id)
             }
+            (FilterClause::Folders { .. }, DependencyChange::Folders) => true,
             (FilterClause::Ratings { .. }, DependencyChange::Rating) => true,
             (
                 FilterClause::NotesPresent { .. }

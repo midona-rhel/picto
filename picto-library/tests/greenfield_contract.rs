@@ -648,6 +648,73 @@ fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
 }
 
 #[test]
+fn folder_subtree_deletion_preserves_media_and_restores_exact_membership_on_undo() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (active, _) = library
+        .ingest(&imported("folder-delete-active", Lifecycle::Active, &[]))
+        .unwrap();
+    let (inbox, _) = library
+        .ingest(&imported("folder-delete-inbox", Lifecycle::Inbox, &[]))
+        .unwrap();
+    let (parent, _) = library.create_folder("Parent", None).unwrap();
+    let (child, _) = library.create_folder("Child", Some(parent)).unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![active, inbox],
+            },
+            child,
+        )
+        .unwrap();
+    let (smart, _) = library
+        .create_smart_folder(
+            "In child",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Folders {
+                    folder_ids: vec![child],
+                    mode: SetMatchMode::Any,
+                }),
+                sort: ItemSort::default(),
+            },
+        )
+        .unwrap();
+    assert_eq!(library.counts().unwrap().folders[&child], 1);
+    assert_eq!(library.counts().unwrap().smart_folders[&smart], 1);
+
+    let child_delete = library.delete_folders(&[child]).unwrap();
+    assert_eq!(child_delete.deleted_folder_ids, vec![child]);
+    assert_eq!(child_delete.fallback_folder_id, Some(parent));
+    assert_eq!(library.counts().unwrap().all, 1);
+    assert_eq!(library.counts().unwrap().inbox, 1);
+    assert_eq!(library.counts().unwrap().smart_folders[&smart], 0);
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.counts().unwrap().folders[&child], 1);
+    assert_eq!(library.counts().unwrap().smart_folders[&smart], 1);
+
+    let tree_delete = library.delete_folders(&[parent]).unwrap();
+    assert_eq!(
+        tree_delete
+            .deleted_folder_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [parent, child].into_iter().collect()
+    );
+    assert_eq!(tree_delete.fallback_folder_id, None);
+    assert!(library.folders().unwrap().is_empty());
+    assert_eq!(library.counts().unwrap().all, 1);
+    assert_eq!(library.counts().unwrap().inbox, 1);
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.folders().unwrap().len(), 2);
+    assert_eq!(library.counts().unwrap().folders[&child], 1);
+    assert!(library.projections().snapshot().folders[&child].contains(inbox.0));
+    library.redo().unwrap().unwrap();
+    assert!(library.folders().unwrap().is_empty());
+}
+
+#[test]
 fn folder_auto_tags_apply_once_on_assignment_and_participate_in_memory_history() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

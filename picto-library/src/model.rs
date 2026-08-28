@@ -143,6 +143,13 @@ pub struct FolderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderDeleteResult {
+    pub deleted_folder_ids: Vec<FolderId>,
+    pub fallback_folder_id: Option<FolderId>,
+    pub receipt: crate::MutationReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceIdentity {
     pub source_key: String,
     pub source_item_key: String,
