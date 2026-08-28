@@ -743,6 +743,31 @@ impl LibraryApplication {
         })
     }
 
+    pub fn duplicate_candidates(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<picto_library::DuplicateCandidate>, String> {
+        self.library
+            .duplicate_candidates(limit.clamp(1, 500) as usize)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn resolve_duplicate(
+        &self,
+        file_id_a: picto_library::FileId,
+        file_id_b: picto_library::FileId,
+        choice: picto_library::DuplicateResolutionChoice,
+    ) -> Result<picto_library::DuplicateResolutionResult, String> {
+        self.library
+            .resolve_duplicate(
+                file_id_a,
+                file_id_b,
+                choice,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(|error| error.to_string())
+    }
+
     pub fn sidebar_counts(&self) -> Result<crate::query_v2::SidebarCounts, String> {
         let counts = self.library.counts().map_err(|error| error.to_string())?;
         let recently_viewed = self
@@ -767,7 +792,7 @@ impl LibraryApplication {
                 |connection| {
                     connection
                         .query_row(
-                            "SELECT COUNT(*) FROM duplicate_pair WHERE decision = 0",
+                        "SELECT COUNT(*) FROM duplicate_pair WHERE status = 1",
                             [],
                             |row| row.get::<_, i64>(0),
                         )

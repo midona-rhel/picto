@@ -1088,6 +1088,14 @@ impl Library {
         })
     }
 
+    pub fn duplicate_candidates(&self, limit: usize) -> Result<Vec<crate::DuplicateCandidate>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| crate::duplicate::list_candidates(connection, &snapshot, limit),
+        )
+    }
+
     pub fn resolve_duplicate(
         &self,
         file_id_a: FileId,

@@ -59,6 +59,10 @@ pub fn dispatch_library(
         }
         "tags.namespace_counts" => read(application.tag_namespace_counts()?),
         "tags.unused_count" => read(application.unused_tag_count()?),
+        "duplicates.list" => {
+            let input: LimitInput = parse(args_json)?;
+            read(application.duplicate_candidates(input.limit)?)
+        }
         "items.record_view" => {
             let input: ItemInput = parse(args_json)?;
             read(application.record_recent_view(input.item_id.0)?)
@@ -187,6 +191,14 @@ pub fn dispatch_library(
         "tags.delete" => {
             let input: TagInput = parse(args_json)?;
             read(application.delete_tag(input.tag_id)?)
+        }
+        "duplicates.resolve" => {
+            let input: LibraryResolveDuplicateInput = parse(args_json)?;
+            read(application.resolve_duplicate(
+                input.file_id_a,
+                input.file_id_b,
+                input.choice,
+            )?)
         }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
@@ -1301,6 +1313,12 @@ pub struct ResolveDuplicateInput {
     file_id_b: i64,
     choice: ResolutionChoice,
 }
+#[derive(Deserialize)]
+struct LibraryResolveDuplicateInput {
+    file_id_a: picto_library::FileId,
+    file_id_b: picto_library::FileId,
+    choice: picto_library::DuplicateResolutionChoice,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1929,6 +1947,48 @@ mod tests {
             .unwrap()
             .tag_ids
             .is_empty());
+    }
+
+    #[test]
+    fn greenfield_dispatch_returns_and_resolves_canonical_duplicate_candidates() {
+        let (_directory, application, first_root) = greenfield_fixture();
+        let (second_root, _) = application
+            .library()
+            .ingest(&greenfield_input("greenfield-duplicate-second"))
+            .unwrap();
+        let first_file = application.library().details(first_root).unwrap().media[0].file_id;
+        let second_file = application.library().details(second_root).unwrap().media[0].file_id;
+        application
+            .library()
+            .record_duplicate_pair(first_file, second_file, 1, 1_700_000_000_100)
+            .unwrap();
+
+        let output = dispatch_library(&application, "duplicates.list", r#"{"limit":25}"#)
+            .unwrap()
+            .unwrap();
+        let candidates: Vec<picto_library::DuplicateCandidate> =
+            serde_json::from_str(&output).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].left.occurrences[0].root_item_id, first_root);
+        assert_eq!(application.sidebar_counts().unwrap().duplicates, 1);
+
+        dispatch_library(
+            &application,
+            "duplicates.resolve",
+            &format!(
+                r#"{{"file_id_a":{},"file_id_b":{},"choice":"KeepBoth"}}"#,
+                first_file.0, second_file.0
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let output = dispatch_library(&application, "duplicates.list", r#"{"limit":25}"#)
+            .unwrap()
+            .unwrap();
+        let candidates: Vec<picto_library::DuplicateCandidate> =
+            serde_json::from_str(&output).unwrap();
+        assert!(candidates.is_empty());
+        assert_eq!(application.sidebar_counts().unwrap().duplicates, 0);
     }
 
     fn page(application: &Application, scope: &str) -> ItemPage {

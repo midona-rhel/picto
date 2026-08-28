@@ -274,6 +274,49 @@ pub struct DuplicatePair {
     pub winner_file_id: Option<FileId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateFile {
+    pub file_id: FileId,
+    pub file_hash: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub pixel_width: Option<u32>,
+    pub pixel_height: Option<u32>,
+    pub frame_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateOccurrence {
+    pub media_item_id: MediaId,
+    pub root_item_id: RootId,
+    pub collection_id: Option<RootId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateCandidateSide {
+    pub file: DuplicateFile,
+    pub occurrences: Vec<DuplicateOccurrence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DuplicateQualityDecision {
+    LeftBetter,
+    RightBetter,
+    AutoTieLeft,
+    AutoTieRight,
+    NeedsChoice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateCandidate {
+    pub file_id_a: FileId,
+    pub file_id_b: FileId,
+    pub distance: u32,
+    pub left: DuplicateCandidateSide,
+    pub right: DuplicateCandidateSide,
+    pub decision: DuplicateQualityDecision,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DuplicateResolutionChoice {
     KeepBoth,

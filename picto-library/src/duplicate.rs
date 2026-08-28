@@ -5,8 +5,9 @@ use roaring::RoaringBitmap;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::model::{
-    DuplicatePair, DuplicateResolutionChoice, DuplicateStatus, FileId, MediaId, PendingBlobCleanup,
-    RootId,
+    DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, DuplicateOccurrence, DuplicatePair,
+    DuplicateQualityDecision, DuplicateResolutionChoice, DuplicateStatus, FileId, Lifecycle,
+    MediaId, PendingBlobCleanup, RootId,
 };
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
@@ -122,6 +123,129 @@ pub(crate) fn list_pairs(
         pairs.push(pair_from_row(row)?);
     }
     Ok(pairs)
+}
+
+pub(crate) fn list_candidates(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    limit: usize,
+) -> Result<Vec<DuplicateCandidate>> {
+    let pairs = list_pairs(connection, Some(DuplicateStatus::Detected), 500)?;
+    let mut candidates = Vec::with_capacity(limit.min(pairs.len()));
+    for pair in pairs {
+        if candidates.len() == limit.clamp(1, 500) {
+            break;
+        }
+        let Some(left) = candidate_side(connection, snapshot, pair.file_id_a)? else {
+            continue;
+        };
+        let Some(right) = candidate_side(connection, snapshot, pair.file_id_b)? else {
+            continue;
+        };
+        candidates.push(DuplicateCandidate {
+            file_id_a: pair.file_id_a,
+            file_id_b: pair.file_id_b,
+            distance: pair.distance,
+            decision: compare_candidate_quality(&left.file, &right.file, pair.distance),
+            left,
+            right,
+        });
+    }
+    Ok(candidates)
+}
+
+fn candidate_side(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    file_id: FileId,
+) -> Result<Option<DuplicateCandidateSide>> {
+    let file = connection.query_row(
+        "SELECT file_id, content_hash, mime, size_bytes, width, height, frame_count
+         FROM media_file WHERE file_id = ?1",
+        [file_id.0],
+        |row| {
+            Ok(DuplicateFile {
+                file_id: FileId(row.get(0)?),
+                file_hash: row.get(1)?,
+                mime_type: row.get(2)?,
+                size_bytes: row.get(3)?,
+                pixel_width: row.get(4)?,
+                pixel_height: row.get(5)?,
+                frame_count: row.get(6)?,
+            })
+        },
+    )?;
+    let active = snapshot.lifecycle(Lifecycle::Active);
+    let mut statement = connection.prepare_cached(
+        "SELECT media_id FROM media_item WHERE file_id = ?1 ORDER BY media_id",
+    )?;
+    let mut occurrences = Vec::new();
+    let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
+    for media_id in rows {
+        let media_id = MediaId(media_id?);
+        let Some(root_id) = snapshot.media_owner.get(media_id.0).copied() else {
+            continue;
+        };
+        if !active.contains(root_id.0) {
+            continue;
+        }
+        occurrences.push(DuplicateOccurrence {
+            media_item_id: media_id,
+            root_item_id: root_id,
+            collection_id: (root_id.0 != media_id.0).then_some(root_id),
+        });
+    }
+    Ok((!occurrences.is_empty()).then_some(DuplicateCandidateSide { file, occurrences }))
+}
+
+fn compare_candidate_quality(
+    left: &DuplicateFile,
+    right: &DuplicateFile,
+    distance: u32,
+) -> DuplicateQualityDecision {
+    let stable_tie = || {
+        if left.file_id.0 <= right.file_id.0 {
+            DuplicateQualityDecision::AutoTieLeft
+        } else {
+            DuplicateQualityDecision::AutoTieRight
+        }
+    };
+    if left.file_hash == right.file_hash {
+        return stable_tie();
+    }
+    let dimensions = left
+        .pixel_width
+        .zip(left.pixel_height)
+        .zip(right.pixel_width.zip(right.pixel_height));
+    if let Some(((left_width, left_height), (right_width, right_height))) = dimensions {
+        if distance <= 1 {
+            if left_width >= right_width
+                && left_height >= right_height
+                && (left_width > right_width || left_height > right_height)
+            {
+                return DuplicateQualityDecision::LeftBetter;
+            }
+            if right_width >= left_width
+                && right_height >= left_height
+                && (right_width > left_width || right_height > left_height)
+            {
+                return DuplicateQualityDecision::RightBetter;
+            }
+        }
+        if left_width == right_width
+            && left_height == right_height
+            && left.mime_type == right.mime_type
+            && left.frame_count == right.frame_count
+            && distance <= 1
+        {
+            return match left.size_bytes.cmp(&right.size_bytes) {
+                std::cmp::Ordering::Greater => DuplicateQualityDecision::LeftBetter,
+                std::cmp::Ordering::Less => DuplicateQualityDecision::RightBetter,
+                std::cmp::Ordering::Equal => stable_tie(),
+            };
+        }
+    }
+    DuplicateQualityDecision::NeedsChoice
 }
 
 pub(crate) fn affected_roots(
