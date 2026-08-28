@@ -305,6 +305,57 @@ pub fn request_thumbnail(
     })
 }
 
+pub fn request_thumbnail_library(
+    application: &LibraryApplication,
+    file_hash: &FileHash,
+) -> Result<RequestThumbnailResult, String> {
+    if application
+        .blobs()
+        .find_thumbnail_path(&file_hash.0)
+        .map_err(|error| format!("Thumbnail lookup failed: {error}"))?
+        .is_some()
+    {
+        return Ok(RequestThumbnailResult {
+            ready: true,
+            supported: true,
+            queued: false,
+        });
+    }
+    let (mime, frame_count) = application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+            connection
+                .query_row(
+                    "SELECT mime, frame_count FROM media_file WHERE content_hash = ?1",
+                    [&file_hash.0],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<u32>>(1)?)),
+                )
+                .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())?;
+    if !crate::media_capabilities::capabilities_for_stored_media(
+        &mime,
+        frame_count.map(i64::from),
+    )
+    .can_thumbnail()
+    {
+        return Ok(RequestThumbnailResult {
+            ready: false,
+            supported: false,
+            queued: false,
+        });
+    }
+    let (_, enqueued, _) = application
+        .library()
+        .enqueue_thumbnail_work(&[file_hash.0.clone()], &Utc::now().to_rfc3339())
+        .map_err(|error| error.to_string())?;
+    Ok(RequestThumbnailResult {
+        ready: false,
+        supported: true,
+        queued: enqueued != 0,
+    })
+}
+
 /// Explicit regeneration is allowed to wait; viewport thumbnail requests are not.
 pub async fn render_thumbnail_now(
     store: &Store,
@@ -323,6 +374,13 @@ pub async fn render_thumbnail_now(
     )
     .await?
     .thumbnail_written)
+}
+
+pub async fn render_thumbnail_now_library(
+    application: &LibraryApplication,
+    file_hash: &FileHash,
+) -> Result<bool, String> {
+    crate::library_media_runtime::render_thumbnail_now(application, &file_hash.0).await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -451,6 +451,20 @@ pub async fn dispatch_library_async(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
+        "media.request_thumbnail" => {
+            let input: FileHashInput = parse(args_json)?;
+            read(crate::media_io_v2::request_thumbnail_library(
+                application,
+                &input.file_hash,
+            )?)
+        }
+        "media.render_thumbnail_now" => {
+            let input: FileHashInput = parse(args_json)?;
+            read(
+                crate::media_io_v2::render_thumbnail_now_library(application, &input.file_hash)
+                    .await?,
+            )
+        }
         "imports.enqueue" => {
             let input: crate::library_import::ManualImportInput = parse(args_json)?;
             read(crate::library_import::enqueue_manual_import(application, &input).await?)
@@ -2302,6 +2316,18 @@ mod tests {
             serde_json::from_str(&first).unwrap();
         assert_eq!((first.requested, first.enqueued), (1, 0));
         assert_eq!(first.already_queued, 1);
+        assert_eq!(
+            crate::media_io_v2::request_thumbnail_library(
+                &application,
+                &crate::app::FileHash(hash.clone()),
+            )
+            .unwrap(),
+            crate::media_io_v2::RequestThumbnailResult {
+                ready: false,
+                supported: true,
+                queued: false,
+            }
+        );
 
         let export_directory = tempfile::tempdir().unwrap();
         let export = dispatch_library(

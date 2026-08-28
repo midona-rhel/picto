@@ -72,6 +72,33 @@ pub async fn drain_batch(
     Ok(report)
 }
 
+pub async fn render_thumbnail_now(
+    application: &LibraryApplication,
+    content_hash: &str,
+) -> Result<bool, String> {
+    let file_id = application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            connection
+                .query_row(
+                    "SELECT file_id FROM media_file WHERE content_hash = ?1",
+                    [content_hash],
+                    |row| row.get::<_, u32>(0).map(FileId),
+                )
+                .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())?;
+    let target = load_target(application, file_id)?;
+    let mut source = PreparedMediaSource::from_stored_metadata(
+        target.file_path.clone(),
+        &target.mime,
+        target.duration_ms.and_then(|value| i64::try_from(value).ok()),
+        target.frame_count.map(i64::from),
+    );
+    ensure_thumbnail(application, &target, &mut source).await?;
+    Ok(true)
+}
+
 async fn execute(
     application: &LibraryApplication,
     work: &ClaimedMediaWork,
