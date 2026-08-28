@@ -24,6 +24,239 @@ pub(crate) struct UngroupResult {
     pub snapshot: ProjectionSnapshot,
 }
 
+pub(crate) struct DetachResult {
+    pub root_id: RootId,
+    pub affected: RoaringBitmap,
+    pub snapshot: ProjectionSnapshot,
+}
+
+pub(crate) fn detach(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    mut snapshot: ProjectionSnapshot,
+    collection_id: RootId,
+    media_id: MediaId,
+    modified_at_ms: i64,
+) -> Result<DetachResult> {
+    let members = snapshot
+        .collection_orders
+        .get(&collection_id)
+        .cloned()
+        .ok_or_else(|| {
+            LibraryError::InvalidInput(format!("root {collection_id} is not a collection"))
+        })?;
+    if !members.contains(&media_id) {
+        return Err(LibraryError::InvalidInput(format!(
+            "media {media_id} is not a member of collection {collection_id}"
+        )));
+    }
+    if members.len() < 2 {
+        return Err(LibraryError::InvalidInput(
+            "ungroup a one-member collection instead of detaching its only member".into(),
+        ));
+    }
+    let collection = load_roots(transaction, &[collection_id])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| LibraryError::NotFound(format!("collection {collection_id}")))?;
+    let lifecycle = common_lifecycle(&snapshot, &[collection_id.0].into_iter().collect())?;
+    let rating = rating_for(&snapshot, collection_id)?;
+    let inherited_tags = snapshot
+        .tags
+        .iter()
+        .filter_map(|(tag_id, roots)| roots.contains(collection_id.0).then_some(*tag_id))
+        .collect::<Vec<_>>();
+    let inherited_folders = snapshot
+        .folders
+        .iter()
+        .filter_map(|(folder_id, roots)| roots.contains(collection_id.0).then_some(*folder_id))
+        .collect::<Vec<_>>();
+    let (media_name, facts) = transaction.query_row(
+        "SELECT media.media_name, file.mime, file.size_bytes, file.width, file.height,
+                file.duration_ms, file.palette_json
+         FROM media_item media JOIN media_file file ON file.file_id = media.file_id
+         WHERE media.media_id = ?1",
+        [media_id.0],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                CoverFacts {
+                    mime: row.get(1)?,
+                    size_bytes: row.get::<_, i64>(2)? as u64,
+                    width: row.get(3)?,
+                    height: row.get(4)?,
+                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+                    palette: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                },
+            ))
+        },
+    )?;
+    let remaining = members
+        .iter()
+        .copied()
+        .filter(|member| *member != media_id)
+        .collect::<Vec<_>>();
+    let next_cover = if collection.cover_media_id == media_id {
+        remaining[0]
+    } else {
+        collection.cover_media_id
+    };
+    let remaining_size = collection
+        .total_size_bytes
+        .checked_sub(facts.size_bytes)
+        .ok_or_else(|| LibraryError::InvalidState("collection size underflow".into()))?;
+
+    transaction.execute(
+        "UPDATE library_root
+         SET cover_media_id = ?2, modified_at_ms = ?3, media_count = ?4,
+             total_size_bytes = ?5
+         WHERE root_id = ?1",
+        params![
+            collection_id.0,
+            next_cover.0,
+            modified_at_ms,
+            remaining.len() as i64,
+            i64::try_from(remaining_size).map_err(|_| LibraryError::InvalidState(
+                "collection size exceeds SQLite range".into()
+            ))?
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO library_root
+             (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
+              captured_at_ms, modified_at_ms, media_count, total_size_bytes)
+         VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?6, ?7, 1, ?8)",
+        params![
+            media_id.0,
+            media_name,
+            collection.notes,
+            serde_json::to_string(&collection.urls)?,
+            collection.imported_at_ms,
+            collection.captured_at_ms,
+            modified_at_ms,
+            i64::try_from(facts.size_bytes).map_err(|_| LibraryError::InvalidState(
+                "media size exceeds SQLite range".into()
+            ))?
+        ],
+    )?;
+    ordering::replace(
+        transaction,
+        revision,
+        OrderOwnerKind::Collection,
+        collection_id.0,
+        &remaining.iter().map(|media| media.0).collect::<Vec<_>>(),
+    )?;
+
+    let lifecycle_members = Arc::make_mut(&mut snapshot.lifecycle)
+        .entry(lifecycle)
+        .or_default();
+    lifecycle_members.insert(media_id.0);
+    bitmap::replace(
+        transaction,
+        revision,
+        BitmapKey {
+            domain: BitmapDomain::Lifecycle,
+            key_id: lifecycle.bitmap_key(),
+        },
+        lifecycle_members,
+    )?;
+    let rating_members = Arc::make_mut(&mut snapshot.ratings)
+        .entry(rating)
+        .or_default();
+    rating_members.insert(media_id.0);
+    bitmap::replace(
+        transaction,
+        revision,
+        BitmapKey {
+            domain: BitmapDomain::Rating,
+            key_id: rating.bitmap_key(),
+        },
+        rating_members,
+    )?;
+    for tag_id in &inherited_tags {
+        let roots = Arc::make_mut(&mut snapshot.tags)
+            .entry(*tag_id)
+            .or_default();
+        roots.insert(media_id.0);
+        bitmap::replace(
+            transaction,
+            revision,
+            BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            },
+            roots,
+        )?;
+    }
+    for folder_id in &inherited_folders {
+        let before = snapshot.folder_orders[folder_id].as_ref();
+        let position = before
+            .iter()
+            .position(|root| *root == collection_id)
+            .ok_or_else(|| {
+                LibraryError::InvalidState(format!(
+                    "folder {} bitmap and order disagree",
+                    folder_id.0
+                ))
+            })?;
+        let mut after = before.clone();
+        after.insert(position + 1, RootId(media_id.0));
+        ordering::replace(
+            transaction,
+            revision,
+            OrderOwnerKind::Folder,
+            folder_id.0,
+            &after.iter().map(|root| root.0).collect::<Vec<_>>(),
+        )?;
+        Arc::make_mut(&mut snapshot.folder_orders).insert(*folder_id, Arc::new(after.clone()));
+        Arc::make_mut(&mut snapshot.folders)
+            .insert(*folder_id, after.iter().map(|root| root.0).collect());
+    }
+
+    Arc::make_mut(&mut snapshot.collection_orders).insert(collection_id, Arc::new(remaining));
+    let owners = Arc::make_mut(&mut snapshot.media_owner);
+    if owners.len() <= media_id.0 as usize {
+        owners.resize(media_id.0 as usize + 1, None);
+    }
+    owners[media_id.0 as usize] = Some(RootId(media_id.0));
+    Arc::make_mut(&mut snapshot.media_count).insert(collection_id.0, members.len() as u64 - 1);
+    Arc::make_mut(&mut snapshot.total_bytes).insert(collection_id.0, remaining_size);
+    Arc::make_mut(&mut snapshot.modified_at).insert(collection_id.0, modified_at_ms.max(0) as u64);
+    if next_cover != collection.cover_media_id {
+        refresh_cover_projection(transaction, &mut snapshot, collection_id)?;
+    }
+    add_media_root_projection(
+        &mut snapshot,
+        RootId(media_id.0),
+        &facts,
+        collection.imported_at_ms,
+        modified_at_ms,
+        inherited_tags.len() as u64,
+        inherited_folders.len() as u64,
+        collection.notes.is_some(),
+        !collection.urls.is_empty(),
+    );
+    crate::fts::mark_one(transaction, RootId(media_id.0), modified_at_ms)?;
+    transaction.execute(
+        "INSERT INTO cloud_journal
+             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+         VALUES (?1, 'collection.detach', ?2, ?3, ?4)",
+        params![
+            revision as i64,
+            crate::bitmap::encode(&[collection_id.0, media_id.0].into_iter().collect())?,
+            serde_json::json!({"collection_id": collection_id.0, "media_id": media_id.0})
+                .to_string(),
+            modified_at_ms
+        ],
+    )?;
+    snapshot.revision = revision;
+    Ok(DetachResult {
+        root_id: RootId(media_id.0),
+        affected: [collection_id.0, media_id.0].into_iter().collect(),
+        snapshot,
+    })
+}
+
 pub(crate) fn set_cover(
     transaction: &Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,

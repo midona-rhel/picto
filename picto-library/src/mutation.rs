@@ -923,6 +923,56 @@ impl Library {
         Ok((roots, receipt))
     }
 
+    pub fn detach_collection_member(
+        &self,
+        collection_id: RootId,
+        media_id: MediaId,
+        modified_at_ms: i64,
+    ) -> Result<(RootId, MutationReceipt)> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let ((root_id, receipt), _, ()) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let output = crate::group::detach(
+                    transaction,
+                    revision,
+                    (*snapshot).clone(),
+                    collection_id,
+                    media_id,
+                    modified_at_ms,
+                )?;
+                let mut next = output.snapshot;
+                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "roots".into(),
+                        "collections".into(),
+                        "tags".into(),
+                        "folders".into(),
+                        "sidebar".into(),
+                        "search".into(),
+                    ],
+                    output.affected.iter().map(RootId),
+                );
+                Ok((
+                    (output.root_id, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok((root_id, receipt))
+    }
+
     pub fn reorder_collection(
         &self,
         collection_id: RootId,

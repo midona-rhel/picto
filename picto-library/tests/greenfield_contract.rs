@@ -917,6 +917,110 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
 }
 
 #[test]
+fn detaching_restores_one_root_and_keeps_collection_organization_on_the_root() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut image_import = imported_as(
+        "detach-image",
+        "image/png",
+        LabColor {
+            l: 50.0,
+            a: 10.0,
+            b: 10.0,
+            weight: 1.0,
+        },
+    );
+    image_import.tags = vec!["creator:image".into()];
+    let mut video_import = imported_as(
+        "detach-video",
+        "video/mp4",
+        LabColor {
+            l: 20.0,
+            a: -10.0,
+            b: -10.0,
+            weight: 1.0,
+        },
+    );
+    video_import.tags = vec!["creator:video".into()];
+    let (image, _) = library.ingest(&image_import).unwrap();
+    let (video, _) = library.ingest(&video_import).unwrap();
+    let (folder, _) = library.create_folder("Detach", None).unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![image, video],
+            },
+            folder,
+        )
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![image, video],
+            },
+            cover_root_id: image,
+            winning_collection_id: None,
+            name: Some("Detach pair".into()),
+            modified_at_ms: 1_700_000_002_000,
+        })
+        .unwrap();
+
+    let (detached, _) = library
+        .detach_collection_member(
+            collection,
+            picto_library::MediaId(image.0),
+            1_700_000_002_100,
+        )
+        .unwrap();
+    assert_eq!(detached, image);
+    let all = library
+        .query(&query(ItemScope::All), &PageRequest::default())
+        .unwrap();
+    assert_eq!(all.total, 2);
+    assert_eq!(root_tag_count(&library, collection), 2);
+    assert_eq!(root_tag_count(&library, detached), 2);
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection]
+            .iter()
+            .map(|media| media.0)
+            .collect::<Vec<_>>(),
+        vec![video.0]
+    );
+    let folder_page = library
+        .query(
+            &RootQuery {
+                scope: ItemScope::Folder { folder_id: folder },
+                view: ViewQuerySpec {
+                    filter: FilterExpr::default(),
+                    sort: ItemSort {
+                        field: SortField::FolderOrder,
+                        direction: SortDirection::Ascending,
+                        random_seed: None,
+                    },
+                },
+            },
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        folder_page
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![collection, detached]
+    );
+    assert_eq!(
+        folder_page
+            .items
+            .iter()
+            .map(|item| item.mime.as_str())
+            .collect::<Vec<_>>(),
+        vec!["video/mp4", "image/png"]
+    );
+}
+
+#[test]
 fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
