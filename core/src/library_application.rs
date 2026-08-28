@@ -5,6 +5,7 @@
 //! `LibraryDatabase` scheduler through `library().database()`.
 
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use picto_library::{Library, RootId};
@@ -20,6 +21,11 @@ pub struct LibraryApplication {
     root: PathBuf,
     library: Arc<Library>,
     blobs: Arc<BlobStore>,
+    ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
+    ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
+    ai_model_downloads: tokio::sync::Mutex<HashMap<String, crate::app::AiModelDownload>>,
+    ai_model_lifecycle: tokio::sync::Mutex<()>,
+    ai_worker_status: std::sync::Mutex<crate::app::AiWorkerStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -76,6 +82,11 @@ impl LibraryApplication {
             root,
             library: Arc::new(library),
             blobs: Arc::new(blobs),
+            ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
+            ai_prediction_cache: crate::ai_tagger::inference::new_prediction_cache(),
+            ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
+            ai_model_lifecycle: tokio::sync::Mutex::new(()),
+            ai_worker_status: std::sync::Mutex::new(crate::app::AiWorkerStatus::default()),
         })
     }
 
@@ -89,6 +100,46 @@ impl LibraryApplication {
 
     pub fn blobs(&self) -> &Arc<BlobStore> {
         &self.blobs
+    }
+
+    pub(crate) fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
+        &self.ai_sessions
+    }
+
+    pub(crate) fn ai_prediction_cache(
+        &self,
+    ) -> &crate::ai_tagger::inference::SharedPredictionCache {
+        &self.ai_prediction_cache
+    }
+
+    pub(crate) fn ai_model_downloads(
+        &self,
+    ) -> &tokio::sync::Mutex<HashMap<String, crate::app::AiModelDownload>> {
+        &self.ai_model_downloads
+    }
+
+    pub(crate) fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()> {
+        &self.ai_model_lifecycle
+    }
+
+    pub(crate) fn set_ai_worker_status(&self, active: bool, detail: impl Into<String>) {
+        if let Ok(mut status) = self.ai_worker_status.lock() {
+            status.active = active;
+            status.detail = detail.into();
+        }
+    }
+
+    pub(crate) fn ai_worker_status(&self) -> crate::app::AiWorkerStatus {
+        self.ai_worker_status
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn cancel_ai_model_downloads(&self) {
+        for download in self.ai_model_downloads.lock().await.values() {
+            download.cancel.cancel();
+        }
     }
 
     pub fn query(

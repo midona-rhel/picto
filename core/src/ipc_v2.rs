@@ -451,6 +451,7 @@ pub async fn dispatch_library_async(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
+        "diagnostics.snapshot" => read(crate::diagnostics_v2::snapshot_library(application)?),
         "media.request_thumbnail" => {
             let input: FileHashInput = parse(args_json)?;
             read(crate::media_io_v2::request_thumbnail_library(

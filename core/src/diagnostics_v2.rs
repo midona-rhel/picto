@@ -25,7 +25,24 @@ pub struct DiagnosticsSnapshot {
 }
 
 pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String> {
-    let mut workers = application.store().read(|connection| {
+    let workers = application.store().read(durable_workers)?;
+    Ok(finish_snapshot(workers, application.ai_worker_status()))
+}
+
+pub fn snapshot_library(
+    application: &crate::library_application::LibraryApplication,
+) -> Result<DiagnosticsSnapshot, String> {
+    let workers = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| durable_workers(connection).map_err(Into::into),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(finish_snapshot(workers, application.ai_worker_status()))
+}
+
+fn durable_workers(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<WorkerDiagnostic>> {
         let ingest = connection.query_row(
             "SELECT
                  COALESCE(SUM(status = 'running'), 0),
@@ -140,8 +157,12 @@ pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String
                 attention: 0,
             },
         ])
-    })?;
-    let ai = application.ai_worker_status();
+}
+
+fn finish_snapshot(
+    mut workers: Vec<WorkerDiagnostic>,
+    ai: crate::app::AiWorkerStatus,
+) -> DiagnosticsSnapshot {
     workers.push(WorkerDiagnostic {
         id: "ai-tagger".into(),
         label: "AI tagging".into(),
@@ -151,10 +172,10 @@ pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String
         queued: 0,
         attention: 0,
     });
-    Ok(DiagnosticsSnapshot {
+    DiagnosticsSnapshot {
         captured_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         workers,
-    })
+    }
 }
 
 fn worker(
@@ -271,6 +292,24 @@ mod tests {
         assert_eq!(ai.state, "working");
         assert_eq!(ai.active, 1);
         assert_eq!(ai.detail, "Running OppaiOracle · 17 images");
+    }
+
+    #[test]
+    fn schema_one_snapshot_uses_the_canonical_scheduler_and_process_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let application =
+            crate::library_application::LibraryApplication::create(directory.path()).unwrap();
+        application.set_ai_worker_status(true, "Running model · 3 roots");
+
+        let diagnostics = snapshot_library(&application).unwrap();
+        assert_eq!(diagnostics.workers.len(), 6);
+        let ai = diagnostics
+            .workers
+            .iter()
+            .find(|worker| worker.id == "ai-tagger")
+            .unwrap();
+        assert_eq!(ai.state, "working");
+        assert_eq!(ai.detail, "Running model · 3 roots");
     }
 
     #[test]
