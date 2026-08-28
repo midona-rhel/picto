@@ -56,6 +56,21 @@ impl Library {
 
     fn from_database(database: LibraryDatabase) -> Result<Self> {
         let database = Arc::new(database);
+        database.maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
+            transaction.execute(
+                "DELETE FROM view_pref
+                 WHERE (scope LIKE 'folder:%' AND NOT EXISTS (
+                            SELECT 1 FROM folder_definition
+                            WHERE folder_id = CAST(substr(view_pref.scope, 8) AS INTEGER)
+                        ))
+                    OR (scope LIKE 'smart:%' AND NOT EXISTS (
+                            SELECT 1 FROM smart_folder_definition
+                            WHERE smart_folder_id = CAST(substr(view_pref.scope, 7) AS INTEGER)
+                        ))",
+                [],
+            )?;
+            Ok(())
+        })?;
         let projections = Arc::new(ProjectionStore::load(&database)?);
         Ok(Self {
             database,
@@ -1228,9 +1243,9 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        if input.members.len() < 2 {
+        if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
-                "a collection import requires at least two media members".into(),
+                "a collection import requires at least one media member".into(),
             ));
         }
         if input.cover_index >= input.members.len() {
@@ -1270,6 +1285,7 @@ impl Library {
                         name: input.name.clone(),
                         modified_at_ms: input.modified_at_ms,
                     },
+                    true,
                 )?;
                 let mut next = output.snapshot;
                 ingest::persist_touched(
@@ -3834,8 +3850,13 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let selected = crate::selection::resolve(transaction, &snapshot, &request.target)?;
                 let before = capture_structure(transaction, &snapshot, &selected)?;
-                let output =
-                    crate::group::organize(transaction, revision, (*snapshot).clone(), &request)?;
+                let output = crate::group::organize(
+                    transaction,
+                    revision,
+                    (*snapshot).clone(),
+                    &request,
+                    false,
+                )?;
                 let mut next = output.snapshot;
                 crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
                 let after = capture_structure(transaction, &next, &output.affected)?;

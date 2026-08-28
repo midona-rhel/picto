@@ -634,9 +634,10 @@ pub(crate) fn organize(
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     request: &GroupRequest,
+    allow_singleton: bool,
 ) -> Result<GroupResult> {
     let ordered_roots = crate::selection::resolve_ordered(transaction, &snapshot, &request.target)?;
-    if ordered_roots.len() < 2 {
+    if ordered_roots.is_empty() || (!allow_singleton && ordered_roots.len() < 2) {
         return Err(LibraryError::InvalidInput(
             "creating or merging a collection requires at least two roots".into(),
         ));
