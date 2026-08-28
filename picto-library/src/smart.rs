@@ -14,6 +14,9 @@ pub struct SmartFolderRecord {
     pub smart_folder_id: SmartFolderId,
     pub name: String,
     pub parent_id: Option<SmartFolderId>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
     pub view: ViewQuerySpec,
     pub display_order: i64,
     pub count: u64,
@@ -135,22 +138,26 @@ pub fn list(
     snapshot: &ProjectionSnapshot,
 ) -> Result<Vec<SmartFolderRecord>> {
     let mut statement = connection.prepare(
-        "SELECT smart_folder_id, name, parent_id, view_query_json, display_order
+        "SELECT smart_folder_id, name, parent_id, icon, color, notes,
+                view_query_json, display_order
          FROM smart_folder_definition ORDER BY display_order, smart_folder_id",
     )?;
     let rows = statement.query_map([], |row| {
         let smart_folder_id = SmartFolderId(row.get(0)?);
-        let json = row.get::<_, String>(3)?;
+        let json = row.get::<_, String>(6)?;
         Ok((
             smart_folder_id,
             row.get::<_, String>(1)?,
             row.get::<_, Option<u32>>(2)?.map(SmartFolderId),
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
             json,
-            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (smart_folder_id, name, parent_id, json, display_order) = row?;
+        let (smart_folder_id, name, parent_id, icon, color, notes, json, display_order) = row?;
         let view = serde_json::from_str(&json)?;
         let count = snapshot
             .smart_results
@@ -160,6 +167,9 @@ pub fn list(
             smart_folder_id,
             name,
             parent_id,
+            icon,
+            color,
+            notes,
             view,
             display_order,
             count,

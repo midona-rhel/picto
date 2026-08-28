@@ -5,7 +5,7 @@ use picto_library::query::{ItemScope, PageRequest, RootQuery};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
     GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle, PreparedImport, Rating,
-    RootKind,
+    RootKind, SmartFolderInput,
 };
 use tempfile::TempDir;
 
@@ -63,6 +63,21 @@ fn query(scope: ItemScope) -> RootQuery {
                 random_seed: None,
             },
         },
+    }
+}
+
+fn smart_input(
+    name: &str,
+    parent_id: Option<picto_library::SmartFolderId>,
+    view: ViewQuerySpec,
+) -> SmartFolderInput {
+    SmartFolderInput {
+        name: name.into(),
+        parent_id,
+        icon: None,
+        color: None,
+        notes: None,
+        view,
     }
 }
 
@@ -270,7 +285,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
         .set_folder_auto_tags(auto_folder, vec![source], 1_700_000_000_650)
         .unwrap();
     let (smart_folder, _) = library
-        .create_smart_folder(
+        .create_smart_folder(smart_input(
             "Source",
             None,
             ViewQuerySpec {
@@ -280,7 +295,7 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
                 }),
                 sort: ItemSort::default(),
             },
-        )
+        ))
         .unwrap();
     let smart_query = RootQuery {
         scope: ItemScope::SmartFolder {
@@ -668,7 +683,7 @@ fn folder_subtree_deletion_preserves_media_and_restores_exact_membership_on_undo
         )
         .unwrap();
     let (smart, _) = library
-        .create_smart_folder(
+        .create_smart_folder(smart_input(
             "In child",
             None,
             ViewQuerySpec {
@@ -678,7 +693,7 @@ fn folder_subtree_deletion_preserves_media_and_restores_exact_membership_on_undo
                 }),
                 sort: ItemSort::default(),
             },
-        )
+        ))
         .unwrap();
     assert_eq!(library.counts().unwrap().folders[&child], 1);
     assert_eq!(library.counts().unwrap().smart_folders[&smart], 1);
@@ -794,7 +809,7 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
         sort: ItemSort::default(),
     };
     let (smart_folder_id, _) = library
-        .create_smart_folder("Alice", None, view.clone())
+        .create_smart_folder(smart_input("Alice", None, view.clone()))
         .unwrap();
     let smart_query = RootQuery {
         scope: ItemScope::SmartFolder { smart_folder_id },
@@ -855,6 +870,89 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
         1
     );
     assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+}
+
+#[test]
+fn smart_folder_definitions_are_typed_cycle_safe_and_session_undoable() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (parent, _) = library
+        .create_smart_folder(smart_input("Parent", None, ViewQuerySpec::default()))
+        .unwrap();
+    let (child, _) = library
+        .create_smart_folder(SmartFolderInput {
+            name: "Child".into(),
+            parent_id: Some(parent),
+            icon: Some("search-heart".into()),
+            color: Some("#336699".into()),
+            notes: Some("saved query".into()),
+            view: ViewQuerySpec::default(),
+        })
+        .unwrap();
+    let child_record = library
+        .smart_folders()
+        .unwrap()
+        .into_iter()
+        .find(|folder| folder.smart_folder_id == child)
+        .unwrap();
+    assert_eq!(child_record.icon.as_deref(), Some("search-heart"));
+    assert_eq!(child_record.color.as_deref(), Some("#336699"));
+    assert_eq!(child_record.notes.as_deref(), Some("saved query"));
+
+    assert!(library
+        .update_smart_folder(
+            parent,
+            SmartFolderInput {
+                name: "Parent".into(),
+                parent_id: Some(child),
+                icon: None,
+                color: None,
+                notes: None,
+                view: ViewQuerySpec::default(),
+            },
+        )
+        .is_err());
+    library
+        .update_smart_folder(
+            child,
+            SmartFolderInput {
+                name: "Renamed child".into(),
+                parent_id: Some(parent),
+                icon: None,
+                color: Some("#ffffff".into()),
+                notes: None,
+                view: ViewQuerySpec::default(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        library
+            .smart_folders()
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.smart_folder_id == child)
+            .unwrap()
+            .name,
+        "Renamed child"
+    );
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library
+            .smart_folders()
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.smart_folder_id == child)
+            .unwrap()
+            .name,
+        "Child"
+    );
+
+    library.delete_smart_folder(child).unwrap();
+    assert_eq!(library.smart_folders().unwrap().len(), 1);
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap().len(), 2);
+    library.redo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap().len(), 1);
 }
 
 #[test]

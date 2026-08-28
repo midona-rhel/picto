@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::bitmap::BitmapKey;
-use crate::model::{FolderId, MediaId, RootId, RootKind};
+use crate::model::{FolderId, MediaId, RootId, RootKind, SmartFolderId};
 use crate::ordering::OrderOwnerKind;
 use crate::projection::ProjectionSnapshot;
 
@@ -47,6 +47,19 @@ pub struct FolderDefinitionState {
     pub color: Option<String>,
     pub notes: Option<String>,
     pub auto_tag_ids: Vec<u8>,
+    pub display_order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SmartFolderDefinitionState {
+    pub smart_folder_id: SmartFolderId,
+    pub stable_key: String,
+    pub parent_id: Option<SmartFolderId>,
+    pub name: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub view: crate::predicate::ViewQuerySpec,
     pub display_order: i64,
 }
 
@@ -121,6 +134,11 @@ pub enum SemanticChange {
         before: Option<Box<FolderDefinitionState>>,
         after: Option<Box<FolderDefinitionState>>,
     },
+    SmartFolderDefinition {
+        smart_folder_id: SmartFolderId,
+        before: Option<Box<SmartFolderDefinitionState>>,
+        after: Option<Box<SmartFolderDefinitionState>>,
+    },
     RecentViews {
         before: Arc<Vec<(RootId, i64)>>,
         after: Arc<Vec<(RootId, i64)>>,
@@ -190,6 +208,19 @@ impl SemanticChange {
                         + state.color.as_deref().map(str::len).unwrap_or(0)
                         + state.notes.as_deref().map(str::len).unwrap_or(0)
                         + state.auto_tag_ids.len()
+                        + 64
+                })
+                .sum(),
+            Self::SmartFolderDefinition { before, after, .. } => before
+                .iter()
+                .chain(after.iter())
+                .map(|state| {
+                    state.stable_key.len()
+                        + state.name.len()
+                        + state.icon.as_deref().map(str::len).unwrap_or(0)
+                        + state.color.as_deref().map(str::len).unwrap_or(0)
+                        + state.notes.as_deref().map(str::len).unwrap_or(0)
+                        + serde_json::to_vec(&state.view).map_or(0, |value| value.len())
                         + 64
                 })
                 .sum(),

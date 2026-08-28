@@ -7,13 +7,14 @@ use roaring::RoaringBitmap;
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
 use crate::history::{
-    FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory, StructuralRootState,
-    StructuralState, TagDefinitionState,
+    FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
+    SmartFolderDefinitionState, StructuralRootState, StructuralState, TagDefinitionState,
 };
 use crate::ingest;
 use crate::model::{
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
     PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, SmartFolderId,
+    SmartFolderInput,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -337,15 +338,19 @@ impl Library {
 
     pub fn create_smart_folder(
         &self,
-        name: &str,
-        parent_id: Option<SmartFolderId>,
-        view: crate::predicate::ViewQuerySpec,
+        input: SmartFolderInput,
     ) -> Result<(SmartFolderId, MutationReceipt)> {
-        let name = required_name("smart folder", name)?;
+        let name = required_name("smart folder", &input.name)?;
+        let parent_id = input.parent_id;
+        let icon = normalized_optional(input.icon.as_deref());
+        let color = normalized_optional(input.color.as_deref());
+        let notes = normalized_optional(input.notes.as_deref());
+        let view = input.view;
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let ((smart_folder_id, receipt), _, ()) = self.database.published_write(
+        let history = self.history.clone();
+        let ((smart_folder_id, receipt), _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
@@ -359,13 +364,17 @@ impl Library {
                 )?;
                 transaction.execute(
                     "INSERT INTO smart_folder_definition
-                         (smart_folder_id, stable_key, parent_id, name, view_query_json, display_order)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         (smart_folder_id, stable_key, parent_id, name, icon, color, notes,
+                          view_query_json, display_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     rusqlite::params![
                         smart_folder_id.0,
                         uuid::Uuid::new_v4().to_string(),
                         parent_id.map(|id| id.0),
                         name,
+                        icon,
+                        color,
+                        notes,
                         serde_json::to_string(&view)?,
                         display_order
                     ],
@@ -381,48 +390,76 @@ impl Library {
                 let mut next = (*snapshot).clone();
                 crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
                 next.revision = revision;
+                let after = load_smart_folder_definition(transaction, smart_folder_id)?
+                    .ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "new smart folder {} disappeared before publication",
+                            smart_folder_id.0
+                        ))
+                    })?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec!["smart-folders".into(), "navigation".into()],
                     Vec::new(),
                 );
-                Ok(((smart_folder_id, receipt.clone()), PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: None,
-                }))
+                Ok((
+                    (smart_folder_id, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::new(
+                            "Create smart folder",
+                            SemanticChange::SmartFolderDefinition {
+                                smart_folder_id,
+                                before: None,
+                                after: Some(Box::new(after)),
+                            },
+                        )),
+                    },
+                ))
             },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
+        push_history(&history, history_entry);
         Ok((smart_folder_id, receipt))
     }
 
     pub fn update_smart_folder(
         &self,
         smart_folder_id: SmartFolderId,
-        name: &str,
-        parent_id: Option<SmartFolderId>,
-        view: crate::predicate::ViewQuerySpec,
+        input: SmartFolderInput,
     ) -> Result<MutationReceipt> {
-        let name = required_name("smart folder", name)?;
+        let name = required_name("smart folder", &input.name)?;
+        let parent_id = input.parent_id;
+        let icon = normalized_optional(input.icon.as_deref());
+        let color = normalized_optional(input.color.as_deref());
+        let notes = normalized_optional(input.notes.as_deref());
+        let view = input.view;
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 validate_smart_parent(transaction, parent_id, Some(smart_folder_id))?;
+                let before = load_smart_folder_definition(transaction, smart_folder_id)?
+                    .ok_or_else(|| {
+                        LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
+                    })?;
                 if transaction.execute(
                     "UPDATE smart_folder_definition
-                     SET parent_id = ?2, name = ?3, view_query_json = ?4
+                     SET parent_id = ?2, name = ?3, icon = ?4, color = ?5, notes = ?6,
+                         view_query_json = ?7
                      WHERE smart_folder_id = ?1",
                     rusqlite::params![
                         smart_folder_id.0,
                         parent_id.map(|id| id.0),
                         name,
+                        icon,
+                        color,
+                        notes,
                         serde_json::to_string(&view)?
                     ],
                 )? == 0
@@ -443,6 +480,13 @@ impl Library {
                 let mut next = (*snapshot).clone();
                 crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
                 next.revision = revision;
+                let after = load_smart_folder_definition(transaction, smart_folder_id)?
+                    .ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "smart folder {} disappeared during update",
+                            smart_folder_id.0
+                        ))
+                    })?;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     vec!["smart-folders".into(), "navigation".into()],
@@ -453,14 +497,22 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: (before != after).then(|| {
+                            HistoryEntry::new(
+                                "Update smart folder",
+                                SemanticChange::SmartFolderDefinition {
+                                    smart_folder_id,
+                                    before: Some(Box::new(before)),
+                                    after: Some(Box::new(after)),
+                                },
+                            )
+                        }),
                     },
                 ))
             },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
+        push_history(&history, history_entry);
         Ok(receipt)
     }
 
@@ -468,10 +520,15 @@ impl Library {
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                let before = load_smart_folder_definition(transaction, smart_folder_id)?
+                    .ok_or_else(|| {
+                        LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
+                    })?;
                 let child_count = transaction.query_row(
                     "SELECT COUNT(*) FROM smart_folder_definition WHERE parent_id = ?1",
                     [smart_folder_id.0],
@@ -513,14 +570,20 @@ impl Library {
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: None,
+                        history: Some(HistoryEntry::new(
+                            "Delete smart folder",
+                            SemanticChange::SmartFolderDefinition {
+                                smart_folder_id,
+                                before: Some(Box::new(before)),
+                                after: None,
+                            },
+                        )),
                     },
                 ))
             },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
+        push_history(&history, history_entry);
         Ok(receipt)
     }
 
@@ -3757,6 +3820,69 @@ fn apply_semantic_change(
             resources.insert("folders".into());
             resources.insert("navigation".into());
         }
+        SemanticChange::SmartFolderDefinition {
+            smart_folder_id,
+            before,
+            after,
+        } => {
+            let (expected, replacement) = if use_after {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            let current = load_smart_folder_definition(transaction, *smart_folder_id)?;
+            if current.as_ref() != expected.as_deref() {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay history because smart folder {} changed",
+                    smart_folder_id.0
+                )));
+            }
+            match replacement {
+                Some(folder) => {
+                    transaction.execute(
+                        "INSERT INTO smart_folder_definition
+                             (smart_folder_id, stable_key, parent_id, name, icon, color, notes,
+                              view_query_json, display_order)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                         ON CONFLICT(smart_folder_id) DO UPDATE SET
+                             stable_key = excluded.stable_key,
+                             parent_id = excluded.parent_id,
+                             name = excluded.name,
+                             icon = excluded.icon,
+                             color = excluded.color,
+                             notes = excluded.notes,
+                             view_query_json = excluded.view_query_json,
+                             display_order = excluded.display_order",
+                        rusqlite::params![
+                            folder.smart_folder_id.0,
+                            folder.stable_key,
+                            folder.parent_id.map(|id| id.0),
+                            folder.name,
+                            folder.icon,
+                            folder.color,
+                            folder.notes,
+                            serde_json::to_string(&folder.view)?,
+                            folder.display_order
+                        ],
+                    )?;
+                    crate::smart::replace_query(
+                        transaction,
+                        snapshot,
+                        *smart_folder_id,
+                        folder.view.clone(),
+                    )?;
+                }
+                None => {
+                    transaction.execute(
+                        "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
+                        [smart_folder_id.0],
+                    )?;
+                    crate::smart::remove(snapshot, *smart_folder_id);
+                }
+            }
+            resources.insert("smart-folders".into());
+            resources.insert("navigation".into());
+        }
         SemanticChange::RecentViews { before, after } => {
             let replacement = if use_after { after } else { before };
             transaction.execute("DELETE FROM recent_view", [])?;
@@ -4367,8 +4493,73 @@ fn validate_smart_parent(
                 parent_id.0
             )));
         }
+        if let Some(child_id) = child_id {
+            let creates_cycle = transaction.query_row(
+                "WITH RECURSIVE descendants(smart_folder_id) AS (
+                     SELECT smart_folder_id FROM smart_folder_definition WHERE parent_id = ?1
+                     UNION ALL
+                     SELECT child.smart_folder_id
+                     FROM smart_folder_definition child
+                     JOIN descendants parent ON child.parent_id = parent.smart_folder_id
+                 )
+                 SELECT EXISTS(
+                     SELECT 1 FROM descendants WHERE smart_folder_id = ?2
+                 )",
+                rusqlite::params![child_id.0, parent_id.0],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if creates_cycle {
+                return Err(LibraryError::InvalidInput(
+                    "a smart folder cannot move below its descendant".into(),
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn load_smart_folder_definition(
+    connection: &rusqlite::Connection,
+    smart_folder_id: SmartFolderId,
+) -> Result<Option<SmartFolderDefinitionState>> {
+    use rusqlite::OptionalExtension;
+
+    let row = connection
+        .query_row(
+            "SELECT stable_key, parent_id, name, icon, color, notes, view_query_json,
+                    display_order
+             FROM smart_folder_definition WHERE smart_folder_id = ?1",
+            [smart_folder_id.0],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u32>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(
+        |(stable_key, parent_id, name, icon, color, notes, view_json, display_order)| {
+            Ok(SmartFolderDefinitionState {
+                smart_folder_id,
+                stable_key,
+                parent_id: parent_id.map(SmartFolderId),
+                name,
+                icon,
+                color,
+                notes,
+                view: serde_json::from_str(&view_json)?,
+                display_order,
+            })
+        },
+    )
+    .transpose()
 }
 
 fn load_root_text(

@@ -31,6 +31,16 @@ local_id!(TagNamespaceId);
 local_id!(FolderId);
 local_id!(SmartFolderId);
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartFolderInput {
+    pub name: String,
+    pub parent_id: Option<SmartFolderId>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub view: crate::predicate::ViewQuerySpec,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RootKind {
