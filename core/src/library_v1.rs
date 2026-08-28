@@ -69,6 +69,14 @@ pub fn lifecycle(value: Lifecycle) -> picto_library::Lifecycle {
     }
 }
 
+fn app_lifecycle(value: picto_library::Lifecycle) -> Lifecycle {
+    match value {
+        picto_library::Lifecycle::Active => Lifecycle::Active,
+        picto_library::Lifecycle::Inbox => Lifecycle::Inbox,
+        picto_library::Lifecycle::Trash => Lifecycle::Trash,
+    }
+}
+
 pub fn receipt(value: picto_library::MutationReceipt) -> MutationReceipt {
     MutationReceipt {
         revision: value.revision,
@@ -126,6 +134,90 @@ pub fn page(value: picto_library::query::RootPage) -> Result<crate::query_v2::It
         visible_item_count: Some(checked_i64(u128::from(value.total))?),
         visible_media_count: Some(checked_i64(value.media_count)?),
         total_size_bytes: Some(checked_i64(value.total_size_bytes)?),
+    })
+}
+
+pub fn details(
+    library: &Library,
+    value: picto_library::RootDetails,
+) -> Result<crate::query_v2::ItemDetails, String> {
+    let tag_names = library
+        .tags()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|tag| {
+            let name = if tag.namespace.is_empty() || tag.namespace == "general" {
+                tag.subname
+            } else {
+                format!("{}:{}", tag.namespace, tag.subname)
+            };
+            (tag.tag_id, name)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let aggregate_tags = value
+        .tag_ids
+        .iter()
+        .filter_map(|tag_id| tag_names.get(tag_id).cloned())
+        .collect::<Vec<_>>();
+    let rating = rating_number(value.rating);
+    let imported_at = timestamp_string(value.root.imported_at_ms)?;
+    let captured_at = value
+        .root
+        .captured_at_ms
+        .map(timestamp_string)
+        .transpose()?;
+    let notes = value.root.notes.clone();
+    let source_urls = value.root.source_urls.clone();
+    let media = value
+        .media
+        .into_iter()
+        .enumerate()
+        .map(|(position, media)| {
+            let dominant_colors = media.facts.palette.iter().map(lab_hex).collect::<Vec<_>>();
+            Ok(crate::query_v2::MediaDetails {
+                media_item_id: crate::app::ItemId(i64::from(media.media_id.0)),
+                file_hash: crate::app::FileHash(media.facts.content_hash),
+                mime_type: media.facts.mime,
+                dominant_color_hex: dominant_colors.first().cloned(),
+                dominant_colors,
+                size_bytes: checked_i64(u128::from(media.facts.size_bytes))?,
+                pixel_width: media.facts.width.map(i64::from),
+                pixel_height: media.facts.height.map(i64::from),
+                duration_ms: media
+                    .facts
+                    .duration_ms
+                    .map(|duration| checked_i64(u128::from(duration)))
+                    .transpose()?,
+                frame_count: media.facts.frame_count.map(i64::from),
+                name: Some(media.media_name),
+                notes: notes.clone(),
+                rating,
+                source_urls: source_urls.clone(),
+                captured_at: captured_at.clone(),
+                imported_at: imported_at.clone(),
+                position: checked_i64(position as u128)?,
+                tags: aggregate_tags.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(crate::query_v2::ItemDetails {
+        item_id: crate::app::ItemId(i64::from(value.root.root_id.0)),
+        kind: match value.root.kind {
+            picto_library::RootKind::Media => crate::app::ItemKind::Media,
+            picto_library::RootKind::Collection => crate::app::ItemKind::Collection,
+        },
+        lifecycle: app_lifecycle(value.lifecycle),
+        label: Some(value.root.name),
+        cover_media_item_id: Some(crate::app::ItemId(i64::from(value.root.cover_media_id.0))),
+        folder_ids: value
+            .folder_ids
+            .into_iter()
+            .map(|folder_id| i64::from(folder_id.0))
+            .collect(),
+        media,
+        aggregate_tags,
+        revision: value.revision,
     })
 }
 
@@ -411,6 +503,23 @@ fn checked_i64(value: u128) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("value {value} exceeds the renderer integer domain"))
 }
 
+fn rating_number(value: Rating) -> Option<i64> {
+    match value {
+        Rating::Unrated => None,
+        Rating::One => Some(1),
+        Rating::Two => Some(2),
+        Rating::Three => Some(3),
+        Rating::Four => Some(4),
+        Rating::Five => Some(5),
+    }
+}
+
+fn timestamp_string(value: i64) -> Result<String, String> {
+    chrono::DateTime::from_timestamp_millis(value)
+        .map(|value| value.to_rfc3339())
+        .ok_or_else(|| format!("timestamp {value} is outside the supported date range"))
+}
+
 fn lab_hex(value: &LabColor) -> String {
     use palette::{IntoColor, Lab, LinSrgb, Srgb};
 
@@ -514,5 +623,61 @@ mod tests {
         assert_eq!(converted.visible_media_count, Some(30));
         assert_eq!(converted.total_size_bytes, Some(999));
         assert_eq!(converted.revision, 4);
+    }
+
+    #[test]
+    fn details_keep_member_facts_separate_from_root_organization() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let converted = details(
+            &library,
+            picto_library::RootDetails {
+                root: picto_library::RootRecord {
+                    root_id: RootId(7),
+                    stable_key: "root".into(),
+                    kind: picto_library::RootKind::Collection,
+                    name: "Collection".into(),
+                    notes: Some("Root note".into()),
+                    source_urls: vec!["https://example.invalid/post".into()],
+                    cover_media_id: picto_library::MediaId(8),
+                    imported_at_ms: 1_700_000_000_000,
+                    captured_at_ms: None,
+                    modified_at_ms: 1_700_000_000_100,
+                    media_count: 1,
+                    total_size_bytes: 42,
+                },
+                lifecycle: picto_library::Lifecycle::Inbox,
+                rating: Rating::Four,
+                folder_ids: vec![FolderId(3)],
+                tag_ids: Vec::new(),
+                media: vec![picto_library::MediaRecord {
+                    media_id: picto_library::MediaId(8),
+                    media_name: "member.png".into(),
+                    file_id: picto_library::FileId(9),
+                    file_path: "/tmp/member.png".into(),
+                    facts: picto_library::ImmutableMediaFacts {
+                        mime: "image/png".into(),
+                        size_bytes: 42,
+                        width: Some(10),
+                        height: Some(20),
+                        duration_ms: None,
+                        frame_count: Some(1),
+                        content_hash: "hash".into(),
+                        perceptual_hash: None,
+                        palette: Vec::new(),
+                    },
+                }],
+                revision: 2,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(converted.label.as_deref(), Some("Collection"));
+        assert_eq!(converted.lifecycle, Lifecycle::Inbox);
+        assert_eq!(converted.folder_ids, vec![3]);
+        assert_eq!(converted.media[0].name.as_deref(), Some("member.png"));
+        assert_eq!(converted.media[0].notes.as_deref(), Some("Root note"));
+        assert_eq!(converted.media[0].rating, Some(4));
+        assert_eq!(converted.media[0].position, 0);
     }
 }
