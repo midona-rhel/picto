@@ -34,6 +34,7 @@ fn imported(
         },
         lifecycle: Lifecycle::Active,
         rating: Rating::Unrated,
+        notes: None,
         tags: Vec::new(),
         folders: Vec::new(),
         source_urls: vec![format!("https://example.test/{key}")],

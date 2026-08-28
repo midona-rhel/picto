@@ -254,7 +254,6 @@ CREATE TABLE ingest_job (
     source_path TEXT NOT NULL,
     source_item_id INTEGER REFERENCES source_item(source_item_id) ON DELETE CASCADE,
     payload_json TEXT NOT NULL,
-    lifecycle TEXT NOT NULL CHECK (lifecycle IN ('inbox', 'active')),
     delete_after_ingest INTEGER NOT NULL DEFAULT 0 CHECK (delete_after_ingest IN (0, 1)),
     status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
     attempt_count INTEGER NOT NULL DEFAULT 0,

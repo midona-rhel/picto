@@ -1005,6 +1005,7 @@ mod tests {
             },
             lifecycle: Lifecycle::Active,
             rating: picto_library::Rating::Unrated,
+            notes: None,
             tags: Vec::new(),
             folders: Vec::new(),
             source_urls: Vec::new(),

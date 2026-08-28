@@ -32,6 +32,7 @@ fn imported(key: &str, lifecycle: Lifecycle, tags: &[&str]) -> PreparedImport {
         },
         lifecycle,
         rating: Rating::Unrated,
+        notes: None,
         tags: tags.iter().map(|value| (*value).to_owned()).collect(),
         folders: Vec::new(),
         source_urls: vec![format!("https://example.test/{key}")],
@@ -129,6 +130,83 @@ fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision(
     let rebuilt = Library::open(&path).unwrap();
     assert_eq!(rebuilt.projections().snapshot().revision, newer_revision);
     assert_eq!(root_tag_count(&rebuilt, root), 1);
+}
+
+#[test]
+fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut input = imported("retry", Lifecycle::Active, &["creator:alice"]);
+    input.notes = Some("preserved import note".into());
+
+    let (root_id, _) = library.ingest(&input).unwrap();
+    let (stable_retry, _) = library.ingest(&input).unwrap();
+    assert_eq!(stable_retry, root_id);
+
+    let mut source_retry = input.clone();
+    source_retry.stable_key = "different-local-key".into();
+    let (source_retry, _) = library.ingest(&source_retry).unwrap();
+    assert_eq!(source_retry, root_id);
+    assert_eq!(library.counts().unwrap().all, 1);
+    assert_eq!(
+        library.details(root_id).unwrap().root.notes.as_deref(),
+        Some("preserved import note")
+    );
+
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![root_id],
+    };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library
+        .permanently_delete(&target, 1_700_000_000_100)
+        .unwrap();
+    assert!(library.ingest(&input).is_err());
+}
+
+#[test]
+fn durable_ingest_queue_persists_only_canonical_payloads() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let payload = picto_library::PreparedIngestPayload::Item(imported(
+        "queued",
+        Lifecycle::Inbox,
+        &["queue:canonical"],
+    ));
+    let job = picto_library::PreparedIngestJob {
+        job_key: "manual:queued".into(),
+        source_kind: "manual".into(),
+        source_path: "/tmp/queued.png".into(),
+        source_item_id: None,
+        delete_after_ingest: false,
+        payload: payload.clone(),
+    };
+
+    let (job_id, _) = library
+        .enqueue_ingest_job(&job, "2026-08-28T10:00:00Z")
+        .unwrap();
+    let (same_job_id, _) = library
+        .enqueue_ingest_job(&job, "2026-08-28T10:00:01Z")
+        .unwrap();
+    assert_eq!(same_job_id, job_id);
+
+    let claimed = library
+        .claim_ingest_jobs(64, "2026-08-28T10:00:02Z")
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].ingest_job_id, job_id);
+    assert_eq!(claimed[0].payload, payload);
+    assert_eq!(claimed[0].attempt_count, 1);
+
+    let revision = library.database().revision().unwrap();
+    assert!(library
+        .claim_ingest_jobs(64, "2026-08-28T10:00:03Z")
+        .unwrap()
+        .is_empty());
+    assert_eq!(library.database().revision().unwrap(), revision);
+    assert!(library
+        .complete_ingest_jobs(&[job_id], "2026-08-28T10:00:04Z")
+        .unwrap()
+        .is_some());
 }
 
 #[test]

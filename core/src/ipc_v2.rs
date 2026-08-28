@@ -1778,6 +1778,7 @@ mod tests {
             },
             lifecycle: picto_library::Lifecycle::Active,
             rating: picto_library::Rating::Unrated,
+            notes: None,
             tags: Vec::new(),
             folders: Vec::new(),
             source_urls: Vec::new(),

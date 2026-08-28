@@ -331,6 +331,7 @@ pub struct PreparedImport {
     pub facts: ImmutableMediaFacts,
     pub lifecycle: Lifecycle,
     pub rating: Rating,
+    pub notes: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -349,6 +350,32 @@ pub struct PreparedCollectionImport {
     pub cover_index: usize,
     pub name: Option<String>,
     pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum PreparedIngestPayload {
+    Item(PreparedImport),
+    Collection(PreparedCollectionImport),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreparedIngestJob {
+    pub job_key: String,
+    pub source_kind: String,
+    pub source_path: String,
+    pub source_item_id: Option<i64>,
+    pub delete_after_ingest: bool,
+    pub payload: PreparedIngestPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimedIngestJob {
+    pub ingest_job_id: i64,
+    pub source_path: String,
+    pub delete_after_ingest: bool,
+    pub attempt_count: u32,
+    pub payload: PreparedIngestPayload,
 }
 
 /// Tags produced for one visible library root. Collection callers combine

@@ -13,6 +13,7 @@ pub mod fts;
 mod group;
 pub mod history;
 pub mod ingest;
+pub mod ingest_queue;
 pub mod model;
 pub mod mutation;
 pub mod ordering;

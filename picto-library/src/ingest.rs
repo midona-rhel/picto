@@ -27,6 +27,26 @@ pub(crate) fn insert_one(
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
 ) -> Result<IngestResult> {
+    if let Some(root_id) = existing_root(transaction, &snapshot, input)? {
+        snapshot.revision = revision;
+        return Ok(IngestResult {
+            root_id,
+            snapshot,
+            resources: vec!["roots".into()],
+            bitmap_keys: Vec::new(),
+            folder_ids: Vec::new(),
+        });
+    }
+    if transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM deletion_tombstone WHERE stable_key = ?1)",
+        [&input.stable_key],
+        |row| row.get::<_, bool>(0),
+    )? {
+        return Err(LibraryError::InvalidState(
+            "a deliberately deleted import cannot be recreated".into(),
+        ));
+    }
+
     let file_id = if let Some(file_id) = transaction
         .query_row(
             "SELECT file_id FROM media_file WHERE content_hash = ?1",
@@ -78,10 +98,11 @@ pub(crate) fn insert_one(
         "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
               captured_at_ms, modified_at_ms, media_count, total_size_bytes)
-         VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?5, 1, ?7)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, 1, ?8)",
         params![
             root_id.0,
             input.media_name,
+            input.notes,
             serde_json::to_string(&input.source_urls)?,
             media_id.0,
             input.imported_at_ms,
@@ -232,6 +253,13 @@ pub(crate) fn insert_one(
     if !input.source_urls.is_empty() {
         Arc::make_mut(&mut snapshot.urls_present).insert(root_id.0);
     }
+    if input
+        .notes
+        .as_deref()
+        .is_some_and(|notes| !notes.is_empty())
+    {
+        Arc::make_mut(&mut snapshot.notes_present).insert(root_id.0);
+    }
 
     fts::mark_one(transaction, root_id, input.imported_at_ms)?;
     snapshot.revision = revision;
@@ -248,6 +276,48 @@ pub(crate) fn insert_one(
         bitmap_keys,
         folder_ids: input.folders.clone(),
     })
+}
+
+fn existing_root(
+    transaction: &Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    input: &PreparedImport,
+) -> Result<Option<RootId>> {
+    let stable_media = transaction
+        .query_row(
+            "SELECT local_id FROM library_item WHERE stable_key = ?1 AND item_kind = 1",
+            [&input.stable_key],
+            |row| row.get::<_, u32>(0),
+        )
+        .optional()?;
+    let source_media = input
+        .source_identity
+        .as_ref()
+        .map(|source| {
+            transaction
+                .query_row(
+                    "SELECT media_id FROM source_provenance
+                     WHERE source_key = ?1 AND source_item_key = ?2
+                     ORDER BY media_id LIMIT 1",
+                    params![source.source_key, source.source_item_key],
+                    |row| row.get::<_, u32>(0),
+                )
+                .optional()
+        })
+        .transpose()?
+        .flatten();
+    if stable_media.is_some() && source_media.is_some() && stable_media != source_media {
+        return Err(LibraryError::InvalidState(
+            "stable and source identities resolve to different media".into(),
+        ));
+    }
+    Ok(stable_media.or(source_media).map(|media_id| {
+        snapshot
+            .media_owner
+            .get(media_id)
+            .copied()
+            .unwrap_or(RootId(media_id))
+    }))
 }
 
 pub(crate) fn persist_touched(

@@ -123,6 +123,42 @@ impl Library {
         Ok((output, receipt))
     }
 
+    pub fn auxiliary_write_if_changed<T>(
+        &self,
+        priority: WorkPriority,
+        resources: impl IntoIterator<Item = String>,
+        item_ids: impl IntoIterator<Item = RootId>,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>, u64) -> Result<Option<T>>,
+    ) -> Result<Option<(T, MutationReceipt)>> {
+        let resources = resources.into_iter().collect::<Vec<_>>();
+        let item_ids = item_ids.into_iter().collect::<Vec<_>>();
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let published = self.database.published_write_if_changed(
+            priority,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let Some(output) = operation(transaction, revision)? else {
+                    return Ok(None);
+                };
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt =
+                    PublicationCoordinator::receipt(revision, resources, item_ids);
+                Ok(Some((
+                    (output, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                )))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        Ok(published.map(|((output, receipt), _, _)| (output, receipt)))
+    }
+
     pub fn read_auxiliary_json(&self, table: &str, key: &str) -> Result<Option<String>> {
         let (table, key_column) = auxiliary_json_spec(table)?;
         self.database.read(WorkPriority::VisibleRead, |connection| {

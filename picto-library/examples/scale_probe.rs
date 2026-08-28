@@ -197,6 +197,7 @@ fn prepared(index: usize) -> PreparedImport {
             Lifecycle::Active
         },
         rating: Rating::Unrated,
+        notes: None,
         tags,
         folders: Vec::new(),
         source_urls: vec![format!("https://fixture.invalid/{index}")],
