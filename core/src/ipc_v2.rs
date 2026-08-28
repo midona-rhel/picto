@@ -451,6 +451,10 @@ pub async fn dispatch_library_async(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
+        "imports.enqueue" => {
+            let input: crate::library_import::ManualImportInput = parse(args_json)?;
+            read(crate::library_import::enqueue_manual_import(application, &input).await?)
+        }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
             read(application.reset_subscription_library(input.subscription_id).await?)

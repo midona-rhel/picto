@@ -23,6 +23,7 @@ pub mod ingest_v2;
 pub mod ipc_v2;
 pub mod library_application;
 pub mod library_ingest_runtime;
+pub mod library_import;
 pub mod library_media_runtime;
 pub mod library_runtime;
 pub mod media_capabilities;
