@@ -216,6 +216,9 @@ pub(crate) fn insert_one(
     Arc::make_mut(&mut snapshot.total_bytes).insert(root_id.0, input.facts.size_bytes);
     Arc::make_mut(&mut snapshot.media_count).insert(root_id.0, 1);
     Arc::make_mut(&mut snapshot.imported_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    if let Some(value) = input.captured_at_ms {
+        Arc::make_mut(&mut snapshot.captured_at).insert(root_id.0, value.max(0) as u64);
+    }
     Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
     if let Some(value) = input.facts.width {
         Arc::make_mut(&mut snapshot.width).insert(root_id.0, value as u64);

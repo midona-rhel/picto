@@ -349,6 +349,7 @@ pub struct ProjectionSnapshot {
     pub height: Arc<NumericIndex>,
     pub duration: Arc<NumericIndex>,
     pub imported_at: Arc<NumericIndex>,
+    pub captured_at: Arc<NumericIndex>,
     pub modified_at: Arc<NumericIndex>,
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
@@ -415,6 +416,7 @@ impl ProjectionSnapshot {
             &self.height,
             &self.duration,
             &self.imported_at,
+            &self.captured_at,
             &self.modified_at,
         ]
         .into_iter()
@@ -587,12 +589,14 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
     let mut height = NumericIndex::default();
     let mut duration = NumericIndex::default();
     let mut imported_at = NumericIndex::default();
+    let mut captured_at = NumericIndex::default();
     let mut modified_at = NumericIndex::default();
     let mut notes_present = RoaringBitmap::new();
     let mut urls_present = RoaringBitmap::new();
     let mut roots = connection.prepare(
         "SELECT root.root_id, item.item_kind, root.total_size_bytes, root.media_count,
-                root.imported_at_ms, root.modified_at_ms, root.notes, root.source_urls_json,
+                root.imported_at_ms, root.captured_at_ms, root.modified_at_ms,
+                root.notes, root.source_urls_json,
                 file.mime, file.width, file.height, file.duration_ms, file.palette_json
          FROM library_root root
          JOIN library_item item ON item.local_id = root.root_id
@@ -606,14 +610,15 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             row.get::<_, i64>(2)? as u64,
             row.get::<_, u32>(3)?,
             row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, Option<String>>(6)?,
-            row.get::<_, String>(7)?,
+            row.get::<_, Option<i64>>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, Option<String>>(7)?,
             row.get::<_, String>(8)?,
-            row.get::<_, Option<u32>>(9)?,
+            row.get::<_, String>(9)?,
             row.get::<_, Option<u32>>(10)?,
-            row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-            row.get::<_, String>(12)?,
+            row.get::<_, Option<u32>>(11)?,
+            row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
+            row.get::<_, String>(13)?,
         ))
     })?;
     for row in rows {
@@ -623,6 +628,7 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
             bytes,
             count,
             imported,
+            captured,
             modified,
             notes,
             urls,
@@ -650,6 +656,9 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         total_bytes.insert(root_id, bytes);
         media_count.insert(root_id, count as u64);
         imported_at.insert(root_id, imported.max(0) as u64);
+        if let Some(value) = captured {
+            captured_at.insert(root_id, value.max(0) as u64);
+        }
         modified_at.insert(root_id, modified.max(0) as u64);
         if let Some(value) = root_width {
             width.insert(root_id, value as u64);
@@ -763,6 +772,7 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         height: Arc::new(height),
         duration: Arc::new(duration),
         imported_at: Arc::new(imported_at),
+        captured_at: Arc::new(captured_at),
         modified_at: Arc::new(modified_at),
         notes_present: Arc::new(notes_present),
         urls_present: Arc::new(urls_present),

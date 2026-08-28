@@ -62,6 +62,10 @@ pub enum FilterClause {
         minimum_ms: Option<u64>,
         maximum_ms: Option<u64>,
     },
+    CapturedAt {
+        minimum_ms: Option<u64>,
+        maximum_ms: Option<u64>,
+    },
     Width {
         minimum: Option<u64>,
         maximum: Option<u64>,
@@ -350,6 +354,10 @@ fn evaluate_clause(
             minimum_ms,
             maximum_ms,
         } => snapshot.modified_at.between(*minimum_ms, *maximum_ms),
+        FilterClause::CapturedAt {
+            minimum_ms,
+            maximum_ms,
+        } => snapshot.captured_at.between(*minimum_ms, *maximum_ms),
         FilterClause::Width { minimum, maximum } => snapshot.width.between(*minimum, *maximum),
         FilterClause::Height { minimum, maximum } => snapshot.height.between(*minimum, *maximum),
         FilterClause::Duration {

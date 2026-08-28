@@ -149,7 +149,7 @@ impl LibraryDatabase {
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let writer = open_connection(&path, true)?;
+        let writer = open_connection(&path, false)?;
         schema::validate(&writer)?;
         Self::from_writer(path, writer)
     }

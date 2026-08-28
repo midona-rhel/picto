@@ -91,6 +91,10 @@ fn fresh_schema_reopens_and_rejects_unrelated_sqlite_files() {
     let unrelated = directory.path().join("unrelated.sqlite");
     rusqlite::Connection::open(&unrelated).unwrap();
     assert!(Library::open(&unrelated).is_err());
+
+    let missing = directory.path().join("missing.sqlite");
+    assert!(Library::open(&missing).is_err());
+    assert!(!missing.exists());
 }
 
 #[test]
@@ -1048,6 +1052,37 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
         1
     );
     assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+}
+
+#[test]
+fn captured_date_filter_uses_the_exact_numeric_projection() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (captured, _) = library
+        .ingest(&imported("captured-date", Lifecycle::Active, &[]))
+        .unwrap();
+    let mut missing_date = imported("missing-date", Lifecycle::Active, &[]);
+    missing_date.captured_at_ms = None;
+    library.ingest(&missing_date).unwrap();
+
+    let result = library
+        .query(
+            &RootQuery {
+                scope: ItemScope::All,
+                view: ViewQuerySpec {
+                    filter: FilterExpr::Clause(FilterClause::CapturedAt {
+                        minimum_ms: Some(1_500_000_000_000),
+                        maximum_ms: Some(1_650_000_000_000),
+                    }),
+                    sort: ItemSort::default(),
+                },
+            },
+            &PageRequest::default(),
+        )
+        .unwrap();
+
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].root_id, captured);
 }
 
 #[test]

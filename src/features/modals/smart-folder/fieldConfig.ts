@@ -29,10 +29,7 @@ const NUMERIC_OPERATORS = [
 ];
 
 const TEXT_OPERATORS = [
-  { value: 'is', label: 'is' },
   { value: 'contains', label: 'contains' },
-  { value: 'starts_with', label: 'starts with' },
-  { value: 'ends_with', label: 'ends with' },
   { value: 'is_empty', label: 'is empty' },
   { value: 'is_not_empty', label: 'is not empty' },
 ];
@@ -97,7 +94,7 @@ export const FIELD_DEFS: FieldDef[] = [
   {
     key: 'name',
     label: 'Name',
-    operators: TEXT_OPERATORS,
+    operators: [{ value: 'contains', label: 'contains' }],
     valueType: 'text',
   },
   {
@@ -132,19 +129,6 @@ export const FIELD_DEFS: FieldDef[] = [
     label: 'Source URL',
     operators: TEXT_OPERATORS,
     valueType: 'text',
-  },
-  {
-    key: 'shape',
-    label: 'Shape',
-    operators: [
-      { value: 'is', label: 'is' },
-    ],
-    valueType: 'select',
-    selectOptions: [
-      { value: 'landscape', label: 'Landscape' },
-      { value: 'portrait', label: 'Portrait' },
-      { value: 'square', label: 'Square' },
-    ],
   },
   {
     key: 'color',

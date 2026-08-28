@@ -8,7 +8,7 @@ use crate::projection::{NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBi
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v6";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v7";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
@@ -35,6 +35,7 @@ struct CheckpointData {
     height: NumericIndex,
     duration: NumericIndex,
     imported_at: NumericIndex,
+    captured_at: NumericIndex,
     modified_at: NumericIndex,
     notes_present: roaring::RoaringBitmap,
     urls_present: roaring::RoaringBitmap,
@@ -67,6 +68,7 @@ pub fn encode(snapshot: &ProjectionSnapshot) -> Result<Vec<u8>> {
         height: (*snapshot.height).clone(),
         duration: (*snapshot.duration).clone(),
         imported_at: (*snapshot.imported_at).clone(),
+        captured_at: (*snapshot.captured_at).clone(),
         modified_at: (*snapshot.modified_at).clone(),
         notes_present: (*snapshot.notes_present).clone(),
         urls_present: (*snapshot.urls_present).clone(),
@@ -104,6 +106,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         height: std::sync::Arc::new(data.height),
         duration: std::sync::Arc::new(data.duration),
         imported_at: std::sync::Arc::new(data.imported_at),
+        captured_at: std::sync::Arc::new(data.captured_at),
         modified_at: std::sync::Arc::new(data.modified_at),
         notes_present: std::sync::Arc::new(data.notes_present),
         urls_present: std::sync::Arc::new(data.urls_present),

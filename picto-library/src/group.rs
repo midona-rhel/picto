@@ -227,6 +227,7 @@ pub(crate) fn detach(
         RootId(media_id.0),
         &facts,
         collection.imported_at_ms,
+        collection.captured_at_ms,
         modified_at_ms,
         inherited_tags.len() as u64,
         inherited_folders.len() as u64,
@@ -510,6 +511,7 @@ pub(crate) fn ungroup(
             RootId(media_id.0),
             facts,
             collection.imported_at_ms,
+            collection.captured_at_ms,
             modified_at_ms,
             inherited_tags.len() as u64,
             inherited_folders.len() as u64,
@@ -748,6 +750,7 @@ pub(crate) fn organize(
         members.len() as u64,
         total_size,
         imported_at,
+        cover.captured_at_ms,
         request.modified_at_ms,
         tag_count,
         folder_count,
@@ -986,6 +989,7 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
         Arc::make_mut(&mut snapshot.height).remove(root_id);
         Arc::make_mut(&mut snapshot.duration).remove(root_id);
         Arc::make_mut(&mut snapshot.imported_at).remove(root_id);
+        Arc::make_mut(&mut snapshot.captured_at).remove(root_id);
         Arc::make_mut(&mut snapshot.modified_at).remove(root_id);
         Arc::make_mut(&mut snapshot.notes_present).remove(root_id);
         Arc::make_mut(&mut snapshot.urls_present).remove(root_id);
@@ -1000,6 +1004,7 @@ fn add_collection_projection(
     media_count: u64,
     total_size: u64,
     imported_at: i64,
+    captured_at: Option<i64>,
     modified_at: i64,
     tag_count: u64,
     folder_count: u64,
@@ -1018,6 +1023,9 @@ fn add_collection_projection(
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, total_size);
     Arc::make_mut(&mut snapshot.media_count).insert(id, media_count);
     Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
+    if let Some(value) = captured_at {
+        Arc::make_mut(&mut snapshot.captured_at).insert(id, value.max(0) as u64);
+    }
     Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
     if has_notes {
         Arc::make_mut(&mut snapshot.notes_present).insert(id);
@@ -1086,6 +1094,7 @@ fn add_media_root_projection(
     root_id: RootId,
     facts: &CoverFacts,
     imported_at: i64,
+    captured_at: Option<i64>,
     modified_at: i64,
     tag_count: u64,
     folder_count: u64,
@@ -1123,6 +1132,9 @@ fn add_media_root_projection(
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, facts.size_bytes);
     Arc::make_mut(&mut snapshot.media_count).insert(id, 1);
     Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
+    if let Some(value) = captured_at {
+        Arc::make_mut(&mut snapshot.captured_at).insert(id, value.max(0) as u64);
+    }
     Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
     if let Some(value) = facts.width {
         Arc::make_mut(&mut snapshot.width).insert(id, value as u64);
