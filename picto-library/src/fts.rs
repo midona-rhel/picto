@@ -41,8 +41,16 @@ pub fn mark_dirty(
 pub fn settle_batch(transaction: &Transaction<'_>, limit: usize) -> Result<RoaringBitmap> {
     let roots = {
         let mut statement = transaction.prepare(
-            "SELECT root_id FROM fts_dirty
-             ORDER BY category, queued_at_ms, root_id LIMIT ?1",
+            "WITH ranked AS (
+                 SELECT root_id, category, queued_at_ms,
+                        row_number() OVER (
+                            PARTITION BY category ORDER BY queued_at_ms, root_id
+                        ) AS category_rank
+                 FROM fts_dirty
+             )
+             SELECT root_id FROM ranked
+             ORDER BY category_rank, queued_at_ms, category, root_id
+             LIMIT ?1",
         )?;
         let values = statement
             .query_map([limit as i64], |row| row.get::<_, u32>(0))?

@@ -12,17 +12,18 @@ ingestion. FTS and derivative settlement are intentionally outside canonical ing
 
 | Measurement | Existing backend baseline | Greenfield result |
 |---|---:|---:|
-| Concurrent reader p95 | 4.69 ms | 1.561 ms |
-| Concurrent reader p99 | Not recorded | 2.278 ms |
-| Concurrent reader maximum | Not recorded | 4.674 ms |
-| Warm page read p95 | Not recorded | 0.194 ms |
-| Selection summary, 94k active roots | 36 ms at 90k | 0.267 ms |
-| Add tag to 94k active roots | 42 ms at 90k | 6.473 ms |
-| Move 94k active roots to Trash | Not recorded | 0.847 ms |
-| Canonical ingest database work | About 4 ms/item | 0.244 ms/item |
-| Ingest publication batch p95 | Not recorded | 13.714 ms |
-| Projection checkpoint write | Not recorded | 55.516 ms |
-| Checkpoint-backed reopen | Not recorded | 33.089 ms |
+| Concurrent reader p95 | 4.69 ms | 1.783 ms |
+| Concurrent reader p99 | Not recorded | 2.616 ms |
+| Concurrent reader maximum | Not recorded | 8.092 ms |
+| Warm page read p95 | Not recorded | 0.183 ms |
+| Sidebar counts, 100k roots | Not recorded | 2.278 ms |
+| Selection summary, 94k active roots | 36 ms at 90k | 0.269 ms |
+| Add tag to 94k active roots | 42 ms at 90k | 6.345 ms |
+| Move 94k active roots to Trash | Not recorded | 0.769 ms |
+| Canonical ingest database work | About 4 ms/item | 0.261 ms/item |
+| Ingest publication batch p95 | Not recorded | 14.592 ms |
+| Projection checkpoint write | Not recorded | 63.473 ms |
+| Checkpoint-backed reopen | Not recorded | 34.472 ms |
 | Full projection recovery | Not recorded | 255.884 ms |
 | Projection checkpoint size | Not recorded | 12,346,910 bytes |
 

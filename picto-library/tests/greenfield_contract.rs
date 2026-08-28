@@ -475,6 +475,65 @@ fn bounded_ingest_batch_publishes_once_and_fts_respects_each_scope() {
 }
 
 #[test]
+fn fts_settlement_interleaves_dirty_categories() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let inputs = (0..4)
+        .map(|index| imported(&format!("fts-{index}"), Lifecycle::Active, &[]))
+        .collect::<Vec<_>>();
+    let roots = library
+        .ingest_batch(&inputs)
+        .unwrap()
+        .into_iter()
+        .map(|(root, _)| root)
+        .collect::<Vec<_>>();
+    library
+        .database()
+        .maintenance_write(picto_library::database::WorkPriority::Fts, |transaction| {
+            transaction.execute("DELETE FROM fts_dirty", [])?;
+            for root in &roots[..3] {
+                transaction.execute(
+                    "INSERT INTO fts_dirty(root_id, category, queued_at_ms)
+                         VALUES (?1, 1, 100)",
+                    [root.0],
+                )?;
+            }
+            transaction.execute(
+                "INSERT INTO fts_dirty(root_id, category, queued_at_ms)
+                     VALUES (?1, 2, 100)",
+                [roots[3].0],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    library.settle_fts(2).unwrap().unwrap();
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM fts_dirty WHERE category = 2",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM fts_dirty", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    2
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
+#[test]
 fn collections_are_one_root_and_media_filters_use_only_the_cover() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
