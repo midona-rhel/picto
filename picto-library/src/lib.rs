@@ -1,0 +1,30 @@
+//! Greenfield media-library kernel.
+//!
+//! This crate owns media roots, canonical memberships, queries, mutations,
+//! publication, and session history. It deliberately has no dependency on the
+//! application shell or the backend it replaces.
+
+pub mod bitmap;
+pub mod checkpoint;
+pub mod database;
+pub mod error;
+pub mod fts;
+mod group;
+pub mod history;
+pub mod ingest;
+pub mod model;
+pub mod mutation;
+pub mod ordering;
+pub mod predicate;
+pub mod projection;
+pub mod publication;
+pub mod query;
+pub mod schema;
+pub mod selection;
+
+pub use database::LibraryDatabase;
+pub use error::{LibraryError, Result};
+pub use mutation::Library;
+pub use model::*;
+pub use projection::{ProjectionSnapshot, ProjectionStore};
+pub use publication::{LibraryChanged, MutationReceipt};
