@@ -516,6 +516,105 @@ pub async fn dispatch_library_async(
             )?;
             read(PixivOAuthExchangeOutput { ok: true })
         }
+        "subscriptions.gallery.start" => {
+            let input: GalleryImportInput = parse(args_json)?;
+            let url = normalize_ehentai_gallery_url(&input.url)?;
+            let is_exhentai = url.starts_with("https://exhentai.org/");
+            if input.service_id.as_deref().is_some_and(|service| {
+                !matches!((service, is_exhentai), ("ehentai", false) | ("exhentai", true))
+            }) {
+                return Err("The selected gallery service does not match the URL".into());
+            }
+            let gallery_id = url
+                .split('/')
+                .nth(4)
+                .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
+            let definition = NewSubscription {
+                name: format!(
+                    "{} Gallery {gallery_id}",
+                    if is_exhentai { "ExHentai" } else { "E-Hentai" }
+                ),
+                schedule: "manual".into(),
+                initial_post_limit: None,
+                periodic_post_limit: None,
+                queries: vec![NewSubscriptionQuery {
+                    site_id: "ehentai".into(),
+                    query_text: url,
+                    display_name: Some("Gallery import".into()),
+                    notes: None,
+                    group_posts: true,
+                }],
+            };
+            let timestamp = now();
+            let (subscription_id, _) =
+                application.create_subscription_definition_library(&definition, &timestamp)?;
+            if let Err(error) = crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+                application.root(),
+                subscription_id,
+            )
+            .await
+            {
+                let _ = application.delete_subscription_library(subscription_id);
+                return Err(error);
+            }
+            let (run, receipt) = application
+                .request_subscription_run_library(subscription_id, &timestamp)
+                .inspect_err(|_| {
+                    let _ = application.delete_subscription_library(subscription_id);
+                })?;
+            read(LibraryCreatedSubscriptionRun {
+                run_id: run.run_id,
+                created: run.created,
+                receipt,
+            })
+        }
+        "subscriptions.gallery.cleanup" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            let catalog = crate::subscription_catalog_v2::list_library(application)?;
+            let Some(subscription) = catalog
+                .subscriptions
+                .iter()
+                .find(|entry| entry.subscription_id == input.subscription_id)
+            else {
+                return read(Option::<LibraryGalleryImportCleanupResult>::None).map(Some);
+            };
+            if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
+                return Err("Only transient E-Hentai gallery jobs can use gallery cleanup".into());
+            }
+            crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+                application.root(),
+                input.subscription_id,
+            )
+            .await?;
+            let title = application
+                .library()
+                .auxiliary_read(
+                    picto_library::database::WorkPriority::VisibleRead,
+                    |connection| {
+                        connection
+                            .query_row(
+                                "SELECT NULLIF(TRIM(post.title), '')
+                                 FROM subscription_source_post link
+                                 JOIN source_post post ON post.source_post_id = link.source_post_id
+                                 WHERE link.subscription_id = ?1 AND post.root_item_id IS NOT NULL
+                                 ORDER BY post.updated_at DESC, post.source_post_id DESC LIMIT 1",
+                                [input.subscription_id],
+                                |row| row.get::<_, Option<String>>(0),
+                            )
+                            .optional()
+                            .map(Option::flatten)
+                            .map_err(Into::into)
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            match application.delete_subscription_library(input.subscription_id) {
+                Ok(receipt) => read(LibraryGalleryImportCleanupResult { title, receipt }),
+                Err(error) if error.contains("subscription does not exist") => {
+                    read(Option::<LibraryGalleryImportCleanupResult>::None)
+                }
+                Err(error) => Err(error),
+            }
+        }
         "media.request_thumbnail" => {
             let input: FileHashInput = parse(args_json)?;
             read(crate::media_io_v2::request_thumbnail_library(
@@ -1663,6 +1762,17 @@ struct LibraryAutomaticDuplicateInput {
 struct LibraryAiAssignmentsInput {
     assignments: Vec<picto_library::RootTagAssignment>,
 }
+#[derive(Serialize)]
+struct LibraryCreatedSubscriptionRun {
+    run_id: i64,
+    created: bool,
+    receipt: picto_library::MutationReceipt,
+}
+#[derive(Serialize)]
+struct LibraryGalleryImportCleanupResult {
+    title: Option<String>,
+    receipt: picto_library::MutationReceipt,
+}
 #[derive(Deserialize)]
 struct LibraryUpdateSmartFolderInput {
     smart_folder_id: picto_library::SmartFolderId,
@@ -2447,6 +2557,39 @@ mod tests {
             receipt.revision,
             application.library().database().revision().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn greenfield_gallery_job_uses_canonical_subscription_state() {
+        let (_directory, application, _) = greenfield_fixture();
+        let output = dispatch_library_async(
+            &application,
+            "subscriptions.gallery.start",
+            r#"{"service_id":"ehentai","url":"https://e-hentai.org/g/12345/0123456789/"}"#,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let created: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(created["run_id"].as_i64().unwrap() > 0);
+
+        let catalog = crate::subscription_catalog_v2::list_library(&application).unwrap();
+        assert_eq!(catalog.subscriptions.len(), 1);
+        let subscription_id = catalog.subscriptions[0].subscription_id;
+        assert_eq!(catalog.subscriptions[0].queries[0].site_id, "ehentai");
+
+        dispatch_library_async(
+            &application,
+            "subscriptions.gallery.cleanup",
+            &format!(r#"{{"subscription_id":{subscription_id}}}"#),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(crate::subscription_catalog_v2::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .is_empty());
     }
 
     #[test]
