@@ -418,6 +418,21 @@ pub fn dispatch_library(
         }
         "settings.view.reset" => read(application.reset_view_preferences()?),
         "tasks.get" => read(crate::tasks_v2::snapshot_library(application)?),
+        "cloud.providers.detect" => read(crate::cloud::provider::detect_roots()),
+        "cloud.status.get" => read(crate::cloud::status_library(application)?),
+        "cloud.configuration.get" => read(crate::cloud::configuration_library(application)?),
+        "cloud.configure" => {
+            let input: crate::cloud::ConfigureCloudInput = parse(args_json)?;
+            read(crate::cloud::configure_library(application, &input)?)
+        }
+        "cloud.pause" => {
+            let input: CloudPauseInput = parse(args_json)?;
+            read(crate::cloud::set_paused_library(application, input.paused)?)
+        }
+        "cloud.retention.update" => {
+            let input: ValueInput = parse(args_json)?;
+            read(crate::cloud::update_retention_library(application, &input.value)?)
+        }
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
@@ -2324,6 +2339,36 @@ mod tests {
             receipt.revision,
             application.library().database().revision().unwrap()
         );
+    }
+
+    #[test]
+    fn greenfield_cloud_status_and_settings_use_low_priority_schema_one_state() {
+        let (_directory, application, _) = greenfield_fixture();
+        let configuration = dispatch_library(&application, "cloud.configuration.get", "{}")
+            .unwrap()
+            .unwrap();
+        let configuration: crate::cloud::CloudConfiguration =
+            serde_json::from_str(&configuration).unwrap();
+        assert_eq!(configuration.provider, None);
+
+        dispatch_library(&application, "cloud.pause", r#"{"paused":true}"#)
+            .unwrap()
+            .unwrap();
+        dispatch_library(
+            &application,
+            "cloud.retention.update",
+            r#"{"value":{"daily":7}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let status = dispatch_library(&application, "cloud.status.get", "{}")
+            .unwrap()
+            .unwrap();
+        let status: crate::cloud::CloudSyncStatus = serde_json::from_str(&status).unwrap();
+        assert_eq!(status.state, "paused");
+        assert!(status.pending_mutations >= 1);
+        let configuration = crate::cloud::configuration_library(&application).unwrap();
+        assert_eq!(configuration.retention, serde_json::json!({"daily": 7}));
     }
 
     #[test]

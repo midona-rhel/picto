@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemKind, Lifecycle, MutationReceipt};
+use crate::library_application::LibraryApplication;
 use crate::projection_v2::{
     timestamp_ms, FolderOrderProjectionChange, FolderProjectionChange, GroupOrderProjectionChange,
     ItemProjectionChange, MediaClassificationProjectionChange, MembershipProjectionChange,
@@ -548,6 +549,42 @@ pub fn status(application: &Application) -> Result<CloudSyncStatus, String> {
     })
 }
 
+pub fn status_library(application: &LibraryApplication) -> Result<CloudSyncStatus, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(connection.query_row(
+                    "SELECT state, phase, blocking, completed_units, total_units,
+                            message, last_sync_at,
+                            (SELECT COUNT(*) FROM cloud_journal
+                             WHERE expanded_at_ms IS NULL) +
+                            (SELECT COUNT(*) FROM cloud_outbox
+                             WHERE published_at IS NULL),
+                            pending_blobs, missing_blobs
+                     FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| {
+                        Ok(CloudSyncStatus {
+                            state: row.get(0)?,
+                            phase: row.get(1)?,
+                            blocking: row.get::<_, i64>(2)? != 0,
+                            completed_units: row.get(3)?,
+                            total_units: row.get(4)?,
+                            message: row.get(5)?,
+                            last_sync_at: row.get(6)?,
+                            pending_mutations: row.get(7)?,
+                            pending_blobs: row.get(8)?,
+                            missing_blobs: row.get(9)?,
+                        })
+                    },
+                )?)
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn configuration(application: &Application) -> Result<CloudConfiguration, String> {
     application.store().read_snapshot(|connection| {
         connection.query_row(
@@ -567,6 +604,81 @@ pub fn configuration(application: &Application) -> Result<CloudConfiguration, St
             },
         )
     })
+}
+
+pub fn configuration_library(
+    application: &LibraryApplication,
+) -> Result<CloudConfiguration, String> {
+    application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT provider, account_label, remote_root, library_id,
+                                device_id, retention_json
+                         FROM cloud_state WHERE singleton = 1",
+                        [],
+                        |row| {
+                            let retention: String = row.get(5)?;
+                            Ok(CloudConfiguration {
+                                provider: row.get(0)?,
+                                account_label: row.get(1)?,
+                                root_path: row.get(2)?,
+                                library_id: row.get(3)?,
+                                device_id: row.get(4)?,
+                                retention: serde_json::from_str(&retention)
+                                    .map_err(json_sql_error)?,
+                            })
+                        },
+                    )
+                    .map_err(Into::into)
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+pub fn configure_library(
+    application: &LibraryApplication,
+    input: &ConfigureCloudInput,
+) -> Result<picto_library::MutationReceipt, String> {
+    if !matches!(input.provider.as_str(), "google_drive" | "dropbox") {
+        return Err(format!(
+            "Unsupported cloud folder provider: {}",
+            input.provider
+        ));
+    }
+    let root = provider::canonical_provider_root(
+        &input.provider,
+        std::path::PathBuf::from(&input.root_path),
+    );
+    let provider = provider::DirectoryProvider::open_existing(&root)?;
+    provider.verify_writable()?;
+    let root_path = root.to_string_lossy().into_owned();
+    let published = application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            [resources::CLOUD.to_string(), resources::TASKS.to_string()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE cloud_state
+                     SET provider = ?1, account_label = ?2, remote_root = ?3,
+                         state = 'idle', phase = 'idle', paused = 0, message = ''
+                     WHERE singleton = 1
+                       AND (provider IS NOT ?1 OR account_label IS NOT ?2
+                            OR remote_root IS NOT ?3 OR paused != 0
+                            OR state != 'idle' OR phase != 'idle' OR message != '')",
+                    params![input.provider, input.account_label, root_path],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    seed_local_originals_library(application)?;
+    cloud_receipt_or_current(application, published)
 }
 
 pub fn configure(
@@ -674,6 +786,30 @@ pub fn update_retention(
     })
 }
 
+pub fn update_retention_library(
+    application: &LibraryApplication,
+    retention: &serde_json::Value,
+) -> Result<picto_library::MutationReceipt, String> {
+    let retention_json = serde_json::to_string(retention).map_err(|error| error.to_string())?;
+    let published = application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            [resources::CLOUD.to_string()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE cloud_state SET retention_json = ?1
+                     WHERE singleton = 1 AND retention_json != ?1",
+                    [&retention_json],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    cloud_receipt_or_current(application, published)
+}
+
 pub fn set_paused(application: &Application, paused: bool) -> Result<MutationReceipt, String> {
     let (_, revision) = application.transaction(
         |transaction| {
@@ -692,6 +828,95 @@ pub fn set_paused(application: &Application, paused: bool) -> Result<MutationRec
         resources: vec![resources::CLOUD.to_string(), resources::TASKS.to_string()],
         item_ids: Vec::new(),
     })
+}
+
+pub fn set_paused_library(
+    application: &LibraryApplication,
+    paused: bool,
+) -> Result<picto_library::MutationReceipt, String> {
+    let published = application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            [resources::CLOUD.to_string(), resources::TASKS.to_string()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE cloud_state
+                     SET paused = ?1,
+                         state = CASE WHEN ?1 THEN 'paused' ELSE 'idle' END,
+                         phase = CASE WHEN ?1 THEN phase ELSE 'idle' END
+                     WHERE singleton = 1
+                       AND (paused != ?1 OR state != CASE WHEN ?1 THEN 'paused' ELSE 'idle' END
+                            OR (?1 = 0 AND phase != 'idle'))",
+                    [i64::from(paused)],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    cloud_receipt_or_current(application, published)
+}
+
+fn cloud_receipt_or_current(
+    application: &LibraryApplication,
+    published: Option<((), picto_library::MutationReceipt)>,
+) -> Result<picto_library::MutationReceipt, String> {
+    if let Some(((), receipt)) = published {
+        return Ok(receipt);
+    }
+    Ok(picto_library::MutationReceipt {
+        revision: application
+            .library()
+            .database()
+            .revision()
+            .map_err(|error| error.to_string())?,
+        resources: vec![resources::CLOUD.to_string(), resources::TASKS.to_string()],
+        item_ids: Vec::new(),
+    })
+}
+
+fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), String> {
+    let originals = application
+        .blobs()
+        .list_originals()
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    application
+        .library()
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                let now = Utc::now().to_rfc3339();
+                let mut statement = transaction.prepare("SELECT content_hash FROM media_file")?;
+                let hashes = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                drop(statement);
+                for hash in hashes {
+                    let Some(extension) = originals.get(&hash) else {
+                        continue;
+                    };
+                    transaction.execute(
+                        "INSERT INTO cloud_blob_state
+                             (file_hash, state, remote_extension, updated_at)
+                         VALUES (?1, 'available', ?2, ?3)
+                         ON CONFLICT(file_hash) DO UPDATE SET
+                             state = 'available',
+                             remote_extension = COALESCE(
+                                 cloud_blob_state.remote_extension,
+                                 excluded.remote_extension
+                             ),
+                             last_error = NULL,
+                             updated_at = excluded.updated_at",
+                        params![hash, extension, now],
+                    )?;
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())
 }
 
 pub fn record_local(

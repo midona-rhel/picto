@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-28-work-runtime";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-28-cloud-runtime";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
 
@@ -16,6 +16,14 @@ pub fn create(connection: &mut Connection) -> Result<()> {
                  (singleton, schema_generation, schema_fingerprint, revision, next_local_id)
              VALUES (1, ?1, ?2, 1, 1)",
             rusqlite::params![SCHEMA_GENERATION, SCHEMA_FINGERPRINT],
+        )?;
+        connection.execute(
+            "INSERT INTO cloud_state (singleton, library_id, device_id)
+             VALUES (1, ?1, ?2)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                uuid::Uuid::new_v4().to_string()
+            ],
         )?;
         Ok::<_, LibraryError>(())
     })();
