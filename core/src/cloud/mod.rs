@@ -32,7 +32,7 @@ pub mod reconcile;
 pub mod snapshot;
 pub mod worker;
 
-pub const CLOUD_SCHEMA_GENERATION: i64 = 2;
+pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 const APPLIED_MUTATION_DIAGNOSTIC_LIMIT: i64 = 10_000;
 const MUTATION_RECEIPT_ITEM_LIMIT: usize = 256;
 
@@ -730,6 +730,42 @@ pub fn directory_provider(
         .provider
         .ok_or_else(|| "Cloud sync is not configured".to_string())?;
     provider::DirectoryProvider::open_provider_root(&provider_name, root)
+}
+
+pub fn directory_provider_library(
+    application: &LibraryApplication,
+) -> Result<provider::DirectoryProvider, String> {
+    let configuration = configuration_library(application)?;
+    let root = configuration
+        .root_path
+        .ok_or_else(|| "Cloud sync is not configured".to_string())?;
+    let provider_name = configuration
+        .provider
+        .ok_or_else(|| "Cloud sync is not configured".to_string())?;
+    provider::DirectoryProvider::open_provider_root(&provider_name, root)
+}
+
+pub fn snapshot_due_library(
+    application: &LibraryApplication,
+    now_ms: i64,
+    minimum_age_ms: i64,
+) -> Result<bool, String> {
+    application
+        .library()
+        .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
+            connection
+                .query_row(
+                    "SELECT provider IS NOT NULL AND paused = 0 AND EXISTS (
+                             SELECT 1 FROM cloud_journal
+                             WHERE expanded_at_ms IS NULL AND created_at_ms <= ?1
+                         )
+                         FROM cloud_state WHERE singleton = 1",
+                    [now_ms.saturating_sub(minimum_age_ms)],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())
 }
 
 pub async fn discover_libraries(root_path: &str) -> Result<Vec<CloudLibraryOption>, String> {

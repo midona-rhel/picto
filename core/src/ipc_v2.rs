@@ -462,6 +462,14 @@ pub async fn dispatch_library_async(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
+        "cloud.reconcile" | "cloud.snapshot.create" => {
+            let provider = crate::cloud::directory_provider_library(application)?;
+            read(crate::cloud::snapshot::publish_library(application, &provider).await?)
+        }
+        "cloud.restore.list" => {
+            let provider = crate::cloud::directory_provider_library(application)?;
+            read(crate::cloud::snapshot::list_remote_for_library(application, &provider).await?)
+        }
         "diagnostics.snapshot" => read(crate::diagnostics_v2::snapshot_library(application)?),
         "ai.status" => read(crate::ai_runtime_v2::model_status_library(application).await?),
         "ai.models.download" => {

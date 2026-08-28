@@ -40,6 +40,10 @@ pub fn start(
             "library-derivatives",
             start_derivative_worker(Arc::clone(&application), cancel.child_token()),
         ),
+        (
+            "library-cloud-snapshot",
+            start_cloud_snapshot_worker(Arc::clone(&application), cancel.child_token()),
+        ),
     ];
     workers.extend(start_subscription_workers(
         Arc::clone(&application),
@@ -271,6 +275,48 @@ fn start_derivative_worker(
                 _ = idle.tick() => {
                     if let Err(error) = crate::library_media_runtime::drain_batch(&application, 8).await {
                         tracing::warn!(%error, "Canonical derivative batch failed");
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_cloud_snapshot_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    const SNAPSHOT_AGE: Duration = Duration::from_secs(20 * 60);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    let due = crate::cloud::snapshot_due_library(
+                        &application,
+                        now_ms,
+                        SNAPSHOT_AGE.as_millis() as i64,
+                    );
+                    match due {
+                        Ok(false) => continue,
+                        Err(error) => {
+                            tracing::warn!(%error, "Canonical cloud schedule check failed");
+                            continue;
+                        }
+                        Ok(true) => {}
+                    }
+                    let provider = match crate::cloud::directory_provider_library(&application) {
+                        Ok(provider) => provider,
+                        Err(error) => {
+                            tracing::warn!(%error, "Canonical cloud provider is unavailable");
+                            continue;
+                        }
+                    };
+                    if let Err(error) = crate::cloud::snapshot::publish_library(&application, &provider).await {
+                        tracing::warn!(%error, "Canonical cloud snapshot failed");
                     }
                 }
             }
