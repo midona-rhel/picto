@@ -262,6 +262,7 @@ pub fn dispatch_library(
             read(application.patch_view_preferences(&input.scope, &input.value)?)
         }
         "settings.view.reset" => read(application.reset_view_preferences()?),
+        "tasks.get" => read(crate::tasks_v2::snapshot_library(application)?),
         "history.state" => read(application.history_state()),
         "history.undo" => read(application.undo()?),
         "history.redo" => read(application.redo()?),
