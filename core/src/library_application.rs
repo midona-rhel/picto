@@ -12,7 +12,7 @@ use picto_library::{Library, RootId};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::{ItemTarget, LibraryChanged, LIBRARY_CHANGED_EVENT};
+use crate::app::{LibraryChanged, LIBRARY_CHANGED_EVENT};
 use crate::blob_store::BlobStore;
 
 const DATABASE_FILE: &str = "library.sqlite";
@@ -120,114 +120,96 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
-    pub fn record_recent_view(&self, item_id: i64) -> Result<crate::app::MutationReceipt, String> {
+    pub fn record_recent_view(&self, root_id: RootId) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .record_recent_view(
-                checked_root_id(item_id)?,
+                root_id,
                 chrono::Utc::now().timestamp_millis(),
             )
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 
-    pub fn clear_recent_views(&self) -> Result<crate::app::MutationReceipt, String> {
+    pub fn clear_recent_views(&self) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .clear_recent_views()
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 
     pub fn set_lifecycle(
         &self,
-        target: &ItemTarget,
-        lifecycle: crate::app::Lifecycle,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
+        target: &picto_library::selection::SelectionTarget,
+        lifecycle: picto_library::Lifecycle,
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .set_lifecycle(&target, crate::library_v1::lifecycle(lifecycle))
-            .map(crate::library_v1::receipt)
+            .set_lifecycle(target, lifecycle)
             .map_err(|error| error.to_string())
     }
 
     pub fn set_folder_membership(
         &self,
-        target: &ItemTarget,
-        folder_id: i64,
+        target: &picto_library::selection::SelectionTarget,
+        folder_id: picto_library::FolderId,
         present: bool,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
-        let folder_id = picto_library::FolderId(checked_local_id(folder_id, "folder")?);
+    ) -> Result<picto_library::MutationReceipt, String> {
         let result = if present {
-            self.library.add_to_folder(&target, folder_id)
+            self.library.add_to_folder(target, folder_id)
         } else {
-            self.library.remove_from_folder(&target, folder_id)
+            self.library.remove_from_folder(target, folder_id)
         };
-        result
-            .map(crate::library_v1::receipt)
-            .map_err(|error| error.to_string())
+        result.map_err(|error| error.to_string())
     }
 
     pub fn apply_tags(
         &self,
-        target: &ItemTarget,
+        target: &picto_library::selection::SelectionTarget,
         tags: &[String],
         add: bool,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .apply_tags(&target, tags, add)
-            .map(crate::library_v1::receipt)
+            .apply_tags(target, tags, add)
             .map_err(|error| error.to_string())
     }
 
     pub fn rename_item(
         &self,
-        item_id: i64,
+        root_id: RootId,
         name: &str,
-    ) -> Result<crate::app::MutationReceipt, String> {
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .rename_root(
-                checked_root_id(item_id)?,
+                root_id,
                 name,
                 chrono::Utc::now().timestamp_millis(),
             )
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 
     pub fn rename_items(
         &self,
-        renames: &[crate::operations_v2::ItemRename],
-    ) -> Result<crate::app::MutationReceipt, String> {
+        renames: &[picto_library::RootRename],
+    ) -> Result<picto_library::MutationReceipt, String> {
         let renames = renames
             .iter()
-            .map(|rename| Ok((checked_root_id(rename.item_id.0)?, rename.name.clone())))
-            .collect::<Result<Vec<_>, String>>()?;
+            .map(|rename| (rename.root_id, rename.name.clone()))
+            .collect::<Vec<_>>();
         self.library
             .rename_roots(&renames, chrono::Utc::now().timestamp_millis())
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 
     pub fn patch_metadata(
         &self,
-        target: &ItemTarget,
-        patch: &crate::operations_v2::MediaMetadataPatch,
-    ) -> Result<crate::app::MutationReceipt, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
-        let rating = patch
-            .rating
-            .map(|value| value.map_or(Ok(picto_library::Rating::Unrated), checked_rating))
-            .transpose()?;
+        target: &picto_library::selection::SelectionTarget,
+        patch: &picto_library::RootMetadataPatch,
+    ) -> Result<picto_library::MutationReceipt, String> {
         self.library
             .patch_metadata(
-                &target,
-                rating,
+                target,
+                patch.rating,
                 patch.notes.clone(),
                 patch.source_urls.clone(),
                 chrono::Utc::now().timestamp_millis(),
             )
-            .map(crate::library_v1::receipt)
             .map_err(|error| error.to_string())
     }
 
@@ -723,20 +705,13 @@ impl LibraryApplication {
 
     pub fn delete_items(
         &self,
-        target: &ItemTarget,
-    ) -> Result<crate::operations_v2::DeleteItemsResult, String> {
-        let target = crate::library_v1::target(&self.library, target)?;
-        let (receipt, cleanup) = self
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let (receipt, _) = self
             .library
-            .permanently_delete(&target, chrono::Utc::now().timestamp_millis())
+            .permanently_delete(target, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())?;
-        Ok(crate::operations_v2::DeleteItemsResult {
-            receipt: crate::library_v1::receipt(receipt),
-            freed_file_hashes: cleanup
-                .into_iter()
-                .map(|entry| entry.content_hash)
-                .collect(),
-        })
+        Ok(receipt)
     }
 
     pub fn duplicate_candidates(
@@ -948,17 +923,6 @@ fn checked_local_id(value: i64, kind: &str) -> Result<u32, String> {
 
 fn checked_count(value: u64) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("count {value} exceeds the renderer integer domain"))
-}
-
-fn checked_rating(value: i64) -> Result<picto_library::Rating, String> {
-    match value {
-        1 => Ok(picto_library::Rating::One),
-        2 => Ok(picto_library::Rating::Two),
-        3 => Ok(picto_library::Rating::Three),
-        4 => Ok(picto_library::Rating::Four),
-        5 => Ok(picto_library::Rating::Five),
-        _ => Err(format!("rating {value} is outside the supported range")),
-    }
 }
 
 fn map_history_state(value: picto_library::history::HistoryState) -> LibraryHistoryState {

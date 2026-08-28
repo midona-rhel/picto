@@ -239,6 +239,19 @@ pub struct RootTagAssignment {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RootMetadataPatch {
+    pub rating: Option<Rating>,
+    pub notes: Option<Option<String>>,
+    pub source_urls: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootRename {
+    pub root_id: RootId,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupRequest {
     pub target: crate::selection::SelectionTarget,

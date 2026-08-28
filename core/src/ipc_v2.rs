@@ -65,16 +65,16 @@ pub fn dispatch_library(
             read(application.duplicate_candidates(input.limit)?)
         }
         "items.record_view" => {
-            let input: ItemInput = parse(args_json)?;
-            read(application.record_recent_view(input.item_id.0)?)
+            let input: LibraryRootInput = parse(args_json)?;
+            read(application.record_recent_view(input.root_id)?)
         }
         "items.clear_recent_views" => read(application.clear_recent_views()?),
         "items.set_lifecycle" => {
-            let input: LifecycleInput = parse(args_json)?;
+            let input: LibraryLifecycleInput = parse(args_json)?;
             read(application.set_lifecycle(&input.target, input.lifecycle)?)
         }
         "items.set_folder" => {
-            let input: FolderMembershipInput = parse(args_json)?;
+            let input: LibraryFolderMembershipInput = parse(args_json)?;
             read(application.set_folder_membership(
                 &input.target,
                 input.folder_id,
@@ -82,23 +82,23 @@ pub fn dispatch_library(
             )?)
         }
         "items.apply_tags" => {
-            let input: ApplyTagsInput = parse(args_json)?;
+            let input: LibraryApplyTagsInput = parse(args_json)?;
             read(application.apply_tags(&input.target, &input.tags, input.add)?)
         }
         "items.rename" => {
-            let input: ItemNameInput = parse(args_json)?;
-            read(application.rename_item(input.item_id.0, &input.name)?)
+            let input: LibraryRenameRootInput = parse(args_json)?;
+            read(application.rename_item(input.root_id, &input.name)?)
         }
         "items.rename_many" => {
-            let input: RenameItemsInput = parse(args_json)?;
+            let input: LibraryRenameRootsInput = parse(args_json)?;
             read(application.rename_items(&input.renames)?)
         }
         "items.patch_metadata" => {
-            let input: PatchMetadataInput = parse(args_json)?;
+            let input: LibraryPatchMetadataInput = parse(args_json)?;
             read(application.patch_metadata(&input.target, &input.patch)?)
         }
         "items.delete" => {
-            let input: TargetInput = parse(args_json)?;
+            let input: LibraryTargetInput = parse(args_json)?;
             read(application.delete_items(&input.target)?)
         }
         "items.organize_into_collection" => {
@@ -1334,6 +1334,37 @@ struct LibraryRootInput {
 struct LibraryTargetInput {
     target: picto_library::selection::SelectionTarget,
 }
+#[derive(Deserialize)]
+struct LibraryLifecycleInput {
+    target: picto_library::selection::SelectionTarget,
+    lifecycle: picto_library::Lifecycle,
+}
+#[derive(Deserialize)]
+struct LibraryFolderMembershipInput {
+    target: picto_library::selection::SelectionTarget,
+    folder_id: picto_library::FolderId,
+    present: bool,
+}
+#[derive(Deserialize)]
+struct LibraryApplyTagsInput {
+    target: picto_library::selection::SelectionTarget,
+    tags: Vec<String>,
+    add: bool,
+}
+#[derive(Deserialize)]
+struct LibraryRenameRootInput {
+    root_id: picto_library::RootId,
+    name: String,
+}
+#[derive(Deserialize)]
+struct LibraryRenameRootsInput {
+    renames: Vec<picto_library::RootRename>,
+}
+#[derive(Deserialize)]
+struct LibraryPatchMetadataInput {
+    target: picto_library::selection::SelectionTarget,
+    patch: picto_library::RootMetadataPatch,
+}
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
@@ -1702,7 +1733,7 @@ mod tests {
             &application,
             "items.apply_tags",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["creator:alice","series:example"],"add":true}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"tags":["creator:alice","series:example"],"add":true}}"#,
                 root_id.0
             ),
         )
@@ -1725,7 +1756,7 @@ mod tests {
             &application,
             "items.patch_metadata",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"patch":{{"rating":5,"notes":"IPC note","source_urls":["https://example.test/ipc"]}}}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"patch":{{"rating":"five","notes":"IPC note","source_urls":["https://example.test/ipc"]}}}}"#,
                 root_id.0
             ),
         )
@@ -1741,7 +1772,7 @@ mod tests {
             &application,
             "items.set_lifecycle",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"lifecycle":"trash"}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"lifecycle":"trash"}}"#,
                 root_id.0
             ),
         )
@@ -1756,15 +1787,18 @@ mod tests {
             &application,
             "items.delete",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}}}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}}}}"#,
                 root_id.0
             ),
         )
         .unwrap()
         .unwrap();
-        let deleted: crate::operations_v2::DeleteItemsResult =
-            serde_json::from_str(&deleted).unwrap();
-        assert_eq!(deleted.freed_file_hashes, ["hash-greenfield-ipc-root"]);
+        let deleted: picto_library::MutationReceipt = serde_json::from_str(&deleted).unwrap();
+        assert!(!deleted.resources.is_empty());
+        assert_eq!(
+            application.library().pending_blob_cleanup(10).unwrap()[0].content_hash,
+            "hash-greenfield-ipc-root"
+        );
         assert_eq!(application.library().counts().unwrap().trash, 0);
 
         assert!(dispatch_library(&application, "legacy.magic", "{}")
@@ -1846,7 +1880,7 @@ mod tests {
                 &application,
                 "items.apply_tags",
                 &format!(
-                    r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["auto:known"],"add":{add}}}"#,
+                    r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"tags":["auto:known"],"add":{add}}}"#,
                     root_id.0
                 ),
             )
@@ -1880,7 +1914,7 @@ mod tests {
             &application,
             "items.set_folder",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"folder_id":{folder_id},"present":true}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"folder_id":{folder_id},"present":true}}"#,
                 root_id.0
             ),
         )
@@ -1932,7 +1966,7 @@ mod tests {
             &application,
             "items.apply_tags",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["creator:one","creator:two"],"add":true}}"#,
+                r#"{{"target":{{"kind":"explicit","root_ids":[{}]}},"tags":["creator:one","creator:two"],"add":true}}"#,
                 root_id.0
             ),
         )
