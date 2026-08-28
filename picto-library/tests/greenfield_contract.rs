@@ -814,6 +814,98 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn selection_summary_returns_six_ordered_previews_and_structural_collection_candidates() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut roots = Vec::new();
+    for index in 0..8 {
+        let mut input = imported(&format!("preview-{index}"), Lifecycle::Active, &[]);
+        input.imported_at_ms += index;
+        roots.push(library.ingest(&input).unwrap().0);
+    }
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![roots[0], roots[1]],
+            },
+            cover_root_id: roots[0],
+            winning_collection_id: None,
+            name: Some("Preview collection".into()),
+            modified_at_ms: 1_700_000_000_100,
+        })
+        .unwrap();
+    let explicit_roots = [collection]
+        .into_iter()
+        .chain(roots[2..].iter().copied())
+        .collect::<Vec<_>>();
+    let summary = library
+        .selection_summary(&SelectionTarget::Explicit {
+            root_ids: explicit_roots,
+        })
+        .unwrap();
+
+    assert_eq!(
+        summary.sample_hashes,
+        (2..8)
+            .map(|index| format!("hash-preview-{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(summary.collection_candidates.len(), 1);
+    assert_eq!(summary.collection_candidates[0].collection_id, collection);
+    assert_eq!(summary.collection_candidates[0].label, "Preview collection");
+    assert_eq!(summary.collection_candidates[0].member_count, 2);
+}
+
+#[test]
+fn selection_image_compatibility_treats_a_collection_as_one_root_with_images() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (image, _) = library
+        .ingest(&imported_as(
+            "image-member",
+            "image/png",
+            LabColor {
+                l: 50.0,
+                a: 0.0,
+                b: 0.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (video, _) = library
+        .ingest(&imported_as(
+            "video-member",
+            "video/mp4",
+            LabColor {
+                l: 40.0,
+                a: 0.0,
+                b: 0.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![image, video],
+            },
+            cover_root_id: image,
+            winning_collection_id: None,
+            name: Some("Mixed media".into()),
+            modified_at_ms: 1_700_000_000_100,
+        })
+        .unwrap();
+
+    let summary = library
+        .selection_summary(&SelectionTarget::Explicit {
+            root_ids: vec![collection],
+        })
+        .unwrap();
+    assert!(summary.all_selected_roots_have_images);
+    assert_eq!(summary.sample_hashes, vec!["hash-image-member"]);
+}
+
+#[test]
 fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

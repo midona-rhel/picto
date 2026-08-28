@@ -206,6 +206,10 @@ pub(crate) fn insert_one(
         .insert(root_id.0, Arc::new(input.facts.palette.clone()));
     let owners = Arc::make_mut(&mut snapshot.media_owner);
     owners.insert(media_id.0, root_id);
+    if input.facts.mime.starts_with("image/") {
+        Arc::make_mut(&mut snapshot.image_media).insert(media_id.0);
+        Arc::make_mut(&mut snapshot.roots_with_images).insert(root_id.0);
+    }
 
     Arc::make_mut(&mut snapshot.tag_count).insert(root_id.0, assigned_tags);
     Arc::make_mut(&mut snapshot.folder_count).insert(root_id.0, assigned_folders);

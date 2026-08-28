@@ -334,6 +334,8 @@ pub struct ProjectionSnapshot {
     pub folders: Arc<HashMap<FolderId, SharedBitmap>>,
     pub collection_orders: Arc<HashMap<RootId, Arc<Vec<MediaId>>>>,
     pub media_owner: Arc<ShardedIdMap<RootId>>,
+    pub image_media: Arc<RoaringBitmap>,
+    pub roots_with_images: Arc<RoaringBitmap>,
     pub root_kinds: Arc<HashMap<RootKind, SharedBitmap>>,
     pub mime: Arc<HashMap<String, SharedBitmap>>,
     pub mime_family: Arc<HashMap<String, SharedBitmap>>,
@@ -385,6 +387,8 @@ impl ProjectionSnapshot {
             + bitmap_map_estimated_bytes(&self.smart_results)
             + self.notes_present.serialized_size()
             + self.urls_present.serialized_size()
+            + self.image_media.serialized_size()
+            + self.roots_with_images.serialized_size()
             + self.media_owner.estimated_bytes();
         bytes += self
             .tag_ids_by_name
@@ -691,6 +695,26 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         }
     }
 
+    let mut image_media = RoaringBitmap::new();
+    let mut media_statement = connection.prepare(
+        "SELECT media.media_id, file.mime
+         FROM media_item media
+         JOIN media_file file ON file.file_id = media.file_id",
+    )?;
+    let media_rows = media_statement.query_map([], |row| {
+        Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in media_rows {
+        let (media_id, mime) = row?;
+        if mime.starts_with("image/") {
+            image_media.insert(media_id);
+        }
+    }
+    let roots_with_images = image_media
+        .iter()
+        .filter_map(|media_id| media_owner.get(media_id).map(|root_id| root_id.0))
+        .collect::<RoaringBitmap>();
+
     let mut tag_counts: HashMap<u32, u64> = HashMap::new();
     for members in tags.values() {
         for root_id in members.iter() {
@@ -724,6 +748,8 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         folders: Arc::new(folders),
         collection_orders: Arc::new(collection_orders),
         media_owner: Arc::new(media_owner),
+        image_media: Arc::new(image_media),
+        roots_with_images: Arc::new(roots_with_images),
         root_kinds: Arc::new(root_kinds),
         mime: Arc::new(mime),
         mime_family: Arc::new(mime_family),

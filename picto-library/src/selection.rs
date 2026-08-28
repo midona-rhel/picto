@@ -2,7 +2,7 @@ use roaring::RoaringBitmap;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FolderId, Rating, RootId, TagId};
+use crate::model::{FolderId, Rating, RootId, RootKind, TagId};
 use crate::projection::ProjectionSnapshot;
 use crate::query::{self, RootQuery};
 use crate::{LibraryError, Result};
@@ -31,11 +31,25 @@ pub struct SelectionSummary {
     pub total_size_bytes: u128,
     pub media_count: u128,
     pub shared_rating: Option<Rating>,
+    pub minimum_rating: Option<Rating>,
+    pub maximum_rating: Option<Rating>,
     pub shared_tags: Vec<TagId>,
     pub shared_folders: Vec<FolderId>,
+    pub sample_hashes: Vec<String>,
+    pub collection_candidates: Vec<SelectionCollectionCandidate>,
     pub shared_notes: Option<String>,
+    pub has_notes: bool,
     pub shared_source_urls: Option<Vec<String>>,
+    pub has_source_urls: bool,
+    pub all_selected_roots_have_images: bool,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectionCollectionCandidate {
+    pub collection_id: RootId,
+    pub label: String,
+    pub member_count: u32,
 }
 
 pub fn resolve(
@@ -137,12 +151,24 @@ pub fn resolve_ordered(
 pub fn summarize(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
+    target: &SelectionTarget,
     selection: &RoaringBitmap,
 ) -> Result<SelectionSummary> {
-    let shared_rating = Rating::ALL
-        .into_iter()
-        .find(|rating| (snapshot.rating(*rating) & selection).len() == selection.len());
+    let shared_rating = (!selection.is_empty())
+        .then(|| {
+            Rating::ALL
+                .into_iter()
+                .find(|rating| (snapshot.rating(*rating) & selection).len() == selection.len())
+        })
+        .flatten();
     let first = selection.min();
+    let rated = Rating::ALL
+        .into_iter()
+        .filter(|rating| *rating != Rating::Unrated)
+        .filter(|rating| !(snapshot.rating(*rating) & selection).is_empty())
+        .collect::<Vec<_>>();
+    let minimum_rating = rated.first().copied();
+    let maximum_rating = rated.last().copied();
     let shared_tags = first.map_or_else(Vec::new, |first| {
         snapshot
             .tags
@@ -163,6 +189,8 @@ pub fn summarize(
     });
     let notes_members = &*snapshot.notes_present & selection;
     let urls_members = &*snapshot.urls_present & selection;
+    let has_notes = !notes_members.is_empty();
+    let has_source_urls = !urls_members.is_empty();
     let compare_notes = !selection.is_empty() && notes_members.len() == selection.len();
     let compare_urls = !selection.is_empty() && urls_members.len() == selection.len();
     let (shared_notes, compared_urls) =
@@ -176,17 +204,110 @@ pub fn summarize(
     } else {
         compared_urls
     };
+    let sample_hashes = preview_hashes(connection, snapshot, target, selection)?;
+    let collection_candidates = collection_candidates(connection, snapshot, selection)?;
+    let all_selected_roots_have_images = snapshot.roots_with_images.is_superset(selection);
     Ok(SelectionSummary {
         selected_count: selection.len(),
         total_size_bytes: snapshot.total_bytes.sum(selection),
         media_count: snapshot.media_count.sum(selection),
         shared_rating,
+        minimum_rating,
+        maximum_rating,
         shared_tags,
         shared_folders,
+        sample_hashes,
+        collection_candidates,
         shared_notes,
+        has_notes,
         shared_source_urls,
+        has_source_urls,
+        all_selected_roots_have_images,
         revision: snapshot.revision,
     })
+}
+
+fn preview_hashes(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    target: &SelectionTarget,
+    selection: &RoaringBitmap,
+) -> Result<Vec<String>> {
+    const PREVIEW_COUNT: usize = 6;
+    let root_ids = match target {
+        SelectionTarget::Explicit { root_ids } => root_ids
+            .iter()
+            .rev()
+            .filter(|root_id| selection.contains(root_id.0))
+            .take(PREVIEW_COUNT)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>(),
+        SelectionTarget::Query { .. } | SelectionTarget::Range { .. } => {
+            let mut recent = Vec::with_capacity(PREVIEW_COUNT);
+            for root_id in selection {
+                let candidate = (
+                    snapshot.imported_at.value(root_id).unwrap_or_default(),
+                    RootId(root_id),
+                );
+                if recent.len() < PREVIEW_COUNT {
+                    recent.push(candidate);
+                } else if let Some((oldest, _)) =
+                    recent.iter().enumerate().min_by_key(|(_, value)| **value)
+                {
+                    if candidate > recent[oldest] {
+                        recent[oldest] = candidate;
+                    }
+                }
+            }
+            recent.sort_unstable();
+            recent.into_iter().map(|(_, root_id)| root_id).collect()
+        }
+    };
+    let mut statement = connection.prepare_cached(
+        "SELECT file.content_hash
+         FROM library_root root
+         JOIN media_item media ON media.media_id = root.cover_media_id
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE root.root_id = ?1",
+    )?;
+    root_ids
+        .into_iter()
+        .map(|root_id| {
+            statement
+                .query_row([root_id.0], |row| row.get(0))
+                .map_err(Into::into)
+        })
+        .collect()
+}
+
+fn collection_candidates(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    selection: &RoaringBitmap,
+) -> Result<Vec<SelectionCollectionCandidate>> {
+    let selected_collections = snapshot
+        .root_kinds
+        .get(&RootKind::Collection)
+        .map_or_else(RoaringBitmap::new, |collections| collections & selection);
+    let mut statement = connection
+        .prepare_cached("SELECT name, media_count FROM library_root WHERE root_id = ?1")?;
+    selected_collections
+        .iter()
+        .map(|root_id| {
+            statement
+                .query_row([root_id], |row| {
+                    Ok(SelectionCollectionCandidate {
+                        collection_id: RootId(root_id),
+                        label: row.get(0)?,
+                        member_count: row.get(1)?,
+                    })
+                })
+                .map_err(Into::into)
+        })
+        .collect()
 }
 
 fn shared_text(

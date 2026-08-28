@@ -736,6 +736,9 @@ pub(crate) fn organize(
     for media in &members {
         owners.insert(media.0, collection_id);
     }
+    let has_image = members
+        .iter()
+        .any(|media_id| snapshot.image_media.contains(media_id.0));
 
     remove_root_projections(&mut snapshot, &selected);
     add_collection_projection(
@@ -750,6 +753,7 @@ pub(crate) fn organize(
         folder_count,
         cover.notes.is_some(),
         !urls.is_empty(),
+        has_image,
     );
 
     crate::fts::mark_one(transaction, collection_id, request.modified_at_ms)?;
@@ -959,6 +963,7 @@ fn settle_folders(
 }
 
 pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
+    *Arc::make_mut(&mut snapshot.roots_with_images) -= roots;
     for members in Arc::make_mut(&mut snapshot.root_kinds).values_mut() {
         *members -= roots;
     }
@@ -1000,6 +1005,7 @@ fn add_collection_projection(
     folder_count: u64,
     has_notes: bool,
     has_urls: bool,
+    has_image: bool,
 ) {
     let id = collection_id.0;
     Arc::make_mut(&mut snapshot.root_kinds)
@@ -1018,6 +1024,9 @@ fn add_collection_projection(
     }
     if has_urls {
         Arc::make_mut(&mut snapshot.urls_present).insert(id);
+    }
+    if has_image {
+        Arc::make_mut(&mut snapshot.roots_with_images).insert(id);
     }
 }
 
@@ -1129,5 +1138,8 @@ fn add_media_root_projection(
     }
     if has_urls {
         Arc::make_mut(&mut snapshot.urls_present).insert(id);
+    }
+    if facts.mime.starts_with("image/") {
+        Arc::make_mut(&mut snapshot.roots_with_images).insert(id);
     }
 }

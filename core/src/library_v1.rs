@@ -221,6 +221,87 @@ pub fn details(
     })
 }
 
+pub fn selection_summary(
+    library: &Library,
+    value: picto_library::selection::SelectionSummary,
+) -> Result<crate::query_v2::SelectionSummary, String> {
+    let selected_count = checked_i64(u128::from(value.selected_count))?;
+    let tag_names = library
+        .tags()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|tag| {
+            let name = if tag.namespace.is_empty() || tag.namespace == "general" {
+                tag.subname
+            } else {
+                format!("{}:{}", tag.namespace, tag.subname)
+            };
+            (tag.tag_id, name)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let folder_names = library
+        .folders()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|folder| (folder.folder_id, folder.name))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    Ok(crate::query_v2::SelectionSummary {
+        total_count: selected_count,
+        selected_count,
+        sample_hashes: value
+            .sample_hashes
+            .into_iter()
+            .map(crate::app::FileHash)
+            .collect(),
+        shared_tags: value
+            .shared_tags
+            .into_iter()
+            .filter_map(|tag_id| tag_names.get(&tag_id).cloned())
+            .map(|tag| crate::query_v2::SelectionTagCount {
+                tag,
+                count: selected_count,
+            })
+            .collect(),
+        shared_folders: value
+            .shared_folders
+            .into_iter()
+            .filter_map(|folder_id| {
+                folder_names.get(&folder_id).cloned().map(|name| {
+                    crate::query_v2::SelectionFolderInfo {
+                        folder_id: i64::from(folder_id.0),
+                        name,
+                    }
+                })
+            })
+            .collect(),
+        selected_collection_candidates: value
+            .collection_candidates
+            .into_iter()
+            .map(|candidate| crate::query_v2::SelectionCollectionCandidate {
+                collection_id: crate::app::ItemId(i64::from(candidate.collection_id.0)),
+                label: Some(candidate.label),
+                member_count: i64::from(candidate.member_count),
+            })
+            .collect(),
+        shared_notes: value.shared_notes,
+        has_notes: value.has_notes,
+        shared_source_urls: value.shared_source_urls,
+        has_source_urls: value.has_source_urls,
+        stats: crate::query_v2::SelectionSummaryStats {
+            total_size_bytes: Some(checked_i64(value.total_size_bytes)?),
+            media_count: checked_i64(value.media_count)?,
+            all_media_are_images: value.all_selected_roots_have_images,
+            rating_stats: crate::query_v2::SelectionRatingStats {
+                min: value.minimum_rating.and_then(rating_number),
+                max: value.maximum_rating.and_then(rating_number),
+                shared: value.shared_rating.and_then(rating_number),
+            },
+        },
+        revision: value.revision,
+    })
+}
+
 fn scope(value: &AppScope) -> Result<ItemScope, String> {
     Ok(match value {
         AppScope::All => ItemScope::All,
@@ -679,5 +760,49 @@ mod tests {
         assert_eq!(converted.media[0].notes.as_deref(), Some("Root note"));
         assert_eq!(converted.media[0].rating, Some(4));
         assert_eq!(converted.media[0].position, 0);
+    }
+
+    #[test]
+    fn selection_summary_preserves_six_previews_and_collection_actions() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let converted = selection_summary(
+            &library,
+            picto_library::selection::SelectionSummary {
+                selected_count: 2,
+                total_size_bytes: 42,
+                media_count: 3,
+                shared_rating: Some(Rating::Four),
+                minimum_rating: Some(Rating::Two),
+                maximum_rating: Some(Rating::Four),
+                shared_tags: Vec::new(),
+                shared_folders: Vec::new(),
+                sample_hashes: (1..=6).map(|index| format!("hash-{index}")).collect(),
+                collection_candidates: vec![
+                    picto_library::selection::SelectionCollectionCandidate {
+                        collection_id: RootId(7),
+                        label: "Existing collection".into(),
+                        member_count: 2,
+                    },
+                ],
+                shared_notes: None,
+                has_notes: true,
+                shared_source_urls: Some(Vec::new()),
+                has_source_urls: false,
+                all_selected_roots_have_images: true,
+                revision: 9,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(converted.sample_hashes.len(), 6);
+        assert_eq!(converted.selected_collection_candidates.len(), 1);
+        assert_eq!(
+            converted.selected_collection_candidates[0].collection_id,
+            crate::app::ItemId(7)
+        );
+        assert_eq!(converted.stats.rating_stats.min, Some(2));
+        assert_eq!(converted.stats.rating_stats.max, Some(4));
+        assert_eq!(converted.stats.rating_stats.shared, Some(4));
     }
 }

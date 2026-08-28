@@ -8,7 +8,7 @@ use crate::projection::{NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBi
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v5";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v6";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
@@ -20,6 +20,8 @@ struct CheckpointData {
     folders: std::collections::HashMap<FolderId, SharedBitmap>,
     collection_orders: std::collections::HashMap<RootId, std::sync::Arc<Vec<MediaId>>>,
     media_owner: ShardedIdMap<RootId>,
+    image_media: roaring::RoaringBitmap,
+    roots_with_images: roaring::RoaringBitmap,
     root_kinds: std::collections::HashMap<RootKind, SharedBitmap>,
     mime: std::collections::HashMap<String, SharedBitmap>,
     mime_family: std::collections::HashMap<String, SharedBitmap>,
@@ -50,6 +52,8 @@ pub fn encode(snapshot: &ProjectionSnapshot) -> Result<Vec<u8>> {
         folders: (*snapshot.folders).clone(),
         collection_orders: (*snapshot.collection_orders).clone(),
         media_owner: (*snapshot.media_owner).clone(),
+        image_media: (*snapshot.image_media).clone(),
+        roots_with_images: (*snapshot.roots_with_images).clone(),
         root_kinds: (*snapshot.root_kinds).clone(),
         mime: (*snapshot.mime).clone(),
         mime_family: (*snapshot.mime_family).clone(),
@@ -85,6 +89,8 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         folders: std::sync::Arc::new(data.folders),
         collection_orders: std::sync::Arc::new(data.collection_orders),
         media_owner: std::sync::Arc::new(data.media_owner),
+        image_media: std::sync::Arc::new(data.image_media),
+        roots_with_images: std::sync::Arc::new(data.roots_with_images),
         root_kinds: std::sync::Arc::new(data.root_kinds),
         mime: std::sync::Arc::new(data.mime),
         mime_family: std::sync::Arc::new(data.mime_family),

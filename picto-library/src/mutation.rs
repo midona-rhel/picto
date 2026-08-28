@@ -141,7 +141,7 @@ impl Library {
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
                 let selection = crate::selection::resolve(connection, &snapshot, target)?;
-                crate::selection::summarize(connection, &snapshot, &selection)
+                crate::selection::summarize(connection, &snapshot, target, &selection)
             },
         )
     }
@@ -1070,20 +1070,40 @@ impl Library {
                         serde_json::to_string(&palette)?
                     ],
                 )?;
+                let mut next = (*snapshot).clone();
                 let affected = {
-                    let mut statement = transaction.prepare_cached(
-                        "SELECT root.root_id
-                         FROM library_root root
-                         JOIN media_item media ON media.media_id = root.cover_media_id
-                         WHERE media.file_id = ?1",
-                    )?;
-                    let roots = statement
+                    let media_ids = transaction
+                        .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?
                         .query_map([file_id], |row| row.get::<_, u32>(0))?
-                        .collect::<std::result::Result<RoaringBitmap, _>>()?;
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let image_media = Arc::make_mut(&mut next.image_media);
+                    let mut roots = RoaringBitmap::new();
+                    for media_id in media_ids {
+                        if mime.starts_with("image/") {
+                            image_media.insert(media_id);
+                        } else {
+                            image_media.remove(media_id);
+                        }
+                        if let Some(owner) = snapshot.media_owner.get(media_id) {
+                            roots.insert(owner.0);
+                        }
+                    }
                     roots
                 };
-                let mut next = (*snapshot).clone();
                 for root_id in &affected {
+                    let has_image = next.collection_orders.get(&RootId(root_id)).map_or_else(
+                        || next.image_media.contains(root_id),
+                        |members| {
+                            members
+                                .iter()
+                                .any(|media_id| next.image_media.contains(media_id.0))
+                        },
+                    );
+                    if has_image {
+                        Arc::make_mut(&mut next.roots_with_images).insert(root_id);
+                    } else {
+                        Arc::make_mut(&mut next.roots_with_images).remove(root_id);
+                    }
                     crate::group::refresh_cover_projection(
                         transaction,
                         &mut next,
@@ -2666,6 +2686,7 @@ impl Library {
                 }
                 for media_id in &media_ids {
                     Arc::make_mut(&mut next.media_owner).remove(media_id);
+                    Arc::make_mut(&mut next.image_media).remove(media_id);
                 }
                 crate::group::remove_root_projections(&mut next, &roots);
                 crate::smart::settle_affected(transaction, &mut next, &roots)?;
