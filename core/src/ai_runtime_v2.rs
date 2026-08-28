@@ -20,6 +20,40 @@ const MAX_MANUAL_PREDICTION_ITEMS: usize = 256;
 const MAX_MANUAL_PREDICTION_MODELS: usize = 8;
 const MIN_MANUAL_REVIEW_CONFIDENCE: f32 = 0.05;
 
+trait AiInferenceHost: crate::ai_models_v2::AiModelHost + Send + Sync {
+    fn blobs(&self) -> &BlobStore;
+    fn prediction_cache(&self) -> &crate::ai_tagger::inference::SharedPredictionCache;
+    fn set_worker_status(&self, active: bool, detail: String);
+}
+
+impl AiInferenceHost for Application {
+    fn blobs(&self) -> &BlobStore {
+        self.blobs()
+    }
+
+    fn prediction_cache(&self) -> &crate::ai_tagger::inference::SharedPredictionCache {
+        self.ai_prediction_cache()
+    }
+
+    fn set_worker_status(&self, active: bool, detail: String) {
+        self.set_ai_worker_status(active, detail);
+    }
+}
+
+impl AiInferenceHost for crate::library_application::LibraryApplication {
+    fn blobs(&self) -> &BlobStore {
+        self.blobs()
+    }
+
+    fn prediction_cache(&self) -> &crate::ai_tagger::inference::SharedPredictionCache {
+        self.ai_prediction_cache()
+    }
+
+    fn set_worker_status(&self, active: bool, detail: String) {
+        self.set_ai_worker_status(active, detail);
+    }
+}
+
 /// Provenance bit shared with the existing AI tagger.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +136,30 @@ pub struct MediaPrediction {
 #[serde(rename_all = "camelCase")]
 pub struct ManualPredictionResponse {
     pub predictions: Vec<MediaPrediction>,
+    pub thresholds: AiThresholds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryManualPredictionRequest {
+    pub root_ids: Vec<picto_library::RootId>,
+    #[serde(default)]
+    pub model_slugs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootPrediction {
+    pub root_id: picto_library::RootId,
+    pub predictions: Vec<AiTagPrediction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryManualPredictionResponse {
+    pub predictions: Vec<RootPrediction>,
     pub thresholds: AiThresholds,
 }
 
@@ -272,7 +330,116 @@ pub async fn manual_predict(
     })
 }
 
+pub async fn manual_predict_library(
+    application: &crate::library_application::LibraryApplication,
+    request: LibraryManualPredictionRequest,
+) -> Result<LibraryManualPredictionResponse, String> {
+    if request.root_ids.is_empty() {
+        return Err("At least one library root is required".into());
+    }
+    if request.root_ids.len() > MAX_MANUAL_PREDICTION_ITEMS {
+        return Err(format!(
+            "Manual prediction accepts at most {} library roots",
+            MAX_MANUAL_PREDICTION_ITEMS
+        ));
+    }
+    let settings = application.application_settings()?.value;
+    let models = resolve_prediction_models(&request.model_slugs, &settings)?;
+    let thresholds = thresholds_from_settings(&settings);
+    let mut results = request
+        .root_ids
+        .iter()
+        .map(|root_id| RootPrediction {
+            root_id: *root_id,
+            predictions: Vec::new(),
+            error: None,
+        })
+        .collect::<Vec<_>>();
+    let mut files = Vec::new();
+    let mut owners = Vec::new();
+    for (index, root_id) in request.root_ids.into_iter().enumerate() {
+        match application.library().details(root_id) {
+            Ok(details) => {
+                let before = files.len();
+                for media in details.media {
+                    if media.facts.mime.starts_with("image/") {
+                        files.push((media.facts.content_hash, media.facts.mime));
+                        owners.push(index);
+                    }
+                }
+                if files.len() == before {
+                    results[index].error = Some("AI prediction requires image media".into());
+                }
+            }
+            Err(error) => results[index].error = Some(error.to_string()),
+        }
+    }
+    if files.len() > MAX_MANUAL_PREDICTION_ITEMS {
+        return Err(format!(
+            "Manual prediction accepts at most {} image members",
+            MAX_MANUAL_PREDICTION_ITEMS
+        ));
+    }
+    if !files.is_empty() {
+        match predict_files_cached(application, &models, &files, manual_review_thresholds()).await {
+            Ok(predictions) => {
+                let mut combined = vec![HashMap::new(); results.len()];
+                for (owner, predictions) in owners.into_iter().zip(predictions) {
+                    for prediction in predictions {
+                        let key = (
+                            prediction.namespace.clone(),
+                            prediction.tag.clone(),
+                            prediction.model.clone(),
+                        );
+                        let entry = combined[owner].entry(key).or_insert(prediction.clone());
+                        if prediction.confidence > entry.confidence {
+                            *entry = prediction;
+                        }
+                    }
+                }
+                for (result, predictions) in results.iter_mut().zip(combined) {
+                    let mut predictions = predictions.into_values().collect::<Vec<_>>();
+                    predictions.sort_by(|left, right| {
+                        left.namespace
+                            .cmp(&right.namespace)
+                            .then_with(|| left.tag.cmp(&right.tag))
+                            .then_with(|| left.model.cmp(&right.model))
+                    });
+                    result.predictions = predictions
+                        .into_iter()
+                        .map(|prediction| AiTagPrediction {
+                            tag: prediction.tag,
+                            namespace: prediction.namespace,
+                            confidence: prediction.confidence,
+                            model: prediction.model,
+                        })
+                        .collect();
+                }
+            }
+            Err(error) => {
+                for result in &mut results {
+                    if result.error.is_none() {
+                        result.error = Some(error.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(LibraryManualPredictionResponse {
+        predictions: results,
+        thresholds: public_thresholds(&thresholds),
+    })
+}
+
 pub async fn unload_sessions(application: &Application) {
+    application.ai_sessions().lock().await.clear();
+    application.set_ai_worker_status(false, "Idle");
+    tracing::debug!(target: "ai_inference", "AI model session unloaded");
+}
+
+pub async fn unload_library_sessions(
+    application: &crate::library_application::LibraryApplication,
+) {
     application.ai_sessions().lock().await.clear();
     application.set_ai_worker_status(false, "Idle");
     tracing::debug!(target: "ai_inference", "AI model session unloaded");
@@ -605,7 +772,10 @@ fn setting_threshold(settings: &serde_json::Value, key: &str, default: f32) -> f
         .clamp(0.0, 1.0)
 }
 
-async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Result<(), String> {
+async fn ensure_sessions(
+    application: &impl AiInferenceHost,
+    models: &[ModelInfo],
+) -> Result<(), String> {
     if models.len() > 1 {
         return Err("AI tagging runs exactly one model at a time".into());
     }
@@ -613,7 +783,9 @@ async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Res
         return Ok(());
     };
     let models_root = crate::ai_models_v2::models_root(application);
-    let mut sessions = application.ai_sessions().lock().await;
+    let mut sessions = crate::ai_models_v2::AiModelHost::ai_sessions(application)
+        .lock()
+        .await;
     if sessions.len() == 1 && sessions.contains_key(&model.slug) {
         return Ok(());
     }
@@ -650,7 +822,7 @@ async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Res
 }
 
 async fn predict_batch(
-    application: &Application,
+    application: &impl AiInferenceHost,
     models: &[ModelInfo],
     images: Vec<Vec<u8>>,
     thresholds: Thresholds,
@@ -661,7 +833,7 @@ async fn predict_batch(
     let images = Arc::new(images);
     let mut combined = vec![Vec::new(); images.len()];
     for (model_index, model) in models.iter().enumerate() {
-        application.set_ai_worker_status(
+        application.set_worker_status(
             true,
             format!(
                 "Loading {} · model {}/{} · {} images",
@@ -673,7 +845,9 @@ async fn predict_batch(
         );
         ensure_sessions(application, std::slice::from_ref(model)).await?;
         let (slug, session, backend) = {
-            let sessions = application.ai_sessions().lock().await;
+            let sessions = crate::ai_models_v2::AiModelHost::ai_sessions(application)
+                .lock()
+                .await;
             sessions
                 .get(&model.slug)
                 .cloned()
@@ -687,7 +861,7 @@ async fn predict_batch(
                 .ok_or_else(|| format!("AI model session '{}' is not loaded", model.slug))?
         };
         for image_index in 0..images.len() {
-            application.set_ai_worker_status(
+            application.set_worker_status(
                 true,
                 format!(
                     "Running {} on {} · model {}/{} · image {}/{}",
@@ -739,7 +913,7 @@ async fn predict_batch(
 }
 
 async fn predict_files_cached(
-    application: &Application,
+    application: &impl AiInferenceHost,
     models: &[ModelInfo],
     files: &[(String, String)],
     thresholds: Thresholds,
@@ -747,9 +921,11 @@ async fn predict_files_cached(
     // Manual review and background ingestion share one inference lane. The
     // selected models run serially and only the current model remains loaded.
     let started = Instant::now();
-    let _inference_lane = application.ai_model_lifecycle().lock().await;
+    let _inference_lane = crate::ai_models_v2::AiModelHost::ai_model_lifecycle(application)
+        .lock()
+        .await;
     let mut activity = AiWorkerActivity::new(application, files.len(), models.len(), started);
-    application.set_ai_worker_status(
+    application.set_worker_status(
         true,
         format!("Checking prediction cache · {} images", files.len()),
     );
@@ -766,7 +942,7 @@ async fn predict_files_cached(
 
     {
         let mut cache = application
-            .ai_prediction_cache()
+            .prediction_cache()
             .lock()
             .map_err(|_| "AI prediction cache lock was poisoned".to_string())?;
         for (index, (key, file)) in keys.iter().zip(files).enumerate() {
@@ -800,7 +976,7 @@ async fn predict_files_cached(
         }
         let inferred = inferred.into_iter().map(Arc::new).collect::<Vec<_>>();
         let mut cache = application
-            .ai_prediction_cache()
+            .prediction_cache()
             .lock()
             .map_err(|_| "AI prediction cache lock was poisoned".to_string())?;
         for (key, predictions) in missing_keys.into_iter().zip(&inferred) {
@@ -851,7 +1027,7 @@ fn ai_input_bytes(blobs: &BlobStore, file_hash: &str, mime_type: &str) -> Result
 }
 
 struct AiWorkerActivity<'a> {
-    application: &'a Application,
+    application: &'a dyn AiInferenceHost,
     files: usize,
     models: usize,
     started: Instant,
@@ -859,7 +1035,12 @@ struct AiWorkerActivity<'a> {
 }
 
 impl<'a> AiWorkerActivity<'a> {
-    fn new(application: &'a Application, files: usize, models: usize, started: Instant) -> Self {
+    fn new(
+        application: &'a dyn AiInferenceHost,
+        files: usize,
+        models: usize,
+        started: Instant,
+    ) -> Self {
         Self {
             application,
             files,
@@ -871,7 +1052,7 @@ impl<'a> AiWorkerActivity<'a> {
 
     fn complete(&mut self, cache_hits: usize, inferred: usize) {
         let elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0;
-        self.application.set_ai_worker_status(
+        self.application.set_worker_status(
             false,
             format!(
                 "Last run {:.1} s · {} images · {} model(s) · {} cached · {} inferred",
@@ -898,7 +1079,7 @@ impl<'a> AiWorkerActivity<'a> {
 impl Drop for AiWorkerActivity<'_> {
     fn drop(&mut self) {
         if !self.completed {
-            self.application.set_ai_worker_status(
+            self.application.set_worker_status(
                 false,
                 format!(
                     "Last run stopped after {:.1} s · {} images · {} model(s)",

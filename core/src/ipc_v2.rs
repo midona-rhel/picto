@@ -473,6 +473,23 @@ pub async fn dispatch_library_async(
             crate::ai_models_v2::optimize(application, &input.slug).await?;
             read(crate::ai_runtime_v2::model_status_library(application).await?)
         }
+        "ai.review.predict" => {
+            let input: crate::ai_runtime_v2::LibraryManualPredictionRequest = parse(args_json)?;
+            read(crate::ai_runtime_v2::manual_predict_library(application, input).await?)
+        }
+        "ai.review.unload" => {
+            crate::ai_runtime_v2::unload_library_sessions(application).await;
+            read(EmptyOutput {})
+        }
+        "ai.review.apply" => {
+            let input: LibraryAiAssignmentsInput = parse(args_json)?;
+            read(
+                application
+                    .library()
+                    .add_tag_assignments(&input.assignments)
+                    .map_err(|error| error.to_string())?,
+            )
+        }
         "media.request_thumbnail" => {
             let input: FileHashInput = parse(args_json)?;
             read(crate::media_io_v2::request_thumbnail_library(
@@ -1615,6 +1632,10 @@ struct LibraryResolveDuplicateInput {
 struct LibraryAutomaticDuplicateInput {
     file_id_a: picto_library::FileId,
     file_id_b: picto_library::FileId,
+}
+#[derive(Deserialize)]
+struct LibraryAiAssignmentsInput {
+    assignments: Vec<picto_library::RootTagAssignment>,
 }
 #[derive(Deserialize)]
 struct LibraryUpdateSmartFolderInput {
@@ -3181,5 +3202,35 @@ mod tests {
             .projections()
             .direct_tag_bitmap(tag_id)
             .contains(item_id.0 as u32));
+    }
+
+    #[tokio::test]
+    async fn canonical_ai_commands_apply_tags_to_roots_once() {
+        let (_directory, application, root_id) = greenfield_fixture();
+
+        let status = dispatch_library_async(&application, "ai.status", "{}")
+            .await
+            .unwrap()
+            .unwrap();
+        let status: crate::ai_runtime_v2::AiRuntimeStatus =
+            serde_json::from_str(&status).unwrap();
+        assert_eq!(status.models.len(), crate::ai_tagger::models::known_models().len());
+
+        let output = dispatch_library_async(
+            &application,
+            "ai.review.apply",
+            &format!(
+                r#"{{"assignments":[{{"root_id":{},"tags":["general:one girl"]}}]}}"#,
+                root_id.0
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let receipt: picto_library::MutationReceipt = serde_json::from_str(&output).unwrap();
+        assert_eq!(receipt.item_ids, vec![root_id]);
+        let snapshot = application.library().projections().snapshot();
+        let tag_id = snapshot.tag_ids_by_name["general:one girl"];
+        assert!(snapshot.tags[&tag_id].contains(root_id.0));
     }
 }
