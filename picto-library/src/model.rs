@@ -254,6 +254,38 @@ pub struct PendingBlobCleanup {
     pub file_path: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicateStatus {
+    Detected,
+    NotDuplicate,
+    Resolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicatePair {
+    pub file_id_a: FileId,
+    pub file_id_b: FileId,
+    pub distance: u32,
+    pub status: DuplicateStatus,
+    pub detected_at_ms: i64,
+    pub decided_at_ms: Option<i64>,
+    pub winner_file_id: Option<FileId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DuplicateResolutionChoice {
+    KeepBoth,
+    KeepFile { winner_file_id: FileId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateResolutionResult {
+    pub choice: DuplicateResolutionChoice,
+    pub affected_root_ids: Vec<RootId>,
+    pub receipt: crate::MutationReceipt,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MediaFactsUpdate {
     pub mime: Option<String>,

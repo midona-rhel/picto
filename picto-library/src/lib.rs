@@ -7,6 +7,7 @@
 pub mod bitmap;
 pub mod checkpoint;
 pub mod database;
+pub mod duplicate;
 pub mod error;
 pub mod fts;
 mod group;

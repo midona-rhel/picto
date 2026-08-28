@@ -12,9 +12,11 @@ use crate::history::{
 };
 use crate::ingest;
 use crate::model::{
+    DuplicatePair, DuplicateResolutionChoice, DuplicateResolutionResult, DuplicateStatus, FileId,
     FolderDeleteResult, FolderId, FolderRecord, GroupRequest, Lifecycle, MediaFactsUpdate, MediaId,
-    PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind, RootTagAssignment,
-    SmartFolderDeleteResult, SmartFolderId, SmartFolderInput, TagNamespaceId, TagRecord,
+    PendingBlobCleanup, PreparedCollectionImport, PreparedImport, Rating, RootId, RootKind,
+    RootTagAssignment, SmartFolderDeleteResult, SmartFolderId, SmartFolderInput, TagNamespaceId,
+    TagRecord,
 };
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
@@ -963,6 +965,171 @@ impl Library {
                 crate::checkpoint::write(transaction, revision, &payload)
             })?;
         Ok(size)
+    }
+
+    pub fn record_duplicate_pair(
+        &self,
+        file_id_a: FileId,
+        file_id_b: FileId,
+        distance: u32,
+        detected_at_ms: i64,
+    ) -> Result<Option<MutationReceipt>> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let published = self.database.published_write_if_changed(
+            WorkPriority::Maintenance,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let Some(pair) = crate::duplicate::record_detected(
+                    transaction,
+                    file_id_a,
+                    file_id_b,
+                    distance,
+                    detected_at_ms,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let affected = crate::duplicate::affected_roots(
+                    transaction,
+                    &snapshot,
+                    pair.file_id_a,
+                    pair.file_id_b,
+                )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "duplicate.detect",
+                    (!affected.is_empty()).then_some(&affected),
+                    serde_json::json!({
+                        "file_id_a": pair.file_id_a.0,
+                        "file_id_b": pair.file_id_b.0,
+                        "distance": pair.distance,
+                    }),
+                    detected_at_ms,
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["duplicates".into()],
+                    affected.iter().map(RootId),
+                );
+                Ok(Some((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                )))
+            },
+            move |_, delta| {
+                publish_delta(&projections, &publication, delta);
+            },
+        )?;
+        Ok(published.map(|(receipt, _, ())| receipt))
+    }
+
+    pub fn duplicate_pairs(
+        &self,
+        status: Option<DuplicateStatus>,
+        limit: usize,
+    ) -> Result<Vec<DuplicatePair>> {
+        self.database.read(WorkPriority::VisibleRead, |connection| {
+            crate::duplicate::list_pairs(connection, status, limit)
+        })
+    }
+
+    pub fn resolve_duplicate(
+        &self,
+        file_id_a: FileId,
+        file_id_b: FileId,
+        choice: DuplicateResolutionChoice,
+        decided_at_ms: i64,
+    ) -> Result<DuplicateResolutionResult> {
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (result, _, ()) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let mut output = crate::duplicate::resolve(
+                    transaction,
+                    revision,
+                    (*snapshot).clone(),
+                    file_id_a,
+                    file_id_b,
+                    choice,
+                    decided_at_ms,
+                )?;
+                if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
+                    crate::smart::settle_affected(
+                        transaction,
+                        &mut output.snapshot,
+                        &output.affected_roots,
+                    )?;
+                }
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "duplicate.resolve",
+                    (!output.affected_roots.is_empty()).then_some(&output.affected_roots),
+                    serde_json::json!({
+                        "file_id_a": output.history.file_id_a().0,
+                        "file_id_b": output.history.file_id_b().0,
+                        "choice": choice,
+                    }),
+                    decided_at_ms,
+                )?;
+                output.snapshot.revision = revision;
+                let resources = if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
+                    vec![
+                        "duplicates".into(),
+                        "media".into(),
+                        "roots".into(),
+                        "smart-folders".into(),
+                    ]
+                } else {
+                    vec!["duplicates".into()]
+                };
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    resources,
+                    output.affected_roots.iter().map(RootId),
+                );
+                let result = DuplicateResolutionResult {
+                    choice,
+                    affected_root_ids: receipt.item_ids.clone(),
+                    receipt: receipt.clone(),
+                };
+                Ok((
+                    result,
+                    PublishedDelta {
+                        snapshot: output.snapshot,
+                        receipt,
+                        history: Some(HistoryEntry::new(
+                            "Resolve duplicate",
+                            SemanticChange::DuplicateResolution(output.history),
+                        )),
+                    },
+                ))
+            },
+            move |_, delta| {
+                let history_entry = publish_delta(&projections, &publication, delta);
+                push_history(&history, history_entry);
+            },
+        )?;
+        Ok(result)
+    }
+
+    pub fn pending_blob_cleanup(&self, limit: usize) -> Result<Vec<PendingBlobCleanup>> {
+        self.database.read_consistent(
+            WorkPriority::Maintenance,
+            |_| Ok(self.history.protected_cleanup_files()),
+            |connection, protected| crate::duplicate::ready_cleanup(connection, &protected, limit),
+        )
     }
 
     pub fn update_media_facts(
@@ -2634,6 +2801,7 @@ impl Library {
         deleted_at_ms: i64,
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         let target = target.clone();
+        let protected_cleanup_files = self.history.protected_cleanup_files();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let ((receipt, cleanup), _, ()) = self.database.published_write(
@@ -2732,10 +2900,10 @@ impl Library {
                              ON CONFLICT(file_id) DO NOTHING",
                             rusqlite::params![file_id, file_path, revision as i64],
                         )?;
-                        cleanup.push(crate::PendingBlobCleanup {
-                            file_id: crate::FileId(file_id),
-                            file_path,
-                        });
+                        let file_id = crate::FileId(file_id);
+                        if !protected_cleanup_files.contains(&file_id) {
+                            cleanup.push(crate::PendingBlobCleanup { file_id, file_path });
+                        }
                     }
                 }
 
@@ -4313,6 +4481,17 @@ fn apply_semantic_change(
                 "sidebar".into(),
                 "search".into(),
             ]);
+        }
+        SemanticChange::DuplicateResolution(state) => {
+            let changed =
+                crate::duplicate::replay(transaction, revision, snapshot, state, use_after)?;
+            *affected |= &changed;
+            resources.insert("duplicates".into());
+            if state.rewires_file() {
+                resources.insert("roots".into());
+                resources.insert("media".into());
+                resources.insert("smart-folders".into());
+            }
         }
         SemanticChange::Compound(changes) => {
             if use_after {

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::bitmap::BitmapKey;
-use crate::model::{FolderId, MediaId, RootId, RootKind, SmartFolderId};
+use crate::model::{FileId, FolderId, MediaId, RootId, RootKind, SmartFolderId};
 use crate::ordering::OrderOwnerKind;
 use crate::projection::ProjectionSnapshot;
 
@@ -153,6 +153,7 @@ pub enum SemanticChange {
         before: StructuralState,
         after: StructuralState,
     },
+    DuplicateResolution(crate::duplicate::DuplicateHistoryState),
     Compound(Vec<SemanticChange>),
 }
 
@@ -253,7 +254,24 @@ impl SemanticChange {
                     + before.projection.estimated_bytes()
                     + after.projection.estimated_bytes()
             }
+            Self::DuplicateResolution(state) => state.estimated_bytes(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
+        }
+    }
+
+    fn protected_cleanup_files(&self, protected: &mut BTreeSet<FileId>) {
+        match self {
+            Self::DuplicateResolution(state) => {
+                if let Some(file_id) = state.protected_file_id() {
+                    protected.insert(file_id);
+                }
+            }
+            Self::Compound(changes) => {
+                for change in changes {
+                    change.protected_cleanup_files(protected);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -291,6 +309,7 @@ struct Stacks {
     undo: VecDeque<HistoryEntry>,
     redo: VecDeque<HistoryEntry>,
     bytes: usize,
+    protected_cleanup_files: BTreeSet<FileId>,
 }
 
 #[derive(Default)]
@@ -317,6 +336,7 @@ impl SessionHistory {
                 stacks.bytes = stacks.bytes.saturating_sub(removed.estimated_bytes);
             }
         }
+        stacks.refresh_cleanup_protections();
         true
     }
 
@@ -348,6 +368,10 @@ impl SessionHistory {
         *self.stacks.lock() = Stacks::default();
     }
 
+    pub fn protected_cleanup_files(&self) -> BTreeSet<FileId> {
+        self.stacks.lock().protected_cleanup_files.clone()
+    }
+
     pub fn state(&self) -> HistoryState {
         let stacks = self.stacks.lock();
         HistoryState {
@@ -358,6 +382,16 @@ impl SessionHistory {
             entries: stacks.undo.len() + stacks.redo.len(),
             bytes: stacks.bytes,
         }
+    }
+}
+
+impl Stacks {
+    fn refresh_cleanup_protections(&mut self) {
+        let mut protected = BTreeSet::new();
+        for entry in self.undo.iter().chain(self.redo.iter()) {
+            entry.change.protected_cleanup_files(&mut protected);
+        }
+        self.protected_cleanup_files = protected;
     }
 }
 
