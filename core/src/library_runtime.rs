@@ -27,6 +27,14 @@ pub fn start(
             start_watched_folder_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
+            "library-fts",
+            start_fts_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
+            "library-checkpoint",
+            start_checkpoint_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
             "library-derivatives",
             start_derivative_worker(application, cancel.child_token()),
         ),
@@ -72,6 +80,51 @@ fn start_watched_folder_worker(
                     match crate::library_import::scan_watched_folders(&application).await {
                         Ok(_) => {}
                         Err(error) => tracing::warn!(%error, "Canonical watched-folder scan failed"),
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_fts_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut idle = tokio::time::interval(Duration::from_millis(100));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = idle.tick() => {
+                    let library = Arc::clone(application.library());
+                    match tokio::task::spawn_blocking(move || library.settle_fts(256)).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => tracing::warn!(%error, "Canonical FTS settlement failed"),
+                        Err(error) => tracing::warn!(%error, "Canonical FTS worker stopped"),
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_checkpoint_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(5 * 60);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(interval) => {
+                    let library = Arc::clone(application.library());
+                    match tokio::task::spawn_blocking(move || library.write_projection_checkpoint()).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => tracing::warn!(%error, "Canonical projection checkpoint failed"),
+                        Err(error) => tracing::warn!(%error, "Canonical checkpoint worker stopped"),
                     }
                 }
             }
