@@ -23,6 +23,10 @@ pub fn start(
             start_ingest_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
+            "library-watched-folders",
+            start_watched_folder_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
             "library-derivatives",
             start_derivative_worker(application, cancel.child_token()),
         ),
@@ -47,6 +51,27 @@ fn start_ingest_worker(
                         Ok(Ok(_)) => {}
                         Ok(Err(error)) => tracing::warn!(%error, "Canonical ingest batch failed"),
                         Err(error) => tracing::warn!(%error, "Canonical ingest worker stopped"),
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_watched_folder_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut idle = tokio::time::interval(Duration::from_secs(30));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = idle.tick() => {
+                    match crate::library_import::scan_watched_folders(&application).await {
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(%error, "Canonical watched-folder scan failed"),
                     }
                 }
             }

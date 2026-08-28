@@ -1,8 +1,9 @@
 //! Filesystem import adapter for the canonical library ingest queue.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use picto_library::{
     FolderId, ImmutableMediaFacts, Lifecycle, PreparedCollectionImport, PreparedImport,
@@ -11,6 +12,8 @@ use picto_library::{
 use serde::{Deserialize, Serialize};
 
 use crate::library_application::LibraryApplication;
+
+const WATCH_STABLE_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManualImportInput {
@@ -47,6 +50,21 @@ pub struct ImportEnqueueReport {
 struct ImportCandidate {
     path: PathBuf,
     relative_parent: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct WatchedFolder {
+    folder_id: FolderId,
+    path: PathBuf,
+    recursive: bool,
+}
+
+#[derive(Debug)]
+struct PendingWatch {
+    folder_id: FolderId,
+    path: PathBuf,
+    metadata: fs::Metadata,
+    job_key: String,
 }
 
 pub async fn enqueue_manual_import(
@@ -150,6 +168,155 @@ pub async fn enqueue_manual_import(
         }
     }
     Ok(report)
+}
+
+pub async fn scan_watched_folders(
+    application: &LibraryApplication,
+) -> Result<ImportEnqueueReport, String> {
+    let enabled = application
+        .application_settings()?
+        .value
+        .get("autoImportEnabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if !enabled {
+        return Ok(ImportEnqueueReport::default());
+    }
+
+    let watches = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::CanonicalIngest,
+            |connection| {
+            let mut statement = connection.prepare(
+                "SELECT folder_id, watch_path, watch_subfolders
+                 FROM folder_definition
+                 WHERE watch_enabled = 1 AND watch_path IS NOT NULL
+                 ORDER BY folder_id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(WatchedFolder {
+                        folder_id: FolderId(row.get(0)?),
+                        path: PathBuf::from(row.get::<_, String>(1)?),
+                        recursive: row.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    if watches.is_empty() {
+        return Ok(ImportEnqueueReport::default());
+    }
+
+    let mut existing = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::CanonicalIngest,
+            |connection| {
+            let mut statement = connection.prepare(
+                "SELECT job_key FROM ingest_job
+                 WHERE source_kind = 'watch' AND status <> 'failed'",
+            )?;
+            let keys = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<HashSet<_>>>()?;
+            Ok(keys)
+            },
+        )
+        .map_err(|error| error.to_string())?;
+
+    let (mut report, pending) = tokio::task::spawn_blocking(move || {
+        collect_watched_candidates(watches, &mut existing)
+    })
+    .await
+    .map_err(|error| format!("Watched-folder scan worker failed: {error}"))??;
+    if !pending.is_empty() {
+        tokio::time::sleep(WATCH_STABLE_DELAY).await;
+    }
+
+    let now = chrono::Utc::now();
+    let input = ManualImportInput {
+        paths: Vec::new(),
+        tags: Vec::new(),
+        source_urls: Vec::new(),
+        lifecycle: Lifecycle::Inbox,
+        parent_folder_id: None,
+        preserve_structure: false,
+        include_subfolders: true,
+        expand_archives: false,
+        include_folders_without_media: false,
+        delete_after_ingest: false,
+        group_files: false,
+    };
+    for candidate in pending {
+        if !file_is_stable(&candidate.path, &candidate.metadata) {
+            report.skipped += 1;
+            continue;
+        }
+        match prepare_import(
+            &candidate.path,
+            &input,
+            Some(candidate.folder_id),
+            candidate.job_key.clone(),
+            now.timestamp_millis(),
+        )
+        .await
+        {
+            Ok(value) => {
+                enqueue(
+                    application,
+                    &PreparedIngestJob {
+                        job_key: candidate.job_key,
+                        source_kind: "watch".into(),
+                        source_path: value.file_path.clone(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(value),
+                    },
+                    &now.to_rfc3339(),
+                    &mut report,
+                )?;
+            }
+            Err(error) if error.starts_with("Unsupported media:") => report.skipped += 1,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(report)
+}
+
+fn collect_watched_candidates(
+    watches: Vec<WatchedFolder>,
+    existing: &mut HashSet<String>,
+) -> Result<(ImportEnqueueReport, Vec<PendingWatch>), String> {
+    let mut report = ImportEnqueueReport::default();
+    let mut pending = Vec::new();
+    for watch in watches {
+        for candidate in collect_directory(&watch.path, watch.recursive, None)? {
+            report.discovered += 1;
+            let metadata = match fs::metadata(&candidate.path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    report.skipped += 1;
+                    continue;
+                }
+            };
+            let job_key = watch_job_key(watch.folder_id, &candidate.path, &metadata);
+            if !existing.insert(job_key.clone()) {
+                report.already_queued += 1;
+                continue;
+            }
+            pending.push(PendingWatch {
+                folder_id: watch.folder_id,
+                path: candidate.path,
+                metadata,
+                job_key,
+            });
+        }
+    }
+    Ok((report, pending))
 }
 
 fn enqueue(
@@ -446,6 +613,32 @@ fn is_zip(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
 }
 
+fn watch_job_key(folder_id: FolderId, path: &Path, metadata: &fs::Metadata) -> String {
+    let modified = metadata
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "watch:{}:{}:{}:{}",
+        folder_id.0,
+        path.display(),
+        metadata.len(),
+        modified
+    )
+}
+
+fn file_is_stable(path: &Path, previous: &fs::Metadata) -> bool {
+    fs::metadata(path)
+        .map(|current| {
+            current.is_file()
+                && current.len() == previous.len()
+                && current.modified().ok() == previous.modified().ok()
+        })
+        .unwrap_or(false)
+}
+
 fn default_true() -> bool {
     true
 }
@@ -530,5 +723,38 @@ mod tests {
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.media.len(), 2);
         assert_eq!(details.tag_ids.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn watched_folder_queues_each_stable_file_once_for_inbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let watched = directory.path().join("watched");
+        fs::create_dir(&watched).unwrap();
+        let source = watched.join("source.png");
+        png(&source, [10, 20, 30]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let folder = application
+            .create_folder(picto_library::CreateFolderInput {
+                name: "Watched".into(),
+                parent_id: None,
+            })
+            .unwrap();
+        application
+            .set_folder_watch(&picto_library::FolderWatchInput {
+                folder_id: folder.folder_id,
+                path: watched.to_string_lossy().into_owned(),
+                include_subfolders: true,
+            })
+            .unwrap();
+
+        let first = scan_watched_folders(&application).await.unwrap();
+        let second = scan_watched_folders(&application).await.unwrap();
+        assert_eq!(first.queued, 1);
+        assert_eq!(second.already_queued, 1);
+
+        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+        let details = application.library().details(settled.root_ids[0]).unwrap();
+        assert_eq!(details.lifecycle, Lifecycle::Inbox);
+        assert_eq!(details.folder_ids, vec![folder.folder_id]);
     }
 }
