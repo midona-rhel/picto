@@ -137,6 +137,14 @@ pub fn dispatch_library(
             let input: picto_library::FolderAutoTagsInput = parse(args_json)?;
             read(application.set_folder_auto_tags(&input)?)
         }
+        "folders.cover.get" => {
+            let input: LibraryFolderInput = parse(args_json)?;
+            read(application.folder_cover(input.folder_id)?)
+        }
+        "folders.cover.set" => {
+            let input: picto_library::FolderCoverInput = parse(args_json)?;
+            read(application.set_folder_cover(&input)?)
+        }
         "folders.move" => {
             let input: LibraryMoveFolderInput = parse(args_json)?;
             read(application.move_folder(input.folder_id, input.parent_id)?)
@@ -156,6 +164,14 @@ pub fn dispatch_library(
         "folders.delete" => {
             let input: LibraryFolderIdsInput = parse(args_json)?;
             read(application.delete_folders(&input.folder_ids)?)
+        }
+        "folders.watch.set" => {
+            let input: picto_library::FolderWatchInput = parse(args_json)?;
+            read(application.set_folder_watch(&input)?)
+        }
+        "folders.watch.clear" => {
+            let input: LibraryFolderInput = parse(args_json)?;
+            read(application.clear_folder_watch(input.folder_id)?)
         }
         "smart_folders.create" => {
             let input: picto_library::SmartFolderInput = parse(args_json)?;
@@ -1907,6 +1923,7 @@ mod tests {
     #[test]
     fn greenfield_dispatch_routes_folder_and_smart_folder_mutations() {
         let (_directory, application, root_id) = greenfield_fixture();
+        let watch_directory = tempfile::tempdir().unwrap();
         for add in [true, false] {
             dispatch_library(
                 &application,
@@ -1952,6 +1969,35 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        dispatch_library(
+            &application,
+            "folders.cover.set",
+            &format!(r#"{{"folder_id":{folder_id},"root_id":{}}}"#, root_id.0),
+        )
+        .unwrap()
+        .unwrap();
+        let cover = dispatch_library(
+            &application,
+            "folders.cover.get",
+            &format!(r#"{{"folder_id":{folder_id}}}"#),
+        )
+        .unwrap()
+        .unwrap();
+        let cover: picto_library::FolderCover = serde_json::from_str(&cover).unwrap();
+        assert_eq!(cover.root_id, root_id);
+        assert_eq!(cover.content_hash, "hash-greenfield-ipc-root");
+        dispatch_library(
+            &application,
+            "folders.watch.set",
+            &serde_json::json!({
+                "folder_id": folder_id,
+                "path": watch_directory.path(),
+                "include_subfolders": true,
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             application
                 .library()
@@ -1977,6 +2023,9 @@ mod tests {
             .unwrap();
         let navigation: serde_json::Value = serde_json::from_str(&navigation).unwrap();
         assert_eq!(navigation["folders"][0]["folder_id"], folder_id);
+        assert_eq!(navigation["folders"][0]["cover_root_id"], root_id.0);
+        assert_eq!(navigation["folders"][0]["watch_enabled"], true);
+        assert_eq!(navigation["folders"][0]["watch_subfolders"], true);
         assert_eq!(
             navigation["smart_folders"][0]["view"]["filter"]["kind"],
             "all"

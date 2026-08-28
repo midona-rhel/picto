@@ -354,6 +354,56 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn folder_cover(
+        &self,
+        folder_id: picto_library::FolderId,
+    ) -> Result<Option<picto_library::FolderCover>, String> {
+        self.library
+            .folder_cover(folder_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_folder_cover(
+        &self,
+        input: &picto_library::FolderCoverInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .set_folder_cover(input.folder_id, input.root_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_folder_watch(
+        &self,
+        input: &picto_library::FolderWatchInput,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let path = std::fs::canonicalize(input.path.trim())
+            .map_err(|error| format!("Failed to resolve watched folder: {error}"))?;
+        if !path.is_dir() {
+            return Err(format!("Watched path is not a directory: {}", path.display()));
+        }
+        let library_root = std::fs::canonicalize(self.root())
+            .unwrap_or_else(|_| self.root().to_path_buf());
+        if path.starts_with(library_root) {
+            return Err("A watched folder cannot be inside the Picto library".into());
+        }
+        self.library
+            .set_folder_watch(
+                input.folder_id,
+                &path.to_string_lossy(),
+                input.include_subfolders,
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn clear_folder_watch(
+        &self,
+        folder_id: picto_library::FolderId,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .clear_folder_watch(folder_id)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn move_folder(
         &self,
         folder_id: picto_library::FolderId,

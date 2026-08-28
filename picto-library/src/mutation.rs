@@ -2196,6 +2196,136 @@ impl Library {
         )
     }
 
+    pub fn folder_cover(&self, folder_id: FolderId) -> Result<Option<crate::FolderCover>> {
+        use rusqlite::OptionalExtension;
+
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let cover_root_id = connection
+                    .query_row(
+                        "SELECT cover_root_id FROM folder_definition WHERE folder_id = ?1",
+                        [folder_id.0],
+                        |row| row.get::<_, Option<u32>>(0),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => {
+                            LibraryError::NotFound(format!("folder {folder_id}"))
+                        }
+                        error => error.into(),
+                    })?;
+                let Some(root_id) = cover_root_id.map(RootId) else {
+                    return Ok(None);
+                };
+                if !snapshot
+                    .folders
+                    .get(&folder_id)
+                    .is_some_and(|members| members.contains(root_id.0))
+                {
+                    return Ok(None);
+                }
+                connection
+                    .query_row(
+                        "SELECT file.content_hash, file.mime
+                         FROM library_root root
+                         JOIN media_item media ON media.media_id = root.cover_media_id
+                         JOIN media_file file ON file.file_id = media.file_id
+                         WHERE root.root_id = ?1",
+                        [root_id.0],
+                        |row| {
+                            Ok(crate::FolderCover {
+                                root_id,
+                                content_hash: row.get(0)?,
+                                mime: row.get(1)?,
+                            })
+                        },
+                    )
+                    .optional()
+                    .map_err(Into::into)
+            },
+        )
+    }
+
+    pub fn set_folder_cover(
+        &self,
+        folder_id: FolderId,
+        root_id: RootId,
+    ) -> Result<MutationReceipt> {
+        let snapshot = self.projections.snapshot();
+        if !snapshot
+            .folders
+            .get(&folder_id)
+            .is_some_and(|members| members.contains(root_id.0))
+        {
+            return Err(LibraryError::InvalidInput(
+                "folder cover root must belong to the folder".into(),
+            ));
+        }
+        drop(snapshot);
+        self.update_folder_definition(
+            "folders.set_cover",
+            "Set folder cover",
+            folder_id,
+            move |transaction| {
+                if transaction.execute(
+                    "UPDATE folder_definition SET cover_root_id = ?2 WHERE folder_id = ?1",
+                    rusqlite::params![folder_id.0, root_id.0],
+                )? == 0
+                {
+                    return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+                }
+                Ok(())
+            },
+        )
+    }
+
+    pub fn set_folder_watch(
+        &self,
+        folder_id: FolderId,
+        path: &str,
+        include_subfolders: bool,
+    ) -> Result<MutationReceipt> {
+        let path = required_name("watch path", path)?;
+        self.update_folder_definition(
+            "folders.set_watch",
+            "Set watched folder",
+            folder_id,
+            move |transaction| {
+                if transaction.execute(
+                    "UPDATE folder_definition
+                     SET watch_path = ?2, watch_enabled = 1, watch_subfolders = ?3
+                     WHERE folder_id = ?1",
+                    rusqlite::params![folder_id.0, path, include_subfolders],
+                )? == 0
+                {
+                    return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+                }
+                Ok(())
+            },
+        )
+    }
+
+    pub fn clear_folder_watch(&self, folder_id: FolderId) -> Result<MutationReceipt> {
+        self.update_folder_definition(
+            "folders.clear_watch",
+            "Clear watched folder",
+            folder_id,
+            move |transaction| {
+                if transaction.execute(
+                    "UPDATE folder_definition
+                     SET watch_path = NULL, watch_enabled = 0, watch_subfolders = 0
+                     WHERE folder_id = ?1",
+                    [folder_id.0],
+                )? == 0
+                {
+                    return Err(LibraryError::NotFound(format!("folder {folder_id}")));
+                }
+                Ok(())
+            },
+        )
+    }
+
     pub fn move_folder(
         &self,
         folder_id: FolderId,
@@ -4793,8 +4923,9 @@ fn apply_semantic_change(
                     transaction.execute(
                         "INSERT INTO folder_definition
                              (folder_id, stable_key, parent_id, name, icon, color, notes,
-                              auto_tag_ids, display_order)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                              auto_tag_ids, cover_root_id, watch_path, watch_enabled,
+                              watch_subfolders, display_order)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                          ON CONFLICT(folder_id) DO UPDATE SET
                              stable_key = excluded.stable_key,
                              parent_id = excluded.parent_id,
@@ -4803,6 +4934,10 @@ fn apply_semantic_change(
                              color = excluded.color,
                              notes = excluded.notes,
                              auto_tag_ids = excluded.auto_tag_ids,
+                             cover_root_id = excluded.cover_root_id,
+                             watch_path = excluded.watch_path,
+                             watch_enabled = excluded.watch_enabled,
+                             watch_subfolders = excluded.watch_subfolders,
                              display_order = excluded.display_order",
                         rusqlite::params![
                             folder.folder_id.0,
@@ -4813,6 +4948,10 @@ fn apply_semantic_change(
                             folder.color,
                             folder.notes,
                             folder.auto_tag_ids,
+                            folder.cover_root_id.map(|id| id.0),
+                            folder.watch_path,
+                            folder.watch_enabled,
+                            folder.watch_subfolders,
                             folder.display_order
                         ],
                     )?;
@@ -5441,7 +5580,7 @@ fn load_folder_definition(
     connection
         .query_row(
             "SELECT stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
-                    display_order
+                    cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
              FROM folder_definition WHERE folder_id = ?1",
             [folder_id.0],
             |row| {
@@ -5454,7 +5593,11 @@ fn load_folder_definition(
                     color: row.get(4)?,
                     notes: row.get(5)?,
                     auto_tag_ids: row.get(6)?,
-                    display_order: row.get(7)?,
+                    cover_root_id: row.get::<_, Option<u32>>(7)?.map(RootId),
+                    watch_path: row.get(8)?,
+                    watch_enabled: row.get(9)?,
+                    watch_subfolders: row.get(10)?,
+                    display_order: row.get(11)?,
                 })
             },
         )
@@ -5467,7 +5610,8 @@ fn list_folders(
     snapshot: &ProjectionSnapshot,
 ) -> Result<Vec<FolderRecord>> {
     let mut statement = connection.prepare(
-        "SELECT folder_id, stable_key, parent_id, name, icon, color, notes, display_order
+        "SELECT folder_id, stable_key, parent_id, name, icon, color, notes,
+                cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
          FROM folder_definition
          ORDER BY parent_id, display_order, folder_id",
     )?;
@@ -5481,7 +5625,11 @@ fn list_folders(
             icon: row.get(4)?,
             color: row.get(5)?,
             notes: row.get(6)?,
-            display_order: row.get(7)?,
+            cover_root_id: row.get::<_, Option<u32>>(7)?.map(RootId),
+            watch_path: row.get(8)?,
+            watch_enabled: row.get(9)?,
+            watch_subfolders: row.get(10)?,
+            display_order: row.get(11)?,
             count: snapshot
                 .folders
                 .get(&folder_id)

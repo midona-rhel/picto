@@ -86,6 +86,7 @@ CREATE TABLE folder_definition (
     color TEXT,
     notes TEXT,
     auto_tag_ids BLOB NOT NULL DEFAULT X'',
+    cover_root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
     watch_path TEXT UNIQUE,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
     watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),

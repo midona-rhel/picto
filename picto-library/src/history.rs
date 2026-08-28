@@ -47,6 +47,10 @@ pub struct FolderDefinitionState {
     pub color: Option<String>,
     pub notes: Option<String>,
     pub auto_tag_ids: Vec<u8>,
+    pub cover_root_id: Option<RootId>,
+    pub watch_path: Option<String>,
+    pub watch_enabled: bool,
+    pub watch_subfolders: bool,
     pub display_order: i64,
 }
 
@@ -215,6 +219,7 @@ impl SemanticChange {
                         + state.color.as_deref().map(str::len).unwrap_or(0)
                         + state.notes.as_deref().map(str::len).unwrap_or(0)
                         + state.auto_tag_ids.len()
+                        + state.watch_path.as_deref().map(str::len).unwrap_or(0)
                         + 64
                 })
                 .sum(),

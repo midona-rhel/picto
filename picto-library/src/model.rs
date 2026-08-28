@@ -175,8 +175,19 @@ pub struct FolderRecord {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub notes: Option<String>,
+    pub cover_root_id: Option<RootId>,
+    pub watch_path: Option<String>,
+    pub watch_enabled: bool,
+    pub watch_subfolders: bool,
     pub display_order: i64,
     pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderCover {
+    pub root_id: RootId,
+    pub content_hash: String,
+    pub mime: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +264,19 @@ pub struct FolderMetadataInput {
 pub struct FolderAutoTagsInput {
     pub folder_id: FolderId,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderCoverInput {
+    pub folder_id: FolderId,
+    pub root_id: RootId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderWatchInput {
+    pub folder_id: FolderId,
+    pub path: String,
+    pub include_subfolders: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
