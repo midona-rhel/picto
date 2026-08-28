@@ -368,6 +368,108 @@ fn query_subscription_views(
 }
 
 impl LibraryApplication {
+    pub async fn reset_subscription_library(
+        &self,
+        subscription_id: i64,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    require_subscription(connection, subscription_id)?;
+                    reject_active_subscription_edit(connection, subscription_id)?;
+                    Ok(())
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+            self.root(),
+            subscription_id,
+        )
+        .await?;
+        crate::onlyfans_source_v2::clear_subscription_state(self.root(), subscription_id)?;
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.reset",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        require_subscription(transaction, subscription_id)?;
+                        reject_active_subscription_edit(transaction, subscription_id)?;
+                        transaction.execute(
+                            "DELETE FROM ingest_job
+                             WHERE source_item_id IN (
+                                 SELECT si.source_item_id
+                                 FROM subscription_source_post ssp
+                                 JOIN source_item si
+                                   ON si.source_post_id = ssp.source_post_id
+                                 WHERE ssp.subscription_id = ?1
+                                   AND si.media_item_id IS NULL
+                                 UNION
+                                 SELECT rsi.source_item_id
+                                 FROM subscription_run_source_item rsi
+                                 JOIN subscription_run_query srq
+                                   ON srq.run_query_id = rsi.run_query_id
+                                 JOIN subscription_run sr ON sr.run_id = srq.run_id
+                                 JOIN source_item si
+                                   ON si.source_item_id = rsi.source_item_id
+                                 WHERE sr.subscription_id = ?1
+                                   AND si.media_item_id IS NULL
+                             )",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "UPDATE source_item
+                             SET state = 'pending', last_error = NULL,
+                                 updated_at = datetime('now')
+                             WHERE media_item_id IS NULL AND source_item_id IN (
+                                 SELECT si.source_item_id
+                                 FROM subscription_source_post ssp
+                                 JOIN source_item si
+                                   ON si.source_post_id = ssp.source_post_id
+                                 WHERE ssp.subscription_id = ?1
+                                 UNION
+                                 SELECT rsi.source_item_id
+                                 FROM subscription_run_source_item rsi
+                                 JOIN subscription_run_query srq
+                                   ON srq.run_query_id = rsi.run_query_id
+                                 JOIN subscription_run sr ON sr.run_id = srq.run_id
+                                 WHERE sr.subscription_id = ?1
+                             )",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "UPDATE subscription_query
+                             SET resume_cursor = NULL, initial_run_complete = 0,
+                                 last_success_at = NULL, last_failure_at = NULL,
+                                 last_failure_kind = NULL, last_failure_message = NULL
+                             WHERE subscription_id = ?1",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "DELETE FROM subscription_issue WHERE subscription_id = ?1",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "DELETE FROM subscription_source_post
+                             WHERE subscription_id = ?1",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "DELETE FROM subscription_run WHERE subscription_id = ?1",
+                            [subscription_id],
+                        )?;
+                        Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
     pub fn create_subscription_definition_library(
         &self,
         input: &NewSubscription,

@@ -426,6 +426,21 @@ pub fn dispatch_library(
     Ok(Some(output))
 }
 
+pub async fn dispatch_library_async(
+    application: &crate::library_application::LibraryApplication,
+    command: &str,
+    args_json: &str,
+) -> Result<Option<String>, String> {
+    let output = match command {
+        "subscriptions.reset" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(application.reset_subscription_library(input.subscription_id).await?)
+        }
+        _ => return dispatch_library(application, command, args_json),
+    }?;
+    Ok(Some(output))
+}
+
 pub fn dispatch(
     application: &Application,
     command: &str,
@@ -2279,6 +2294,36 @@ mod tests {
         .unwrap();
         let export: crate::media_io_v2::ExportResult = serde_json::from_str(&export).unwrap();
         assert_eq!((export.selected_item_count, export.exported), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn greenfield_subscription_reset_uses_async_canonical_path() {
+        let (_directory, application, _) = greenfield_fixture();
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(
+                &NewSubscription {
+                    name: "Reset me".into(),
+                    schedule: "manual".into(),
+                    initial_post_limit: None,
+                    periodic_post_limit: None,
+                    queries: Vec::new(),
+                },
+                "2026-01-01T00:00:00Z",
+            )
+            .unwrap();
+        let output = dispatch_library_async(
+            &application,
+            "subscriptions.reset",
+            &format!(r#"{{"subscription_id":{subscription_id}}}"#),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let receipt: picto_library::MutationReceipt = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            receipt.revision,
+            application.library().database().revision().unwrap()
+        );
     }
 
     #[test]
