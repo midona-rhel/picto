@@ -99,8 +99,15 @@ pub struct AiTagPrediction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct LibraryManualPredictionTarget {
+    pub root_id: picto_library::RootId,
+    pub media_item_id: picto_library::MediaId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct LibraryManualPredictionRequest {
-    pub root_ids: Vec<picto_library::RootId>,
+    pub targets: Vec<LibraryManualPredictionTarget>,
     #[serde(default)]
     pub model_slugs: Option<Vec<String>>,
 }
@@ -202,20 +209,24 @@ pub async fn manual_predict_library(
     application: &crate::library_application::LibraryApplication,
     request: LibraryManualPredictionRequest,
 ) -> Result<LibraryManualPredictionResponse, String> {
-    if request.root_ids.is_empty() {
-        return Err("At least one library root is required".into());
+    if request.targets.is_empty() {
+        return Err("At least one library media target is required".into());
     }
-    if request.root_ids.len() > MAX_MANUAL_PREDICTION_ITEMS {
+    if request.targets.len() > MAX_MANUAL_PREDICTION_ITEMS {
         return Err(format!(
-            "Manual prediction accepts at most {} library roots",
+            "Manual prediction accepts at most {} image members",
             MAX_MANUAL_PREDICTION_ITEMS
         ));
     }
     let settings = application.application_settings()?.value;
     let models = resolve_prediction_models(&request.model_slugs, &settings)?;
     let thresholds = thresholds_from_settings(&settings);
-    let mut results = request
-        .root_ids
+    let root_ids = request
+        .targets
+        .iter()
+        .map(|target| target.root_id)
+        .collect::<BTreeSet<_>>();
+    let mut results = root_ids
         .iter()
         .map(|root_id| RootPrediction {
             root_id: *root_id,
@@ -223,30 +234,41 @@ pub async fn manual_predict_library(
             error: None,
         })
         .collect::<Vec<_>>();
+    let owner_indexes = results
+        .iter()
+        .enumerate()
+        .map(|(index, result)| (result.root_id, index))
+        .collect::<HashMap<_, _>>();
     let mut files = Vec::new();
     let mut owners = Vec::new();
-    for (index, root_id) in request.root_ids.into_iter().enumerate() {
+    let mut details_by_root = HashMap::new();
+    for root_id in root_ids {
         match application.library().details(root_id) {
             Ok(details) => {
-                let before = files.len();
-                for media in details.media {
-                    if media.facts.mime.starts_with("image/") {
-                        files.push((media.facts.content_hash, media.facts.mime));
-                        owners.push(index);
-                    }
-                }
-                if files.len() == before {
-                    results[index].error = Some("AI prediction requires image media".into());
-                }
+                details_by_root.insert(root_id, details);
             }
-            Err(error) => results[index].error = Some(error.to_string()),
+            Err(error) => results[owner_indexes[&root_id]].error = Some(error.to_string()),
         }
     }
-    if files.len() > MAX_MANUAL_PREDICTION_ITEMS {
-        return Err(format!(
-            "Manual prediction accepts at most {} image members",
-            MAX_MANUAL_PREDICTION_ITEMS
-        ));
+    for target in request.targets {
+        let owner = owner_indexes[&target.root_id];
+        let Some(details) = details_by_root.get(&target.root_id) else {
+            continue;
+        };
+        let Some(media) = details
+            .media
+            .iter()
+            .find(|media| media.media_id == target.media_item_id)
+        else {
+            results[owner].error = Some("The selected media is not part of this item".into());
+            continue;
+        };
+        if !media.facts.mime.starts_with("image/") {
+            results[owner].error = Some("AI prediction requires image media".into());
+            continue;
+        }
+        files.push((media.facts.content_hash.clone(), media.facts.mime.clone()));
+        owners.push(owner);
     }
     if !files.is_empty() {
         match predict_files_cached(application, &models, &files, manual_review_thresholds()).await {
@@ -297,6 +319,93 @@ pub async fn manual_predict_library(
         predictions: results,
         thresholds: public_thresholds(&thresholds),
     })
+}
+
+pub async fn drain_auto_tag_work(
+    application: &crate::library_application::LibraryApplication,
+    limit: usize,
+) -> Result<usize, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let work = application
+        .library()
+        .claim_ai_tag_work(limit, &now)
+        .map_err(|error| error.to_string())?;
+    if work.is_empty() {
+        return Ok(0);
+    }
+    let settings = application.application_settings()?.value;
+    let enabled = setting_bool(&settings, "aiTaggerAutoOnImport").unwrap_or(false);
+    let mut completed = Vec::new();
+    for item in work {
+        let result = match item.root_id {
+            Some(root_id) if enabled => auto_tag_root(application, root_id, &settings).await,
+            Some(_) => Ok(()),
+            None => Err(format!("AI-tag work {} has no root", item.work_id)),
+        };
+        match result {
+            Ok(()) => completed.push(item.work_id),
+            Err(error) => {
+                application
+                    .library()
+                    .retry_media_work(item.work_id, item.attempt_count, &error, &now)
+                    .map_err(|failure| failure.to_string())?;
+            }
+        }
+    }
+    application
+        .library()
+        .complete_media_work(&completed)
+        .map_err(|error| error.to_string())?;
+    Ok(completed.len())
+}
+
+async fn auto_tag_root(
+    application: &crate::library_application::LibraryApplication,
+    root_id: picto_library::RootId,
+    settings: &serde_json::Value,
+) -> Result<(), String> {
+    let models = configured_models(settings);
+    if models.is_empty() {
+        return Err("Auto-tagging is enabled but no AI model is enabled".into());
+    }
+    let details = application
+        .library()
+        .details(root_id)
+        .map_err(|error| error.to_string())?;
+    let files = details
+        .media
+        .into_iter()
+        .filter(|media| media.facts.mime.starts_with("image/"))
+        .map(|media| (media.facts.content_hash, media.facts.mime))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let predictions = predict_files_cached(
+        application,
+        &models,
+        &files,
+        thresholds_from_settings(settings),
+    )
+    .await?;
+    let write_rating = setting_bool(settings, "aiTaggerWriteRating").unwrap_or(true);
+    let tags = predictions
+        .iter()
+        .flatten()
+        .filter_map(|prediction| normalized_prediction(prediction, write_rating))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if tags.is_empty() {
+        return Ok(());
+    }
+    application
+        .library()
+        .add_tag_assignments(&[picto_library::RootTagAssignment { root_id, tags }])
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 pub async fn unload_library_sessions(application: &crate::library_application::LibraryApplication) {
@@ -814,7 +923,6 @@ fn normalize_predictions(predictions: &[TagPrediction], write_rating: bool) -> V
         .collect()
 }
 
-#[cfg(test)]
 fn normalized_prediction(prediction: &TagPrediction, write_rating: bool) -> Option<String> {
     let namespace = match prediction.namespace.as_str() {
         "general" => "general",

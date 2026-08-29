@@ -92,18 +92,22 @@ impl Library {
     }
 
     pub fn claim_media_work(&self, limit: usize, now: &str) -> Result<Vec<ClaimedMediaWork>> {
-        self.claim_media_work_filtered(limit, now, false)
+        self.claim_media_work_filtered(limit, now, None)
     }
 
     pub fn claim_derivative_work(&self, limit: usize, now: &str) -> Result<Vec<ClaimedMediaWork>> {
-        self.claim_media_work_filtered(limit, now, true)
+        self.claim_media_work_filtered(limit, now, Some("derivative"))
+    }
+
+    pub fn claim_ai_tag_work(&self, limit: usize, now: &str) -> Result<Vec<ClaimedMediaWork>> {
+        self.claim_media_work_filtered(limit, now, Some("ai_tag"))
     }
 
     fn claim_media_work_filtered(
         &self,
         limit: usize,
         now: &str,
-        derivatives_only: bool,
+        filter: Option<&str>,
     ) -> Result<Vec<ClaimedMediaWork>> {
         let limit = limit.clamp(1, 8);
         let Some((work, _)) = self.auxiliary_write_if_changed(
@@ -111,12 +115,20 @@ impl Library {
             [TASKS_RESOURCE.to_owned()],
             [],
             |transaction, _| {
-                let sql = if derivatives_only {
+                let sql = if filter == Some("derivative") {
                     "SELECT work_id, root_id, media_item_id, file_id, file_hash,
                             work_type, attempt_count
                      FROM work_item
                      WHERE status = 'pending' AND available_at <= ?1
                        AND work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash')
+                     ORDER BY priority DESC, available_at, work_id
+                     LIMIT ?2"
+                } else if filter == Some("ai_tag") {
+                    "SELECT work_id, root_id, media_item_id, file_id, file_hash,
+                            work_type, attempt_count
+                     FROM work_item
+                     WHERE status = 'pending' AND available_at <= ?1
+                       AND work_type = 'ai_tag'
                      ORDER BY priority DESC, available_at, work_id
                      LIMIT ?2"
                 } else {

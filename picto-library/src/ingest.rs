@@ -422,6 +422,38 @@ fn enqueue_file_work(
     Ok(())
 }
 
+pub(crate) fn enqueue_ai_tag_roots(
+    transaction: &Transaction<'_>,
+    root_ids: impl IntoIterator<Item = RootId>,
+    now_ms: i64,
+) -> Result<()> {
+    let available_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms)
+        .ok_or_else(|| LibraryError::InvalidInput("ingest timestamp is outside range".into()))?
+        .to_rfc3339();
+    let mut unique = root_ids
+        .into_iter()
+        .map(|root_id| root_id.0)
+        .collect::<Vec<_>>();
+    unique.sort_unstable();
+    unique.dedup();
+    let mut insert = transaction.prepare_cached(
+        "INSERT INTO work_item
+             (root_id, work_type, status, priority, attempt_count,
+              available_at, created_at, updated_at)
+         VALUES (?1, 'ai_tag', 'pending', ?2, 0, ?3, ?3, ?3)
+         ON CONFLICT(root_id, work_type) WHERE root_id IS NOT NULL
+         DO NOTHING",
+    )?;
+    for root_id in unique {
+        insert.execute(params![
+            root_id,
+            crate::model::MediaWorkKind::AiTag.priority(),
+            available_at
+        ])?;
+    }
+    Ok(())
+}
+
 fn refresh_existing_file(
     transaction: &Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,

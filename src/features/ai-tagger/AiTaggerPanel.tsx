@@ -26,6 +26,7 @@ import {
   aiTaggerStatus,
   aiTaggerUnload,
   type AiModelStatus,
+  type AiPredictionTarget,
   type AiTagPrediction,
   type RootPrediction,
 } from '../../platform/aiTaggerApi';
@@ -49,6 +50,7 @@ type ViewMode = 'suggested' | 'below';
 const MIN_REVIEW_CONFIDENCE = 5;
 const MAX_REVIEW_CONFIDENCE = 95;
 const DEFAULT_REVIEW_CONFIDENCE = 35;
+const PREDICTION_BATCH_SIZE = 4;
 
 interface ReviewTag {
   key: string;
@@ -93,17 +95,20 @@ function predictionTags(prediction: RootPrediction | undefined, runModels: Set<s
   return [...byKey.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
-function mergePredictionResults(previous: RootPrediction[], incoming: RootPrediction[], replacedModels: Set<string>): RootPrediction[] {
+function mergePredictionResults(previous: RootPrediction[], incoming: RootPrediction[]): RootPrediction[] {
   const byItem = new Map(previous.map((entry) => [entry.rootId, entry]));
   for (const next of incoming) {
     const current = byItem.get(next.rootId);
+    const predictions = new Map<string, AiTagPrediction>();
+    for (const tag of [...(current?.predictions ?? []), ...next.predictions]) {
+      const key = `${tag.model}\u0000${tag.namespace}\u0000${tag.tag}`;
+      const existing = predictions.get(key);
+      if (!existing || tag.confidence > existing.confidence) predictions.set(key, tag);
+    }
     byItem.set(next.rootId, {
       rootId: next.rootId,
-      predictions: [
-        ...(current?.predictions ?? []).filter((tag) => !replacedModels.has(tag.model)),
-        ...next.predictions,
-      ],
-      error: next.error,
+      predictions: [...predictions.values()],
+      error: current?.error ?? next.error,
     });
   }
   return [...byItem.values()];
@@ -173,26 +178,38 @@ export function AiTaggerPanel() {
     setRunning(true);
     setError(null);
     const orderedSlugs = [...slugs];
-    const total = orderedSlugs.length * roots.length;
-    setProgress({ done: 0, total, currentItemId: roots[0]?.rootItemId ?? null });
     if (reset) setPredictions([]);
 
     try {
-      const failures: RootPrediction[] = [];
+      const targets: AiPredictionTarget[] = roots.flatMap((root) => root.imageMedia.map((media) => ({
+        rootId: root.rootItemId,
+        mediaItemId: media.media_id,
+      })));
+      const total = orderedSlugs.length * targets.length;
+      setProgress({ done: 0, total, currentItemId: targets[0]?.rootId ?? null });
+      let failedAnalyses = 0;
+      let firstFailure: string | null = null;
       let done = 0;
       for (const slug of orderedSlugs) {
         if (generation !== runGenerationRef.current) return;
-        setProgress({ done, total, currentItemId: roots[0]?.rootItemId ?? null });
-        const output = await aiTagPredict(roots.map((root) => root.rootItemId), [slug]);
-        if (generation !== runGenerationRef.current) return;
-        setPredictions((previous) => mergePredictionResults(previous, output.predictions, new Set([slug])));
-        setActiveItemId((current) => current ?? roots[0]?.rootItemId ?? null);
-        failures.push(...output.predictions.filter((prediction) => prediction.error));
-        done += roots.length;
-        setProgress({ done, total, currentItemId: null });
+        for (let offset = 0; offset < targets.length; offset += PREDICTION_BATCH_SIZE) {
+          const batch = targets.slice(offset, offset + PREDICTION_BATCH_SIZE);
+          setProgress({ done, total, currentItemId: batch[0]?.rootId ?? null });
+          const output = await aiTagPredict(batch, [slug]);
+          if (generation !== runGenerationRef.current) return;
+          setPredictions((previous) => mergePredictionResults(previous, output.predictions));
+          setActiveItemId((current) => current ?? batch[0]?.rootId ?? null);
+          const errors = new Map(output.predictions.flatMap((prediction) => (
+            prediction.error ? [[prediction.rootId, prediction.error] as const] : []
+          )));
+          failedAnalyses += batch.filter((target) => errors.has(target.rootId)).length;
+          firstFailure ??= errors.values().next().value ?? null;
+          done += batch.length;
+          setProgress({ done, total, currentItemId: null });
+        }
       }
-      if (failures.length > 0) {
-        setError(`${failures.length} of ${total} model/item analyses failed. ${failures[0].error}`);
+      if (failedAnalyses > 0) {
+        setError(`${failedAnalyses} of ${total} model/media analyses failed. ${firstFailure}`);
       }
       try {
         const status = await aiTaggerStatus();

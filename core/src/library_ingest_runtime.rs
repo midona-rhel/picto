@@ -37,6 +37,15 @@ pub fn run_batch(
         claimed: claimed.len(),
         ..Default::default()
     };
+    if claimed.is_empty() {
+        return Ok(report);
+    }
+    let auto_tag = application
+        .application_settings()?
+        .value
+        .get("aiTaggerAutoOnImport")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let mut items = Vec::new();
     let mut collections = Vec::new();
     for mut job in claimed {
@@ -60,9 +69,16 @@ pub fn run_batch(
         }
     }
 
-    settle_items(application, items, &now, &mut report)?;
+    settle_items(application, items, &now, auto_tag, &mut report)?;
     for (job_id, input, cleanup) in collections {
-        match application.library().ingest_collection(&input) {
+        let ingested = if auto_tag {
+            application
+                .library()
+                .ingest_collection_with_auto_tags(&input)
+        } else {
+            application.library().ingest_collection(&input)
+        };
+        match ingested {
             Ok((root_id, _)) => {
                 reconcile_ingested_sources(application, &input.members, root_id, &now)?;
                 application
@@ -91,6 +107,7 @@ fn settle_items(
     application: &LibraryApplication,
     jobs: Vec<(i64, PreparedImport, Vec<PathBuf>)>,
     now: &str,
+    auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
     if jobs.is_empty() {
@@ -100,7 +117,12 @@ fn settle_items(
         .iter()
         .map(|(_, input, _)| input.clone())
         .collect::<Vec<_>>();
-    match application.library().ingest_batch(&inputs) {
+    let ingested = if auto_tag {
+        application.library().ingest_batch_with_auto_tags(&inputs)
+    } else {
+        application.library().ingest_batch(&inputs)
+    };
+    match ingested {
         Ok(outputs) => {
             for (input, (root_id, _)) in inputs.iter().zip(&outputs) {
                 reconcile_ingested_sources(
@@ -130,7 +152,7 @@ fn settle_items(
         }
         Err(_) if jobs.len() > 1 => {
             for job in jobs {
-                settle_items(application, vec![job], now, report)?;
+                settle_items(application, vec![job], now, auto_tag, report)?;
             }
             Ok(())
         }
@@ -499,5 +521,59 @@ mod tests {
             .find_thumbnail_path(&member_hash)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn auto_tag_enabled_collection_queues_only_the_coherent_collection_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        application
+            .patch_application_settings(&serde_json::json!({
+                "aiTaggerAutoOnImport": true,
+                "aiTaggerWd14Enabled": true
+            }))
+            .unwrap();
+        let cover_path = directory.path().join("auto-cover.png");
+        let member_path = directory.path().join("auto-member.png");
+        let cover = image_import(&cover_path, "auto-cover", [10, 20, 30, 255]);
+        let member = image_import(&member_path, "auto-member", [40, 50, 60, 255]);
+        application
+            .library()
+            .enqueue_ingest_job(
+                &PreparedIngestJob {
+                    job_key: "manual:auto-collection".into(),
+                    source_kind: "manual".into(),
+                    source_path: cover_path.to_string_lossy().into_owned(),
+                    source_item_id: None,
+                    delete_after_ingest: false,
+                    payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
+                        members: vec![cover, member],
+                        cover_index: 0,
+                        name: Some("Auto-tag collection".into()),
+                        modified_at_ms: 1_700_000_000_000,
+                    }),
+                },
+                "2026-08-28T12:00:00Z",
+            )
+            .unwrap();
+
+        let report = run_batch(&application, 64).unwrap();
+        assert_eq!(report.ingested, 1);
+        let queued_root = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::Maintenance,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT root_id FROM work_item WHERE work_type = 'ai_tag'",
+                            [],
+                            |row| row.get::<_, u32>(0).map(RootId),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(queued_root, report.root_ids[0]);
     }
 }

@@ -27,6 +27,11 @@ export interface RootTagAssignment {
   tags: string[];
 }
 
+export interface AiPredictionTarget {
+  rootId: number;
+  mediaItemId: number;
+}
+
 /** Read the backend-owned AI model and threshold state. */
 export function aiTaggerStatus(): Promise<AiRuntimeStatus> {
   return invoke<AiRuntimeStatus>('ai.status');
@@ -53,10 +58,10 @@ export function aiTaggerOptimizeModel(slug: string): Promise<AiRuntimeStatus> {
   return invoke<AiRuntimeStatus>('ai.models.optimize', input);
 }
 
-/** Predict tags for logical media items; physical file hashes stay backend-only. */
-export function aiTagPredict(rootIds: number[], models?: string[]): Promise<LibraryManualPredictionResponse> {
+/** Predict media targets while returning suggestions grouped by their owning root. */
+export function aiTagPredict(targets: AiPredictionTarget[], models?: string[]): Promise<LibraryManualPredictionResponse> {
   return invoke<LibraryManualPredictionResponse>('ai.review.predict', {
-    rootIds,
+    targets,
     modelSlugs: models ?? null,
   });
 }

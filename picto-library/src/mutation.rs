@@ -1173,7 +1173,14 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with_identity_reuse(inputs, true)
+        self.ingest_batch_with_identity_reuse(inputs, true, false)
+    }
+
+    pub fn ingest_batch_with_auto_tags(
+        &self,
+        inputs: &[PreparedImport],
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        self.ingest_batch_with_identity_reuse(inputs, true, true)
     }
 
     /// Converter-only import path. It preserves every legacy root while still
@@ -1182,13 +1189,14 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with_identity_reuse(inputs, false)
+        self.ingest_batch_with_identity_reuse(inputs, false, false)
     }
 
     fn ingest_batch_with_identity_reuse(
         &self,
         inputs: &[PreparedImport],
         reuse_identity: bool,
+        auto_tag: bool,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
@@ -1207,6 +1215,7 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let mut next = (*snapshot).clone();
                 let mut root_ids = Vec::with_capacity(inputs.len());
+                let mut created_root_ids = Vec::with_capacity(inputs.len());
                 let mut resources = BTreeSet::new();
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
@@ -1222,6 +1231,9 @@ impl Library {
                     )?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
+                    if output.created_root {
+                        created_root_ids.push(output.root_id);
+                    }
                     resources.extend(output.resources);
                     bitmap_keys.extend(output.bitmap_keys);
                     folder_ids.extend(output.folder_ids);
@@ -1236,6 +1248,18 @@ impl Library {
                     affected.iter().map(RootId),
                 )?;
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                if auto_tag && !created_root_ids.is_empty() {
+                    ingest::enqueue_ai_tag_roots(
+                        transaction,
+                        created_root_ids.iter().copied(),
+                        inputs
+                            .iter()
+                            .map(|input| input.imported_at_ms)
+                            .max()
+                            .unwrap_or_else(now_ms),
+                    )?;
+                    resources.insert("tasks".to_owned());
+                }
                 insert_cloud_journal(
                     transaction,
                     revision,
@@ -1275,7 +1299,14 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with_identity_reuse(input, true)
+        self.ingest_collection_with_identity_reuse(input, true, false)
+    }
+
+    pub fn ingest_collection_with_auto_tags(
+        &self,
+        input: &PreparedCollectionImport,
+    ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with_identity_reuse(input, true, true)
     }
 
     /// Converter-only collection path. Source identities are copied, but are
@@ -1284,13 +1315,14 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with_identity_reuse(input, false)
+        self.ingest_collection_with_identity_reuse(input, false, false)
     }
 
     fn ingest_collection_with_identity_reuse(
         &self,
         input: &PreparedCollectionImport,
         reuse_identity: bool,
+        auto_tag: bool,
     ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -1383,6 +1415,14 @@ impl Library {
                     affected.iter().map(RootId),
                 )?;
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                if auto_tag && !created_root_ids.is_empty() {
+                    ingest::enqueue_ai_tag_roots(
+                        transaction,
+                        std::iter::once(published_root),
+                        input.modified_at_ms,
+                    )?;
+                    resources.insert("tasks".to_owned());
+                }
                 resources.extend(["tags".to_owned(), "folders".to_owned()]);
                 let receipt = PublicationCoordinator::receipt(
                     revision,

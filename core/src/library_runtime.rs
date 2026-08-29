@@ -41,6 +41,10 @@ pub fn start(
             start_derivative_worker(Arc::clone(&application), cancel.child_token()),
         ),
         (
+            "library-ai-tagging",
+            start_ai_tag_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
             "library-cloud-snapshot",
             start_cloud_snapshot_worker(Arc::clone(&application), cancel.child_token()),
         ),
@@ -76,6 +80,10 @@ pub fn start_tutorial(
         (
             "library-derivatives",
             start_derivative_worker(Arc::clone(&application), cancel.child_token()),
+        ),
+        (
+            "library-ai-tagging",
+            start_ai_tag_worker(Arc::clone(&application), cancel.child_token()),
         ),
     ];
     let source_application = Arc::clone(&application);
@@ -292,6 +300,26 @@ fn start_derivative_worker(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn start_ai_tag_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut idle = tokio::time::interval(Duration::from_millis(100));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = idle.tick() => {
+                    if let Err(error) = crate::ai_runtime::drain_auto_tag_work(&application, 1).await {
+                        tracing::warn!(%error, "Canonical AI-tag worker failed");
                     }
                 }
             }
