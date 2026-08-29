@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, Provider } from 'jotai';
 import type { CanonicalTagRecord } from '../../shared/types/canonical';
 import { renderWithProviders } from '../../test/render';
-import { TagManagerScreen, TagsToolbar } from './TagManagerScreen';
+import { mergeUniqueTags, TagManagerScreen, TagsToolbar } from './TagManagerScreen';
 
 const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
@@ -137,6 +137,14 @@ function setupUser() {
 }
 
 describe('TagManagerScreen', () => {
+  it('merges overlapping pages by stable tag id', () => {
+    expect(mergeUniqueTags([firstTag, zeroTag], [{ ...firstTag, assignment_count: 8 }, nextTag])).toEqual([
+      { ...firstTag, assignment_count: 8 },
+      zeroTag,
+      nextTag,
+    ]);
+  });
+
   it('focuses the titlebar search from anywhere in its visible capsule', async () => {
     await renderScreen();
     const search = screen.getByRole('textbox', { name: 'Search tags' });
@@ -156,7 +164,7 @@ describe('TagManagerScreen', () => {
       namespace: null,
       search: null,
       cursor: 'opaque-cursor',
-      limit: 100,
+      limit: 500,
     });
     expect(screen.queryByRole('button', { name: 'Load more tags' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Refresh tags' })).not.toBeInTheDocument();
@@ -179,7 +187,7 @@ describe('TagManagerScreen', () => {
       namespace: null,
       search: 'bob',
       cursor: null,
-      limit: 100,
+      limit: 500,
     }));
     expect(screen.queryByRole('dialog', { name: 'Edit tag' })).not.toBeInTheDocument();
 
@@ -189,7 +197,7 @@ describe('TagManagerScreen', () => {
       namespace: 'creator',
       search: 'bob',
       cursor: null,
-      limit: 100,
+      limit: 500,
     }));
   });
 
@@ -206,7 +214,7 @@ describe('TagManagerScreen', () => {
       namespace: null,
       search: null,
       cursor: null,
-      limit: 100,
+      limit: 500,
     }));
   });
 

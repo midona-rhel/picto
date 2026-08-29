@@ -46,7 +46,7 @@ import {
 } from './tagPreferences';
 import styles from './TagManagerScreen.module.css';
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 500;
 const PICKER_PAGE_SIZE = 40;
 const tagManagerQueryAtom = atom('');
 
@@ -67,6 +67,15 @@ type GroupAction = {
 
 function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subname'>): string {
   return tagName(tag);
+}
+
+export function mergeUniqueTags(
+  current: CanonicalTagRecord[],
+  incoming: CanonicalTagRecord[],
+): CanonicalTagRecord[] {
+  const merged = new Map(current.map((tag) => [tag.tag_id, tag]));
+  for (const tag of incoming) merged.set(tag.tag_id, tag);
+  return [...merged.values()];
 }
 
 function errorMessage(reason: unknown): string {
@@ -307,6 +316,7 @@ export function TagManagerScreen() {
   const [viewEpoch, setViewEpoch] = useState(0);
   const [viewTransition, setViewTransition] = useState<'idle' | 'leaving' | 'entering'>('idle');
   const listGeneration = useRef(0);
+  const loadingCursor = useRef<string | null>(null);
   const summaryGeneration = useRef(0);
   const viewTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invalidationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -342,6 +352,8 @@ export function TagManagerScreen() {
 
   useEffect(() => {
     const generation = ++listGeneration.current;
+    loadingCursor.current = null;
+    setLoadingMore(false);
     let cancelled = false;
     const nextBrowseIdentity = `${namespace ?? '*'}\u0000${query}\u0000${showStarred ? 'starred' : 'browse'}`;
     const browseChanged = browseIdentity.current !== nextBrowseIdentity;
@@ -374,7 +386,7 @@ export function TagManagerScreen() {
         });
     void request.then((page) => {
       if (cancelled || generation !== listGeneration.current) return;
-      setTags(page.tags);
+      setTags(mergeUniqueTags([], page.tags));
       setCursor(page.next_cursor);
       if (browseChanged) {
         setViewEpoch((value) => value + 1);
@@ -433,6 +445,7 @@ export function TagManagerScreen() {
 
   const resetBrowse = useCallback(() => {
     listGeneration.current += 1;
+    loadingCursor.current = null;
     setTags([]);
     setCursor(null);
     setLoading(true);
@@ -463,9 +476,10 @@ export function TagManagerScreen() {
   }, [resetBrowse, showStarred]);
 
   const loadMore = useCallback(() => {
-    if (!cursor || loadingMore) return;
+    if (!cursor || loadingCursor.current === cursor) return;
     const generation = listGeneration.current;
     const requestedCursor = cursor;
+    loadingCursor.current = requestedCursor;
     setLoadingMore(true);
     void tagsController.getPaginated({
       namespace,
@@ -474,14 +488,19 @@ export function TagManagerScreen() {
       limit: PAGE_SIZE,
     }).then((page) => {
       if (generation !== listGeneration.current) return;
-      setTags((current) => [...current, ...page.tags]);
-      setCursor(page.next_cursor);
+      setTags((current) => mergeUniqueTags(current, page.tags));
+      // A repeated cursor is a malformed/non-advancing page. Stop rather than
+      // repeatedly fetching and reconciling the same tag records.
+      setCursor(page.next_cursor === requestedCursor ? null : page.next_cursor);
     }).catch((reason: unknown) => {
       if (generation === listGeneration.current) setError(errorMessage(reason));
     }).finally(() => {
-      if (generation === listGeneration.current) setLoadingMore(false);
+      if (generation === listGeneration.current && loadingCursor.current === requestedCursor) {
+        loadingCursor.current = null;
+        setLoadingMore(false);
+      }
     });
-  }, [cursor, loadingMore, namespace, query]);
+  }, [cursor, namespace, query]);
 
   useEffect(() => {
     const element = tagCanvasRef.current;
