@@ -141,17 +141,21 @@
 
 .sourceValue:not(:disabled) { cursor: pointer; }
 
-.sourceAction {
+.sourceAction,
+.urlActionBtn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 31px;
+  height: 32px;
   flex: 0 0 31px;
   border: 0;
   border-left: 1px solid var(--inspector-separator, var(--color-border-secondary));
+  padding: 0;
   background: none;
   color: inherit;
   opacity: 0.5;
+  cursor: pointer;
 }
 
 .sourceControlOpen .sourceAction {
@@ -160,8 +164,9 @@
   background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
 }
 
-.sourceAction:not(:disabled) { cursor: pointer; }
-.sourceAction:not(:disabled):hover { opacity: 1; }
+.sourceAction:disabled { cursor: default; }
+.sourceAction:not(:disabled):hover,
+.urlActionBtn:hover { opacity: 1; }
 
 @keyframes fieldExpand {
   from { opacity: 0.92; }
@@ -195,7 +200,7 @@
 }
 
 .urlRow:first-child {
-  padding-right: calc(var(--control-height-sm) + 4px);
+  padding-right: 35px;
 }
 
 .urlRow:hover { background: var(--inspector-field-surface, var(--color-surface-hover)); }
@@ -252,29 +257,11 @@
 
 .urlEditInput::placeholder { color: var(--inspector-text-tertiary, var(--color-text-tertiary)); }
 
-.urlActionBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-height-sm);
-  height: var(--control-height-sm);
-  flex-shrink: 0;
-  border: 0;
-  padding: 0;
-  background: none;
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  opacity: 0.4;
-  cursor: pointer;
-}
-
-.urlActionBtn:hover { opacity: 1; }
-.urlRemoveBtn:hover { color: var(--color-negative); }
-
 .addUrlBtn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: var(--control-height-sm);
+  height: 32px;
   padding: 0 10px;
   border: 0;
   background: none;

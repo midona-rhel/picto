@@ -287,7 +287,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
                 </button>
               </KbdTooltip>
               <KbdTooltip label="Delete URL">
-                <button className={`${styles.urlActionBtn} ${styles.urlRemoveBtn}`} onClick={() => handleRemove(index)} type="button" aria-label="Delete URL">
+                <button className={styles.urlActionBtn} onClick={() => handleRemove(index)} type="button" aria-label="Delete URL">
                   <IconTrash size={13} stroke={1.5} />
                 </button>
               </KbdTooltip>
