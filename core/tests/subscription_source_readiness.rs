@@ -123,10 +123,13 @@ async fn certify_selected_source() -> Result<(), String> {
     if first.posts.is_empty() {
         return Err("source run succeeded without materializing any media posts".into());
     }
-    if first.traversed_post_count > batch_size as usize {
+    // Traversal may exceed the batch: no-media and duplicate posts are
+    // skipped without consuming the added-post budget, and page-window
+    // boundary detection announces the first post beyond the limit.
+    if first.posts.len() > batch_size as usize {
         return Err(format!(
-            "source traversed {} posts for a requested batch of {batch_size}",
-            first.traversed_post_count
+            "source materialized {} posts for a requested batch of {batch_size}",
+            first.posts.len()
         ));
     }
     let checkpoint = read_checkpoint(&application, subscription_id)?;
