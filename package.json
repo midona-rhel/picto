@@ -20,7 +20,7 @@
     "start:electron": "npm run rebuild:native && electron electron/main.mjs",
     "rebuild:native": "npm --prefix native/picto-node run build:local",
     "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",
-    "build:native": "npm --prefix native/picto-node run build:local -- --release",
+    "build:native": "npm --prefix native/picto-node run build:local -- --release && node scripts/stage-native-runtime-libraries.mjs",
     "build:gallery-dl-bridge": "node -e \"const {spawnSync}=require('node:child_process'); const python=process.platform==='win32'?'python':'python3'; const result=spawnSync(python,['scripts/build-gallery-dl-bridge.py',...process.argv.slice(1)],{stdio:'inherit'}); process.exit(result.status ?? 1)\" --",
     "build:onlyfans-bridge": "node -e \"const {spawnSync}=require('node:child_process'); const python=process.platform==='win32'?'python':'python3'; const result=spawnSync(python,['scripts/build-onlyfans-bridge.py',...process.argv.slice(1)],{stdio:'inherit'}); process.exit(result.status ?? 1)\" --",
     "prebuild": "npm run prepare:viewer-assets",
@@ -55,13 +55,19 @@
       "dist/*.html",
       "electron/**/*",
       "native/picto-node/index.node",
+      "native/picto-node/*.so*",
+      "native/picto-node/*.dylib",
+      "native/picto-node/*.dll",
       "!node_modules/**",
       "LICENSE",
       "THIRD_PARTY_LICENSES",
       "package.json"
     ],
     "asarUnpack": [
-      "native/**/*.node"
+      "native/**/*.node",
+      "native/**/*.so*",
+      "native/**/*.dylib",
+      "native/**/*.dll"
     ],
     "extraFiles": [
       {
