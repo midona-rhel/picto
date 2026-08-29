@@ -9,13 +9,15 @@ interface Props {
   on: boolean;
   onChange: () => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
-export function ToggleSwitch({ on, onChange, disabled = false }: Props) {
+export function ToggleSwitch({ on, onChange, disabled = false, ariaLabel }: Props) {
   return (
     <label
       className={`${styles.toggle} ${disabled ? styles.disabled : ''}`}
       role="switch"
+      aria-label={ariaLabel}
       aria-checked={on}
       aria-disabled={disabled}
       tabIndex={disabled ? -1 : 0}

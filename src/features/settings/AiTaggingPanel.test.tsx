@@ -144,6 +144,39 @@ describe('AiTaggingPanel', () => {
     expect(screen.getByText('Z3D').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
   });
 
+  it('selects which downloaded models run automatically on ingestion', async () => {
+    const secondModel = { ...model, slug: 'z3d-e621-convnext', label: 'Z3D', downloaded: true };
+    mocks.status.mockResolvedValue({
+      ...status(true),
+      models: [{ ...model, downloaded: true }, secondModel],
+    });
+    const onSettingsChange = vi.fn();
+    await act(async () => {
+      render(<AiTaggingPanel
+        settings={{ ...settings, aiTaggerAutoOnImport: true, aiTaggerWd14Enabled: true }}
+        onSettingsChange={onSettingsChange}
+      />);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('switch', { name: 'Run WD14 SWN on new imports' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch', { name: 'Run Z3D on new imports' })).toHaveAttribute('aria-checked', 'false');
+    await setupUser().click(screen.getByRole('switch', { name: 'Run Z3D on new imports' }));
+    expect(onSettingsChange).toHaveBeenCalledWith({ aiTaggerE621Enabled: true });
+  });
+
+  it('selects a downloaded recommended model when automatic tagging is first enabled', async () => {
+    mocks.status.mockResolvedValue(status(true));
+    const onSettingsChange = vi.fn();
+    await renderPanel(onSettingsChange);
+
+    await setupUser().click(screen.getByRole('switch', { name: 'Auto-tag new imports' }));
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      aiTaggerAutoOnImport: true,
+      aiTaggerWd14Enabled: true,
+    });
+  });
+
   it('exposes the validated OppaiOracle and DanbooruTagQuery runtimes', async () => {
     mocks.status.mockResolvedValue({
       ...status(true),

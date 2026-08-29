@@ -31,6 +31,14 @@ const MODEL_SHORT_LABELS: Record<string, string> = {
   'danbooru-tag-query-b16': 'DTQuery',
 };
 
+const AUTO_MODEL_SETTING_KEYS: Record<string, keyof AppSettings> = {
+  'wd14-swinv2-v3': 'aiTaggerWd14Enabled',
+  'z3d-e621-convnext': 'aiTaggerE621Enabled',
+  'wd14-eva02-large-v3': 'aiTaggerEva02Enabled',
+  'oppai-oracle-v1-1': 'aiTaggerOppaiOracleEnabled',
+  'danbooru-tag-query-b16': 'aiTaggerDanbooruTagQueryEnabled',
+};
+
 /** Threshold settings keys with their tag-namespace dot colors. */
 const THRESHOLDS: Array<{ key: string; label: string; namespace: string }> = [
   { key: 'aiThresholdGeneral', label: 'General', namespace: 'general' },
@@ -270,10 +278,50 @@ export function AiTaggingPanel({
             <div className={settingsStyles.settingControl}>
               <ToggleSwitch
                 on={Boolean(settings.aiTaggerAutoOnImport)}
-                onChange={() => patchSettings({ aiTaggerAutoOnImport: !settings.aiTaggerAutoOnImport })}
+                disabled={!settings.aiTaggerAutoOnImport && !status.models.some((model) => model.downloaded)}
+                ariaLabel="Auto-tag new imports"
+                onChange={() => {
+                  if (settings.aiTaggerAutoOnImport) {
+                    patchSettings({ aiTaggerAutoOnImport: false });
+                    return;
+                  }
+                  const downloaded = status.models.filter((model) => model.downloaded);
+                  const alreadySelected = downloaded.some((model) => Boolean(settings[AUTO_MODEL_SETTING_KEYS[model.slug]]));
+                  const fallback = downloaded.find((model) => model.recommended) ?? downloaded[0];
+                  const fallbackKey = fallback ? AUTO_MODEL_SETTING_KEYS[fallback.slug] : undefined;
+                  patchSettings({
+                    aiTaggerAutoOnImport: true,
+                    ...(!alreadySelected && fallbackKey
+                      ? { [fallbackKey]: true }
+                      : {}),
+                  });
+                }}
               />
             </div>
           </div>
+          {settings.aiTaggerAutoOnImport && status.models.filter((model) => model.downloaded).map((model) => {
+            const key = AUTO_MODEL_SETTING_KEYS[model.slug];
+            if (!key) return null;
+            const label = MODEL_SHORT_LABELS[model.slug] ?? model.label;
+            return (
+              <div key={`automatic-${model.slug}`}>
+                <div className={settingsStyles.rowSep} />
+                <div className={settingsStyles.settingRow}>
+                  <div className={styles.settingCopy}>
+                    <div className={styles.settingName}>{label}</div>
+                    <div className={styles.settingDescription}>{model.dataset}</div>
+                  </div>
+                  <div className={settingsStyles.settingControl}>
+                    <ToggleSwitch
+                      on={Boolean(settings[key])}
+                      ariaLabel={`Run ${label} on new imports`}
+                      onChange={() => patchSettings({ [key]: !settings[key] })}
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
           <div className={settingsStyles.rowSep} />
           <div className={settingsStyles.settingRow}>
             <div className={styles.settingCopy}>
@@ -283,6 +331,7 @@ export function AiTaggingPanel({
             <div className={settingsStyles.settingControl}>
               <ToggleSwitch
                 on={Boolean(settings.aiTaggerWriteRating)}
+                ariaLabel="Write rating tags"
                 onChange={() => patchSettings({ aiTaggerWriteRating: !settings.aiTaggerWriteRating })}
               />
             </div>
