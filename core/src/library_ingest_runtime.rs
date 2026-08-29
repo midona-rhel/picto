@@ -78,12 +78,7 @@ pub fn run_batch(
                     .library()
                     .fail_ingest_job(job_id, &error.to_string(), &now)
                     .map_err(|failure| failure.to_string())?;
-                mark_failed_sources(
-                    application,
-                    &input.members,
-                    &error.to_string(),
-                    &now,
-                )?;
+                mark_failed_sources(application, &input.members, &error.to_string(), &now)?;
                 report.failed += 1;
             }
         }
@@ -145,7 +140,12 @@ fn settle_items(
                 .library()
                 .fail_ingest_job(job_id, &error.to_string(), now)
                 .map_err(|failure| failure.to_string())?;
-            mark_failed_sources(application, std::slice::from_ref(&jobs[0].1), &error.to_string(), now)?;
+            mark_failed_sources(
+                application,
+                std::slice::from_ref(&jobs[0].1),
+                &error.to_string(),
+                now,
+            )?;
             report.failed += 1;
             Ok(())
         }

@@ -4,8 +4,8 @@
  * TypeScript API commands are kept in sync.
  *
  * Parses:
- * - core/src/ipc_v2.rs — normal command dispatch
- * - core/src/state_v2.rs — process-level commands that replace the active library
+ * - core/src/ipc.rs — normal command dispatch
+ * - core/src/state.rs — process-level commands that replace the active library
  * - src/platform/*.ts — invoke('command_name', ...) calls (per-domain API files)
  *
  * Reports any drift between the two surfaces, minus an explicit allowlist.
@@ -16,8 +16,8 @@ import { extractRustCommandsFromText, extractTsCommandsFromText } from './check-
 
 const ROOT = process.cwd();
 const RUST_COMMAND_FILES = [
-  path.join(ROOT, 'core/src/ipc_v2.rs'),
-  path.join(ROOT, 'core/src/state_v2.rs'),
+  path.join(ROOT, 'core/src/ipc.rs'),
+  path.join(ROOT, 'core/src/state.rs'),
 ];
 const CALLER_DIRS = [path.join(ROOT, 'src'), path.join(ROOT, 'electron')];
 const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');

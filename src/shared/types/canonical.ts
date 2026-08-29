@@ -42,6 +42,7 @@ export interface CanonicalEntityGridItem {
 export interface MediaRecord {
   media_id: number;
   media_name: string;
+  media_notes: string | null;
   file_id: number;
   file_path: string;
   facts: {
@@ -112,12 +113,60 @@ export interface CanonicalFolderInfo {
   name: string;
 }
 
+export interface CanonicalFolderRecord {
+  folder_id: number;
+  stable_key: string;
+  parent_id: number | null;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  notes: string | null;
+  cover_root_id: number | null;
+  watch_path: string | null;
+  watch_enabled: boolean;
+  watch_subfolders: boolean;
+  display_order: number;
+  count: number;
+}
+
+export interface CanonicalSmartFolderRecord {
+  smart_folder_id: number;
+  name: string;
+  parent_id: number | null;
+  icon: string | null;
+  color: string | null;
+  notes: string | null;
+  view: ViewQuerySpec;
+  display_order: number;
+  count: number;
+}
+
+export interface CanonicalNavigationSnapshot {
+  folders: CanonicalFolderRecord[];
+  smart_folders: CanonicalSmartFolderRecord[];
+  revision: number;
+}
+
+export interface CanonicalSidebarCounts {
+  all: number;
+  inbox: number;
+  trash: number;
+  recently_viewed: number;
+  untagged: number;
+  uncategorized: number;
+  duplicates: number;
+  folders: Array<{ folder_id: number; count: number }>;
+  smart_folders: Array<{ smart_folder_id: number; count: number }>;
+  revision: number;
+}
+
 // ── Query types ──────────────────────────────────────────────────
 
 export type BaseScope =
   | { kind: 'all' }
   | { kind: 'inbox' }
   | { kind: 'trash' }
+  | { kind: 'media_matches'; item_id: number }
   | { kind: 'recently_viewed' }
   | { kind: 'untagged' }
   | { kind: 'uncategorized' }
@@ -257,6 +306,7 @@ export interface SmartFolderPredicateRule {
   value?: unknown;
   value2?: unknown;
   values?: string[] | null;
+  unit?: string;
 }
 
 export interface SmartFolderPredicateGroup {
@@ -270,18 +320,12 @@ export interface SmartFolderPredicate {
 }
 
 export interface SmartFolderCommandPayload {
-  smart_folder_id: number;
   name: string;
   parent_id: number | null;
   icon: string | null;
   color: string | null;
   notes: string | null;
-  predicate_json: string;
-  sort_field?: string | null;
-  sort_order?: string | null;
-  display_order: number | null;
-  created_at: string | null;
-  updated_at: string | null;
+  view: ViewQuerySpec;
 }
 
 // ── Selection types ──────────────────────────────────────────────
@@ -326,6 +370,14 @@ export interface OrganizeCollectionInput {
   cover_root_id: number;
   winning_collection_id: number | null;
   name: string | null;
+  notes: string | null;
+}
+
+export interface CollectionNoteDraft {
+  notes: string;
+  source_count: number;
+  byte_length: number;
+  maximum_bytes: number;
 }
 
 export interface OrganizeCollectionResult {

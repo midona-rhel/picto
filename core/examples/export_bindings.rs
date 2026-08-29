@@ -1,6 +1,8 @@
-//! Explicit TypeScript binding generator for the replacement IPC contract.
+//! Explicit TypeScript binding generator for the integration-shell IPC values.
 //!
-//! Run with `npm run generate:bindings`. Normal Rust tests never write source files.
+//! Canonical media-library types live in `src/shared/types/canonical.ts` and
+//! mirror `picto_library` directly. This generator owns only shell DTOs that
+//! derive `TS`; it does not recreate a parallel media-library contract.
 
 use ts_rs::TS;
 
@@ -36,131 +38,121 @@ macro_rules! export {
 }
 
 fn main() {
-    use picto_core::ai_runtime_v2::{
-        AiModelStatus, AiRuntimeStatus, AiTagPrediction, AiThresholds, ManualPredictionRequest,
-        ManualPredictionResponse, MediaPrediction,
-    };
-    use picto_core::app::{
-        FileHash, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemSort, ItemSortField,
-        ItemTarget, LibraryChanged, Lifecycle, MediaId, MutationReceipt, SortDirection,
-    };
-    use picto_core::auth_v2::{
+    use picto_core::ai_runtime::{AiModelStatus, AiRuntimeStatus, AiTagPrediction, AiThresholds};
+    use picto_core::auth::{
         CredentialHealthRecord, CredentialRecord, SetCredentialInput, SourceCatalogEntry,
     };
-    use picto_core::cloud::reconcile::ReconcileResult;
     use picto_core::cloud::snapshot::RestorePoint;
     use picto_core::cloud::{
-        CloudConfiguration, CloudLibraryOption, CloudMutation, CloudOperation, CloudSyncStatus,
-        ConfigureCloudInput, HybridTimestamp,
+        CloudConfiguration, CloudLibraryOption, CloudSyncStatus, ConfigureCloudInput,
+        HybridTimestamp,
     };
-    use picto_core::duplicates_v2::{
-        CandidateOccurrence, CandidateSide, DuplicateCandidate, DuplicateScanResult, FileQuality,
-        QualityDecision, ResolutionChoice, ResolutionResult,
+    use picto_core::dto::{FileHash, LibraryChanged};
+    use picto_core::ipc::{
+        AddSubscriptionQueryInput, CloudPauseInput, EmptyOutput, FileHashInput, FileHashesInput,
+        GalleryImportInput, LimitInput, ListTagsInput, ModelInput, PatchViewSettingsInput,
+        PauseSubscriptionInput, PauseSubscriptionQueryInput, RenameSubscriptionInput,
+        ScanDuplicatesInput, ScheduleSubscriptionInput, ScopeInput,
+        SetSubscriptionQueryGroupingInput, SiteInput, SubscriptionCoverCandidatesInput,
+        SubscriptionCoverInput, SubscriptionDestinationInput, SubscriptionInput,
+        SubscriptionPostsPerRunInput, SubscriptionQueryInput, SubscriptionRunActivityInput,
+        SubscriptionRunsInput, UpdateSubscriptionQueryInput, ValueInput,
     };
-    use picto_core::folders_v2::{
-        CreateFolderInput, FolderId, FolderMutationReceipt, FolderWatchInput,
-        ReorderFolderChildrenInput, ReorderFolderItemsInput,
+    use picto_core::media_io::{
+        ExportFormat, ExportResult, RequestThumbnailResult, ResolvedFilePath, ThumbnailQueueResult,
     };
-    use picto_core::import_v2::{ImportEnqueueReport, ManualImportInput};
-    use picto_core::ipc_v2::{
-        AddSubscriptionQueryInput, AiAssignmentsInput, AiTagAssignment, ApplyTagsInput,
-        AutomaticDuplicateInput, CreatedFolder, CreatedSmartFolder, CreatedSubscription,
-        CreatedSubscriptionQuery, CreatedSubscriptionRun, EmptyOutput, FileHashInput,
-        FileHashesInput, FolderInput, FolderMembershipInput, ItemInput, LifecycleInput, LimitInput,
-        ListTagsInput, ModelInput, MoveFolderInput, MoveSmartFolderInput, PatchMetadataInput,
-        PatchViewSettingsInput, PauseSubscriptionInput, PauseSubscriptionQueryInput,
-        QueryItemsInput, RenameFolderInput, RenameSubscriptionInput, RenameTagGroupInput,
-        RenameTagInput, ReorderSmartFoldersInput, ResolveDuplicateInput, ScanDuplicatesInput,
-        ScheduleSubscriptionInput, ScopeInput, SiteInput, SmartFolderInput,
-        SubscriptionCoverCandidatesInput, SubscriptionCoverInput, SubscriptionDestinationInput,
-        SubscriptionInput, SubscriptionPostsPerRunInput, SubscriptionQueryInput,
-        SubscriptionRunActivityInput, SubscriptionRunsInput, TagGroupInput, TagInput, TargetInput,
-        UpdateSmartFolderInput, UpdateSubscriptionQueryInput, ValueInput,
-    };
-    use picto_core::media_io_v2::{
-        ExportFormat, ExportRequest, ExportResult, RequestThumbnailResult, ResolvedFilePath,
-        ThumbnailQueueResult,
-    };
-    use picto_core::navigation_v2::{
-        CreateSmartFolderInput, FolderNavigationItem, NavigationSnapshot,
-        SmartFolderMutationReceipt, SmartFolderNavigationItem,
-    };
-    use picto_core::operations_v2::{
-        DeleteItemsResult, DetachItemsInput, MediaMetadataPatch, OrganizeIntoCollectionInput,
-        OrganizeIntoCollectionResult, ReorderCollectionInput,
-    };
-    use picto_core::query_v2::{
-        ItemDetails, ItemPage, ItemPageRequest, ItemSummary, LibraryStatistics, MediaDetails,
-        ScopeCount, SelectionCollectionCandidate, SelectionSummary, SidebarCounts,
-    };
-    use picto_core::settings_v2::SettingsSnapshot;
-    use picto_core::smart_v2::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
-    use picto_core::subscription_activity_v2::{
+    use picto_core::settings::SettingsSnapshot;
+    use picto_core::subscription_activity::{
         ActivityCounts, CurrentSubscriptionProgress, IngestAttempt, IssueCursor, IssuePage,
         IssuePageRequest, SourceItemActivity, SubscriptionIssue, SubscriptionQueryActivity,
         SubscriptionRunActivity, SubscriptionRunList, SubscriptionRunSummary,
     };
-    use picto_core::subscription_catalog_v2::{
+    use picto_core::subscription_catalog::{
         NewSubscription, NewSubscriptionQuery, SubscriptionCoverCandidate,
         SubscriptionCoverCandidateCursor, SubscriptionCoverCandidatePage,
         SubscriptionCoverSelection, SubscriptionDestinationPolicy, SubscriptionList,
         SubscriptionProgress, SubscriptionQueryView, SubscriptionView,
     };
-    use picto_core::tags_v2::{TagPage, TagSummary};
-    use picto_core::tasks_v2::{QueueCounts, TaskIssue, TaskSnapshot};
+    use picto_core::tasks::{QueueCounts, TaskIssue, TaskSnapshot};
 
-    // Export paths are relative to core/src in the derive attributes.
     let output_base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     export!(&output_base;
-        ItemId, MediaId, FileHash, ItemKind, Lifecycle, ItemScope, ItemFilters,
-        ItemSortField, SortDirection, ItemSort, ItemQuery, ItemTarget,
-        MutationReceipt, LibraryChanged,
-        HybridTimestamp, CloudOperation, CloudMutation, CloudSyncStatus,
-        ConfigureCloudInput, CloudLibraryOption, CloudConfiguration,
-        ReconcileResult, RestorePoint,
-        ItemPageRequest, ItemSummary, ItemPage, MediaDetails, ItemDetails, LibraryStatistics,
-        SelectionSummary, SelectionCollectionCandidate, ScopeCount, SidebarCounts,
-        OrganizeIntoCollectionInput, OrganizeIntoCollectionResult, DetachItemsInput,
-        ReorderCollectionInput,
-        MediaMetadataPatch, DeleteItemsResult,
-        FolderId, CreateFolderInput, ReorderFolderChildrenInput, ReorderFolderItemsInput,
-        FolderWatchInput, FolderMutationReceipt,
-        FolderNavigationItem, SmartFolderNavigationItem, NavigationSnapshot,
-        CreateSmartFolderInput, SmartFolderMutationReceipt,
-        TagSummary, TagPage,
-        FileQuality, QualityDecision, DuplicateCandidate, CandidateSide, CandidateOccurrence,
-        DuplicateScanResult, ResolutionChoice, ResolutionResult,
-        NewSubscriptionQuery, NewSubscription, SubscriptionCoverCandidate,
-        SubscriptionCoverCandidateCursor, SubscriptionCoverCandidatePage,
-        SubscriptionCoverSelection, SubscriptionDestinationPolicy, SubscriptionQueryView,
-        SubscriptionProgress, SubscriptionView, SubscriptionList,
-        ActivityCounts, SubscriptionRunSummary, SubscriptionRunList, IngestAttempt,
-        SourceItemActivity, SubscriptionQueryActivity, SubscriptionRunActivity,
-        CurrentSubscriptionProgress, SubscriptionIssue, IssueCursor, IssuePageRequest, IssuePage,
-        CredentialRecord, CredentialHealthRecord, SetCredentialInput, SourceCatalogEntry,
-        SettingsSnapshot, QueueCounts, TaskIssue, TaskSnapshot,
-        ResolvedFilePath, RequestThumbnailResult, ThumbnailQueueResult,
-        ExportFormat, ExportRequest, ExportResult,
-        AiModelStatus, AiRuntimeStatus, AiTagPrediction, AiThresholds,
-        ManualPredictionRequest, MediaPrediction, ManualPredictionResponse,
-        SmartFolderPredicate, SmartRuleGroup, MatchMode, PredicateRule,
-        ManualImportInput, ImportEnqueueReport,
-        QueryItemsInput, ItemInput, FileHashInput, FileHashesInput, TargetInput,
-        LifecycleInput, FolderMembershipInput, ApplyTagsInput,
-        PatchMetadataInput, ListTagsInput, TagInput,
-        RenameTagInput, RenameTagGroupInput, TagGroupInput, LimitInput, ScanDuplicatesInput, ResolveDuplicateInput,
-        AutomaticDuplicateInput, FolderInput, RenameFolderInput, MoveFolderInput,
-        SmartFolderInput, UpdateSmartFolderInput, MoveSmartFolderInput,
-        ReorderSmartFoldersInput, AddSubscriptionQueryInput, UpdateSubscriptionQueryInput,
-        PauseSubscriptionQueryInput, SubscriptionQueryInput, SubscriptionInput,
+        FileHash,
+        LibraryChanged,
+        HybridTimestamp,
+        CloudSyncStatus,
+        ConfigureCloudInput,
+        CloudLibraryOption,
+        CloudConfiguration,
+        RestorePoint,
+        NewSubscriptionQuery,
+        NewSubscription,
+        SubscriptionCoverCandidate,
+        SubscriptionCoverCandidateCursor,
+        SubscriptionCoverCandidatePage,
+        SubscriptionCoverSelection,
+        SubscriptionDestinationPolicy,
+        SubscriptionQueryView,
+        SubscriptionProgress,
+        SubscriptionView,
+        SubscriptionList,
+        ActivityCounts,
+        SubscriptionRunSummary,
+        SubscriptionRunList,
+        IngestAttempt,
+        SourceItemActivity,
+        SubscriptionQueryActivity,
+        SubscriptionRunActivity,
+        CurrentSubscriptionProgress,
+        SubscriptionIssue,
+        IssueCursor,
+        IssuePageRequest,
+        IssuePage,
+        CredentialRecord,
+        CredentialHealthRecord,
+        SetCredentialInput,
+        SourceCatalogEntry,
+        SettingsSnapshot,
+        QueueCounts,
+        TaskIssue,
+        TaskSnapshot,
+        ResolvedFilePath,
+        RequestThumbnailResult,
+        ThumbnailQueueResult,
+        ExportFormat,
+        ExportResult,
+        AiModelStatus,
+        AiRuntimeStatus,
+        AiTagPrediction,
+        AiThresholds,
+        CloudPauseInput,
+        FileHashInput,
+        FileHashesInput,
+        ListTagsInput,
+        LimitInput,
+        ScanDuplicatesInput,
+        AddSubscriptionQueryInput,
+        GalleryImportInput,
+        UpdateSubscriptionQueryInput,
+        PauseSubscriptionQueryInput,
+        SetSubscriptionQueryGroupingInput,
+        SubscriptionQueryInput,
+        SubscriptionInput,
         SubscriptionCoverCandidatesInput,
-        SubscriptionRunsInput, SubscriptionRunActivityInput, RenameSubscriptionInput,
-        PauseSubscriptionInput, ScheduleSubscriptionInput, SubscriptionCoverInput,
+        SubscriptionRunsInput,
+        SubscriptionRunActivityInput,
+        RenameSubscriptionInput,
+        PauseSubscriptionInput,
+        ScheduleSubscriptionInput,
         SubscriptionPostsPerRunInput,
-        SubscriptionDestinationInput, ScopeInput, SiteInput, ValueInput,
-        PatchViewSettingsInput, ModelInput, AiTagAssignment, AiAssignmentsInput, EmptyOutput,
-        CreatedFolder, CreatedSmartFolder, CreatedSubscription, CreatedSubscriptionQuery,
-        CreatedSubscriptionRun,
+        SubscriptionDestinationInput,
+        SubscriptionCoverInput,
+        ScopeInput,
+        SiteInput,
+        ValueInput,
+        PatchViewSettingsInput,
+        ModelInput,
+        EmptyOutput,
     );
 
     normalize_generated_bindings();
