@@ -19,16 +19,14 @@ export function parseMediaUrl(urlString) {
   const parts = url.pathname.split('/').filter(Boolean);
   if (parts.length !== 2) return null;
   const [kind, segment] = parts;
+  if (kind === 'library-cover' && segment === 'cover') {
+    const libraryRoot = url.searchParams.get('library');
+    return libraryRoot ? { kind: 'library-cover', libraryRoot } : null;
+  }
   if (kind === 'thumb') {
     const match = segment.match(/^([a-fA-F0-9]{64})\.jpg$/);
     if (!match) return null;
-    const libraryRoot = url.searchParams.get('library');
-    return {
-      kind: 'thumb',
-      hash: match[1],
-      ext: 'jpg',
-      ...(libraryRoot ? { libraryRoot } : {}),
-    };
+    return { kind: 'thumb', hash: match[1], ext: 'jpg' };
   }
   if (kind === 'file') {
     const match = segment.match(/^([a-fA-F0-9]{64})\.([a-zA-Z0-9]+)$/);
@@ -187,18 +185,14 @@ export function createMediaProtocolService({
     return path.dirname(blobsDirectory);
   }
 
-  async function resolveThumbMeta(hash, rootOverride = null) {
-    const currentRoot = syncCachesForCurrentRoot();
-    const root = rootOverride ?? currentRoot;
+  async function resolveThumbMeta(hash) {
+    const root = syncCachesForCurrentRoot();
     if (!root) return null;
-    const cacheKey = `${root}\0${hash}`;
-    const cached = thumbMetaCache.get(cacheKey);
+    const cached = thumbMetaCache.get(hash);
     if (cached) return cached;
     const roots = [root];
-    if (!rootOverride) {
-      const sourceRoot = originalLibraryRoot(fileMetaCache.get(hash)?.filePath ?? '');
-      if (sourceRoot && sourceRoot !== root) roots.push(sourceRoot);
-    }
+    const sourceRoot = originalLibraryRoot(fileMetaCache.get(hash)?.filePath ?? '');
+    if (sourceRoot && sourceRoot !== root) roots.push(sourceRoot);
     for (const candidateRoot of roots) {
       const ab = hash.slice(0, 2);
       const cd = hash.slice(2, 4);
@@ -208,7 +202,7 @@ export function createMediaProtocolService({
         const stat = await tryStat(filePath);
         if (!stat) continue;
         const meta = buildMeta(filePath, stat, extension);
-        thumbMetaCache.set(cacheKey, meta);
+        thumbMetaCache.set(hash, meta);
         thumbRequestsQueued.delete(hash);
         return meta;
       }
@@ -217,11 +211,18 @@ export function createMediaProtocolService({
   }
 
   function invalidateThumbnail(hash) {
-    for (const key of thumbMetaCache.keys()) {
-      if (key.endsWith(`\0${hash}`)) thumbMetaCache.delete(key);
-    }
+    thumbMetaCache.delete(hash);
     thumbRequestInFlight.delete(hash);
     thumbRequestsQueued.delete(hash);
+  }
+
+  async function resolveLibraryCoverMeta(libraryRoot) {
+    for (const extension of ['jpg', 'png']) {
+      const filePath = path.join(libraryRoot, `.picto-library-cover.${extension}`);
+      const stat = await tryStat(filePath);
+      if (stat) return buildMeta(filePath, stat, extension);
+    }
+    return null;
   }
 
   async function setThumbnail(hash, pngBase64) {
@@ -342,7 +343,7 @@ export function createMediaProtocolService({
     protocol.handle('media', async (request) => {
       syncCachesForCurrentRoot();
       const parsed = parseMediaUrl(request.url);
-      if (!parsed || !isValidHash(parsed.hash)) {
+      if (!parsed || (parsed.kind !== 'library-cover' && !isValidHash(parsed.hash))) {
         forwardWarn('media', `Failed to parse: ${request.url}`);
         return new Response('Invalid media URL', {
           status: 400,
@@ -350,7 +351,7 @@ export function createMediaProtocolService({
         });
       }
 
-      const requestedLibraryRoot = parsed.kind === 'thumb' ? parsed.libraryRoot ?? null : null;
+      const requestedLibraryRoot = parsed.kind === 'library-cover' ? parsed.libraryRoot : null;
       if (requestedLibraryRoot) {
         const knownRoots = new Set([
           getCurrentLibraryRoot(),
@@ -364,24 +365,26 @@ export function createMediaProtocolService({
         }
       }
 
-      const original = parsed.kind === 'thumb' && !requestedLibraryRoot
+      const original = parsed.kind === 'thumb'
         ? await resolveOriginalMeta(parsed.hash, 'bin')
         : null;
-      const meta = parsed.kind === 'thumb'
-        ? (requestedLibraryRoot
-            ? await resolveThumbMeta(parsed.hash, requestedLibraryRoot)
-            : original ? await resolveThumbMeta(parsed.hash) : null)
-        : await resolveOriginalMeta(parsed.hash, parsed.ext);
+      const meta = parsed.kind === 'library-cover'
+        ? await resolveLibraryCoverMeta(requestedLibraryRoot)
+        : parsed.kind === 'thumb'
+          ? (original ? await resolveThumbMeta(parsed.hash) : null)
+          : await resolveOriginalMeta(parsed.hash, parsed.ext);
 
       if (!meta && parsed.kind === 'thumb' && original) {
         scheduleThumbnailAfterMiss(parsed.hash);
       }
 
       if (!meta) {
-        const missingPath = parsed.kind === 'thumb'
+        const missingPath = parsed.kind === 'library-cover'
+          ? path.join(requestedLibraryRoot, '.picto-library-cover.jpg')
+          : parsed.kind === 'thumb'
           ? buildBlobPath(parsed.kind, parsed.hash, 'jpg')
           : buildBlobPath(parsed.kind, parsed.hash, parsed.ext);
-        if (parsed.kind !== 'thumb') {
+        if (parsed.kind === 'file') {
           forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${missingPath}`);
         }
         return new Response('Not found', {
@@ -390,10 +393,10 @@ export function createMediaProtocolService({
         });
       }
 
-      const mime = parsed.kind === 'thumb'
+      const mime = parsed.kind === 'thumb' || parsed.kind === 'library-cover'
         ? extToMime(meta.actualExt || 'jpg')
         : extToMime(meta.actualExt || parsed.ext);
-      const cacheControl = parsed.kind === 'thumb'
+      const cacheControl = parsed.kind === 'thumb' || parsed.kind === 'library-cover'
         ? 'no-store'
         : 'public, max-age=31536000, immutable';
       const range = parseRange(request.headers.get('range'), meta.size);

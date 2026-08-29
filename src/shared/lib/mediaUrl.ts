@@ -27,9 +27,12 @@ export function mimeToMediaExt(mime: string): string {
   return MIME_EXT[mime] ?? 'bin';
 }
 
-export function mediaThumbnailUrl(hash: string, libraryPath?: string | null): string {
-  const base = `media://localhost/thumb/${hash}.jpg`;
-  return libraryPath ? `${base}?library=${encodeURIComponent(libraryPath)}` : base;
+export function mediaThumbnailUrl(hash: string): string {
+  return `media://localhost/thumb/${hash}.jpg`;
+}
+
+export function libraryCoverUrl(libraryPath: string): string {
+  return `media://localhost/library-cover/cover?library=${encodeURIComponent(libraryPath)}`;
 }
 
 export function mediaFileUrl(hash: string, mime: string): string {

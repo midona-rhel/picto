@@ -1,5 +1,7 @@
 import { expect, test } from 'vitest';
 import { createLibraryHostService } from './libraryHostService.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 test('library image metadata is persisted and broadcast to every window', async () => {
@@ -44,6 +46,42 @@ test('library image metadata is persisted and broadcast to every window', async 
     'library-meta-changed',
     { path: '/Pictures/Test.library' },
   ]]);
+});
+
+test('library covers are materialized in the library root', async () => {
+  const libraryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-library-cover-'));
+  const imageHash = 'a'.repeat(64);
+  const thumbnail = path.join(libraryPath, 'blobs', 't', 'aa', 'aa', `${imageHash}.jpg`);
+  try {
+    await fs.mkdir(path.dirname(thumbnail), { recursive: true });
+    await fs.writeFile(thumbnail, 'cover bytes');
+    const config = { libraryMeta: {} };
+    const service = createLibraryHostService({
+      fs,
+      path,
+      dialog: {},
+      openLibrary: async () => {},
+      closeLibrary: async () => {},
+      addLibraryToHistory: async () => {},
+      removeLibraryFromHistory: async () => {},
+      togglePinned: async () => {},
+      getCachedConfig: () => config,
+      saveGlobalConfig: async () => {},
+      updateLibraryPath: async () => {},
+      getCurrentLibraryRoot: () => libraryPath,
+      setCurrentLibraryRoot: () => {},
+      createMainWindow: () => {},
+      sendToAllWindows: () => {},
+      buildAppMenu: () => {},
+    });
+
+    await service.setLibraryMeta(libraryPath, { imageHash });
+
+    expect(await fs.readFile(path.join(libraryPath, '.picto-library-cover.jpg'), 'utf8')).toBe('cover bytes');
+    expect(config.libraryMeta[libraryPath].imageHash).toBe(imageHash);
+  } finally {
+    await fs.rm(libraryPath, { recursive: true, force: true });
+  }
 });
 
 test('open dialog accepts a macOS library package as well as a directory', async () => {

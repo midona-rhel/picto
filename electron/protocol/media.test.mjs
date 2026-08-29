@@ -25,12 +25,9 @@ describe('media protocol helpers', () => {
     expect(parseMediaUrl('media://host/thumb/abc.png')).toBeNull();
   });
 
-  it('parses a library-specific thumbnail URL', () => {
-    const hash = 'a'.repeat(64);
-    expect(parseMediaUrl(`media://host/thumb/${hash}.jpg?library=${encodeURIComponent('/Pictures/Archive.library')}`)).toEqual({
-      kind: 'thumb',
-      hash,
-      ext: 'jpg',
+  it('parses a library cover URL', () => {
+    expect(parseMediaUrl(`media://host/library-cover/cover?library=${encodeURIComponent('/Pictures/Archive.library')}`)).toEqual({
+      kind: 'library-cover',
       libraryRoot: '/Pictures/Archive.library',
     });
   });
@@ -173,15 +170,12 @@ describe('media protocol helpers', () => {
     }
   });
 
-  it('serves an allow-listed inactive library thumbnail without switching libraries', async () => {
+  it('serves an allow-listed inactive library root cover without switching libraries', async () => {
     const activeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-active-library-'));
     const inactiveRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-inactive-library-'));
-    const hash = '9'.repeat(64);
     let handler;
     try {
-      const thumbnailPath = path.join(inactiveRoot, 'blobs', 't', '99', '99', `${hash}.jpg`);
-      await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
-      await fs.writeFile(thumbnailPath, 'inactive cover');
+      await fs.writeFile(path.join(inactiveRoot, '.picto-library-cover.jpg'), 'inactive cover');
       const service = createMediaProtocolService({
         protocol: { handle(_scheme, next) { handler = next; } },
         path,
@@ -192,8 +186,8 @@ describe('media protocol helpers', () => {
       });
       await service.registerMediaProtocol();
 
-      const allowed = await handler(new Request(`media://localhost/thumb/${hash}.jpg?library=${encodeURIComponent(inactiveRoot)}`));
-      const denied = await handler(new Request(`media://localhost/thumb/${hash}.jpg?library=${encodeURIComponent('/unknown.library')}`));
+      const allowed = await handler(new Request(`media://localhost/library-cover/cover?library=${encodeURIComponent(inactiveRoot)}`));
+      const denied = await handler(new Request(`media://localhost/library-cover/cover?library=${encodeURIComponent('/unknown.library')}`));
 
       expect(allowed.status).toBe(200);
       expect(await allowed.text()).toBe('inactive cover');

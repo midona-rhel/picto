@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { IconBooks } from '@tabler/icons-react';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { libraryCoverUrl } from '../../shared/lib/mediaUrl';
 import { SubscriptionCoverImage } from '../subscriptions/components/SubscriptionCoverImage';
 import styles from './LibraryAvatar.module.css';
 
@@ -39,7 +40,7 @@ export function LibraryAvatar({
         <SubscriptionCoverImage
           className={styles.image}
           fileHash={imageHash}
-          thumbnailLibraryPath={appearance.libraryPath}
+          thumbnailUrlOverride={appearance.libraryPath ? libraryCoverUrl(appearance.libraryPath) : undefined}
           crop={{
             focusX: appearance.imageFocusX ?? 500,
             focusY: appearance.imageFocusY ?? 500,

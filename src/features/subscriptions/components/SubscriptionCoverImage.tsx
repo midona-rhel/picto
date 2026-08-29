@@ -92,7 +92,7 @@ export function subscriptionCoverGeometry(
 
 export function SubscriptionCoverImage({
   fileHash,
-  thumbnailLibraryPath,
+  thumbnailUrlOverride,
   crop,
   fallbackDimensions,
   className,
@@ -105,7 +105,7 @@ export function SubscriptionCoverImage({
   progressive = false,
 }: {
   fileHash: string;
-  thumbnailLibraryPath?: string | null;
+  thumbnailUrlOverride?: string;
   crop: SubscriptionCoverCrop;
   fallbackDimensions?: SubscriptionCoverDimensions;
   className?: string;
@@ -120,13 +120,13 @@ export function SubscriptionCoverImage({
   const [dimensions, setDimensions] = useState(fallbackDimensions ?? { width: 1, height: 1 });
   const [useThumbnail, setUseThumbnail] = useState(preferThumbnail);
   const [originalReady, setOriginalReady] = useState(false);
-  const thumbnailUrl = mediaThumbnailUrl(fileHash, thumbnailLibraryPath);
+  const thumbnailUrl = thumbnailUrlOverride ?? mediaThumbnailUrl(fileHash);
 
   useEffect(() => {
     setUseThumbnail(preferThumbnail);
     setOriginalReady(false);
     setDimensions(fallbackDimensions ?? { width: 1, height: 1 });
-  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail, thumbnailLibraryPath]);
+  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail, thumbnailUrlOverride]);
 
   const geometry = subscriptionCoverGeometry(dimensions, crop);
   const imageStyle = {

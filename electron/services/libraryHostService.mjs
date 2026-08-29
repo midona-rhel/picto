@@ -32,6 +32,40 @@ export function createLibraryHostService({
 }) {
   let openingLibraryPath = null;
   let tutorialSession = null;
+  const coverExtensions = ['jpg', 'png'];
+
+  function materializedCoverPath(libraryPath, extension) {
+    return path.join(libraryPath, `.picto-library-cover.${extension}`);
+  }
+
+  async function clearMaterializedLibraryCover(libraryPath, exceptExtension = null) {
+    await Promise.all(coverExtensions
+      .filter((extension) => extension !== exceptExtension)
+      .map((extension) => fs.rm(materializedCoverPath(libraryPath, extension), { force: true }).catch(() => {})));
+  }
+
+  async function materializeLibraryCover(libraryPath, imageHash) {
+    if (typeof imageHash !== 'string' || !/^[a-fA-F0-9]{64}$/.test(imageHash)) return false;
+    const directory = path.join(libraryPath, 'blobs', 't', imageHash.slice(0, 2), imageHash.slice(2, 4));
+    for (const extension of coverExtensions) {
+      const source = path.join(directory, `${imageHash}.${extension}`);
+      if (!await fs.access(source).then(() => true, () => false)) continue;
+      const destination = materializedCoverPath(libraryPath, extension);
+      const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
+      await fs.copyFile(source, temporary);
+      await fs.rename(temporary, destination);
+      await clearMaterializedLibraryCover(libraryPath, extension);
+      return true;
+    }
+    return false;
+  }
+
+  async function ensureMaterializedLibraryCover(libraryPath, imageHash) {
+    const exists = await Promise.any(coverExtensions.map((extension) =>
+      fs.access(materializedCoverPath(libraryPath, extension)).then(() => true),
+    )).catch(() => false);
+    if (!exists) await materializeLibraryCover(libraryPath, imageHash).catch(() => false);
+  }
 
   async function cleanupStaleTutorialLibraries() {
     if (!tutorialRoot) return;
@@ -588,6 +622,8 @@ export function createLibraryHostService({
         try {
           await fs.access(libraryPath);
           existsMap[libraryPath] = true;
+          const imageHash = config.libraryMeta?.[libraryPath]?.imageHash;
+          if (imageHash) await ensureMaterializedLibraryCover(libraryPath, imageHash);
         } catch {
           existsMap[libraryPath] = false;
         }
@@ -607,7 +643,18 @@ export function createLibraryHostService({
     const existing = config.libraryMeta[libraryPath] ?? {};
     if ('icon' in meta) existing.icon = meta.icon;
     if ('color' in meta) existing.color = meta.color;
-    if ('imageHash' in meta) existing.imageHash = meta.imageHash;
+    if ('imageHash' in meta) {
+      const hasCanonicalHash = typeof meta.imageHash === 'string'
+        && /^[a-fA-F0-9]{64}$/.test(meta.imageHash);
+      if (hasCanonicalHash) {
+        if (!await materializeLibraryCover(libraryPath, meta.imageHash)) {
+          throw new Error('The selected library cover thumbnail is not available');
+        }
+      } else if (!meta.imageHash) {
+        await clearMaterializedLibraryCover(libraryPath);
+      }
+      existing.imageHash = meta.imageHash;
+    }
     if ('imageFocusX' in meta) existing.imageFocusX = meta.imageFocusX;
     if ('imageFocusY' in meta) existing.imageFocusY = meta.imageFocusY;
     if ('imageZoomPercent' in meta) existing.imageZoomPercent = meta.imageZoomPercent;

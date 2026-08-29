@@ -34,7 +34,7 @@ describe('LibraryAvatar', () => {
 
     expect(screen.getByRole('img', { hidden: true })).toHaveAttribute(
       'src',
-      'media://localhost/thumb/abc123.jpg?library=%2FPictures%2FArchive.library',
+      'media://localhost/library-cover/cover?library=%2FPictures%2FArchive.library',
     );
   });
 
