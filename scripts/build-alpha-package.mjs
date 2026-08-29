@@ -111,7 +111,7 @@ function prepareMacSigning() {
       '-k',
       keychainPassword,
       keychainPath,
-    ]);
+    ], { stdio: 'ignore' });
     run('security', ['find-identity', '-v', '-p', 'codesigning', keychainPath]);
   } catch (error) {
     spawnSync('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
@@ -154,6 +154,12 @@ if (!supportsIconComposer()) {
 
 const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const signing = prepareMacSigning();
+const stop = (exitCode) => {
+  signing?.cleanup();
+  process.exit(exitCode);
+};
+process.once('SIGINT', () => stop(130));
+process.once('SIGTERM', () => stop(143));
 try {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
@@ -161,5 +167,7 @@ try {
   });
   process.exitCode = result.status ?? 1;
 } finally {
+  process.removeAllListeners('SIGINT');
+  process.removeAllListeners('SIGTERM');
   signing?.cleanup();
 }
