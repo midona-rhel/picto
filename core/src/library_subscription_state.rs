@@ -575,6 +575,22 @@ fn record_post_in(
                  position = excluded.position,
                  media_url = COALESCE(excluded.media_url, source_item.media_url),
                  canonical_url = COALESCE(excluded.canonical_url, source_item.canonical_url),
+                 state = CASE
+                     WHEN source_item.state = 'ingested'
+                      AND source_item.media_item_id IS NULL
+                      AND (SELECT root_item_id FROM source_post
+                           WHERE source_post_id = source_item.source_post_id) IS NULL
+                     THEN 'pending'
+                     ELSE source_item.state
+                 END,
+                 last_error = CASE
+                     WHEN source_item.state = 'ingested'
+                      AND source_item.media_item_id IS NULL
+                      AND (SELECT root_item_id FROM source_post
+                           WHERE source_post_id = source_item.source_post_id) IS NULL
+                     THEN NULL
+                     ELSE source_item.last_error
+                 END,
                  updated_at = excluded.updated_at",
             params![
                 source_post_id,
@@ -1330,5 +1346,96 @@ mod tests {
             1,
             "the still-in-flight post keeps its slot reserved"
         );
+    }
+
+    #[test]
+    fn rediscovery_requeues_an_orphaned_ingested_source_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Gallery recovery".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "ehentai".into(),
+                query_text: "https://e-hentai.org/g/2428940/abcdef1234/".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let post = NormalizedPost {
+            site_id: "ehentai".into(),
+            post_key: "gallery-1".into(),
+            canonical_url: None,
+            creator_name: None,
+            title: None,
+            description: None,
+            captured_at: None,
+            metadata_json: None,
+            items: vec![NormalizedItem {
+                item_key: "gallery-1:page-1".into(),
+                position: 1,
+                media_url: None,
+                canonical_url: None,
+            }],
+        };
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &post,
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                WorkPriority::CanonicalIngest,
+                ["subscriptions".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested' WHERE source_item_id = ?1",
+                        [ids["gallery-1:page-1"]],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        record_post(
+            &application,
+            query.run_query_id,
+            &post,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
+        let state = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT state FROM source_item WHERE source_item_id = ?1",
+                        [ids["gallery-1:page-1"]],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(state, "pending");
     }
 }

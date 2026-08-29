@@ -307,6 +307,7 @@ fn reconcile_ingested_sources(
     if sources.is_empty() {
         return Ok(());
     }
+    let snapshot = application.library().projections().snapshot();
     application
         .library()
         .auxiliary_write_if_changed(
@@ -316,13 +317,25 @@ fn reconcile_ingested_sources(
             |transaction, _| {
                 let mut changed = 0;
                 for (site_id, post_key, source_key, item_key) in &sources {
-                    let media_id = transaction.query_row(
+                    let mut statement = transaction.prepare_cached(
                         "SELECT media_id FROM source_provenance
                          WHERE source_key = ?1 AND source_item_key = ?2
-                         ORDER BY media_id LIMIT 1",
-                        rusqlite::params![source_key, item_key],
-                        |row| row.get::<_, u32>(0),
+                         ORDER BY media_id",
                     )?;
+                    let media_ids = statement
+                        .query_map(rusqlite::params![source_key, item_key], |row| {
+                            row.get::<_, u32>(0)
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    let media_id = media_ids
+                        .into_iter()
+                        .find(|media_id| snapshot.media_owner.get(*media_id) == Some(&root_id))
+                        .ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "source item {item_key} has no media owned by root {}",
+                                root_id.0
+                            ))
+                        })?;
                     changed += transaction.execute(
                         "UPDATE source_item
                          SET media_item_id = ?1, state = 'ingested', last_error = NULL, updated_at = ?2
