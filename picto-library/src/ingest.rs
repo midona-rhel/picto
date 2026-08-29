@@ -748,10 +748,16 @@ fn is_weak_name(name: &str) -> bool {
         .filter(|character| character.is_ascii_alphabetic())
         .count();
     let digits = compact.len().saturating_sub(alphabetic);
-    let has_word = stem
+    let words = stem
         .split(|character: char| !character.is_ascii_alphabetic())
-        .any(|part| part.len() >= 3);
-    !has_word || (digits >= 4 && alphabetic <= 4)
+        .filter(|part| part.len() >= 3)
+        .count();
+    // A single word fused to an id-sized digit run ("gelbooru_14583420",
+    // "post12345678") is a synthetic source name, not a human title.
+    if words <= 1 && digits >= 4 {
+        return true;
+    }
+    words == 0 || (digits >= 4 && alphabetic <= 4)
 }
 
 pub(crate) fn persist_touched(
@@ -884,4 +890,30 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         LibraryError::InvalidInput(format!("{field} exceeds SQLite's signed integer range"))
     })
+}
+
+#[cfg(test)]
+mod weak_name_tests {
+    use super::is_weak_name;
+
+    #[test]
+    fn synthetic_source_names_are_weak_and_human_titles_are_not() {
+        for weak in [
+            "gelbooru_14583420",
+            "post12345678",
+            "14583420.png",
+            "2085395535410712592_1.jpg",
+            "d92be9442094b7d22424a460cd5d5296",
+        ] {
+            assert!(is_weak_name(weak), "{weak} should be weak");
+        }
+        for strong in [
+            "Lupa Hairpoon",
+            "Art Trade with BigDad",
+            "wallpaper2",
+            "commission for maythedong",
+        ] {
+            assert!(!is_weak_name(strong), "{strong} should be strong");
+        }
+    }
 }
