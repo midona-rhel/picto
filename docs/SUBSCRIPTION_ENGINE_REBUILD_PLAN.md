@@ -60,6 +60,7 @@ Do not repair this by adding more reconciliation states. Remove duplicate owners
 - Scheduled and manual subscription runs.
 - Gallery import runs.
 - Per-query source cursors.
+- One exclusive active execution per subscription.
 - One-at-a-time source-post traversal.
 - Per-post download staging and progress.
 - Canonical post ingestion.
@@ -140,11 +141,47 @@ Rules:
   For providers that cannot expose a finite frontier, apply a safety bound defined as N
   consecutive terminally settled posts with zero `Added` outcomes in the current run (default
   N = 10 × the configured post limit, persisted per run-query as a counter that resets on every
-  `Added`). Hitting the bound settles the run-query with terminal reason `safety_bound` — it is
-  not success, must never fire on a freshly reset query still walking known canonical duplicates
-  toward genuinely new posts (the counter counts settled traversal, so a reset run re-settling
-  duplicates advances the frontier legitimately and terminates at the bound only after that many
-  consecutive non-adds), and must not advance the cursor past any unprocessed post.
+  `Added`). The bound is a **resumable traversal-budget stop**, not a failure and not success:
+  hitting it settles the run-query with status `budget_exhausted` and terminal reason
+  `safety_bound`, with the cursor persisted
+  at the last settled post, so the next run resumes exactly there and keeps digging. It may
+  legitimately fire mid-way through a freshly reset query's duplicate backfill — no work or
+  frontier progress is lost, the follow-up run continues the walk. It must not advance the cursor
+  past any unprocessed post, and a run ending in `safety_bound` is reported as such in the UI.
+
+### One Active Execution Per Subscription
+
+A subscription owns one exclusive execution lease. Starting work is an atomic backend operation,
+not a renderer convention.
+
+- A full-subscription run acquires the lease and may contain every eligible query, but executes
+  those queries serially. Only one child `source_run_query` may be running at a time.
+- A manually selected query acquires the same lease and creates a run containing exactly that
+  query.
+- While either form is active, no other full run or individual query from that subscription may be
+  started or queued. A competing request returns the existing active run as a conflict.
+- The lease remains held until the run completes or Stop durably cancels it. Pausing or putting a
+  definition on hold does not permit a second execution to overlap the existing run.
+- The UI disables every other Run action for that subscription while the lease is held, but SQLite
+  is the authority that prevents races between UI actions, schedules, retries, and restart recovery.
+- Gallery jobs are not subscription runs and use the shared scheduler without acquiring a
+  subscription lease.
+
+### Stop And Cancellation
+
+Stop cancels at the attempt level, not just the run level:
+
+- During `discovered`/`downloading`: the attempt settles as `cancelled` with reason `stopped`, the
+  cursor does NOT advance past it (the same post is rediscovered next run), staged files for the
+  attempt are deleted, and the Python worker receives a CANCEL for the open attempt — it must
+  acknowledge before the run releases the subscription lease.
+- During `ingesting` (canonical commit already issued): cancellation waits for the commit, then
+  settles the attempt normally (`added`/`skipped`) — a committed ingest is never abandoned — and
+  only subsequent attempts are cancelled.
+- Restart with an open `cancelled`-pending attempt: recovery settles it as `cancelled` using the
+  crash-recovery provenance check first, so a crash during Stop still settles exactly once.
+- A stale Python process that keeps emitting events for a cancelled attempt is fenced by the
+  protocol correlation identifiers; its events are dropped.
 
 ### Crash-Safe Ingest Boundary
 
@@ -196,28 +233,32 @@ CREATE TABLE source_run (
     run_id INTEGER PRIMARY KEY,
     subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
     requested_by TEXT NOT NULL CHECK (requested_by IN ('manual','manual-query','schedule','gallery')),
-    status TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','cancelled')),
+    status TEXT NOT NULL CHECK (status IN
+        ('pending','running','succeeded','budget_exhausted','failed','cancelled')),
     created_at TEXT NOT NULL,
     finished_at TEXT
 ) STRICT;
+CREATE UNIQUE INDEX idx_source_run_active_subscription ON source_run(subscription_id)
+    WHERE subscription_id IS NOT NULL AND status IN ('pending','running');
 
 CREATE TABLE source_run_query (
     run_query_id INTEGER PRIMARY KEY,
     run_id INTEGER NOT NULL REFERENCES source_run(run_id) ON DELETE CASCADE,
     query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-    gallery_job_id INTEGER REFERENCES gallery_job(gallery_job_id) ON DELETE CASCADE,
-    status TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','cancelled')),
+    status TEXT NOT NULL CHECK (status IN
+        ('pending','running','succeeded','budget_exhausted','failed','cancelled')),
     terminal_reason TEXT,          -- e.g. 'budget_met','exhausted','frontier','safety_bound',...
-    available_at TEXT NOT NULL,
-    CHECK ((query_id IS NULL) != (gallery_job_id IS NULL))   -- exactly one execution owner
+    available_at TEXT NOT NULL
 ) STRICT;
+CREATE UNIQUE INDEX idx_source_run_one_running_query ON source_run_query(run_id)
+    WHERE status = 'running';
 
 CREATE TABLE source_post_attempt (
     attempt_id INTEGER PRIMARY KEY,
     run_query_id INTEGER NOT NULL REFERENCES source_run_query(run_query_id) ON DELETE CASCADE,
     source_post_id INTEGER NOT NULL REFERENCES source_post(source_post_id) ON DELETE CASCADE,
     state TEXT NOT NULL CHECK (state IN
-        ('discovered','downloading','downloaded','ingesting','added','skipped','failed')),
+        ('discovered','downloading','downloaded','ingesting','added','skipped','failed','cancelled')),
     terminal_reason TEXT,          -- required for skipped/failed via trigger or app invariant
     cursor_scope TEXT,             -- provider stream partition this post belongs to
     boundary_cursor TEXT,          -- cursor value committed with the terminal outcome
@@ -226,7 +267,7 @@ CREATE TABLE source_post_attempt (
 ) STRICT;
 -- one non-terminal attempt per execution owner:
 CREATE UNIQUE INDEX idx_attempt_open ON source_post_attempt(run_query_id)
-    WHERE state NOT IN ('added','skipped','failed');
+    WHERE state NOT IN ('added','skipped','failed','cancelled');
 
 CREATE TABLE source_attempt_root (   -- attempt-to-root results; >=1 row required for 'added'
     attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
@@ -248,19 +289,50 @@ CREATE TABLE source_file_attempt (
 
 CREATE TABLE gallery_job (
     gallery_job_id INTEGER PRIMARY KEY,
+    run_query_id INTEGER NOT NULL UNIQUE
+        REFERENCES source_run_query(run_query_id) ON DELETE RESTRICT,
     service TEXT NOT NULL,
     url TEXT NOT NULL,
     expected_media_total INTEGER,
     created_at TEXT NOT NULL,
     dismissed_at TEXT
 ) STRICT;
+
+-- Enforced invariants (not comments): terminal attempts carry reasons, Added
+-- carries roots, gallery imports carry exactly one collection root.
+CREATE TRIGGER attempt_terminal_reason_required
+BEFORE UPDATE OF state ON source_post_attempt
+WHEN NEW.state IN ('skipped','failed','cancelled') AND NEW.terminal_reason IS NULL
+BEGIN SELECT RAISE(ABORT, 'terminal attempt requires a reason'); END;
+
+CREATE TRIGGER attempt_added_requires_roots
+BEFORE UPDATE OF state ON source_post_attempt
+WHEN NEW.state = 'added' AND NOT EXISTS
+    (SELECT 1 FROM source_attempt_root r WHERE r.attempt_id = NEW.attempt_id)
+BEGIN SELECT RAISE(ABORT, 'added attempt requires result roots'); END;
+
+CREATE TRIGGER attempt_settled_timestamp
+BEFORE UPDATE OF state ON source_post_attempt
+WHEN NEW.state IN ('added','skipped','failed','cancelled') AND NEW.settled_at IS NULL
+BEGIN SELECT RAISE(ABORT, 'terminal attempt requires settled_at'); END;
+
+CREATE TRIGGER gallery_added_requires_one_root
+BEFORE UPDATE OF state ON source_post_attempt
+WHEN NEW.state = 'added'
+    AND EXISTS (SELECT 1 FROM gallery_job g WHERE g.run_query_id = NEW.run_query_id)
+    AND (SELECT count(*) FROM source_attempt_root r WHERE r.attempt_id = NEW.attempt_id) != 1
+BEGIN SELECT RAISE(ABORT, 'gallery import requires exactly one collection root'); END;
 ```
 
 Query cursors are per stream partition: `subscription_query_cursor(query_id, cursor_scope,
 cursor_value, updated_at, PRIMARY KEY(query_id, cursor_scope))`. Single-stream providers use one
 scope (`'feed'`). Settlement updates only the current scope, atomically with the attempt outcome.
 Run state, counters, phase, downloaded counts, and warnings live in the attempt tables for both
-owners; `gallery_job` holds identity and presentation only.
+owners; `gallery_job` holds identity and presentation only and **references its execution**
+(`gallery_job.run_query_id`), matching one cascade graph: dismissing a gallery job is an explicit
+transaction that deletes the job row and then its `source_run` (whose `source_run_query` rows
+cascade). Nothing cascades from job deletion implicitly; the RESTRICT FK makes an orphaned
+gallery `source_run` impossible.
 
 Do not use a gallery-dl archive database as a second history authority. Picto's source identities,
 provenance, and post outcomes already provide the required idempotency.
@@ -281,6 +353,8 @@ Enforce these in code and tests:
 - Source tables carry no mutable ingest state; only attempt rows do.
 - A post cannot be both added and skipped.
 - A run cannot succeed while any started post is non-terminal.
+- A subscription cannot have more than one active run, and a full run cannot have more than one
+  running child query.
 - A query cannot have more than one non-terminal post attempt.
 - A later post cannot have a download attempt while an earlier post is non-terminal.
 - Progress counts derive only from attempt rows, never from inferred combinations of unrelated
@@ -319,8 +393,11 @@ Rust -> ACK_POST(outcome, warnings)
 Rust -> NEXT_POST(next cursor)
 ```
 
-`ACK_POST` carries the terminal outcome (`Added`, `Skipped(reason)`, `Failed(reason)`) plus any
-warning records — warnings are never an outcome. The Python iterator must not be advanced after
+Every protocol command and event carries `run_query_id` and `attempt_id`; the worker rejects any
+event whose identifiers do not match the currently open attempt (stale events from a cancelled or
+superseded execution are dropped and logged, never applied). `ACK_POST` carries the terminal
+outcome (`Added`, `Skipped(reason)`, `Failed(reason)`) plus any warning records — warnings are
+never an outcome. The Python iterator must not be advanced after
 the current post boundary until `ACK_POST` arrives. If a gallery-dl extractor internally fetches
 the next post before yielding the current boundary, adapt that provider inside its gallery-dl site
 adapter by using a bounded one-post extractor window. Do not weaken the global engine or add
@@ -444,8 +521,21 @@ plus staged-file deletion.
 
 ## Retry And Cleanup
 
-- Specify which failure classes retry the current file, the current post, or fail the whole query;
-  retries are bounded and defined centrally, never inside provider adapters.
+Failure classes are exhaustive and centrally owned (never inside provider adapters):
+
+- 401/403: permanent for the run — the file fails, the post settles per media-failure semantics,
+  and the query fails with kind `unauthorized` (credential health is flagged).
+- 404/410: permanent for that file — file `failed`, post gains a warning; if every file is
+  permanent-unavailable the post is `Skipped(AllMediaUnavailable)`.
+- 429: park the query with kind `rate_limited`, honoring `Retry-After` (or the provider's stated
+  reset) plus a 2-minute buffer; no file-level retry loop.
+- 408, 5xx, connection reset, DNS, timeout: transient — retry the same file up to 3 times with
+  exponential backoff (2s, 4s, 8s) inside the current attempt.
+- Integrity failure (size/hash mismatch, truncated or undecodable file): one re-download, then
+  file `failed` with a warning.
+- Canonical ingest failure: post `Failed(reason)` with no retry — it is a bug, not weather.
+- Escalation: a post fails only when required work exhausts retries; a query fails after 3
+  consecutive post failures; the run aggregates query outcomes.
 - Preserve staged files only while they can be reused safely (resuming the same post attempt).
 - Delete staging after `Added`, `Skipped`, reset, cancellation, or dismissal.
 - Failed gallery jobs remain inspectable but have a bounded retention policy.
@@ -472,6 +562,9 @@ SourceRunProgress {
 
 Rules:
 
+- The backend also exposes one aggregate read model per subscription (sums of the active run's
+  child run-query attempt counters plus the serial position, e.g. "query 3 of 9") — subscription
+  cards consume that aggregate; the renderer never merges per-query events itself.
 - Persist first, then publish.
 - Publish each file completion, coalesced only when multiple completions occur inside 100 ms.
 - UI never increments counters speculatively.
@@ -506,6 +599,8 @@ Rules:
 
 - Implement the state machine as one module with explicit transition functions.
 - Make illegal transitions errors, not no-ops.
+- Acquire and release the subscription execution lease transactionally for full and manual-query
+  runs; full runs claim their child queries serially.
 - Own counters as queries over attempt outcomes.
 - Invoke canonical ingest directly after complete download staging.
 - Verify root, media, provenance, collection vector, and thumbnail before `added` commits.
@@ -524,9 +619,11 @@ Rules:
 ### 5. Integrate Exact Duplicates And Tombstones
 
 - Preserve the existing standalone exact-hash tag fanout behavior.
-- Return an explicit canonical ingest outcome: `Created(root_id)` or
-  `ExistingMetadataUpdated(root_ids)` rather than inferring creation from IDs.
-- Map only `Created` to post added.
+- Return an explicit canonical ingest outcome: `Created(root_ids)` (one or more, matching the
+  multi-root attempt model) and/or `ExistingMetadataUpdated(root_ids)` — a single post may create
+  roots while also updating exact-duplicate roots, so the outcome carries both sets rather than
+  inferring creation from IDs.
+- Map a non-empty `Created` set to post added.
 - Make explicit gallery reimport atomically override relevant tombstones.
 - Add collection-specific physical dedup tests.
 
@@ -555,7 +652,8 @@ subscribestar, tumblr, twitter, yandere.
 Webtoons is explicitly excluded: delete its backend adapter, metadata logic, auth catalog entry,
 bridge handling, and tests rather than only hiding it in TypeScript.
 
-For each gallery-dl provider:
+For every provider — gallery-dl and OF-Scraper alike (OnlyFans runs the same contract suite,
+plus extractor-specific protocol tests for its purchased/messages/feed partitions):
 
 - Run the same fake/contract suite through its adapter.
 - Verify auth material reaches gallery-dl without changing auth ownership.
@@ -630,6 +728,10 @@ There must be one production subscription path after cutover and no dual-write p
 23. A group-scoped provider cursor (e.g. purchased/messages/feed) never clamps discovery in a
     later group: content newer than an earlier group's cursor timestamp is still discovered and
     settled.
+24. Starting a manual query while its subscription is running, or starting the full subscription
+    while one of its queries is running, is rejected without creating a queued or duplicate run.
+25. A full-subscription run executes its eligible queries serially, and Stop durably releases the
+    subscription lease only after the active worker is cancelled.
 
 ## Acceptance Criteria
 
@@ -637,6 +739,7 @@ There must be one production subscription path after cutover and no dual-write p
 - Every gallery-dl provider uses the same pull/ack Python protocol.
 - Authentication code is unchanged by this project.
 - One source post is in flight per query.
+- One execution is active per subscription; full runs execute their queries serially.
 - Later-post prefetch is impossible by construction.
 - Added/skipped/downloaded counters match durable canonical outcomes.
 - No success can exist without verified canonical output.
