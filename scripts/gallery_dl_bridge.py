@@ -638,6 +638,108 @@ class _HookRegistry(dict):
         return callbacks
 
 
+_DOMAIN_INTERVAL_SECONDS = 1.0
+_domain_slot_lock = __import__("threading").Lock()
+_next_request_monotonic: dict[str, float] = {}
+
+
+def _host_state_name(host: str) -> str:
+    return "".join(c if c.isalnum() or c in ".-" else "_" for c in host) + ".slot"
+
+
+def _load_host_slot(state_dir: str, host: str, now: float) -> float | None:
+    import os
+
+    try:
+        with open(
+            os.path.join(state_dir, _host_state_name(host)), encoding="utf-8"
+        ) as handle:
+            stored = float(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+    if stored > now + 60.0:
+        # A monotonic value from a previous boot; unrelated to this clock.
+        return None
+    return stored
+
+
+def _store_host_slot(state_dir: str, host: str, slot: float) -> None:
+    import os
+
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        with open(
+            os.path.join(state_dir, _host_state_name(host)), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(f"{slot:.3f}")
+    except OSError:
+        pass
+
+
+def _pace_domain_request(host: str, now: float, sleep=None, state_dir=None) -> float:
+    """Reserve the next send slot for the host, then sleep the remainder, so
+    consecutive requests to one host are at least one second apart whichever
+    gallery-dl stream — extractor, page fetch, or media download — issued
+    them, including concurrent callers.
+
+    gallery-dl paces its extractor requests (`sleep-request`) and its media
+    downloads (`sleep`) with two independent clocks, so their interleavings
+    can put two requests to the same host inside one second. This limiter at
+    the real HTTP boundary is the policy's guarantee; the gallery-dl options
+    stay on as defense in depth and never add delay beyond the remainder.
+
+    A bridge process runs one source window; `state_dir` carries each host's
+    reserved slot across consecutive processes so a fresh process cannot
+    request inside the previous process's interval.
+    """
+    import time as _time
+
+    sleep = sleep or _time.sleep
+    with _domain_slot_lock:
+        if state_dir and host not in _next_request_monotonic:
+            stored = _load_host_slot(state_dir, host, now)
+            if stored is not None:
+                _next_request_monotonic[host] = stored
+        slot = max(now, _next_request_monotonic.get(host, now))
+        _next_request_monotonic[host] = slot + _DOMAIN_INTERVAL_SECONDS
+        if state_dir:
+            _store_host_slot(state_dir, host, slot + _DOMAIN_INTERVAL_SECONDS)
+    if slot > now:
+        sleep(slot - now)
+    return slot
+
+
+def _install_request_pacing_and_trace(
+    trace_path: str | None, state_dir: str | None
+) -> None:
+    """Enforce the per-domain interval and optionally record every request's
+    host and timestamp as certification evidence."""
+    import os
+    import time
+    import urllib.parse
+
+    import requests
+
+    original = requests.Session.request
+
+    def paced(self, method, url, *args, **kwargs):
+        host = urllib.parse.urlsplit(str(url)).hostname or ""
+        sent_at = _pace_domain_request(host, time.monotonic(), state_dir=state_dir)
+        if trace_path:
+            entry = {
+                "ts_ms": int(time.time() * 1000),
+                "monotonic_ms": int(sent_at * 1000),
+                "host": host,
+                "method": str(method).upper(),
+                "pid": os.getpid(),
+            }
+            with open(trace_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry) + "\n")
+        return original(self, method, url, *args, **kwargs)
+
+    requests.Session.request = paced
+
+
 def _configure_source_window(config, request: dict[str, Any]) -> None:
     """Install the durable Rust cursor and batch size into extractor config."""
     if request.get("post_limit") is not None:
@@ -951,6 +1053,9 @@ def main() -> int:
     # Keep an internal byte heartbeat while a large file is transferring.
     # Picto's Rust watchdog consumes this event; it is not renderer progress.
     config.set(("downloader",), "progress", 0.5)
+    _install_request_pacing_and_trace(
+        request.get("request_trace_path"), request.get("pacing_state_dir")
+    )
 
     _emit(
         "run_started",

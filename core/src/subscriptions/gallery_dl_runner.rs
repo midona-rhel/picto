@@ -85,6 +85,10 @@ pub struct RunOptions {
     pub archive_path: PathBuf,
     /// Optional archive key prefix (used to support targeted reset per subscription/query).
     pub archive_prefix: Option<String>,
+    /// Directory carrying per-host request slots across bridge processes so
+    /// the one-request-per-second/domain pacing survives process boundaries.
+    /// Empty = in-process pacing only.
+    pub pacing_state_dir: PathBuf,
     /// Cancellation token — kills the subprocess when cancelled.
     pub cancel: CancellationToken,
 }
@@ -330,6 +334,18 @@ impl GalleryDlRunner {
             "archive_path": (!opts.archive_path.as_os_str().is_empty()).then(|| opts.archive_path.display().to_string()),
             "archive_prefix": opts.archive_prefix,
             "post_terminal_mode": post_terminal_mode(&opts.site_id),
+            "pacing_state_dir": (!opts.pacing_state_dir.as_os_str().is_empty())
+                .then(|| opts.pacing_state_dir.display().to_string()),
+            // Certification evidence: every HTTP request's host and timestamp,
+            // so the one-request-per-second/domain policy is provable.
+            "request_trace_path": std::env::var_os("PICTO_TRACE_REQUESTS").map(|value| {
+                let path = std::path::PathBuf::from(value);
+                if path.is_absolute() {
+                    path.display().to_string()
+                } else {
+                    temp_dir.join("request-trace.jsonl").display().to_string()
+                }
+            }),
         });
         let request_path = temp_dir.join("bridge-request.json");
         tokio::fs::write(

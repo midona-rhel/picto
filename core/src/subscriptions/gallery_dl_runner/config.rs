@@ -211,6 +211,7 @@ mod tests {
             }),
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -268,6 +269,7 @@ mod tests {
             }),
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -301,6 +303,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -326,6 +329,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -356,6 +360,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -379,6 +384,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -409,6 +415,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -430,6 +437,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -462,6 +470,7 @@ mod tests {
             }),
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -490,6 +499,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -514,6 +524,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -543,6 +554,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -574,6 +586,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -595,6 +608,7 @@ mod tests {
             auth: None,
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
+            pacing_state_dir: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 

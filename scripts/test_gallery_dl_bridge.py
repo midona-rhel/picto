@@ -178,5 +178,83 @@ class GalleryBridgeDownloadProgressTests(unittest.TestCase):
         )
 
 
+class DomainRequestPacingTests(unittest.TestCase):
+    def setUp(self):
+        bridge._next_request_monotonic.clear()
+        self.sleeps = []
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+
+    def test_consecutive_requests_to_one_host_wait_only_the_remainder(self):
+        bridge._pace_domain_request("e621.net", 100.0, sleep=self.sleep)
+        bridge._pace_domain_request("e621.net", 100.4, sleep=self.sleep)
+
+        self.assertEqual(len(self.sleeps), 1)
+        self.assertAlmostEqual(self.sleeps[0], 0.6, places=6)
+
+    def test_a_request_after_the_interval_is_not_delayed(self):
+        bridge._pace_domain_request("e621.net", 100.0, sleep=self.sleep)
+        bridge._pace_domain_request("e621.net", 101.25, sleep=self.sleep)
+
+        self.assertEqual(self.sleeps, [])
+
+    def test_hosts_are_paced_independently(self):
+        bridge._pace_domain_request("e621.net", 100.0, sleep=self.sleep)
+        bridge._pace_domain_request("static1.e621.net", 100.1, sleep=self.sleep)
+
+        self.assertEqual(self.sleeps, [])
+
+    def test_the_sleep_advances_the_recorded_send_time(self):
+        bridge._pace_domain_request("e621.net", 100.0, sleep=self.sleep)
+        sent_at = bridge._pace_domain_request("e621.net", 100.4, sleep=self.sleep)
+
+        self.assertAlmostEqual(sent_at, 101.0, places=6)
+        # A third request right after the delayed second one still waits a
+        # full interval measured from the actual send time.
+        bridge._pace_domain_request("e621.net", 101.0, sleep=self.sleep)
+        self.assertAlmostEqual(self.sleeps[-1], 1.0, places=6)
+
+    def test_slots_persist_across_processes_through_the_state_directory(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            bridge._pace_domain_request(
+                "yande.re", 100.0, sleep=self.sleep, state_dir=state_dir
+            )
+            # A fresh process has an empty in-memory map but must honor the
+            # previous process's reservation from the state directory.
+            bridge._next_request_monotonic.clear()
+            sent_at = bridge._pace_domain_request(
+                "yande.re", 100.3, sleep=self.sleep, state_dir=state_dir
+            )
+
+        self.assertAlmostEqual(sent_at, 101.0, places=6)
+        self.assertAlmostEqual(self.sleeps[-1], 0.7, places=6)
+
+    def test_a_stored_slot_from_a_previous_boot_is_ignored(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            bridge._store_host_slot(state_dir, "yande.re", 999999.0)
+            sent_at = bridge._pace_domain_request(
+                "yande.re", 100.0, sleep=self.sleep, state_dir=state_dir
+            )
+
+        self.assertAlmostEqual(sent_at, 100.0, places=6)
+        self.assertEqual(self.sleeps, [])
+
+    def test_concurrent_callers_reserve_distinct_send_slots(self):
+        # Two callers arriving before either sends must not share a base:
+        # each reserves its own slot a full interval apart.
+        first = bridge._pace_domain_request("yande.re", 100.0, sleep=self.sleep)
+        second = bridge._pace_domain_request("yande.re", 100.001, sleep=self.sleep)
+        third = bridge._pace_domain_request("yande.re", 100.002, sleep=self.sleep)
+
+        self.assertAlmostEqual(first, 100.0, places=6)
+        self.assertAlmostEqual(second, 101.0, places=6)
+        self.assertAlmostEqual(third, 102.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

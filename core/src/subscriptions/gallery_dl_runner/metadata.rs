@@ -1280,7 +1280,9 @@ mod tests {
 
         assert_eq!(
             parsed.description.as_deref(),
-            Some("Commission info Open for sheets and ych. See my terms before asking. updated row")
+            Some(
+                "Commission info Open for sheets and ych. See my terms before asking. updated row"
+            )
         );
     }
 

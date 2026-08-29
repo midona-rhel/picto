@@ -128,6 +128,9 @@ impl GalleryDlSourceRunner {
             auth,
             archive_path,
             archive_prefix: None,
+            // Library-scoped so per-host pacing chains across every query,
+            // window, and run; reset never clears it.
+            pacing_state_dir: self.library_root.join("source-runners/gallery-dl/pacing"),
             cancel,
         };
 
