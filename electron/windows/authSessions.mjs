@@ -268,7 +268,7 @@ function createCookieAdapter(site) {
 }
 
 function createAccountApiAdapter(site) {
-  let navigatingToOptions = false;
+  let optionsNavigationAttempts = 0;
   return {
     async prepare() {
       return { url: site.loginUrl, message: `Log in with ${site.label} in the popup window.` };
@@ -290,8 +290,10 @@ function createAccountApiAdapter(site) {
           message: `${site.label} API key captured.`,
         };
       }
-      if (result.authenticated && !result.onOptions && !navigatingToOptions) {
-        navigatingToOptions = true;
+      if (result.authenticated && !result.onOptions && optionsNavigationAttempts < 5) {
+        // A challenge interstitial can bounce the first hop back to the
+        // account page; keep retrying instead of latching shut.
+        optionsNavigationAttempts += 1;
         return {
           navigate: site.optionsUrl,
           hide: true,
@@ -299,7 +301,7 @@ function createAccountApiAdapter(site) {
           message: `Authenticated. Reading ${site.label} API credentials…`,
         };
       }
-      if (result.onOptions && navigatingToOptions) {
+      if (result.onOptions && optionsNavigationAttempts > 0) {
         return {
           show: true,
           status: 'error',
