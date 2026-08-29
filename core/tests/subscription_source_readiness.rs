@@ -430,8 +430,11 @@ fn read_evidence(
 fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<(), String> {
     let blob_store = BlobStore::open(root).map_err(|error| error.to_string())?;
     // Source tags must land in a canonical namespace; every unmapped source
-    // category has to fall back to `general` instead of inventing one.
+    // category has to fall back to `general` instead of inventing one. The
+    // schema stores general as the empty display name (bare tag names split
+    // to ("", name) at ingest).
     const CANONICAL_NAMESPACES: &[&str] = &[
+        "",
         "general",
         "creator",
         "character",
