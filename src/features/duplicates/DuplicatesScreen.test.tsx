@@ -285,7 +285,8 @@ describe('DuplicatesScreen', () => {
     nextPair.right.occurrences = [{ media_item_id: 44, root_item_id: 44, collection_id: null }];
     vi.mocked(getDuplicatePairs)
       .mockResolvedValueOnce({ items: [pair()], next_cursor: null, has_more: false, total: 2 })
-      .mockResolvedValueOnce({ items: [nextPair], next_cursor: null, has_more: false, total: 1 });
+      .mockResolvedValueOnce({ items: [nextPair], next_cursor: null, has_more: false, total: 1 })
+      .mockResolvedValue({ items: [nextPair], next_cursor: null, has_more: false, total: 1 });
 
     let releaseNextDetails!: () => void;
     const nextDetailsReady = new Promise<void>((resolve) => { releaseNextDetails = resolve; });
@@ -319,6 +320,14 @@ describe('DuplicatesScreen', () => {
     await act(async () => releaseNextDetails());
     expect(await screen.findByText('Next left image')).toBeInTheDocument();
     expect(screen.getByText('Next right image')).toBeInTheDocument();
+
+    await act(async () => duplicateInvalidation.callback?.());
+    await waitFor(() => expect(getDuplicatePairs).toHaveBeenCalledTimes(3));
+    expect(getDuplicateItemDetails).toHaveBeenCalledTimes(4);
+    expect(screen.getByText('Next left image')).toBeInTheDocument();
+    expect(screen.getByText('Next right image')).toBeInTheDocument();
+    expect(screen.queryByText('next-left')).not.toBeInTheDocument();
+    expect(screen.queryByText('next-right')).not.toBeInTheDocument();
   });
 
   it.each([

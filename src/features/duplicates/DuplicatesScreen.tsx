@@ -478,6 +478,8 @@ export function DuplicatesScreen() {
 
   const currentPair = pairs[index] ?? null;
   const pairKey = currentPair ? `${currentPair.file_id_a}:${currentPair.file_id_b}` : '';
+  const currentPairRef = useRef(currentPair);
+  currentPairRef.current = currentPair;
   const activePairKeyRef = useRef(pairKey);
   activePairKeyRef.current = pairKey;
   const [thumbnailGate, setThumbnailGate] = useState({ pairKey: '', left: false, right: false });
@@ -573,7 +575,8 @@ export function DuplicatesScreen() {
   }), [loadPairs]);
 
   useEffect(() => {
-    if (!currentPair) {
+    const pair = currentPairRef.current;
+    if (!pair) {
       requestIdRef.current += 1;
       setLeft({ item: null, media: null });
       setRight({ item: null, media: null });
@@ -592,7 +595,7 @@ export function DuplicatesScreen() {
     setMetadataLoading(true);
     setLeft({ item: null, media: null });
     setRight({ item: null, media: null });
-    loadPairDetails(currentPair)
+    loadPairDetails(pair)
       .then((details) => {
         if (requestId !== requestIdRef.current) return;
         setLeft(details.left);
@@ -605,7 +608,10 @@ export function DuplicatesScreen() {
       .finally(() => {
         if (requestId === requestIdRef.current) setMetadataLoading(false);
       });
-  }, [currentPair, pairKey, reportFailure]);
+  // Pair detail identity is the two file IDs. A queue refresh commonly returns
+  // a new object for the same pair; reloading on object identity would clear
+  // its visible names and expose the hash fallback for a frame.
+  }, [pairKey, reportFailure]);
 
   const finishResolution = useCallback(async (pair: DuplicatePair, action: DuplicateAction) => {
     resolutionInFlightRef.current = true;
