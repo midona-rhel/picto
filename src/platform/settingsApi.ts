@@ -79,6 +79,7 @@ export interface AppSettings {
   subscriptionDefaultGroupPosts: boolean;
   subscriptionInboxItemLimit: number;
   showTagGroups: boolean;
+  showTagPrefixes: boolean;
   starredTags: string[];
   tagGroupColors: Record<string, string>;
   sidebarQuickAccess: string[];
@@ -140,6 +141,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   subscriptionDefaultGroupPosts: true,
   subscriptionInboxItemLimit: 1000,
   showTagGroups: true,
+  showTagPrefixes: false,
   starredTags: [],
   tagGroupColors: {},
   sidebarQuickAccess: [],
@@ -294,6 +296,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     subscriptionDefaultGroupPosts: booleanValue(storedOrDefault(source, 'subscriptionDefaultGroupPosts', APP_SETTINGS_DEFAULTS.subscriptionDefaultGroupPosts), 'subscriptionDefaultGroupPosts'),
     subscriptionInboxItemLimit: integerRangeValue(storedOrDefault(source, 'subscriptionInboxItemLimit', APP_SETTINGS_DEFAULTS.subscriptionInboxItemLimit), 'subscriptionInboxItemLimit', 1, 1_000_000),
     showTagGroups: booleanValue(storedOrDefault(source, 'showTagGroups', APP_SETTINGS_DEFAULTS.showTagGroups), 'showTagGroups'),
+    showTagPrefixes: booleanValue(storedOrDefault(source, 'showTagPrefixes', APP_SETTINGS_DEFAULTS.showTagPrefixes), 'showTagPrefixes'),
     starredTags: stringArrayValue(storedOrDefault(source, 'starredTags', APP_SETTINGS_DEFAULTS.starredTags), 'starredTags'),
     tagGroupColors: stringMapValue(storedOrDefault(source, 'tagGroupColors', APP_SETTINGS_DEFAULTS.tagGroupColors), 'tagGroupColors'),
     sidebarQuickAccess: stringArrayValue(storedOrDefault(source, 'sidebarQuickAccess', APP_SETTINGS_DEFAULTS.sidebarQuickAccess), 'sidebarQuickAccess'),

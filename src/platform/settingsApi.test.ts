@@ -47,6 +47,7 @@ describe('settings API', () => {
     expect(snapshot.value.subscriptionDefaultGroupPosts).toBe(true);
     expect(snapshot.value.subscriptionInboxItemLimit).toBe(1000);
     expect(snapshot.value.showTagGroups).toBe(true);
+    expect(snapshot.value.showTagPrefixes).toBe(false);
     expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.tagGroupColors).toEqual({});
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);

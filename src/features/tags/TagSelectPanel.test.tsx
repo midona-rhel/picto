@@ -9,6 +9,7 @@ import styles from './TagSelectPanel.module.css';
 const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
   getNamespaceSummary: vi.fn(),
+  setTagPrefixesVisible: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-virtual', () => ({
@@ -25,8 +26,9 @@ vi.mock('@tanstack/react-virtual', () => ({
 }));
 vi.mock('../../controllers/tagsController', () => ({ tagsController: mocks }));
 vi.mock('./tagPreferences', () => ({
-  useTagPreferences: () => ({ showTagGroups: true, starredTags: [], tagGroupColors: {} }),
+  useTagPreferences: () => ({ showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {} }),
   setTagStarred: vi.fn(),
+  setTagPrefixesVisible: mocks.setTagPrefixesVisible,
   replaceStarredTag: vi.fn(),
 }));
 
@@ -184,5 +186,7 @@ describe('TagSelectPanel assignment', () => {
     expect(screen.getByRole('button', { name: 'Grid tags' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'List tags' }));
     expect(screen.getByRole('button', { name: 'List tags' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByText('Hide group prefixes'));
+    expect(mocks.setTagPrefixesVisible).toHaveBeenCalledWith(true);
   });
 });

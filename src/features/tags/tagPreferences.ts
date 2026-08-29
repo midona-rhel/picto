@@ -4,12 +4,13 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 
 export interface TagPreferences {
   showTagGroups: boolean;
+  showTagPrefixes: boolean;
   starredTags: string[];
   tagGroupColors: Record<string, string>;
 }
 
 const listeners = new Set<() => void>();
-let snapshot: TagPreferences = { showTagGroups: true, starredTags: [], tagGroupColors: {} };
+let snapshot: TagPreferences = { showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {} };
 let loadPromise: Promise<void> | null = null;
 
 function emit(): void {
@@ -26,6 +27,7 @@ function ensureLoaded(): Promise<void> {
     loadPromise = getSettings()
       .then((settings) => setSnapshot({
         showTagGroups: settings.showTagGroups,
+        showTagPrefixes: settings.showTagPrefixes,
         starredTags: settings.starredTags,
         tagGroupColors: settings.tagGroupColors,
       }))
@@ -67,6 +69,10 @@ async function persist(next: TagPreferences, patch: Partial<TagPreferences>): Pr
 
 export function setTagGroupsVisible(visible: boolean): Promise<void> {
   return persist({ ...snapshot, showTagGroups: visible }, { showTagGroups: visible });
+}
+
+export function setTagPrefixesVisible(visible: boolean): Promise<void> {
+  return persist({ ...snapshot, showTagPrefixes: visible }, { showTagPrefixes: visible });
 }
 
 export function setTagStarred(tag: string, starred: boolean): Promise<void> {

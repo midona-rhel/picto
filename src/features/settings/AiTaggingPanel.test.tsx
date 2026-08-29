@@ -49,7 +49,7 @@ const settings = {
   subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
   subscriptionInboxItemLimit: 1000,
   subscriptionDefaultGroupPosts: true,
-  showTagGroups: true, starredTags: [], tagGroupColors: {}, sidebarQuickAccess: [],
+  showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {}, sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false, aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,

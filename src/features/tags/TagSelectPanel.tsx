@@ -42,6 +42,7 @@ import {
 } from './tagContextMenu';
 import {
   replaceStarredTag,
+  setTagPrefixesVisible,
   setTagStarred,
   useTagPreferences,
 } from './tagPreferences';
@@ -580,7 +581,9 @@ export function TagSelectPanel() {
                             />
                           )}
                           <span className={styles.tagName}>
-                            {query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)}
+                            {query.trim()
+                              ? highlightMatch(displayTagName(tag, tagPreferences.showTagPrefixes), query.trim())
+                              : displayTagName(tag, tagPreferences.showTagPrefixes)}
                           </span>
                           {showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
                         </div>
@@ -607,6 +610,10 @@ export function TagSelectPanel() {
                 <span>Show counts</span>
                 <span className={`${shellStyles.checkBox} ${showCounts ? shellStyles.checkBoxChecked : ''}`}>{showCounts ? <IconCheck size={10} /> : null}</span>
               </button>
+              <button className={styles.settingsRow} type="button" onClick={() => void setTagPrefixesVisible(!tagPreferences.showTagPrefixes)}>
+                <span>Hide group prefixes</span>
+                <span className={`${shellStyles.checkBox} ${!tagPreferences.showTagPrefixes ? shellStyles.checkBoxChecked : ''}`}>{!tagPreferences.showTagPrefixes ? <IconCheck size={10} /> : null}</span>
+              </button>
             </div>
           </>
         ) : null}
@@ -624,6 +631,13 @@ export function TagSelectPanel() {
 
 function formatTag(tag: CanonicalTagRecord): string {
   return tagName(tag);
+}
+
+function displayTagName(tag: CanonicalTagRecord, showPrefix: boolean): string {
+  const fullName = formatTag(tag);
+  if (showPrefix) return fullName;
+  const separator = fullName.indexOf(':');
+  return separator < 0 ? fullName : fullName.slice(separator + 1);
 }
 
 function highlightMatch(text: string, q: string): React.ReactNode {
