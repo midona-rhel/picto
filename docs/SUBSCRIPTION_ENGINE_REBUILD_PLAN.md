@@ -182,6 +182,10 @@ Stop cancels at the attempt level, not just the run level:
   crash-recovery provenance check first, so a crash during Stop still settles exactly once.
 - A stale Python process that keeps emitting events for a cancelled attempt is fenced by the
   protocol correlation identifiers; its events are dropped.
+- Cancellation acknowledgement is bounded: if the Python worker does not ACK within 10 seconds,
+  the service process (or pool member) is terminated (SIGKILL), the open attempt settles as
+  `cancelled` through the recovery path, and the lease releases. Stop can therefore never hang on
+  a stuck extractor; the same bound applies during restart recovery.
 
 ### Crash-Safe Ingest Boundary
 
@@ -244,14 +248,26 @@ CREATE UNIQUE INDEX idx_source_run_active_subscription ON source_run(subscriptio
 CREATE TABLE source_run_query (
     run_query_id INTEGER PRIMARY KEY,
     run_id INTEGER NOT NULL REFERENCES source_run(run_id) ON DELETE CASCADE,
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('query','gallery')),
     query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
     status TEXT NOT NULL CHECK (status IN
         ('pending','running','succeeded','budget_exhausted','failed','cancelled')),
     terminal_reason TEXT,          -- e.g. 'budget_met','exhausted','frontier','safety_bound',...
-    available_at TEXT NOT NULL
+    available_at TEXT NOT NULL,
+    -- SourceOwner union enforced: query-owned rows carry query_id, gallery
+    -- rows carry none (their gallery_job references them; see trigger below).
+    CHECK ((owner_kind = 'query') = (query_id IS NOT NULL)),
+    UNIQUE(run_id, query_id)
 ) STRICT;
 CREATE UNIQUE INDEX idx_source_run_one_running_query ON source_run_query(run_id)
     WHERE status = 'running';
+
+-- A gallery-owned execution may not start before its gallery_job exists.
+CREATE TRIGGER gallery_execution_requires_job
+BEFORE UPDATE OF status ON source_run_query
+WHEN NEW.status = 'running' AND NEW.owner_kind = 'gallery'
+    AND NOT EXISTS (SELECT 1 FROM gallery_job g WHERE g.run_query_id = NEW.run_query_id)
+BEGIN SELECT RAISE(ABORT, 'gallery execution requires its gallery_job'); END;
 
 CREATE TABLE source_post_attempt (
     attempt_id INTEGER PRIMARY KEY,
@@ -263,7 +279,8 @@ CREATE TABLE source_post_attempt (
     cursor_scope TEXT,             -- provider stream partition this post belongs to
     boundary_cursor TEXT,          -- cursor value committed with the terminal outcome
     started_at TEXT NOT NULL,
-    settled_at TEXT
+    settled_at TEXT,
+    UNIQUE(run_query_id, source_post_id)
 ) STRICT;
 -- one non-terminal attempt per execution owner:
 CREATE UNIQUE INDEX idx_attempt_open ON source_post_attempt(run_query_id)
@@ -271,8 +288,10 @@ CREATE UNIQUE INDEX idx_attempt_open ON source_post_attempt(run_query_id)
 
 CREATE TABLE source_attempt_root (   -- attempt-to-root results; >=1 row required for 'added'
     attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
-    root_id INTEGER NOT NULL REFERENCES library_root(root_id) ON DELETE RESTRICT,
-    PRIMARY KEY(attempt_id, root_id)
+    root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
+    root_stable_key TEXT NOT NULL,   -- snapshot at settlement; history survives
+                                     -- permanent deletion of the root itself
+    PRIMARY KEY(attempt_id, root_stable_key)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE source_file_attempt (
@@ -316,11 +335,13 @@ BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state IN ('added','skipped','failed','cancelled') AND NEW.settled_at IS NULL
 BEGIN SELECT RAISE(ABORT, 'terminal attempt requires settled_at'); END;
 
-CREATE TRIGGER gallery_added_requires_one_root
+CREATE TRIGGER gallery_added_requires_one_collection_root
 BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state = 'added'
     AND EXISTS (SELECT 1 FROM gallery_job g WHERE g.run_query_id = NEW.run_query_id)
-    AND (SELECT count(*) FROM source_attempt_root r WHERE r.attempt_id = NEW.attempt_id) != 1
+    AND (SELECT count(*) FROM source_attempt_root r
+         JOIN library_item item ON item.local_id = r.root_id
+         WHERE r.attempt_id = NEW.attempt_id AND item.item_kind = 2) != 1
 BEGIN SELECT RAISE(ABORT, 'gallery import requires exactly one collection root'); END;
 ```
 
@@ -523,8 +544,11 @@ plus staged-file deletion.
 
 Failure classes are exhaustive and centrally owned (never inside provider adapters):
 
-- 401/403: permanent for the run — the file fails, the post settles per media-failure semantics,
-  and the query fails with kind `unauthorized` (credential health is flagged).
+- 401, and 403 from extractor/API/login endpoints: permanent for the run — the query fails with
+  kind `unauthorized` and credential health is flagged.
+- 403 from a media/CDN URL (expired or forbidden signed link): permanent for that file only —
+  file `failed` with a warning; the post settles per media-failure semantics. Media-level
+  forbidden responses never fail the query.
 - 404/410: permanent for that file — file `failed`, post gains a warning; if every file is
   permanent-unavailable the post is `Skipped(AllMediaUnavailable)`.
 - 429: park the query with kind `rate_limited`, honoring `Retry-After` (or the provider's stated
