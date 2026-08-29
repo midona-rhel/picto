@@ -72,6 +72,16 @@ fn ephemeral_store() -> Option<&'static std::sync::Mutex<HashMap<String, String>
         .as_ref()
 }
 
+/// Credentials already unlocked during this application launch. macOS may
+/// prompt whenever a process reads a Keychain item, so repeated subscription
+/// queries must reuse the credential instead of reopening the same item.
+fn unlocked_credential_cache() -> &'static std::sync::Mutex<HashMap<String, Option<SiteCredential>>>
+{
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<SiteCredential>>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 pub fn set_credential(cred: &SiteCredential) -> Result<(), String> {
     let json = serde_json::to_string(cred)
         .map_err(|error| format!("Credential serialization error: {error}"))?;
@@ -82,7 +92,12 @@ pub fn set_credential(cred: &SiteCredential) -> Result<(), String> {
             .insert(cred.site_category.clone(), json);
         return Ok(());
     }
-    set_platform_credential(&cred.site_category, &json)
+    set_platform_credential(&cred.site_category, &json)?;
+    unlocked_credential_cache()
+        .lock()
+        .map_err(|_| "credential cache poisoned".to_string())?
+        .insert(cred.site_category.clone(), Some(cred.clone()));
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -144,12 +159,28 @@ pub fn get_credential(site_category: &str) -> Result<Option<SiteCredential>, Str
             .map(Some)
             .map_err(|error| format!("Credential deserialization error: {error}"));
     }
+    if let Some(credential) = unlocked_credential_cache()
+        .lock()
+        .map_err(|_| "credential cache poisoned".to_string())?
+        .get(site_category)
+        .cloned()
+    {
+        return Ok(credential);
+    }
     let Some(json) = get_platform_credential(site_category)? else {
+        unlocked_credential_cache()
+            .lock()
+            .map_err(|_| "credential cache poisoned".to_string())?
+            .insert(site_category.to_string(), None);
         return Ok(None);
     };
-    serde_json::from_str(&json)
-        .map(Some)
-        .map_err(|error| format!("Credential deserialization error: {error}"))
+    let credential: SiteCredential = serde_json::from_str(&json)
+        .map_err(|error| format!("Credential deserialization error: {error}"))?;
+    unlocked_credential_cache()
+        .lock()
+        .map_err(|_| "credential cache poisoned".to_string())?
+        .insert(site_category.to_string(), Some(credential.clone()));
+    Ok(Some(credential))
 }
 
 #[cfg(target_os = "macos")]
@@ -184,7 +215,12 @@ pub fn delete_credential(site_category: &str) -> Result<(), String> {
             .remove(site_category);
         return Ok(());
     }
-    delete_platform_credential(site_category)
+    delete_platform_credential(site_category)?;
+    unlocked_credential_cache()
+        .lock()
+        .map_err(|_| "credential cache poisoned".to_string())?
+        .remove(site_category);
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
