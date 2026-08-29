@@ -152,28 +152,36 @@ async function readSidebarSnapshot() {
   };
 }
 
-let initialFetchDone = false;
-let initialFetchPromise: Promise<void> | null = null;
 let treeFetchPromise: Promise<void> | null = null;
+let treeFetchGeneration = 0;
+
+function fetchSidebarTree(replacePending: boolean): Promise<void> {
+  if (!replacePending && treeFetchPromise) return treeFetchPromise;
+
+  const generation = ++treeFetchGeneration;
+  store.set(sidebarLoadingAtom, true);
+  const request = readSidebarSnapshot()
+    .then((tree) => {
+      if (generation === treeFetchGeneration) store.set(setSidebarTreeAtom, tree);
+    })
+    .finally(() => {
+      if (generation !== treeFetchGeneration) return;
+      store.set(sidebarLoadingAtom, false);
+      treeFetchPromise = null;
+    });
+  treeFetchPromise = request;
+  return request;
+}
 
 export const sidebarController = {
   fetchTree() {
-    if (treeFetchPromise) return treeFetchPromise;
-    store.set(sidebarLoadingAtom, true);
-    treeFetchPromise = readSidebarSnapshot()
-      .then((tree) => { store.set(setSidebarTreeAtom, tree); })
-      .finally(() => {
-        store.set(sidebarLoadingAtom, false);
-        treeFetchPromise = null;
-      });
-    return treeFetchPromise;
+    return fetchSidebarTree(false);
   },
 
   ensureLoaded() {
-    if (initialFetchDone || initialFetchPromise) return;
-    initialFetchPromise = this.fetchTree()
-      .then(() => { initialFetchDone = true; })
-      .catch(() => {})
-      .finally(() => { initialFetchPromise = null; });
+    // LibraryGate remounts the application for each opened library. Always
+    // replace a read left over from the previous mount, and prevent that stale
+    // result from overwriting the newly opened library's navigation.
+    return fetchSidebarTree(true).catch(() => {});
   },
 };

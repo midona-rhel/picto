@@ -158,4 +158,40 @@ describe('replacement sidebar reads', () => {
     expect(getSidebarCounts).toHaveBeenCalledTimes(1);
     expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
   });
+
+  it('replaces a pending read when the sidebar mounts for another library', async () => {
+    let releaseOld!: () => void;
+    const oldRead = new Promise<void>((resolve) => { releaseOld = resolve; });
+    const newNavigation = {
+      ...navigation,
+      folders: [{ ...navigation.folders[0], folder_id: 40, name: 'New library folder' }],
+      smart_folders: [],
+      revision: 20,
+    };
+    const newCounts = {
+      ...counts,
+      folders: [{ folder_id: 40, count: 3 }],
+      smart_folders: [],
+      revision: 20,
+    };
+
+    getNavigation
+      .mockImplementationOnce(async () => { await oldRead; return navigation; })
+      .mockResolvedValueOnce(newNavigation);
+    getSidebarCounts
+      .mockImplementationOnce(async () => { await oldRead; return counts; })
+      .mockResolvedValueOnce(newCounts);
+
+    const staleFetch = sidebarController.fetchTree();
+    const currentFetch = sidebarController.ensureLoaded();
+    await currentFetch;
+    releaseOld();
+    await staleFetch;
+
+    expect(store.get(sidebarNodesAtom).some((node) => node.id === 'folder:4')).toBe(false);
+    expect(store.get(sidebarNodesAtom).find((node) => node.id === 'folder:40')).toMatchObject({
+      name: 'New library folder',
+      count: 3,
+    });
+  });
 });

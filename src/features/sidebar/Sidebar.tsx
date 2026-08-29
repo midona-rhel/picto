@@ -439,7 +439,7 @@ export function Sidebar() {
 
   // Pending rename: when a new folder is created, we queue its ID here
   // and start inline rename once the node appears in the tree.
-  useEffect(() => { sidebarController.ensureLoaded(); }, []);
+  useEffect(() => { void sidebarController.ensureLoaded(); }, []);
 
   // Trigger pending rename when folder nodes update
   useEffect(() => {
