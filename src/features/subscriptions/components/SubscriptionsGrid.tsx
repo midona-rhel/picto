@@ -19,7 +19,7 @@ interface CardModel {
   selection: SubscriptionsSelection;
   key: string;
   name: string;
-  files: number;
+  items: number;
   sources: number;
   cover: SubscriptionCover | null;
   running: boolean;
@@ -53,7 +53,7 @@ function FollowCard({
       : card.running
         ? { tone: 'running' as const, label: 'Syncing' }
         : card.attention
-          ? { tone: 'attention' as const, label: 'Needs attention' }
+          ? { tone: 'attention' as const, label: 'Warning' }
         : card.completed
           ? { tone: 'success' as const, label: 'Complete' }
           : { tone: 'idle' as const, label: 'Idle' };
@@ -94,7 +94,7 @@ function FollowCard({
         <StatusBadge tone={status.tone} label={status.label} />
       </span>
       <span className={styles.followMeta}>
-        {card.files.toLocaleString()} files
+        {card.items.toLocaleString()} item{card.items === 1 ? '' : 's'}
         {card.sources > 0 && ` · ${card.sources} source${card.sources === 1 ? '' : 's'}`}
       </span>
     </button>
@@ -146,7 +146,7 @@ export function SubscriptionsGrid({
         selection: { kind: 'subscription', id: sub.id },
         key: `sub:${sub.id}`,
         name: sub.name,
-        files: sub.total_files,
+        items: sub.total_items,
         sources: sub.queries.length,
         cover: covers.get(sub.id) ?? null,
         running: running.has(sub.id) || progressBySubscriptionId.has(sub.id),
@@ -154,14 +154,10 @@ export function SubscriptionsGrid({
         attention: hasAttention(sub.id),
         completed: !running.has(sub.id)
           && !progressBySubscriptionId.has(sub.id)
-          && isSubscriptionCompleted(
-            sub,
-            listMetrics[sub.id]?.failedPostCount ?? 0,
-            listMetrics[sub.id]?.openIssueCount ?? 0,
-          ),
+          && isSubscriptionCompleted(sub),
         waitingForInbox: sub.run_status === 'inbox_full',
       })),
-  ].sort((a, b) => b.files - a.files || a.name.localeCompare(b.name));
+  ].sort((a, b) => b.items - a.items || a.name.localeCompare(b.name));
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const anchorIndexRef = useRef<number | null>(null);
@@ -236,6 +232,8 @@ export function SubscriptionsGrid({
         >
           {galleryJobs.map((job) => {
             const progress = progressBySubscriptionId.get(job.id);
+            const downloaded = progress?.files_downloaded ?? 0;
+            const total = progress?.gallery_total_items ?? null;
             return (
               <div className={styles.galleryJob} key={job.id}>
                 <IconDownload size={15} stroke={1.6} aria-hidden />
@@ -243,12 +241,17 @@ export function SubscriptionsGrid({
                   <div className={styles.galleryJobText}>
                     <span>{job.name}</span>
                     <span>
-                      {progress
-                        ? `${progress.files_downloaded} downloaded · ${progress.media_added} added`
-                        : 'Queued'}
+                      {total != null
+                        ? `${downloaded.toLocaleString()} / ${total.toLocaleString()} images downloaded`
+                        : `${downloaded.toLocaleString()} images downloaded`}
                     </span>
                   </div>
-                  <ProgressBar indeterminate height={2} />
+                  <ProgressBar
+                    done={downloaded}
+                    total={total ?? 0}
+                    indeterminate={total == null}
+                    height={2}
+                  />
                 </div>
               </div>
             );

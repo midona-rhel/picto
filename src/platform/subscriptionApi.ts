@@ -87,7 +87,7 @@ function mapSubscription(subscription: SubscriptionView): SubscriptionInfo {
     paused: subscription.paused,
     run_status: subscription.status,
     created_at: '',
-    total_files: subscription.media_count,
+    total_items: subscription.root_count,
     posts_per_run: subscription.periodic_post_limit ?? subscription.initial_post_limit ?? 100,
     target_folder_ids: subscription.destination.target_folder_ids,
     automatic_tags: subscription.destination.automatic_tags,
@@ -114,6 +114,7 @@ function mapProgress(
     posts_traversed: counts.posts_traversed,
     posts_added: counts.posts_added,
     files_downloaded: counts.downloaded,
+    gallery_total_items: current?.gallery_total_items ?? null,
     files_skipped: 0,
     queued_for_ingest: current?.counts.queued ?? Math.max(0, discovered - counts.ingested),
     ingesting: 0,
@@ -176,6 +177,11 @@ function mapIssue(issue: SubscriptionIssue): SubscriptionIssuePage['items'][numb
     first_seen_at: issue.first_seen_at,
     last_seen_at: issue.last_seen_at,
     resolved_at: issue.resolved_at,
+    source_item_key: issue.source_item_key,
+    source_post_key: issue.source_post_key,
+    source_post_title: issue.source_post_title,
+    canonical_post_url: issue.canonical_post_url,
+    media_url: issue.media_url,
     recovery_action: recoveryAction(issue),
     next_retry_at: null,
   };
@@ -301,8 +307,16 @@ export function pauseSubscription(id: string, paused: boolean): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.pause', { subscription_id: Number(id), paused }).then(() => undefined);
 }
 
+export function pauseAllSubscriptions(paused: boolean): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.pause_all', { paused }).then(() => undefined);
+}
+
 export function runSubscription(id: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.run', { subscription_id: Number(id) }).then(() => undefined);
+}
+
+export function runSubscriptionQuery(id: string): Promise<void> {
+  return invoke<CreatedSubscriptionRun>('subscriptions.queries.run', { query_id: Number(id) }).then(() => undefined);
 }
 
 export function startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai' = 'ehentai'): Promise<void> {
@@ -417,6 +431,7 @@ export function getSubscriptionProgress(
     posts_traversed: current.counts.posts_traversed,
     posts_added: current.counts.posts_added,
     files_downloaded: current.counts.downloaded,
+    gallery_total_items: current.gallery_total_items,
     files_skipped: 0,
     queued_for_ingest: current.counts.queued,
     ingesting: 0,
@@ -455,7 +470,7 @@ export function listSubscriptionIssues(
   return invoke<IssuePage>('subscriptions.issues.list', {
     subscription_id: Number(subscriptionId),
     query_id: null,
-    open_only: false,
+    unresolved_only: true,
     cursor: cursor ?? null,
     limit,
   }).then((page) => ({
@@ -463,6 +478,12 @@ export function listSubscriptionIssues(
     next_cursor: page.next_cursor,
     total_count: page.total_count,
   }));
+}
+
+export function acknowledgeSubscriptionIssues(subscriptionId: string): Promise<void> {
+  return invoke('subscriptions.issues.acknowledge', {
+    subscription_id: Number(subscriptionId),
+  }).then(() => undefined);
 }
 
 export function getSubscriptionRunActivity(runId: number, sourceItemLimit = 100): Promise<SubscriptionRunActivity> {

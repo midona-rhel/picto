@@ -44,7 +44,7 @@ export interface SubscriptionInfo {
   paused: boolean;
   run_status: string | null;
   created_at: string;
-  total_files: number;
+  total_items: number;
   posts_per_run: number;
   target_folder_ids: number[];
   automatic_tags: string[];
@@ -70,6 +70,7 @@ export interface SubscriptionProgressEvent {
   posts_traversed: number;
   posts_added: number;
   files_downloaded: number;
+  gallery_total_items?: number | null;
   files_skipped: number;
   queued_for_ingest: number;
   ingesting: number;
@@ -120,6 +121,11 @@ export interface SubscriptionIssueRecord {
   first_seen_at: string;
   last_seen_at: string;
   resolved_at: string | null;
+  source_item_key: string | null;
+  source_post_key: string | null;
+  source_post_title: string | null;
+  canonical_post_url: string | null;
+  media_url: string | null;
   recovery_action: string;
   next_retry_at: string | null;
 }

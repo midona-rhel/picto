@@ -17,8 +17,7 @@ export function isGalleryImportJob(subscription: SubscriptionInfo): boolean {
 export function getSubscriptionRunTarget(
   subscription: SubscriptionInfo,
 ): number {
-  const activeQueryCount = subscription.queries.filter((query) => !query.paused).length;
-  return activeQueryCount * (subscription.posts_per_run || DEFAULT_SOURCE_POST_BATCH_SIZE);
+  return subscription.posts_per_run || DEFAULT_SOURCE_POST_BATCH_SIZE;
 }
 
 export function formatRelativeTime(value: string | null | undefined): string {
@@ -79,24 +78,17 @@ export function describeSubscriptionState(input: {
   return 'idle';
 }
 
-export function isQueryCompleted(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
+export function isQueryCompleted(query: SubscriptionQueryInfo): boolean {
   return !query.paused
     && query.completed_initial_run
     && query.successful_run_count >= 1
     && query.last_success_at != null
-    && query.last_failure_kind == null
-    && failedPostCount === 0;
+    && query.last_failure_kind == null;
 }
 
-export function isSubscriptionCompleted(
-  subscription: SubscriptionInfo,
-  failedPostCount = 0,
-  openIssueCount = 0,
-): boolean {
+export function isSubscriptionCompleted(subscription: SubscriptionInfo): boolean {
   return !subscription.paused
     && subscription.queries.length > 0
-    && failedPostCount === 0
-    && openIssueCount === 0
     && subscription.queries.every((query) => isQueryCompleted(query));
 }
 

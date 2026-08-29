@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { IconExternalLink, IconPencil, IconRefresh, IconShieldLock } from '@tabler/icons-react';
 import type { FailedPostGroup, SubscriptionIssueRecord } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
@@ -7,17 +6,6 @@ import { EmptyState } from './EmptyState';
 import { StatusBadge } from './StatusBadge';
 import { formatRelativeTime } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
-
-function groupByReason(posts: FailedPostGroup[]): Map<string, FailedPostGroup[]> {
-  const groups = new Map<string, FailedPostGroup[]>();
-  for (const post of posts) {
-    const reason = post.lastError?.trim() || 'Unknown failure';
-    const bucket = groups.get(reason);
-    if (bucket) bucket.push(post);
-    else groups.set(reason, [post]);
-  }
-  return groups;
-}
 
 /** One compact table for failed posts and subscription issues. */
 export function HealthTab({
@@ -49,7 +37,6 @@ export function HealthTab({
   hasMore: boolean;
   onLoadMore: () => void;
 }) {
-  const groups = useMemo(() => groupByReason(failedPosts), [failedPosts]);
   const openIssues = issues.filter((issue) => issue.status !== 'resolved');
 
   if (failedPostTotalCount === 0 && issueTotalCount === 0) {
@@ -59,19 +46,25 @@ export function HealthTab({
   return (
     <div className={`${styles.subscriptionTable} ${styles.problemTable}`.trim()}>
       <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.problemRow}`.trim()}>
-        <span>Status</span><span>Error message</span><span>Last seen</span><span />
+        <span>Status</span><span>Post</span><span>Why it failed</span><span>Last seen</span><span />
       </div>
 
-      {[...groups.entries()].map(([reason, posts]) => {
-        const first = posts[0];
+      {failedPosts.map((post) => {
+        const reason = post.lastError?.trim() || 'Unknown failure';
+        const postLabel = post.postId || post.mediaUrl || 'Unknown post';
         return (
-          <div key={reason} className={`${styles.subscriptionTableRow} ${styles.problemRow}`.trim()}>
-            <span className={styles.qCellStatus}><StatusBadge tone="attention" label={`${posts.length} failed`} /></span>
+          <div key={post.key} className={`${styles.subscriptionTableRow} ${styles.problemRow}`.trim()}>
+            <span className={styles.qCellStatus}><StatusBadge tone="attention" label={`${post.failedMembers} failed`} /></span>
+            <span className={styles.problemTarget}>
+              {post.canonicalPostUrl ? (
+                <a href={post.canonicalPostUrl} onClick={(event) => { event.preventDefault(); onOpenUrl(post.canonicalPostUrl as string); }}>{postLabel}</a>
+              ) : <span>{postLabel}</span>}
+            </span>
             <span className={styles.problemMessage} title={reason}>{reason}</span>
-            <span className={styles.qCellTime}>{first.nextRetryAt ? formatRelativeTime(first.nextRetryAt) : '—'}</span>
+            <span className={styles.qCellTime}>{post.nextRetryAt ? formatRelativeTime(post.nextRetryAt) : '—'}</span>
             <span className={styles.qCellActions}>
-              {first.canonicalPostUrl && <KbdTooltip label="Open post"><button type="button" aria-label="Open post" className={styles.querySmallBtn} onClick={() => onOpenUrl(first.canonicalPostUrl as string)}><IconExternalLink size={13} /></button></KbdTooltip>}
-              {onRetryPost && <KbdTooltip label="Retry"><button type="button" aria-label="Retry failed post" className={styles.querySmallBtn} disabled={busy} onClick={() => onRetryPost(first)}><IconRefresh size={13} /></button></KbdTooltip>}
+              {post.canonicalPostUrl && <KbdTooltip label="Open post"><button type="button" aria-label="Open post" className={styles.querySmallBtn} onClick={() => onOpenUrl(post.canonicalPostUrl as string)}><IconExternalLink size={13} /></button></KbdTooltip>}
+              {onRetryPost && <KbdTooltip label="Retry"><button type="button" aria-label="Retry failed post" className={styles.querySmallBtn} disabled={busy} onClick={() => onRetryPost(post)}><IconRefresh size={13} /></button></KbdTooltip>}
             </span>
           </div>
         );
@@ -79,7 +72,12 @@ export function HealthTab({
 
       {openIssues.map((issue) => (
         <div key={issue.issue_id} className={`${styles.subscriptionTableRow} ${styles.problemRow}`.trim()}>
-          <span className={styles.qCellStatus}><StatusBadge tone="attention" label={issue.issue_kind.split('_').join(' ')} /></span>
+          <span className={styles.qCellStatus}><StatusBadge tone="attention" label={issue.issue_kind === 'download_item' ? 'download' : issue.issue_kind.split('_').join(' ')} /></span>
+          <span className={styles.problemTarget}>
+            {issue.canonical_post_url ? (
+              <a href={issue.canonical_post_url} onClick={(event) => { event.preventDefault(); onOpenUrl(issue.canonical_post_url as string); }}>{issue.source_post_title?.trim() || issue.source_post_key || issue.source_item_key || 'Unknown post'}</a>
+            ) : <span>{issue.source_post_title?.trim() || issue.source_post_key || issue.source_item_key || 'Subscription'}</span>}
+          </span>
           <span className={styles.problemMessage} title={[issue.message, issue.detail].filter(Boolean).join('\n')}>{issue.message}</span>
           <span className={styles.qCellTime}>{formatRelativeTime(issue.last_seen_at)}</span>
           <span className={styles.qCellActions}>

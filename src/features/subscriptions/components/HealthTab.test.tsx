@@ -21,6 +21,11 @@ function issue(
     first_seen_at: '2026-08-06T00:00:00Z',
     last_seen_at: '2026-08-06T00:00:00Z',
     resolved_at: null,
+    source_item_key: null,
+    source_post_key: null,
+    source_post_title: null,
+    canonical_post_url: null,
+    media_url: null,
     recovery_action: recoveryAction,
     next_retry_at: recoveryAction === 'retry_automatically' ? '2026-08-07T00:00:00Z' : null,
   };
@@ -54,7 +59,15 @@ describe('HealthTab', () => {
         <HealthTab
         failedPosts={[failedPost]}
         issues={[
-          issue(1, 'retry_now'),
+          {
+            ...issue(1, 'retry_now'),
+            source_item_key: 'attachment-1',
+            source_post_key: 'post-42',
+            source_post_title: 'Broken Patreon post',
+            canonical_post_url: 'https://www.patreon.com/posts/42',
+            media_url: 'https://cdn.example.invalid/deleted.png',
+            issue_kind: 'download_item',
+          },
           issue(2, 'fix_credentials'),
           issue(3, 'review_query'),
           issue(4, 'retry_automatically'),
@@ -75,9 +88,13 @@ describe('HealthTab', () => {
     );
 
     expect(screen.getByText('Status')).toBeInTheDocument();
-    expect(screen.getByText('Error message')).toBeInTheDocument();
+    expect(screen.getByText('Post')).toBeInTheDocument();
+    expect(screen.getByText('Why it failed')).toBeInTheDocument();
     expect(screen.getByText('1 failed')).toBeInTheDocument();
+    expect(screen.getByText('download')).toBeInTheDocument();
     expect(screen.getByText('Download failed')).toHaveAttribute('title', 'Download failed');
+    expect(screen.getByRole('link', { name: 'Broken Patreon post' })).toHaveAttribute('href', 'https://www.patreon.com/posts/42');
+    expect(screen.queryByRole('link', { name: 'https://cdn.example.invalid/deleted.png' })).not.toBeInTheDocument();
     expect(screen.getByText('retry automatically')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Retry all' })).toHaveLength(1);
 

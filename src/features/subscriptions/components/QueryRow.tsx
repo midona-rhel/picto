@@ -1,8 +1,8 @@
 import {
   IconCircleCheckFilled,
   IconCopy,
+  IconHandStop,
   IconPencil,
-  IconPlayerPause,
   IconPlayerPlay,
   IconTrash,
 } from '@tabler/icons-react';
@@ -19,10 +19,12 @@ export function QueryRow({
   query,
   sites,
   running,
+  subscriptionRunning,
   paused,
   authWarning,
   busy,
   onPause,
+  onRun,
   onGrouping,
   onEdit,
   onDelete,
@@ -32,11 +34,13 @@ export function QueryRow({
   query: SubscriptionQueryInfo;
   sites: SubscriptionSiteInfo[];
   running: boolean;
+  subscriptionRunning: boolean;
   paused: boolean;
   /** Non-null when the site needs auth attention; text shown on the chip. */
   authWarning: string | null;
   busy: boolean;
   onPause: (paused: boolean) => void;
+  onRun: () => void;
   onGrouping: (groupPosts: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -46,8 +50,14 @@ export function QueryRow({
   const label = query.display_name?.trim() || query.query_text;
 
   return (
-    <KbdTooltip label="Double-click for source details"><div className={`${styles.subscriptionTableRow} ${styles.qRow}`.trim()} onDoubleClick={onShowStats}>
-      <span className={styles.qCellName}>
+    <div
+      className={`${styles.subscriptionTableRow} ${styles.qRow}`.trim()}
+      onDoubleClick={(event) => {
+        if ((event.target as Element).closest('button')) return;
+        onShowStats();
+      }}
+    >
+      <KbdTooltip label="Double-click for source details"><span className={styles.qCellName}>
         <span className={styles.qName} title={query.query_text}>{label}</span>
         {query.source_history_complete && query.completed_initial_run && (
           <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title="Checked all available posts" />
@@ -56,7 +66,7 @@ export function QueryRow({
         {query.last_failure_message && !running && (
           <span className={styles.qFailureText} title={query.last_failure_message}>{query.last_failure_message}</span>
         )}
-      </span>
+      </span></KbdTooltip>
       <span className={styles.qCellSite}>{getSiteLabel(query.site_id, sites)}</span>
       <span className={styles.qCellNum}>{query.posts_found.toLocaleString()}</span>
       <span className={styles.qCellNum}>{query.files_found.toLocaleString()}</span>
@@ -64,7 +74,18 @@ export function QueryRow({
         {query.last_check_time ? formatRelativeTime(query.last_check_time) : 'never'}
         {!query.completed_initial_run && ' · syncing'}
       </span>
-      <span className={styles.qCellActions}>
+      <span className={styles.qCellActions} onDoubleClick={(event) => event.stopPropagation()}>
+        <KbdTooltip label="Run only this source now">
+          <button
+            type="button"
+            className={styles.querySmallBtn}
+            aria-label="Run query now"
+            onClick={onRun}
+            disabled={busy || subscriptionRunning}
+          >
+            <IconPlayerPlay size={14} />
+          </button>
+        </KbdTooltip>
         <KbdTooltip label={query.group_posts ? 'Group multi-media posts' : 'Keep post media separate'}>
           <button
             type="button"
@@ -77,14 +98,17 @@ export function QueryRow({
             <IconCopy size={14} />
           </button>
         </KbdTooltip>
-        <KbdTooltip label={paused ? 'Resume query' : 'Pause query'}>
+        <KbdTooltip label={paused
+          ? 'Resume this source in future subscription runs'
+          : 'Put this source on hold until it is resumed'}>
           <button
             type="button"
             className={styles.querySmallBtn}
+            aria-label={paused ? 'Resume query' : 'Put query on hold'}
             onClick={() => onPause(!paused)}
             disabled={busy}
           >
-            {paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />}
+            {paused ? <IconPlayerPlay size={14} /> : <IconHandStop size={14} />}
           </button>
         </KbdTooltip>
         <KbdTooltip label="Edit">
@@ -98,6 +122,6 @@ export function QueryRow({
           </button>
         </KbdTooltip>
       </span>
-    </div></KbdTooltip>
+    </div>
   );
 }

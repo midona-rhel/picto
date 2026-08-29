@@ -40,7 +40,7 @@ import {
 import styles from './SubscriptionsScreen.module.css';
 
 export function SubscriptionsScreen() {
-  const snapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
+  const [snapshot, setSnapshot] = useAtom(subscriptionsWorkspaceSnapshotAtom);
   const [selection, setSelection] = useAtom(subscriptionsSelectionAtom);
   const [detail, setDetail] = useAtom(subscriptionsDetailAtom);
   const [wizard, setWizard] = useAtom(subscriptionsWizardAtom);
@@ -70,6 +70,19 @@ export function SubscriptionsScreen() {
         subscriptionsController.listRuns(subscription.id),
         subscriptionsController.listIssues(subscription.id),
       ]);
+      await subscriptionsController.acknowledgeIssues(subscription.id);
+      setSnapshot((current) => {
+        if (!current) return current;
+        const metrics = current.listMetrics[subscription.id];
+        if (!metrics || metrics.openIssueCount === 0) return current;
+        return {
+          ...current,
+          listMetrics: {
+            ...current.listMetrics,
+            [subscription.id]: { ...metrics, openIssueCount: 0 },
+          },
+        };
+      });
       setDetail({
         loading: false,
         subscriptionId: subscription.id,
@@ -93,7 +106,7 @@ export function SubscriptionsScreen() {
         message: err instanceof Error ? err.message : String(err),
       });
     }
-  }, [setDetail]);
+  }, [setDetail, setSnapshot]);
 
   // Startup owns the retained workspace; entering the route only revalidates it.
   useEffect(() => {
@@ -212,6 +225,10 @@ export function SubscriptionsScreen() {
       act(`destination:${id}`, () => subscriptionsController.setDestination(id, destination)).then(() => undefined),
     pauseQuery: (queryId: string, paused: boolean) =>
       void act(`pauseq:${queryId}`, () => subscriptionsController.pauseQuery(queryId, paused)),
+    runQuery: (queryId: string) => {
+      markSubscriptionRunTriggered();
+      void act(`runq:${queryId}`, () => subscriptionsController.runQuery(queryId));
+    },
     setQueryGrouping: (queryId: string, groupPosts: boolean) =>
       void act(`groupq:${queryId}`, () => subscriptionsController.setQueryGrouping(queryId, groupPosts)),
     deleteQuery: (queryId: string) => {

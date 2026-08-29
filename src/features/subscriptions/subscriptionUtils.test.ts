@@ -48,7 +48,7 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     paused: false,
     run_status: null,
     created_at: '2026-08-05T19:08:25Z',
-    total_files: 198,
+    total_items: 198,
     posts_per_run: 100,
     target_folder_ids: [],
     automatic_tags: [],
@@ -62,21 +62,18 @@ describe('subscription completion', () => {
     expect(isQueryCompleted(firstRun)).toBe(true);
   });
 
-  it('rejects incomplete, failed, paused, and unhealthy queries', () => {
+  it('rejects incomplete, failed, and paused queries', () => {
     expect(isQueryCompleted(query({ completed_initial_run: false }))).toBe(false);
     expect(isQueryCompleted(query({ last_failure_kind: 'network' }))).toBe(false);
     expect(isQueryCompleted(query({ paused: true }))).toBe(false);
-    expect(isQueryCompleted(query(), 1)).toBe(false);
   });
 
-  it('requires every query and the subscription health to be complete', () => {
+  it('uses query completion independently from non-fatal media warnings', () => {
     const current = subscription([query(), query({ id: '2' })]);
     expect(isSubscriptionCompleted(current)).toBe(true);
     expect(isSubscriptionCompleted(subscription([
       query({ successful_run_count: 1 }),
     ]))).toBe(true);
-    expect(isSubscriptionCompleted(current, 1, 0)).toBe(false);
-    expect(isSubscriptionCompleted(current, 0, 1)).toBe(false);
     expect(isSubscriptionCompleted(subscription([]))).toBe(false);
     expect(isSubscriptionCompleted(subscription([query({ completed_initial_run: false })]))).toBe(false);
   });
@@ -103,7 +100,7 @@ describe('subscription state', () => {
 });
 
 describe('subscription run target', () => {
-  it('matches the backend limit rule for initial and subsequent query runs', () => {
+  it('uses one subscription-wide post limit across all active queries', () => {
     const value = subscription([
       query({ id: 'initial', completed_initial_run: false }),
       query({ id: 'periodic', completed_initial_run: true }),
@@ -111,15 +108,15 @@ describe('subscription run target', () => {
     ]);
     value.posts_per_run = 40;
 
-    expect(getSubscriptionRunTarget(value)).toBe(80);
+    expect(getSubscriptionRunTarget(value)).toBe(40);
   });
 
-  it('uses one hundred source posts per active query by default', () => {
+  it('uses one hundred source posts for the subscription by default', () => {
     expect(getSubscriptionRunTarget(subscription([
       query({ id: 'one' }),
       query({ id: 'two' }),
       query({ id: 'paused', paused: true }),
-    ]))).toBe(200);
+    ]))).toBe(100);
   });
 
   it('does not invent a source-specific limit for account feeds', () => {

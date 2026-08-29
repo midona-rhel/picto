@@ -41,6 +41,7 @@ export interface DetailController {
   setPostsPerRun: (id: string, postsPerRun: number) => void;
   setDestination: (id: string, destination: { target_folder_ids: number[]; automatic_tags: string[] }) => Promise<void>;
   pauseQuery: (queryId: string, paused: boolean) => void;
+  runQuery: (queryId: string) => void;
   setQueryGrouping: (queryId: string, groupPosts: boolean) => void;
   deleteQuery: (queryId: string) => void;
   editQuery: (queryId: number, siteId: string, queryText: string, displayName: string | null, notes: string | null) => Promise<void>;
@@ -140,7 +141,7 @@ export function SubscriptionDetail({
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
   const problemCount = detail.issueTotalCount + detail.failedPostTotalCount;
-  const completed = !running && isSubscriptionCompleted(subscription, detail.failedPostTotalCount, detail.issueTotalCount);
+  const completed = !running && isSubscriptionCompleted(subscription);
   const lastCheck = useMemo(() => subscription.queries.reduce<string | null>(
     (latest, query) => query.last_check_time && (!latest || query.last_check_time > latest) ? query.last_check_time : latest,
     null,
@@ -149,9 +150,10 @@ export function SubscriptionDetail({
   const persistedPostCount = subscription.queries.reduce((total, query) => total + query.posts_found, 0);
   const traversedCount = progress?.posts_traversed ?? latestRun?.posts_traversed ?? 0;
   const postsAddedCount = progress?.posts_added ?? latestRun?.posts_added ?? persistedPostCount;
+  const filesDownloadedCount = progress?.files_downloaded ?? latestRun?.files_downloaded ?? 0;
   const runTarget = getSubscriptionRunTarget(subscription);
-  const runTraversed = Math.min(progress?.posts_traversed ?? 0, runTarget);
-  const runProgressPercent = runTarget > 0 ? Math.min(100, (runTraversed / runTarget) * 100) : 0;
+  const runAdded = progress?.posts_added ?? 0;
+  const runProgressPercent = runTarget > 0 ? Math.min(100, (runAdded / runTarget) * 100) : 0;
   const failedQuery = useMemo(() => subscription.queries.reduce<SubscriptionQueryInfo | null>((latest, query) => {
     if (!query.last_failure_message) return latest;
     if (!latest?.last_failure_at) return query;
@@ -162,15 +164,15 @@ export function SubscriptionDetail({
     ?? (detail.failedPostTotalCount > 0 ? `${detail.failedPostTotalCount} downloads failed` : null);
   const statusLabel = waitingForInbox
     ? 'Inbox full'
-    : completed
-      ? 'Complete'
     : state === 'running'
       ? 'Syncing'
       : state === 'paused'
         ? 'Paused'
         : state === 'attention'
-          ? 'Needs attention'
-          : 'Idle';
+          ? 'Warning'
+          : completed
+            ? 'Complete'
+            : 'Idle';
   const statusTone = state === 'running'
     ? 'running' as const
     : state === 'paused'
@@ -238,9 +240,15 @@ export function SubscriptionDetail({
               <IconPlayerPlay size={14} /> Run now
             </ActionButton>
           )}
-          <ActionButton variant="secondary" disabled={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
-            {subscription.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />} {subscription.paused ? 'Resume' : 'Pause'}
-          </ActionButton>
+          <KbdTooltip label={subscription.paused
+            ? 'Resume automatic subscription runs'
+            : 'Pause future runs until this subscription is resumed'}>
+            <span className={styles.subscriptionActionTooltipTarget}>
+              <ActionButton variant="secondary" disabled={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
+                {subscription.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />} {subscription.paused ? 'Resume' : 'Pause'}
+              </ActionButton>
+            </span>
+          </KbdTooltip>
           <OverflowMenuButton onOpen={onOpenMenu} />
         </div>
 
@@ -249,15 +257,15 @@ export function SubscriptionDetail({
           aria-hidden={!running}
         >
           <div className={styles.subscriptionRunProgressLabel}>
-            <span>{runTraversed.toLocaleString()} / {runTarget.toLocaleString()} posts traversed</span>
-            <span>{(progress?.media_added ?? 0).toLocaleString()} media added</span>
+            <span>{runAdded.toLocaleString()} / {runTarget.toLocaleString()} posts added</span>
+            <span>{(progress?.files_downloaded ?? 0).toLocaleString()} files downloaded</span>
           </div>
           <div
             className={styles.subscriptionRunProgressTrack}
             role={running ? 'progressbar' : undefined}
             aria-valuemin={running ? 0 : undefined}
             aria-valuemax={running ? runTarget : undefined}
-            aria-valuenow={running ? runTraversed : undefined}
+            aria-valuenow={running ? runAdded : undefined}
           >
             <span style={{ width: `${runProgressPercent}%` }} />
           </div>
@@ -266,8 +274,7 @@ export function SubscriptionDetail({
         <div className={styles.subscriptionProperties}>
           <div className={styles.subscriptionProperty}><span>Posts traversed</span><strong>{traversedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>Posts added</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Files downloaded</span><strong>{(progress?.files_downloaded ?? subscription.total_files).toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Media added</span><strong>{(progress?.media_added ?? subscription.total_files).toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Files downloaded</span><strong>{filesDownloadedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>Last check</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
           <div className={styles.subscriptionProperty}>
             <span>Schedule</span>
@@ -359,8 +366,8 @@ export function SubscriptionDetail({
                   <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.qRow}`}>
                     <span>Source</span>
                     <span className={styles.qCellSite}>Site</span>
-                    <span className={styles.qCellNum}>Posts added</span>
-                    <span className={styles.qCellNum}>Media added</span>
+                    <span className={styles.qCellNum}>Posts</span>
+                    <span className={styles.qCellNum}>Media</span>
                     <span>Last check</span>
                     <span />
                   </div>
@@ -373,10 +380,12 @@ export function SubscriptionDetail({
                         query={query}
                         sites={snapshot.sites}
                         running={queryRunning}
+                        subscriptionRunning={running}
                         paused={query.paused}
                         authWarning={auth.blocking ? auth.label : null}
                         busy={busy}
                         onPause={(paused) => controller.pauseQuery(query.id, paused)}
+                        onRun={() => controller.runQuery(query.id)}
                         onGrouping={(groupPosts) => controller.setQueryGrouping(query.id, groupPosts)}
                         onEdit={() => setEditing(query)}
                         onDelete={() => controller.deleteQuery(query.id)}
@@ -452,10 +461,10 @@ export function SubscriptionDetail({
           <div className={styles.queryStats}>
             <div><span>Source</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
             <div><span>Site</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
-            <div><span>Posts added</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
-            <div><span>Media added</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
+            <div><span>Posts</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
+            <div><span>Media</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
             <div><span>Last check</span><strong>{statsQuery.last_check_time ? formatRelativeTime(statsQuery.last_check_time) : 'Never'}</strong></div>
-            <div><span>State</span><strong>{statsQuery.paused ? 'Paused' : statsQuery.completed_initial_run ? 'Ready' : 'Initial sync'}</strong></div>
+            <div><span>State</span><strong>{statsQuery.paused ? 'Paused' : statsQuery.last_failure_message ? 'Failed' : statsQuery.completed_initial_run ? 'Ready' : 'Initial sync'}</strong></div>
             {statsQuery.last_failure_message && <div><span>Last error</span><strong>{statsQuery.last_failure_message}</strong></div>}
           </div>
         )}

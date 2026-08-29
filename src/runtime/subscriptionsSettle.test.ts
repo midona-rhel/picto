@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
+import type { SubscriptionProgressEvent } from '../shared/types/subscriptions';
 
 const { callbacks, register } = vi.hoisted(() => {
   const callbacks = new Map<string, () => void>();
@@ -50,6 +51,7 @@ vi.mock('../shared/lib/notifications', () => ({ showErrorNotification, showSucce
 import {
   refreshSubscriptionsRuntimeState,
   refreshSubscriptionsWorkspace,
+  retainGalleryProgressTotals,
   resetSubscriptionsSettleForTests,
   startSubscriptionsSettle,
 } from './subscriptionsSettle';
@@ -87,6 +89,22 @@ describe('subscription settlement', () => {
     expect(callbacks.size).toBe(0);
   });
 
+  it('retains a known gallery total for the same run across partial polls', () => {
+    const base = {
+      subscription_id: '9',
+      subscription_name: 'Gallery',
+      run_id: 90,
+      files_downloaded: 2,
+    } as SubscriptionProgressEvent;
+    const [settled] = retainGalleryProgressTotals(
+      [{ ...base, gallery_total_items: 24 }],
+      [{ ...base, files_downloaded: 3, gallery_total_items: null }],
+    );
+
+    expect(settled.gallery_total_items).toBe(24);
+    expect(settled.files_downloaded).toBe(3);
+  });
+
   it('refreshes persisted workspace state for subscription invalidation', async () => {
     const stop = startSubscriptionsSettle();
     callbacks.get('subscriptions')?.();
@@ -94,6 +112,41 @@ describe('subscription settlement', () => {
 
     expect(loadWorkspaceSnapshot).toHaveBeenCalledOnce();
     stop();
+  });
+
+  it('runs a trailing refresh when invalidation races a manual run refresh', async () => {
+    let releaseFirst = () => {};
+    loadWorkspaceSnapshot
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseFirst = () => resolve({
+          subscriptions: [],
+          sites: [],
+          credentials: [],
+          credentialHealth: [],
+          runningSubscriptionIds: [],
+          runningProgress: [],
+          listMetrics: {},
+          covers: new Map(),
+        });
+      }))
+      .mockResolvedValueOnce({
+        subscriptions: [{ id: '7', name: 'Active feed' }],
+        sites: [],
+        credentials: [],
+        credentialHealth: [],
+        runningSubscriptionIds: ['7'],
+        runningProgress: [],
+        listMetrics: {},
+        covers: new Map(),
+      });
+
+    const first = refreshSubscriptionsWorkspace();
+    const trailing = refreshSubscriptionsWorkspace();
+    releaseFirst();
+    await Promise.all([first, trailing]);
+
+    expect(loadWorkspaceSnapshot).toHaveBeenCalledTimes(2);
+    expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.runningSubscriptionIds).toEqual(['7']);
   });
 
   it('refreshes persisted task progress for task invalidation', async () => {
@@ -186,7 +239,7 @@ describe('subscription settlement', () => {
     await refreshSubscriptionsRuntimeState();
     await vi.waitFor(() => expect(showSuccessNotification).toHaveBeenCalledWith({
       title: 'Query completed',
-      message: 'Active feed · artist-name · 100 posts traversed · 12 media added',
+      message: 'Active feed · artist-name · 12 posts added to library',
     }));
   });
 
@@ -211,7 +264,7 @@ describe('subscription settlement', () => {
     await refreshSubscriptionsRuntimeState();
     await vi.waitFor(() => expect(showSuccessNotification).toHaveBeenCalledWith({
       title: 'Subscription completed',
-      message: 'Active feed · 1 query completed · 100 posts traversed · 12 media added',
+      message: 'Active feed · 1 query completed · 12 posts added to library',
     }));
   });
 

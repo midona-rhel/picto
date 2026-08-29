@@ -1,6 +1,7 @@
 import { openExternalUrl } from '../platform/shellApi';
 import {
   addSubscriptionQuery,
+  acknowledgeSubscriptionIssues,
   cleanupGalleryImport,
   createSubscription,
   deleteCredential,
@@ -18,11 +19,13 @@ import {
   listSubscriptionIssues,
   listSubscriptionRuns,
   pauseSubscription,
+  pauseAllSubscriptions,
   pauseSubscriptionQuery,
   setSubscriptionQueryGrouping,
   renameSubscription,
   resetSubscription,
   runSubscription,
+  runSubscriptionQuery,
   startGalleryImport,
   setSubscriptionSchedule,
   setSubscriptionPostsPerRun,
@@ -103,6 +106,10 @@ export const subscriptionsController = {
     return listSubscriptionIssues(subscriptionId, null, 50, cursor);
   },
 
+  acknowledgeIssues(subscriptionId: string): Promise<void> {
+    return acknowledgeSubscriptionIssues(subscriptionId);
+  },
+
   getSites(): Promise<SubscriptionSiteInfo[]> {
     return getSubscriptionSites();
   },
@@ -160,8 +167,16 @@ export const subscriptionsController = {
     return pauseSubscription(id, paused);
   },
 
+  pauseAll(paused: boolean): Promise<void> {
+    return pauseAllSubscriptions(paused);
+  },
+
   run(id: string): Promise<void> {
     return runSubscription(id);
+  },
+
+  runQuery(id: string): Promise<void> {
+    return runSubscriptionQuery(id);
   },
 
   startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai'): Promise<void> {

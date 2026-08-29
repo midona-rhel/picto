@@ -16,7 +16,9 @@ import {
   listSubscriptionIssues,
   listSubscriptionRuns,
   pauseSubscriptionQuery,
+  pauseAllSubscriptions,
   runSubscription,
+  runSubscriptionQuery,
   startGalleryImport,
   cleanupGalleryImport,
   setSubscriptionDestination,
@@ -35,7 +37,7 @@ const replacementSubscription = {
   next_run_at: null,
   status: 'running',
   active_run_id: 11,
-  media_count: 3,
+  root_count: 3,
   open_issue_count: 2,
   cover_file_hash: 'cover-hash',
   cover_focus_x: 250,
@@ -75,24 +77,28 @@ describe('replacement subscription API', () => {
 
     await expect(getSubscriptions()).resolves.toEqual([expect.objectContaining({
       id: '7',
-      total_files: 3,
+      total_items: 3,
       queries: [expect.objectContaining({ id: '9', files_found: 3 })],
     })]);
     await expect(getRunningSubscriptions()).resolves.toEqual(['7']);
     expect(invoke.mock.calls.every(([command]) => command === 'subscriptions.list')).toBe(true);
   });
 
-  it('uses persisted replacement commands for run, cancel, and query pause', async () => {
+  it('uses persisted replacement commands for subscription and query runs, cancellation, and query hold', async () => {
     invoke.mockResolvedValue({ revision: 5, resources: ['subscriptions'], item_ids: [] });
 
     await runSubscription('7');
+    await runSubscriptionQuery('9');
     await stopSubscription('7');
     await pauseSubscriptionQuery('9', true);
+    await pauseAllSubscriptions(true);
 
     expect(invoke.mock.calls).toEqual([
       ['subscriptions.run', { subscription_id: 7 }],
+      ['subscriptions.queries.run', { query_id: 9 }],
       ['subscriptions.cancel', { subscription_id: 7 }],
       ['subscriptions.queries.pause', { query_id: 9, paused: true }],
+      ['subscriptions.pause_all', { paused: true }],
     ]);
   });
 

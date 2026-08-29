@@ -173,6 +173,10 @@
   opacity: 1;
 }
 
+.subscriptionActionTooltipTarget {
+  display: inline-flex;
+}
+
 /* ── Autocomplete dropdown ──────────────────────────────────────── */
 
 .acWrap {
@@ -711,7 +715,7 @@
 
 .qRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.28fr) 76px 76px minmax(82px, 110px) 76px;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.28fr) 76px 76px minmax(82px, 110px) 128px;
   gap: 10px;
   min-width: 0;
 }
@@ -827,11 +831,14 @@
   color: var(--color-text-primary);
   font-weight: var(--font-weight-regular);
   text-align: right;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 @container (max-width: 440px) {
   .qRow {
-    grid-template-columns: minmax(0, 1fr) 44px 44px minmax(82px, 105px) 76px;
+    grid-template-columns: minmax(0, 1fr) 44px 44px minmax(82px, 105px) 128px;
   }
 
   .qCellSite {
@@ -894,7 +901,7 @@
 
 .problemRow {
   display: grid;
-  grid-template-columns: minmax(92px, 0.28fr) minmax(0, 1fr) minmax(82px, 110px) 52px;
+  grid-template-columns: minmax(92px, 0.25fr) minmax(140px, 0.8fr) minmax(180px, 1fr) minmax(82px, 110px) 52px;
   gap: 10px;
   min-width: 0;
 }
@@ -906,8 +913,38 @@
 .problemMessage {
   overflow: hidden;
   color: var(--color-text-secondary);
+  cursor: text;
+  text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
+  white-space: nowrap;
+}
+
+.problemTarget {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.problemTarget > a,
+.problemTarget > span {
+  overflow: hidden;
+  color: var(--color-text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.problemTarget > a {
+  cursor: pointer;
+  text-decoration: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.problemTarget > a:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
 }
 
 .problemRow .qCellStatus {
@@ -926,10 +963,10 @@
 
 @container (max-width: 440px) {
   .problemRow {
-    grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr) 52px;
+    grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr) minmax(0, 1fr) 52px;
   }
 
-  .problemRow > :nth-child(3) {
+  .problemRow > :nth-child(4) {
     display: none;
   }
 }
@@ -948,7 +985,10 @@
   gap: 12px;
   padding: 12px 16px 24px;
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-gutter: stable;
+  box-sizing: border-box;
+  container-type: inline-size;
 }
 
 .followingHeader {
@@ -956,12 +996,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.followingHeader .titleWrap {
+  flex: 0 1 150px;
+  min-width: 104px;
+  overflow: hidden;
 }
 
 .galleryJobs {
-  flex: 1 1 260px;
-  min-width: 180px;
-  max-width: 460px;
+  flex: 1 4 220px;
+  min-width: 120px;
+  max-width: 400px;
   min-height: 38px;
   display: flex;
   flex-direction: column;
@@ -969,6 +1017,11 @@
   overflow: hidden;
   visibility: hidden;
   opacity: 0;
+}
+
+.galleryJobs:not([data-active]) {
+  flex-basis: 72px;
+  min-width: 32px;
 }
 
 .galleryJobs[data-active] {
@@ -1010,6 +1063,51 @@
   flex: none;
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
+}
+
+.followingHeader .heroActions {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: clamp(4px, 0.8cqi, 8px);
+}
+
+.followingHeader .heroActions > button {
+  flex: 0 1 auto;
+  gap: clamp(5px, 0.7cqi, 8px);
+  padding-inline: clamp(10px, 1.8cqi, 20px);
+}
+
+@container (max-width: 720px) {
+  .followingHeader {
+    gap: 8px;
+  }
+
+  .galleryJobs {
+    flex-basis: 160px;
+    min-width: 104px;
+    max-width: 260px;
+  }
+
+  .galleryJobs:not([data-active]) {
+    flex-basis: 48px;
+    min-width: 20px;
+  }
+}
+
+@container (max-width: 600px) {
+  .followingHeader .titleWrap {
+    flex-basis: 112px;
+    min-width: 92px;
+  }
+
+  .galleryJobs {
+    min-width: 88px;
+  }
+
+  .galleryJobs:not([data-active]) {
+    flex-basis: 20px;
+    min-width: 12px;
+  }
 }
 
 .followingGrid {
