@@ -674,7 +674,13 @@ def run_ofscraper(
         "--no-live",
     ]
     before, _, before_group = decode_cursor_details(request.get("before"))
-    if before and before_group in (None, "messages"):
+    # OF-Scraper applies --before globally to every download area. A cursor
+    # parked in an earlier group (purchased/messages) must not clamp the later
+    # groups: feed posts newer than that cutoff are still pending work, so the
+    # date filter would hide them and the run could never settle them. Only the
+    # final group's cursor (or a plain group-less timestamp) bounds everything
+    # that remains; earlier-group boundaries are enforced by follows_cursor.
+    if before and before_group in (None, "feed"):
         arguments.extend(["--before", before])
     sys.argv = arguments
     install_ofscraper_compatibility()

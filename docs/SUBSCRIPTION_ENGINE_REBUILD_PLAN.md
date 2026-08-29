@@ -111,10 +111,12 @@ discovered
 Terminal alternatives:
 
 ```text
-discovered/downloading -> skipped
-discovered/downloading/ingesting -> warning
-discovered/downloading/ingesting -> failed
+discovered/downloading -> skipped(reason)
+discovered/downloading/ingesting -> failed(reason)
 ```
+
+Terminal post outcomes are exactly `Added`, `Skipped(reason)`, or `Failed(reason)`. Warnings are
+orthogonal records attached to an outcome, never an outcome themselves.
 
 Rules:
 
@@ -123,12 +125,33 @@ Rules:
 - `added` commits only after canonical ingest returns and the engine verifies a live root and every
   expected source-to-media association.
 - `skipped` means no usable media, an already-settled exact duplicate, or another explicit
-  non-failure terminal reason.
-- A warning is a completed post with one or more non-fatal media failures. Problems retain the post
-  link and concise reason.
+  non-failure terminal reason. Skipped outcomes persist an explicit reason code.
+- A successfully ingested post with one or more non-fatal media failures is `Added` plus warning
+  records. Warnings must not prevent `posts_added` incrementing and must not cause the post limit
+  to overrun. Problems retain the post link and concise reason.
 - A failed post/run is reserved for a condition that prevented a valid terminal outcome.
 - The next post cannot be requested before the current post reaches a terminal state.
 - The configured post limit counts `added` only. Skips never consume it.
+- Runs must still terminate: at provider exhaustion, or at a known previously settled frontier.
+  For providers that cannot expose a finite frontier, apply a safety bound on consecutive
+  non-added traversal and report that condition as the run's terminal reason rather than
+  traversing forever.
+
+### Crash-Safe Ingest Boundary
+
+The exact settlement sequence per post is:
+
+```text
+canonical ingest commit
+-> verify canonical root/provenance
+-> commit attempt outcome and cursor
+-> publish progress
+-> ACK Python
+```
+
+- Never ACK or advance the cursor before the attempt outcome commits.
+- A crash between canonical commit and attempt settlement must recover through source provenance
+  and settle exactly once, without creating another root.
 
 ### Minimal Durable Tables
 
@@ -140,12 +163,28 @@ Retain or replace with direct schema-1 equivalents:
 - `subscription_query`: provider query, cursor, grouping choice, pause state.
 - `source_run`: one manual or scheduled execution.
 - `source_run_query`: one query execution and aggregate terminal status.
-- `source_post`: stable provider post identity and normalized metadata.
-- `source_item`: stable provider media identity and canonical media reference.
-- `source_post_attempt`: the sole persisted post state for a run/query.
+- `source_post`: stable provider post identity and normalized metadata only. No mutable state.
+- `source_item`: stable provider media identity and metadata only. No `state` column, and no
+  duplicated canonical media ownership — `source_provenance` already owns the source-to-media
+  association.
+- `source_post_attempt`: the sole persisted post state for a run/query. Stores `created_root_id`
+  only for `Added`. An exact duplicate is `SkippedExactDuplicate` and may reference the matched
+  provenance without pretending it created a root.
 - `source_file_attempt`: staged path, bytes, and download outcome for current-post progress.
 - `subscription_issue`: user-visible warnings/problems.
-- `gallery_job`: transient gallery-import owner, separate from subscription definitions.
+- `gallery_job`: gallery-import identity and presentation metadata only, with a foreign key to its
+  run/attempt (see Gallery Imports).
+
+### Concrete Schema Requirements
+
+Specify exact columns, keys, constraints, and indexes for `source_run`, `source_run_query`,
+`source_post_attempt`, `source_file_attempt`, and `gallery_job` before implementation — "as
+needed" is not a schema. At minimum SQLite must enforce:
+
+- One non-terminal post attempt per query (partial unique index over non-terminal states).
+- Explicit terminal reason codes persisted on `Skipped` and `Failed` outcomes.
+- The cursor associated with the terminal post boundary persisted with the attempt outcome.
+- `Added` impossible without a live `created_root_id` (CHECK plus FK).
 
 Do not use a gallery-dl archive database as a second history authority. Picto's source identities,
 provenance, and post outcomes already provide the required idempotency.
@@ -159,10 +198,10 @@ manual/background imports if those operations still need it.
 
 Enforce these in code and tests:
 
-- `added` requires `source_post.root_item_id` to reference a live `library_root`.
-- Every successfully downloaded usable source item in an added post has a live
-  `source_item.media_item_id`.
-- `source_item.state = ingested` with a null media ID is invalid and must never be persisted.
+- `Added` requires the attempt's `created_root_id` to reference a live `library_root`.
+- Every successfully downloaded usable source item in an added post has live provenance in
+  `source_provenance`.
+- Source tables carry no mutable ingest state; only attempt rows do.
 - A post cannot be both added and skipped.
 - A run cannot succeed while any started post is non-terminal.
 - A query cannot have more than one non-terminal post attempt.
@@ -175,8 +214,17 @@ Enforce these in code and tests:
 
 ### Use The Library, Not CLI Orchestration
 
-Run one Python worker process per active query and import the vendored `gallery_dl` package
-directly. The process is an extractor service, not a durable worker and not an authority.
+Prefer one reusable gallery-dl service process, driven by the persisted Rust worker, importing the
+vendored `gallery_dl` package directly. Do not create an uncontrolled Python process per query. If
+multiple processes remain, every request must acquire a token from one shared per-domain limiter.
+Cancellation, fairness, and retry/backoff are defined centrally in the Rust worker; cursor
+advancement and retries cannot belong to provider adapters. The Python process is an extractor
+service, not a durable worker and not an authority.
+
+All provider-side state — download-history databases, caches, incremental markers — lives under
+the engine's per-query state directory and is engine-owned. No provider tool may consult global or
+cross-query state: whether a post was already downloaded is a per-query question answered by
+Picto's attempt history, never by a provider tool's own ledger.
 
 Use a pull/ack protocol:
 
@@ -189,14 +237,22 @@ Python -> FILE_STAGED for each completed file
 Python -> CURRENT_POST_DOWNLOAD_COMPLETE
 Rust commits download progress and canonical ingest
 Rust verifies root/media/provenance
-Rust -> ACK_POST(added | skipped | warning)
+Rust commits the attempt outcome and cursor
+Rust -> ACK_POST(outcome, warnings)
 Rust -> NEXT_POST(next cursor)
 ```
 
-The Python iterator must not be advanced after the current post boundary until `ACK_POST` arrives.
-If a gallery-dl extractor internally fetches the next post before yielding the current boundary,
-adapt that provider inside its gallery-dl site adapter by using a one-post cursor/page window. Do
-not weaken the global engine or add local-provider shims.
+`ACK_POST` carries the terminal outcome (`Added`, `Skipped(reason)`, `Failed(reason)`) plus any
+warning records — warnings are never an outcome. The Python iterator must not be advanced after
+the current post boundary until `ACK_POST` arrives. If a gallery-dl extractor internally fetches
+the next post before yielding the current boundary, adapt that provider inside its gallery-dl site
+adapter by using a bounded one-post extractor window. Do not weaken the global engine or add
+local-provider shims.
+
+Prove the pull behavior before schema implementation: first prototype `NEXT_POST`,
+`DOWNLOAD_CURRENT_POST`, and `ACK_POST` against representative provider classes, and identify
+which gallery-dl APIs or hooks expose post boundaries and media descriptors. Do not assume every
+extractor exposes a generic post-list API.
 
 ### Request Pacing
 
@@ -237,6 +293,12 @@ Adapters must not own run counters, persistence, retry loops, ingest, publicatio
 The completed exact-hash fanout change already present in `picto-library/src/ingest.rs` and
 `picto-library/tests/greenfield_contract.rs` should be preserved and reviewed, not reimplemented.
 
+### One Canonical Ingest Implementation
+
+Subscription attempts and ordinary `ingest_job` work may have different durable envelopes, but
+they must call the same canonical prepared-ingest transaction implementation. Do not create
+separate subscription-specific deduplication, thumbnail, tag, collection, or publication logic.
+
 ### Incoming Collection Post
 
 - Store each physical file once by content hash.
@@ -260,8 +322,17 @@ The completed exact-hash fanout change already present in `picto-library/src/ing
 
 Gallery imports use the same post processor but are not represented as transient subscriptions.
 
-- `gallery_job` owns URL, service, run state, expected image total, downloaded count, canonical
-  root ID, warning/error, and timestamps.
+- `source_post_attempt` remains the sole run-state and counter authority for gallery imports.
+- `gallery_job` stores only gallery-specific identity and presentation metadata (URL, service,
+  expected image total, timestamps), with a foreign key to its run/attempt. Do not duplicate
+  phase, downloaded count, warning state, or root ownership in both tables.
+- Progress ownership is expressed as one owner type instead of mandatory `run_id`/`query_id`:
+
+```text
+SourceOwner =
+  SubscriptionQuery { run_id, query_id }
+  | GalleryJob { gallery_job_id }
+```
 - E-Hentai/ExHentai gallery metadata describes one source post with N media items.
 - The UI initially shows `0 images downloaded`.
 - Once a stable total is known, it shows `downloaded / total images downloaded` without reverting
@@ -294,14 +365,21 @@ It must:
 Because the new engine has no gallery-dl archive authority, reset is a single SQLite-owned cleanup
 plus staged-file deletion.
 
+## Retry And Cleanup
+
+- Specify which failure classes retry the current file, the current post, or fail the whole query;
+  retries are bounded and defined centrally, never inside provider adapters.
+- Preserve staged files only while they can be reused safely (resuming the same post attempt).
+- Delete staging after `Added`, `Skipped`, reset, cancellation, or dismissal.
+- Failed gallery jobs remain inspectable but have a bounded retention policy.
+
 ## Progress And UI Contract
 
 Expose one backend progress DTO derived from durable attempt state:
 
 ```text
 SourceRunProgress {
-  run_id,
-  query_id,
+  owner,          // SourceOwner: SubscriptionQuery { run_id, query_id } | GalleryJob { gallery_job_id }
   current_post_key,
   phase,
   posts_traversed,
@@ -338,12 +416,14 @@ Rules:
 
 ### 2. Create The Minimal Schema-1 Runtime
 
-- Edit schema generation 1 directly; do not add a migration.
-- Add `source_post_attempt`, `source_file_attempt`, and `gallery_job` as needed.
+- Create the revised schema-1 database fresh; there is no conversion.
+- Add `source_post_attempt`, `source_file_attempt`, and `gallery_job` per the Concrete Schema
+  Requirements section.
 - Collapse or delete state columns/tables made redundant by the new attempt model.
 - Add constraints/indexes enforcing one current post/query and valid terminal outcomes where SQLite
   can enforce them.
-- Incompatible libraries must fail without mutation; update the one-shot converter separately.
+- Reject every incompatible database without mutation. Do not update the temporary converter; it
+  is deleted during cleanup.
 
 ### 3. Implement The Rust Post Processor
 
@@ -388,6 +468,14 @@ Rules:
 
 ### 8. Cut Providers Over One By One
 
+Provider inventory being cut over: baraag, danbooru, deviantart, e621, ehentai (incl. exhentai
+URLs), fanbox, furaffinity, gelbooru, hentaifoundry, idolcomplex, konachan, newgrounds, onlyfans
+(OF-Scraper bridge, same engine contract), patreon, pixiv, pixivuser, rule34, safebooru, sankaku,
+subscribestar, tumblr, twitter, yandere.
+
+Webtoons is explicitly excluded: delete its backend adapter, metadata logic, auth catalog entry,
+bridge handling, and tests rather than only hiding it in TypeScript.
+
 For each gallery-dl provider:
 
 - Run the same fake/contract suite through its adapter.
@@ -410,6 +498,10 @@ Delete in the same cutover series:
 - Transient gallery subscriptions and renderer cleanup.
 - Stale state reconciliation that exists only to repair old parallel authorities.
 - Compatibility DTO mappers and alternate progress counters.
+- The temporary schema converter (`picto-schema-v1-convert`) — incompatible libraries are rejected
+  without mutation, not converted.
+- The webtoons provider: backend adapter, metadata logic, auth catalog entry, bridge handling, and
+  tests.
 
 There must be one production subscription path after cutover and no dual-write period.
 
@@ -447,6 +539,18 @@ There must be one production subscription path after cutover and no dual-write p
 13. Automatic subscriptions respect tombstones; explicit gallery import can atomically reimport.
 14. Post limit 2 adds exactly two posts while allowing any number of no-media/duplicate skips.
 15. No provider request for post N+1 begins before post N reaches a terminal committed outcome.
+16. A post added with warnings counts as added: `posts_added` increments and the post limit does
+    not overrun.
+17. A run where every discovered post is already known or has no usable media terminates (at
+    exhaustion, settled frontier, or the reported safety bound) instead of traversing forever.
+18. The cursor commits before ACK and never advances on a failed outcome.
+19. Multiple active queries on one domain obey one shared per-domain limiter.
+20. Gallery progress uses `GalleryJob` ownership without fake query IDs.
+21. Reset never changes another subscription with the identical source query.
+22. Crash recovery after canonical commit settles exactly once without creating another root.
+23. A group-scoped provider cursor (e.g. purchased/messages/feed) never clamps discovery in a
+    later group: content newer than an earlier group's cursor timestamp is still discovered and
+    settled.
 
 ## Acceptance Criteria
 
