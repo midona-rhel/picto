@@ -303,7 +303,12 @@ export function registerIpcHandlers({
       };
     }
     const nativeStarted = performance.now();
-    const serialized = await invokeSerialized(command, args || {});
+    let serialized;
+    try {
+      serialized = await invokeSerialized(command, args || {});
+    } catch (error) {
+      throw new Error(`${command}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return {
       __pictoCoreJson: serialized,
       __pictoNativeMs: performance.now() - nativeStarted,

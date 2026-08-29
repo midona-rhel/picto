@@ -157,9 +157,45 @@ describe('media protocol helpers', () => {
       const response = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
 
       expect(response.status).toBe(404);
-      expect(commands).toEqual([]);
+      expect(commands).toEqual(['media.resolve_paths']);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serves canonical originals and adjacent thumbnails outside the active library root', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-canonical-root-'));
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-canonical-source-'));
+    const hash = 'f'.repeat(64);
+    let handler;
+    try {
+      const originalPath = path.join(sourceRoot, 'blobs', 'f', 'ff', 'ff', `${hash}.jpg`);
+      const thumbnailPath = path.join(sourceRoot, 'blobs', 't', 'ff', 'ff', `${hash}.jpg`);
+      await fs.mkdir(path.dirname(originalPath), { recursive: true });
+      await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
+      await fs.writeFile(originalPath, 'canonical original');
+      await fs.writeFile(thumbnailPath, 'canonical thumbnail');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async (command) => command === 'media.resolve_paths'
+          ? [{ file_hash: hash, path: originalPath }]
+          : null,
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+      });
+      await service.registerMediaProtocol();
+
+      const fileResponse = await handler(new Request(`media://localhost/file/${hash}.jpg`));
+      const thumbResponse = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
+
+      expect(fileResponse.status).toBe(200);
+      expect(await fileResponse.text()).toBe('canonical original');
+      expect(thumbResponse.status).toBe(200);
+      expect(await thumbResponse.text()).toBe('canonical thumbnail');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(sourceRoot, { recursive: true, force: true });
     }
   });
 

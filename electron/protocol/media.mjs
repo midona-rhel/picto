@@ -154,7 +154,30 @@ export function createMediaProtocolService({
         }
       }
     } catch {}
+    try {
+      const resolved = await invoke('media.resolve_paths', { file_hashes: [hash] });
+      const filePath = resolved?.[0]?.path;
+      if (typeof filePath === 'string') {
+        const stat = await tryStat(filePath);
+        if (stat) {
+          const meta = buildMeta(filePath, stat, extHint);
+          fileMetaCache.set(hash, meta);
+          return meta;
+        }
+      }
+    } catch {}
     return null;
+  }
+
+  function originalLibraryRoot(filePath) {
+    const cdDirectory = path.dirname(filePath);
+    const abDirectory = path.dirname(cdDirectory);
+    const originalsDirectory = path.dirname(abDirectory);
+    const blobsDirectory = path.dirname(originalsDirectory);
+    if (path.basename(originalsDirectory) !== 'f' || path.basename(blobsDirectory) !== 'blobs') {
+      return null;
+    }
+    return path.dirname(blobsDirectory);
   }
 
   async function resolveThumbMeta(hash) {
@@ -162,24 +185,22 @@ export function createMediaProtocolService({
     if (!root) return null;
     const cached = thumbMetaCache.get(hash);
     if (cached) return cached;
-    const ab = hash.slice(0, 2);
-    const cd = hash.slice(2, 4);
-    const dir = path.join(root, 'blobs', 't', ab, cd);
-    const jpg = path.join(dir, `${hash}.jpg`);
-    const jpgStat = await tryStat(jpg);
-    if (jpgStat) {
-      const meta = buildMeta(jpg, jpgStat, 'jpg');
-      thumbMetaCache.set(hash, meta);
-      thumbRequestsQueued.delete(hash);
-      return meta;
-    }
-    const png = path.join(dir, `${hash}.png`);
-    const pngStat = await tryStat(png);
-    if (pngStat) {
-      const meta = buildMeta(png, pngStat, 'png');
-      thumbMetaCache.set(hash, meta);
-      thumbRequestsQueued.delete(hash);
-      return meta;
+    const roots = [root];
+    const sourceRoot = originalLibraryRoot(fileMetaCache.get(hash)?.filePath ?? '');
+    if (sourceRoot && sourceRoot !== root) roots.push(sourceRoot);
+    for (const candidateRoot of roots) {
+      const ab = hash.slice(0, 2);
+      const cd = hash.slice(2, 4);
+      const dir = path.join(candidateRoot, 'blobs', 't', ab, cd);
+      for (const extension of ['jpg', 'png']) {
+        const filePath = path.join(dir, `${hash}.${extension}`);
+        const stat = await tryStat(filePath);
+        if (!stat) continue;
+        const meta = buildMeta(filePath, stat, extension);
+        thumbMetaCache.set(hash, meta);
+        thumbRequestsQueued.delete(hash);
+        return meta;
+      }
     }
     return null;
   }

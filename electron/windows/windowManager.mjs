@@ -213,10 +213,18 @@ export function createWindowManager({
         ? {
             minWidth: 900,
             minHeight: 650,
-            resizable: false,
+            // Keep the settings surface on the native resize path. The old
+            // frameless, fixed-size window only exposed a very narrow edge
+            // hit target (and no useful corner target) on macOS.
+            resizable: true,
             maximizable: false,
             fullscreenable: false,
-            frame: false,
+            ...(isMac
+              ? {
+                  frame: true,
+                  titleBarStyle: 'hiddenInset',
+                }
+              : { frame: false }),
             transparent: useTransparent,
             backgroundColor: useTransparent ? '#00000000' : (themeBg === '#00000000' ? '#1a1a1e' : themeBg),
           }
@@ -279,6 +287,12 @@ export function createWindowManager({
     }
 
     const win = new BrowserWindow(winOpts);
+
+    // Settings owns its close control, but retaining the hidden native frame
+    // gives macOS its normal, forgiving edge and corner resize hit areas.
+    if (isSettings && isMac) {
+      win.setWindowButtonVisibility(false);
+    }
 
     // macOS Liquid Glass — electron-liquid-glass addView() blocks all mouse input
     // (NSGlassEffectView intercepts hit tests, no known fix as of v1.1.1).
