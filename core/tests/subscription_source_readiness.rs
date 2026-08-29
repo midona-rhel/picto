@@ -46,6 +46,9 @@ struct PostEvidence {
 struct Evidence {
     traversed_post_count: usize,
     posts: Vec<PostEvidence>,
+    /// Every distinct tag namespace the run persisted. Source tags must land
+    /// in a canonical namespace or fall back to `general` — never invent one.
+    tag_namespaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -354,9 +357,14 @@ fn read_evidence(
                     rooted_media_count,
                 });
             }
+            let tag_namespaces = connection
+                .prepare("SELECT DISTINCT namespace FROM tag ORDER BY namespace")?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(Evidence {
                 traversed_post_count,
                 posts,
+                tag_namespaces,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -384,6 +392,23 @@ fn read_evidence(
 
 fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<(), String> {
     let blob_store = BlobStore::open(root).map_err(|error| error.to_string())?;
+    // Source tags must land in a canonical namespace; every unmapped source
+    // category has to fall back to `general` instead of inventing one.
+    const CANONICAL_NAMESPACES: &[&str] = &[
+        "general",
+        "creator",
+        "character",
+        "series",
+        "species",
+        "rating",
+    ];
+    for namespace in &evidence.tag_namespaces {
+        if !CANONICAL_NAMESPACES.contains(&namespace.as_str()) {
+            return Err(format!(
+                "source run persisted non-canonical tag namespace `{namespace}`"
+            ));
+        }
+    }
     let creator_source = matches!(
         site_id,
         "pixiv"
@@ -674,6 +699,7 @@ fn write_report(
             "canonical_urls_persisted": true,
             "metadata_text_sanitized": true,
             "tags_and_creator_metadata_checked": true,
+            "tag_namespaces_canonical_or_general": true,
             "image_video_mime_only": true,
             "blob_sizes_match_sqlite": true,
             "single_posts_are_media_roots": true,

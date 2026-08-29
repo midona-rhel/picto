@@ -591,9 +591,7 @@ async fn normalize_media_download(
         .tags
         .iter()
         .filter_map(|(namespace, subtag)| {
-            let tag = crate::tag_name::format(namespace, subtag);
-            crate::tag_name::parse_external(&tag)
-                .ok()
+            crate::tag_name::normalize_external_pair(namespace, subtag)
                 .map(|(namespace, subtag)| crate::tag_name::format(&namespace, &subtag))
         })
         .collect();
@@ -928,7 +926,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_tags_keep_general_and_core_groups_only() {
+    async fn external_tags_specialize_or_fall_back_to_general() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("post.png");
         ImageBuffer::from_pixel(1, 1, Rgba([1_u8, 2, 3, 255]))
@@ -952,7 +950,7 @@ mod tests {
         .unwrap()
         .remove(0);
 
-        assert_eq!(item.input.tags, ["solo", "creator:example"]);
+        assert_eq!(item.input.tags, ["solo", "creator:example", "highres"]);
     }
 
     #[tokio::test]

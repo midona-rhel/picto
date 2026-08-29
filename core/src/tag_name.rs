@@ -42,6 +42,32 @@ pub fn parse_external(value: &str) -> Result<(String, String), String> {
     }
 }
 
+/// Map an external source category pair onto the canonical namespaces.
+/// Known aliases specialize; every unmapped category falls back to `general`
+/// — sources cannot invent namespaces, and their tags are never dropped.
+pub fn normalize_external_pair(namespace: &str, subtag: &str) -> Option<(String, String)> {
+    let subtag = subtag.trim().to_lowercase();
+    if subtag.is_empty() {
+        return None;
+    }
+    let namespace = namespace.trim().to_lowercase();
+    let namespace = match namespace.as_str() {
+        "" | "tag" | "ungrouped" => "general",
+        "artist" | "contributor" => "creator",
+        "copyright" => "series",
+        value if EXTERNAL_NAMESPACES.contains(&value) => value,
+        _ => "general",
+    };
+    let subtag = if namespace == "general" {
+        // The bare general form carries no prefix, so a colon inside the
+        // value would later read as a namespace separator.
+        subtag.replace(':', "_")
+    } else {
+        subtag
+    };
+    Some((namespace.to_string(), subtag))
+}
+
 pub fn format(namespace: &str, subtag: &str) -> String {
     if namespace.is_empty() || namespace.eq_ignore_ascii_case("general") {
         subtag.to_string()
@@ -79,6 +105,33 @@ mod tests {
         assert_eq!(format("", "solo"), "solo");
         assert_eq!(format("general", "solo"), "solo");
         assert_eq!(format("character", "hero"), "character:hero");
+    }
+
+    #[test]
+    fn unmapped_external_categories_fall_back_to_general() {
+        assert_eq!(
+            normalize_external_pair("meta", "Highres").unwrap(),
+            ("general".into(), "highres".into())
+        );
+        assert_eq!(
+            normalize_external_pair("lore", "Backstory").unwrap(),
+            ("general".into(), "backstory".into())
+        );
+        assert_eq!(
+            normalize_external_pair("artist", "Someone").unwrap(),
+            ("creator".into(), "someone".into())
+        );
+        assert_eq!(
+            normalize_external_pair("copyright", "Original").unwrap(),
+            ("series".into(), "original".into())
+        );
+        // A colon inside a general value would read as a namespace separator
+        // once stored without a prefix.
+        assert_eq!(
+            normalize_external_pair("", "re:zero").unwrap(),
+            ("general".into(), "re_zero".into())
+        );
+        assert_eq!(normalize_external_pair("meta", "   "), None);
     }
 
     #[test]
