@@ -94,11 +94,11 @@ function predictionTags(prediction: RootPrediction | undefined, runModels: Set<s
 }
 
 function mergePredictionResults(previous: RootPrediction[], incoming: RootPrediction[], replacedModels: Set<string>): RootPrediction[] {
-  const byItem = new Map(previous.map((entry) => [entry.root_id, entry]));
+  const byItem = new Map(previous.map((entry) => [entry.rootId, entry]));
   for (const next of incoming) {
-    const current = byItem.get(next.root_id);
-    byItem.set(next.root_id, {
-      root_id: next.root_id,
+    const current = byItem.get(next.rootId);
+    byItem.set(next.rootId, {
+      rootId: next.rootId,
       predictions: [
         ...(current?.predictions ?? []).filter((tag) => !replacedModels.has(tag.model)),
         ...next.predictions,
@@ -181,19 +181,15 @@ export function AiTaggerPanel() {
       const failures: RootPrediction[] = [];
       let done = 0;
       for (const slug of orderedSlugs) {
-        for (const root of roots) {
-          if (generation !== runGenerationRef.current) return;
-          setProgress({ done, total, currentItemId: root.rootItemId });
-          const output = await aiTagPredict([root.rootItemId], [slug]);
-          if (generation !== runGenerationRef.current) return;
-          const combined = output.predictions[0];
-          if (!combined) continue;
-          setPredictions((previous) => mergePredictionResults(previous, [combined], new Set([slug])));
-          setActiveItemId((current) => current ?? root.rootItemId);
-          if (combined.error) failures.push(combined);
-          done += 1;
-          setProgress({ done, total, currentItemId: root.rootItemId });
-        }
+        if (generation !== runGenerationRef.current) return;
+        setProgress({ done, total, currentItemId: roots[0]?.rootItemId ?? null });
+        const output = await aiTagPredict(roots.map((root) => root.rootItemId), [slug]);
+        if (generation !== runGenerationRef.current) return;
+        setPredictions((previous) => mergePredictionResults(previous, output.predictions, new Set([slug])));
+        setActiveItemId((current) => current ?? roots[0]?.rootItemId ?? null);
+        failures.push(...output.predictions.filter((prediction) => prediction.error));
+        done += roots.length;
+        setProgress({ done, total, currentItemId: null });
       }
       if (failures.length > 0) {
         setError(`${failures.length} of ${total} model/item analyses failed. ${failures[0].error}`);
@@ -281,11 +277,11 @@ export function AiTaggerPanel() {
 
   const reviewItemIds = useMemo(() => reviewRoots.length > 0
     ? reviewRoots.map((root) => root.rootItemId)
-    : predictions.map((prediction) => prediction.root_id), [predictions, reviewRoots]);
+    : predictions.map((prediction) => prediction.rootId), [predictions, reviewRoots]);
   const activeIndex = Math.max(0, reviewItemIds.indexOf(activeItemId ?? reviewItemIds[0]));
   const activeRoot = reviewRoots.find((root) => root.rootItemId === activeItemId) ?? reviewRoots[activeIndex] ?? null;
   const activeMedia = activeRoot?.previewMedia ?? null;
-  const activePrediction = predictions.find((prediction) => prediction.root_id === activeItemId);
+  const activePrediction = predictions.find((prediction) => prediction.rootId === activeItemId);
 
   const moveActive = useCallback((delta: number) => {
     if (reviewItemIds.length === 0) return;
@@ -326,9 +322,9 @@ export function AiTaggerPanel() {
 
   const assignments = useMemo(() => predictions.flatMap((prediction) => {
     const tags = predictionTags(prediction, runModels)
-      .filter((tag) => isChecked(prediction.root_id, tag))
+      .filter((tag) => isChecked(prediction.rootId, tag))
       .map((tag) => tag.key);
-    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.root_id);
+    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.rootId);
     return tags.length > 0 && root
       ? [{ root_id: root.rootItemId, tags }]
       : [];
@@ -362,7 +358,7 @@ export function AiTaggerPanel() {
     const keys = new Set<string>();
     for (const prediction of predictions) {
       for (const tag of prediction.predictions) {
-        if (tag.model === model.slug) keys.add(`${prediction.root_id}\u0000${tag.namespace}:${tag.tag}`);
+        if (tag.model === model.slug) keys.add(`${prediction.rootId}\u0000${tag.namespace}:${tag.tag}`);
       }
     }
     return [model.slug, keys.size];
@@ -484,7 +480,7 @@ export function AiTaggerPanel() {
               : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific library items to auto tag</div>
                 : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this item…' : running ? 'Waiting for this item…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
                   : visibleTags.map((tag) => {
-                    const itemId = activeItemId ?? activePrediction?.root_id;
+                    const itemId = activeItemId ?? activePrediction?.rootId;
                     if (itemId == null) return null;
                     const checked = isChecked(itemId, tag);
                     const evidence = [...tag.models]

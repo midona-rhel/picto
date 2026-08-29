@@ -12,7 +12,7 @@ export type {
 };
 
 export interface RootPrediction {
-  root_id: number;
+  rootId: number;
   predictions: AiTagPrediction[];
   error?: string | null;
 }

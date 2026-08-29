@@ -60,7 +60,7 @@ const model = {
 };
 
 const prediction = (rootId: number, tag = 'cat', confidence = 0.8) => ({
-  root_id: rootId,
+  rootId,
   error: null,
   predictions: [{ tag, namespace: 'character', confidence, model: model.slug }],
 });
@@ -186,9 +186,8 @@ describe('AiTaggerPanel', () => {
     await renderPanel([1, 2]);
     await startRun();
     await screen.findByText('cat');
-    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
-    expect(mocks.predict).toHaveBeenNthCalledWith(1, [1], [model.slug]);
-    expect(mocks.predict).toHaveBeenNthCalledWith(2, [2], [model.slug]);
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(1));
+    expect(mocks.predict).toHaveBeenCalledWith([1, 2], [model.slug]);
     await user.click(screen.getByRole('button', { name: 'Apply 2 tags' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
       { root_id: 1, tags: ['character:cat'] },
@@ -197,7 +196,7 @@ describe('AiTaggerPanel', () => {
     expect(mocks.announce).toHaveBeenCalledWith('items.apply_ai_tags');
   });
 
-  it('runs one image at a time through one model at a time', async () => {
+  it('runs all selected roots once through each selected model', async () => {
     const secondModel = { ...model, slug: 'z3d-e621-convnext', label: 'Z3D' };
     mocks.status.mockResolvedValue({
       models: [model, secondModel],
@@ -207,7 +206,7 @@ describe('AiTaggerPanel', () => {
     });
     mocks.predict.mockImplementation(async (itemIds: number[], modelSlugs: string[]) => ({
       predictions: itemIds.map((rootId) => ({
-        root_id: rootId,
+        rootId,
         error: null,
         predictions: modelSlugs.map((slug) => ({
           tag: slug === model.slug ? 'cat' : 'dog',
@@ -221,12 +220,10 @@ describe('AiTaggerPanel', () => {
     await renderPanel([1, 2]);
     const z3dButton = screen.getAllByText('Z3D').map((node) => node.closest('button')).find(Boolean)!;
     await startRun();
-    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
     expect(mocks.predict.mock.calls).toEqual([
-      [[1], [model.slug]],
-      [[2], [model.slug]],
-      [[1], [secondModel.slug]],
-      [[2], [secondModel.slug]],
+      [[1, 2], [model.slug]],
+      [[1, 2], [secondModel.slug]],
     ]);
     const wdButton = screen.getAllByText('WD14').map((node) => node.closest('button')).find(Boolean);
     expect(wdButton?.className).toContain('sidebarItemSelected');
@@ -276,7 +273,7 @@ describe('AiTaggerPanel', () => {
   it('uses the same run confidence for Picto namespaces', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{
-        root_id: 1,
+        rootId: 1,
         error: null,
         predictions: [{ tag: 'example', namespace: 'creator', confidence: 0.3, model: model.slug }],
       }],
@@ -294,7 +291,7 @@ describe('AiTaggerPanel', () => {
   it('selects rating predictions above their threshold by default', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{
-        root_id: 1,
+        rootId: 1,
         error: null,
         predictions: [{ tag: 'explicit', namespace: 'rating', confidence: 0.9, model: model.slug }],
       }],
@@ -407,7 +404,7 @@ describe('AiTaggerPanel', () => {
     mocks.predict.mockImplementation(async (itemIds: number[]) => ({
       predictions: itemIds.map((itemId) => itemId === 1
         ? prediction(1, 'fresh')
-        : { root_id: 2, predictions: [], error: 'unsupported media' }),
+        : { rootId: 2, predictions: [], error: 'unsupported media' }),
       thresholds: { character: 0.35 },
     }));
     await renderPanel([1, 2]);
@@ -424,7 +421,6 @@ describe('AiTaggerPanel', () => {
     expect(await screen.findByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
     expect(screen.getByText('Analyzing 1 of 2')).toBeInTheDocument();
     await act(async () => resolveFirst({ predictions: [prediction(1), prediction(2)], thresholds: { character: 0.35 } }));
-    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
   });
 
@@ -436,7 +432,7 @@ describe('AiTaggerPanel', () => {
     await renderPanel([1, 2]);
     await startRun();
     expect(await screen.findByText('cat')).toBeInTheDocument();
-    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(1));
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     expect(await screen.findByText('dog')).toBeInTheDocument();
     expect(screen.queryByText('cat')).not.toBeInTheDocument();
@@ -453,7 +449,7 @@ describe('AiTaggerPanel', () => {
     await renderPanel([1, 2]);
     await startRun();
     await screen.findByText('cat');
-    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(1));
     await user.click(screen.getByText('cat'));
     await user.click(screen.getByRole('button', { name: 'Next item' }));
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
