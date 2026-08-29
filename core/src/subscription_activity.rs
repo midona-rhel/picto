@@ -27,6 +27,8 @@ pub struct ActivityCounts {
     #[ts(type = "number")]
     pub posts_added: i64,
     #[ts(type = "number")]
+    pub posts_skipped: i64,
+    #[ts(type = "number")]
     pub fetched: i64,
     #[ts(type = "number")]
     pub downloaded: i64,
@@ -136,6 +138,7 @@ pub struct CurrentSubscriptionProgress {
     #[ts(type = "number")]
     pub run_id: i64,
     pub status: String,
+    pub requested_by: String,
     pub counts: ActivityCounts,
     #[ts(type = "number | null")]
     pub gallery_total_items: Option<i64>,
@@ -300,15 +303,22 @@ fn current_progress_from_connection(
                          AND failure_kind IN ('paused', 'inbox_full')
                         THEN failure_kind
                         ELSE status
-                    END
+                    END,
+                    requested_by
              FROM subscription_run
              WHERE subscription_id = ?1 AND status IN ('pending', 'running')
              ORDER BY run_id DESC LIMIT 1",
             [subscription_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((run_id, status)) = active_run else {
+    let Some((run_id, status, requested_by)) = active_run else {
         return Ok(None);
     };
     let summary = connection.query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)?;
@@ -335,6 +345,7 @@ fn current_progress_from_connection(
         subscription_id,
         run_id,
         status,
+        requested_by,
         counts: summary.counts,
         gallery_total_items,
     }))
@@ -565,21 +576,58 @@ fn activity_counts_for_query(
                    ON ssp.query_id = current.query_id
                   AND ssp.last_seen_run_id = current.run_id
                  WHERE current.run_query_id = ?1),
-                COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                    THEN si.source_post_id END),
+                COUNT(DISTINCT CASE
+                    WHEN si.state = 'ingested'
+                     AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                    THEN post.root_item_id END),
+                (SELECT COUNT(*)
+                 FROM subscription_run_query current
+                 JOIN subscription_run current_run USING(run_id)
+                 JOIN subscription_source_post seen
+                   ON seen.query_id = current.query_id
+                  AND seen.last_seen_run_id = current.run_id
+                 LEFT JOIN source_post seen_post
+                   ON seen_post.source_post_id = seen.source_post_id
+                 LEFT JOIN library_root seen_root
+                   ON seen_root.root_id = seen_post.root_item_id
+                 WHERE current.run_query_id = ?1
+                   AND (seen_root.root_id IS NULL
+                        OR seen_root.imported_at_ms < unixepoch(current_run.created_at) * 1000)
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM source_item candidate
+                       LEFT JOIN ingest_job candidate_job
+                         ON candidate_job.source_item_id = candidate.source_item_id
+                       WHERE candidate.source_post_id = seen.source_post_id
+                         AND (candidate.state IN ('pending', 'downloaded', 'failed')
+                              OR candidate_job.status IN ('pending', 'running', 'failed'))
+                   )),
                 COUNT(DISTINCT rsi.source_item_id),
-                COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
-                                    THEN rsi.source_item_id END),
+                COUNT(DISTINCT CASE
+                    WHEN si.state = 'downloaded' AND si.updated_at >= run.created_at
+                    THEN rsi.source_item_id
+                    WHEN si.state IN ('ingested', 'deleted')
+                     AND (root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                          OR ij.updated_at >= run.created_at)
+                    THEN rsi.source_item_id END),
                 COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
+                                     AND ij.updated_at >= run.created_at
                                     THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                COUNT(DISTINCT CASE
+                    WHEN si.state = 'ingested'
+                     AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                    THEN rsi.source_item_id END),
+                COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= run.created_at)
+                                          OR (ij.status = 'failed' AND ij.updated_at >= run.created_at)
                                     THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN si.state = 'failed' OR ij.status = 'failed'
-                                    THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+                COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= run.created_at
                                     THEN rsi.source_item_id END)
          FROM subscription_run_source_item rsi
+         JOIN subscription_run_query run_query USING(run_query_id)
+         JOIN subscription_run run USING(run_id)
          JOIN source_item si ON si.source_item_id = rsi.source_item_id
+         LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
+         LEFT JOIN library_root root ON root.root_id = post.root_item_id
          LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
          WHERE rsi.run_query_id = ?1",
         [run_query_id],
@@ -587,12 +635,13 @@ fn activity_counts_for_query(
             Ok(ActivityCounts {
                 posts_traversed: row.get(0)?,
                 posts_added: row.get(1)?,
-                fetched: row.get(2)?,
-                downloaded: row.get(3)?,
-                queued: row.get(4)?,
-                ingested: row.get(5)?,
-                failed: row.get(6)?,
-                deleted: row.get(7)?,
+                posts_skipped: row.get(2)?,
+                fetched: row.get(3)?,
+                downloaded: row.get(4)?,
+                queued: row.get(5)?,
+                ingested: row.get(6)?,
+                failed: row.get(7)?,
+                deleted: row.get(8)?,
             })
         },
     )
@@ -613,12 +662,13 @@ fn run_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Subscriptio
         counts: ActivityCounts {
             posts_traversed: row.get(10)?,
             posts_added: row.get(11)?,
-            fetched: row.get(12)?,
-            downloaded: row.get(13)?,
-            queued: row.get(14)?,
-            ingested: row.get(15)?,
-            failed: row.get(16)?,
-            deleted: row.get(17)?,
+            posts_skipped: row.get(12)?,
+            fetched: row.get(13)?,
+            downloaded: row.get(14)?,
+            queued: row.get(15)?,
+            ingested: row.get(16)?,
+            failed: row.get(17)?,
+            deleted: row.get(18)?,
         },
     })
 }
@@ -633,32 +683,59 @@ WITH target_runs AS (
 ),
 post_counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
+           COUNT(DISTINCT CASE
+               WHEN (root.root_id IS NULL
+                     OR root.imported_at_ms < unixepoch(tr.created_at) * 1000)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM source_item candidate
+                    LEFT JOIN ingest_job candidate_job
+                      ON candidate_job.source_item_id = candidate.source_item_id
+                    WHERE candidate.source_post_id = ssp.source_post_id
+                      AND (candidate.state IN ('pending', 'downloaded', 'failed')
+                           OR candidate_job.status IN ('pending', 'running', 'failed'))
+                )
+               THEN ssp.source_post_id END) AS posts_skipped
     FROM target_runs tr
     JOIN subscription_run_query srq ON srq.run_id = tr.run_id
     LEFT JOIN subscription_source_post ssp
       ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
+    LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
+    LEFT JOIN library_root root ON root.root_id = post.root_item_id
     GROUP BY srq.run_id
 ),
 run_counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                               THEN si.source_post_id END) AS posts_added,
+           COUNT(DISTINCT CASE
+               WHEN si.state = 'ingested'
+                AND root.imported_at_ms >= unixepoch(tr.created_at) * 1000
+               THEN post.root_item_id END) AS posts_added,
            COUNT(DISTINCT rsi.source_item_id) AS fetched,
-           COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
-                               THEN rsi.source_item_id END) AS downloaded,
+           COUNT(DISTINCT CASE
+               WHEN si.state = 'downloaded' AND si.updated_at >= tr.created_at
+               THEN rsi.source_item_id
+               WHEN si.state IN ('ingested', 'deleted')
+                AND (root.imported_at_ms >= unixepoch(tr.created_at) * 1000
+                     OR ij.updated_at >= tr.created_at)
+               THEN rsi.source_item_id END) AS downloaded,
            COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
+                                AND ij.updated_at >= tr.created_at
                                THEN rsi.source_item_id END) AS queued,
            COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                AND root.imported_at_ms >= unixepoch(tr.created_at) * 1000
                                THEN rsi.source_item_id END) AS ingested,
-           COUNT(DISTINCT CASE WHEN si.state = 'failed' OR ij.status = 'failed'
+           COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= tr.created_at)
+                                     OR (ij.status = 'failed' AND ij.updated_at >= tr.created_at)
                                THEN rsi.source_item_id END) AS failed,
-           COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+           COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= tr.created_at
                                THEN rsi.source_item_id END) AS deleted
     FROM target_runs tr
     JOIN subscription_run_query srq ON srq.run_id = tr.run_id
     LEFT JOIN subscription_run_source_item rsi ON rsi.run_query_id = srq.run_query_id
     LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
+    LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
+    LEFT JOIN library_root root ON root.root_id = post.root_item_id
     LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
     GROUP BY srq.run_id
 )
@@ -667,6 +744,7 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
        COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
+       COALESCE(pc.posts_skipped, 0),
        COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
        COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
        COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
@@ -679,31 +757,60 @@ ORDER BY sr.created_at DESC, sr.run_id DESC
 const RUN_SUMMARY_BY_ID_SQL: &str = r#"
 WITH post_counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
+           COUNT(DISTINCT CASE
+               WHEN (root.root_id IS NULL
+                     OR root.imported_at_ms < unixepoch(run.created_at) * 1000)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM source_item candidate
+                    LEFT JOIN ingest_job candidate_job
+                      ON candidate_job.source_item_id = candidate.source_item_id
+                    WHERE candidate.source_post_id = ssp.source_post_id
+                      AND (candidate.state IN ('pending', 'downloaded', 'failed')
+                           OR candidate_job.status IN ('pending', 'running', 'failed'))
+                )
+               THEN ssp.source_post_id END) AS posts_skipped
     FROM subscription_run_query srq
+    JOIN subscription_run run ON run.run_id = srq.run_id
     LEFT JOIN subscription_source_post ssp
       ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
+    LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
+    LEFT JOIN library_root root ON root.root_id = post.root_item_id
     WHERE srq.run_id = ?1
     GROUP BY srq.run_id
 ),
 run_counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                               THEN si.source_post_id END) AS posts_added,
+           COUNT(DISTINCT CASE
+               WHEN si.state = 'ingested'
+                AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
+               THEN post.root_item_id END) AS posts_added,
            COUNT(DISTINCT rsi.source_item_id) AS fetched,
-           COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
-                               THEN rsi.source_item_id END) AS downloaded,
+           COUNT(DISTINCT CASE
+               WHEN si.state = 'downloaded' AND si.updated_at >= run.created_at
+               THEN rsi.source_item_id
+               WHEN si.state IN ('ingested', 'deleted')
+                AND (root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                     OR ij.updated_at >= run.created_at)
+               THEN rsi.source_item_id END) AS downloaded,
            COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
+                                AND ij.updated_at >= run.created_at
                                THEN rsi.source_item_id END) AS queued,
            COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
                                THEN rsi.source_item_id END) AS ingested,
-           COUNT(DISTINCT CASE WHEN si.state = 'failed' OR ij.status = 'failed'
+           COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= run.created_at)
+                                     OR (ij.status = 'failed' AND ij.updated_at >= run.created_at)
                                THEN rsi.source_item_id END) AS failed,
-           COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+           COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= run.created_at
                                THEN rsi.source_item_id END) AS deleted
     FROM subscription_run_query srq
+    JOIN subscription_run run ON run.run_id = srq.run_id
     LEFT JOIN subscription_run_source_item rsi ON rsi.run_query_id = srq.run_query_id
     LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
+    LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
+    LEFT JOIN library_root root ON root.root_id = post.root_item_id
     LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
     WHERE srq.run_id = ?1
     GROUP BY srq.run_id
@@ -713,6 +820,7 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
        COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
+       COALESCE(pc.posts_skipped, 0),
        COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
        COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
        COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
@@ -794,5 +902,118 @@ mod tests {
         assert_eq!(progress.gallery_total_items, Some(37));
         assert_eq!(progress.counts.downloaded, 1);
         assert_eq!(progress.counts.posts_added, 0);
+    }
+
+    #[test]
+    fn revisiting_an_old_ingested_item_does_not_report_current_progress() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Existing source".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::CanonicalIngest,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (5000, 'old-root', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (5001, 'old-hash', '/tmp/old', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (5000, 'old', 5001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root
+                             (root_id, name, cover_media_id, imported_at_ms, modified_at_ms,
+                              media_count, total_size_bytes)
+                         VALUES (5000, 'old', 5000, 1700000000000, 1700000000000, 1, 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO source_post
+                             (site_id, post_key, root_item_id, created_at, updated_at)
+                         VALUES ('e621', 'old-post', 5000,
+                                 '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')",
+                        [],
+                    )?;
+                    let source_post_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO source_item
+                             (source_post_id, item_key, position, media_item_id, state,
+                              created_at, updated_at)
+                         VALUES (?1, 'old-media', 0, 5000, 'ingested',
+                                 '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')",
+                        [source_post_id],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:01Z")
+            .unwrap();
+        let query = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap()
+        .unwrap();
+        crate::library_subscription_state::record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: "e621".into(),
+                post_key: "old-post".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "old-media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
+
+        let progress = current_progress_library(&application, subscription_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(progress.counts.posts_traversed, 1);
+        assert_eq!(progress.counts.posts_added, 0);
+        assert_eq!(progress.counts.posts_skipped, 1);
+        assert_eq!(progress.counts.downloaded, 0);
+        assert_eq!(progress.counts.ingested, 0);
     }
 }

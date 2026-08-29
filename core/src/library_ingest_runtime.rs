@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use picto_library::{ClaimedIngestJob, PreparedImport, PreparedIngestPayload, RootId};
+use picto_library::{
+    ClaimedIngestJob, LibraryError, PreparedImport, PreparedIngestPayload, RootId,
+};
 
 use crate::library_application::LibraryApplication;
 use crate::media_capabilities::ThumbnailBackend;
@@ -11,6 +13,7 @@ use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS}
 pub struct CanonicalIngestRunReport {
     pub claimed: usize,
     pub ingested: usize,
+    pub skipped: usize,
     pub failed: usize,
     pub root_ids: Vec<RootId>,
     pub cleanup_failures: usize,
@@ -90,12 +93,18 @@ pub fn run_batch(
                 report.cleanup_failures += cleanup_sources(cleanup);
             }
             Err(error) => {
-                application
-                    .library()
-                    .fail_ingest_job(job_id, &error.to_string(), &now)
-                    .map_err(|failure| failure.to_string())?;
-                mark_failed_sources(application, &input.members, &error.to_string(), &now)?;
-                report.failed += 1;
+                if matches!(error, LibraryError::ImportDeleted) {
+                    settle_deleted_import(application, job_id, &input.members, &now)?;
+                    report.skipped += 1;
+                    report.cleanup_failures += cleanup_sources(cleanup);
+                } else {
+                    application
+                        .library()
+                        .fail_ingest_job(job_id, &error.to_string(), &now)
+                        .map_err(|failure| failure.to_string())?;
+                    mark_failed_sources(application, &input.members, &error.to_string(), &now)?;
+                    report.failed += 1;
+                }
             }
         }
     }
@@ -158,20 +167,77 @@ fn settle_items(
         }
         Err(error) => {
             let job_id = jobs[0].0;
-            application
-                .library()
-                .fail_ingest_job(job_id, &error.to_string(), now)
-                .map_err(|failure| failure.to_string())?;
-            mark_failed_sources(
-                application,
-                std::slice::from_ref(&jobs[0].1),
-                &error.to_string(),
-                now,
-            )?;
-            report.failed += 1;
+            if matches!(error, LibraryError::ImportDeleted) {
+                settle_deleted_import(
+                    application,
+                    job_id,
+                    std::slice::from_ref(&jobs[0].1),
+                    now,
+                )?;
+                report.skipped += 1;
+                report.cleanup_failures += cleanup_sources(jobs[0].2.clone());
+            } else {
+                application
+                    .library()
+                    .fail_ingest_job(job_id, &error.to_string(), now)
+                    .map_err(|failure| failure.to_string())?;
+                mark_failed_sources(
+                    application,
+                    std::slice::from_ref(&jobs[0].1),
+                    &error.to_string(),
+                    now,
+                )?;
+                report.failed += 1;
+            }
             Ok(())
         }
     }
+}
+
+fn settle_deleted_import(
+    application: &LibraryApplication,
+    ingest_job_id: i64,
+    inputs: &[PreparedImport],
+    now: &str,
+) -> Result<(), String> {
+    let sources = inputs
+        .iter()
+        .filter_map(|input| input.source_identity.as_ref())
+        .filter_map(|source| {
+            let (site_id, post_key) = source.source_key.split_once(':')?;
+            Some((site_id, post_key, source.source_item_key.as_str()))
+        })
+        .collect::<Vec<_>>();
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::CanonicalIngest,
+            ["subscriptions".to_owned(), "tasks".to_owned()],
+            [],
+            |transaction, _| {
+                let mut changed = transaction.execute(
+                    "UPDATE ingest_job
+                     SET status = 'succeeded', last_error = NULL, payload_json = '{}', updated_at = ?1
+                     WHERE ingest_job_id = ?2 AND status = 'running'",
+                    rusqlite::params![now, ingest_job_id],
+                )?;
+                for (site_id, post_key, item_key) in &sources {
+                    changed += transaction.execute(
+                        "UPDATE source_item
+                         SET state = 'deleted', media_item_id = NULL,
+                             last_error = NULL, updated_at = ?1
+                         WHERE item_key = ?2 AND source_post_id = (
+                             SELECT source_post_id FROM source_post
+                             WHERE site_id = ?3 AND post_key = ?4
+                         ) AND state != 'ingested'",
+                        rusqlite::params![now, item_key, site_id, post_key],
+                    )?;
+                }
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn payload_inputs(payload: &PreparedIngestPayload) -> &[PreparedImport] {

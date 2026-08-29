@@ -176,11 +176,16 @@ pub fn claim_next_query(
                 };
                 let accepted_posts: u32 = transaction
                     .query_row(
-                        "SELECT COUNT(DISTINCT item.source_post_id)
+                        "SELECT COUNT(DISTINCT post.root_item_id)
                          FROM subscription_run_source_item linked
                          JOIN source_item item USING(source_item_id)
+                         JOIN source_post post USING(source_post_id)
+                         JOIN subscription_run_query run_query USING(run_query_id)
+                         JOIN subscription_run run USING(run_id)
+                         JOIN library_root root ON root.root_id = post.root_item_id
                          WHERE linked.run_query_id = ?1
-                           AND item.state = 'ingested'",
+                           AND item.state = 'ingested'
+                           AND root.imported_at_ms >= unixepoch(run.created_at) * 1000",
                         [candidate.run_query_id],
                         |row| row.get::<_, i64>(0),
                     )?
@@ -568,11 +573,16 @@ pub fn complete_query(
     write_transition(application, |transaction| {
         let added_posts: u32 = transaction
             .query_row(
-                "SELECT COUNT(DISTINCT item.source_post_id)
+                "SELECT COUNT(DISTINCT post.root_item_id)
                  FROM subscription_run_source_item linked
                  JOIN source_item item USING(source_item_id)
+                 JOIN source_post post USING(source_post_id)
+                 JOIN subscription_run_query run_query USING(run_query_id)
+                 JOIN subscription_run run USING(run_id)
+                 JOIN library_root root ON root.root_id = post.root_item_id
                  WHERE linked.run_query_id = ?1
-                   AND item.state = 'ingested'",
+                   AND item.state = 'ingested'
+                   AND root.imported_at_ms >= unixepoch(run.created_at) * 1000",
                 [query.run_query_id],
                 |row| row.get::<_, i64>(0),
             )?
@@ -1021,7 +1031,37 @@ mod tests {
                 [],
                 |transaction, _| {
                     transaction.execute(
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (5000, 'run-created-root', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (5001, 'run-created-hash', '/tmp/run-created', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (5000, 'run-created', 5001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root
+                             (root_id, name, cover_media_id, imported_at_ms, modified_at_ms,
+                              media_count, total_size_bytes)
+                         VALUES (5000, 'run-created', 5000, 1787976003000, 1787976003000, 1, 1)",
+                        [],
+                    )?;
+                    transaction.execute(
                         "UPDATE source_item SET state = 'ingested' WHERE source_item_id = ?1",
+                        [ids["media-1"]],
+                    )?;
+                    transaction.execute(
+                        "UPDATE source_post SET root_item_id = 5000
+                         WHERE source_post_id = (
+                             SELECT source_post_id FROM source_item WHERE source_item_id = ?1
+                         )",
                         [ids["media-1"]],
                     )?;
                     Ok(())

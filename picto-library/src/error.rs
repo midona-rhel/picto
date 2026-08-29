@@ -14,6 +14,8 @@ pub enum LibraryError {
     Incompatible(String),
     #[error("invalid library state: {0}")]
     InvalidState(String),
+    #[error("a deliberately deleted import cannot be recreated")]
+    ImportDeleted,
     #[error("invalid input: {0}")]
     InvalidInput(String),
     #[error("not found: {0}")]

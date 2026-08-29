@@ -74,6 +74,8 @@ pub struct SubscriptionProgress {
     #[ts(type = "number")]
     pub posts_added: i64,
     #[ts(type = "number")]
+    pub posts_skipped: i64,
+    #[ts(type = "number")]
     pub discovered: i64,
     #[ts(type = "number")]
     pub downloaded: i64,
@@ -274,32 +276,62 @@ fn query_subscription_views(
              ),
              traversed_posts AS (
                  SELECT srq.run_id,
-                        COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+                        COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
+                        COUNT(DISTINCT CASE
+                            WHEN (root.root_id IS NULL
+                                  OR root.imported_at_ms < unixepoch(active.created_at) * 1000)
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM source_item candidate
+                                 LEFT JOIN ingest_job candidate_job
+                                   ON candidate_job.source_item_id = candidate.source_item_id
+                                 WHERE candidate.source_post_id = ssp.source_post_id
+                                   AND (candidate.state IN ('pending', 'downloaded', 'failed')
+                                        OR candidate_job.status IN ('pending', 'running', 'failed'))
+                             )
+                            THEN ssp.source_post_id END) AS posts_skipped
                  FROM active_runs active
                  JOIN subscription_run_query srq ON srq.run_id = active.run_id
                  JOIN subscription_source_post ssp
                    ON ssp.query_id = srq.query_id
                   AND ssp.last_seen_run_id = srq.run_id
+                 LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
+                 LEFT JOIN library_root root ON root.root_id = post.root_item_id
                  GROUP BY srq.run_id
              ),
              item_progress AS (
                  SELECT srq.run_id,
-                        COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                            THEN si.source_post_id END) AS posts_added,
+                        COUNT(DISTINCT CASE
+                            WHEN si.state = 'ingested'
+                             AND root.imported_at_ms >= unixepoch(active.created_at) * 1000
+                            THEN post.root_item_id END) AS posts_added,
                         COUNT(DISTINCT rsi.source_item_id) AS discovered,
-                        COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
-                                            THEN rsi.source_item_id END) AS downloaded,
-                        COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                            THEN rsi.source_item_id END) AS ingested,
+                        COUNT(DISTINCT CASE
+                            WHEN si.state = 'downloaded'
+                             AND si.updated_at >= active.created_at
+                            THEN rsi.source_item_id
+                            WHEN si.state IN ('ingested', 'deleted')
+                             AND (root.imported_at_ms >= unixepoch(active.created_at) * 1000
+                                  OR ij.updated_at >= active.created_at)
+                            THEN rsi.source_item_id END) AS downloaded,
+                        COUNT(DISTINCT CASE
+                            WHEN si.state = 'ingested'
+                             AND root.imported_at_ms >= unixepoch(active.created_at) * 1000
+                            THEN rsi.source_item_id END) AS ingested,
                         COUNT(DISTINCT CASE WHEN si.state = 'failed'
+                                             AND si.updated_at >= active.created_at
                                             THEN rsi.source_item_id END) AS failed,
                         COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+                                             AND si.updated_at >= active.created_at
                                             THEN rsi.source_item_id END) AS deleted
                  FROM active_runs active
                  JOIN subscription_run_query srq ON srq.run_id = active.run_id
                  LEFT JOIN subscription_run_source_item rsi
                    ON rsi.run_query_id = srq.run_query_id
                  LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
+                 LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
+                 LEFT JOIN library_root root ON root.root_id = post.root_item_id
+                 LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
                  GROUP BY srq.run_id
              )
              SELECT s.subscription_id, s.name, s.schedule, s.paused,
@@ -315,6 +347,7 @@ fn query_subscription_views(
                     COALESCE(issue_totals.issue_count, 0),
                     COALESCE(traversed_posts.posts_traversed, 0),
                     COALESCE(item_progress.posts_added, 0),
+                    COALESCE(traversed_posts.posts_skipped, 0),
                     COALESCE(item_progress.discovered, 0),
                     COALESCE(item_progress.downloaded, 0),
                     COALESCE(item_progress.ingested, 0),
@@ -352,11 +385,12 @@ fn query_subscription_views(
                 progress: SubscriptionProgress {
                     posts_traversed: row.get(11)?,
                     posts_added: row.get(12)?,
-                    discovered: row.get(13)?,
-                    downloaded: row.get(14)?,
-                    ingested: row.get(15)?,
-                    failed: row.get(16)?,
-                    deleted: row.get(17)?,
+                    posts_skipped: row.get(13)?,
+                    discovered: row.get(14)?,
+                    downloaded: row.get(15)?,
+                    ingested: row.get(16)?,
+                    failed: row.get(17)?,
+                    deleted: row.get(18)?,
                 },
                 destination: SubscriptionDestinationPolicy::default(),
                 queries: Vec::new(),
@@ -375,18 +409,12 @@ impl LibraryApplication {
                 picto_library::database::WorkPriority::VisibleRead,
                 |connection| {
                     require_subscription(connection, subscription_id)?;
-                    reject_active_subscription_edit(connection, subscription_id)?;
+                    reject_running_subscription_reset(connection, subscription_id)?;
                     Ok(())
                 },
             )
             .map_err(|error| error.to_string())?;
-        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-            self.root(),
-            subscription_id,
-        )
-        .await?;
-        crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
-        finish_subscription_mutation(
+        let receipt = finish_subscription_mutation(
             self,
             self.library()
                 .auxiliary_semantic_write_if_changed(
@@ -397,7 +425,18 @@ impl LibraryApplication {
                     serde_json::json!({"subscription_id": subscription_id}),
                     |transaction, _| {
                         require_subscription(transaction, subscription_id)?;
-                        reject_active_subscription_edit(transaction, subscription_id)?;
+                        reject_running_subscription_reset(transaction, subscription_id)?;
+                        transaction.execute(
+                            "DELETE FROM deletion_tombstone
+                             WHERE stable_key IN (
+                                 SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
+                                 FROM subscription_source_post linked
+                                 JOIN source_post post USING(source_post_id)
+                                 JOIN source_item item USING(source_post_id)
+                                 WHERE linked.subscription_id = ?1
+                             )",
+                            [subscription_id],
+                        )?;
                         transaction.execute(
                             "DELETE FROM ingest_job
                              WHERE source_item_id IN (
@@ -424,7 +463,7 @@ impl LibraryApplication {
                             "UPDATE source_item
                              SET state = 'pending', last_error = NULL,
                                  updated_at = datetime('now')
-                             WHERE media_item_id IS NULL AND source_item_id IN (
+                             WHERE source_item_id IN (
                                  SELECT si.source_item_id
                                  FROM subscription_source_post ssp
                                  JOIN source_item si
@@ -465,7 +504,14 @@ impl LibraryApplication {
                     },
                 )
                 .map_err(|error| error.to_string())?,
+        )?;
+        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+            self.root(),
+            subscription_id,
         )
+        .await?;
+        crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
+        Ok(receipt)
     }
 
     pub fn create_subscription_definition_library(
@@ -1610,12 +1656,12 @@ fn query_views_by_subscription(
     let mut statement = connection.prepare(
         "WITH source_counts AS (
              SELECT ssp.query_id,
-                    COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                        THEN ssp.source_post_id END) AS post_count,
-                    COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                        THEN si.media_item_id END) AS media_count
+                    COUNT(DISTINCT post.root_item_id) AS post_count,
+                    COUNT(DISTINCT si.media_item_id) AS media_count
              FROM subscription_source_post ssp
+             JOIN source_post post ON post.source_post_id = ssp.source_post_id
              LEFT JOIN source_item si ON si.source_post_id = ssp.source_post_id
+             WHERE post.root_item_id IS NOT NULL
              GROUP BY ssp.query_id
          ),
          successful_runs AS (
@@ -1932,7 +1978,7 @@ fn require_query(connection: &rusqlite::Connection, query_id: i64) -> rusqlite::
 fn reject_active_query_edit(
     connection: &rusqlite::Connection,
     query_id: i64,
-) -> rusqlite::Result<()> {
+) -> picto_library::Result<()> {
     let active: bool = connection.query_row(
         "SELECT EXISTS (
              SELECT 1 FROM subscription_run_query srq
@@ -1943,7 +1989,9 @@ fn reject_active_query_edit(
         |row| row.get(0),
     )?;
     if active {
-        return Err(invalid("stop the subscription before editing its query"));
+        return Err(picto_library::LibraryError::InvalidState(
+            "stop the subscription before editing its query".into(),
+        ));
     }
     Ok(())
 }
@@ -1951,7 +1999,7 @@ fn reject_active_query_edit(
 fn reject_active_subscription_edit(
     connection: &rusqlite::Connection,
     subscription_id: i64,
-) -> rusqlite::Result<()> {
+) -> picto_library::Result<()> {
     let active: bool = connection.query_row(
         "SELECT EXISTS (
              SELECT 1 FROM subscription_run
@@ -1961,7 +2009,29 @@ fn reject_active_subscription_edit(
         |row| row.get(0),
     )?;
     if active {
-        return Err(invalid("stop the subscription before resetting it"));
+        return Err(picto_library::LibraryError::InvalidState(
+            "stop the subscription before changing its posts-per-run limit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_running_subscription_reset(
+    connection: &rusqlite::Connection,
+    subscription_id: i64,
+) -> picto_library::Result<()> {
+    let running: bool = connection.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM subscription_run
+             WHERE subscription_id = ?1 AND status = 'running'
+         )",
+        [subscription_id],
+        |row| row.get(0),
+    )?;
+    if running {
+        return Err(picto_library::LibraryError::InvalidState(
+            "stop the subscription before resetting it".into(),
+        ));
     }
     Ok(())
 }
@@ -1974,4 +2044,218 @@ fn new_key(prefix: &str) -> String {
 
 fn invalid(message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LibraryApplication, NewSubscription, NewSubscriptionQuery};
+    use rusqlite::params;
+
+    #[tokio::test]
+    async fn reset_discards_a_paused_pending_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Example".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(2),
+            periodic_post_limit: Some(2),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "twitter".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:01Z")
+            .unwrap();
+        application
+            .pause_subscription_library(subscription_id, true)
+            .unwrap();
+
+        let provider_state = application
+            .root()
+            .join("source-runners/onlyfans")
+            .join(format!("subscription-{subscription_id}/query-1"));
+        std::fs::create_dir_all(&provider_state).unwrap();
+        std::fs::write(provider_state.join("state.db"), b"stale").unwrap();
+        let archive =
+            rusqlite::Connection::open(application.root().join("gdl-archive.sqlite3")).unwrap();
+        archive
+            .execute_batch("CREATE TABLE archive (entry TEXT PRIMARY KEY);")
+            .unwrap();
+        archive
+            .execute(
+                "INSERT INTO archive(entry) VALUES (?1), (?2)",
+                params![
+                    format!("picto_s{subscription_id}_q1_reset-post"),
+                    "picto_s999_q1_other-post",
+                ],
+            )
+            .unwrap();
+        drop(archive);
+
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, revision| {
+                    let (query_id, run_id, run_query_id): (i64, i64, i64) = transaction.query_row(
+                        "SELECT query.query_id, run.run_id, run_query.run_query_id
+                             FROM subscription_query query
+                             JOIN subscription_run run USING(subscription_id)
+                             JOIN subscription_run_query run_query
+                               ON run_query.run_id = run.run_id
+                              AND run_query.query_id = query.query_id
+                             WHERE query.subscription_id = ?1",
+                        [subscription_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (5000, 'existing-media', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (5001, 'existing-hash', '/existing', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (5000, 'existing', 5001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO source_post
+                             (site_id, post_key, created_at, updated_at)
+                         VALUES ('twitter', 'reset-post', '2026-08-29T00:00:00Z',
+                                 '2026-08-29T00:00:00Z')",
+                        [],
+                    )?;
+                    let source_post_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO source_item
+                             (source_post_id, item_key, position, media_item_id, state,
+                              created_at, updated_at)
+                         VALUES (?1, 'media-1', 0, 5000, 'ingested',
+                                 '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z')",
+                        [source_post_id],
+                    )?;
+                    let source_item_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO subscription_source_post
+                             (subscription_id, query_id, source_post_id, last_seen_run_id)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![subscription_id, query_id, source_post_id, run_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO subscription_run_source_item(run_query_id, source_item_id)
+                         VALUES (?1, ?2)",
+                        params![run_query_id, source_item_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
+                         VALUES ('source:twitter:reset-post:media-1', ?1, 1),
+                                ('unrelated-root', ?1, 1)",
+                        [revision as i64],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO subscription_issue
+                             (issue_key, subscription_id, query_id, issue_kind, message,
+                              first_seen_at, last_seen_at)
+                         VALUES ('reset-issue', ?1, ?2, 'download_item', 'stale',
+                                 '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z')",
+                        params![subscription_id, query_id],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        application
+            .reset_subscription_library(subscription_id)
+            .await
+            .unwrap();
+
+        let subscription = super::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.subscription_id == subscription_id)
+            .unwrap();
+        assert!(subscription.active_run_id.is_none());
+        assert_eq!(subscription.status.as_deref(), None);
+        assert_eq!(subscription.progress.posts_traversed, 0);
+        assert_eq!(subscription.progress.posts_added, 0);
+        assert_eq!(subscription.progress.downloaded, 0);
+        application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    let state: String = connection.query_row(
+                        "SELECT state FROM source_item WHERE item_key = 'media-1'",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(state, "pending");
+                    let source_tombstone: bool = connection.query_row(
+                        "SELECT EXISTS(
+                             SELECT 1 FROM deletion_tombstone
+                             WHERE stable_key = 'source:twitter:reset-post:media-1'
+                         )",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    let unrelated_tombstone: bool = connection.query_row(
+                        "SELECT EXISTS(
+                             SELECT 1 FROM deletion_tombstone
+                             WHERE stable_key = 'unrelated-root'
+                         )",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert!(!source_tombstone);
+                    assert!(unrelated_tombstone);
+                    assert_eq!(
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM subscription_run WHERE subscription_id = ?1",
+                            [subscription_id],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        0
+                    );
+                    assert_eq!(
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM subscription_issue WHERE subscription_id = ?1",
+                            [subscription_id],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        0
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(!provider_state.exists());
+        let archive =
+            rusqlite::Connection::open(application.root().join("gdl-archive.sqlite3")).unwrap();
+        let remaining = archive
+            .prepare("SELECT entry FROM archive ORDER BY entry")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(remaining, vec!["picto_s999_q1_other-post"]);
+    }
 }

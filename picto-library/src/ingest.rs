@@ -71,19 +71,20 @@ pub(crate) fn insert_one(
                 );
             }
             if let Some(source) = &input.source_identity {
-                transaction.execute(
-                    "INSERT INTO source_provenance
+                transaction
+                    .prepare_cached(
+                        "INSERT INTO source_provenance
                      (source_key, source_item_key, media_id, source_text)
                  VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(source_key, source_item_key, media_id) DO UPDATE SET
                      source_text = excluded.source_text",
-                    params![
+                    )?
+                    .execute(params![
                         source.source_key,
                         source.source_item_key,
                         existing.media_id.0,
                         source.source_text
-                    ],
-                )?;
+                    ])?;
             }
             snapshot.revision = revision;
             return Ok(IngestResult {
@@ -97,69 +98,70 @@ pub(crate) fn insert_one(
             });
         }
     }
-    if transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM deletion_tombstone WHERE stable_key = ?1)",
-        [&input.stable_key],
-        |row| row.get::<_, bool>(0),
-    )? {
-        return Err(LibraryError::InvalidState(
-            "a deliberately deleted import cannot be recreated".into(),
-        ));
+    if transaction
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM deletion_tombstone WHERE stable_key = ?1)")?
+        .query_row([&input.stable_key], |row| row.get::<_, bool>(0))?
+    {
+        return Err(LibraryError::ImportDeleted);
     }
 
     let existing_file = transaction
-        .query_row(
+        .prepare_cached(
             "SELECT file_id, perceptual_hash IS NOT NULL
              FROM media_file WHERE content_hash = ?1",
-            [&input.facts.content_hash],
-            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, bool>(1)?)),
-        )
+        )?
+        .query_row([&input.facts.content_hash], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, bool>(1)?))
+        })
         .optional()?;
-    let (file_id, physical_has_perceptual_hash) = if let Some((file_id, has_hash)) = existing_file {
-        transaction.execute(
+    let (file_id, physical_has_perceptual_hash) =
+        if let Some((file_id, has_hash)) = existing_file {
+            transaction.prepare_cached(
             "UPDATE media_file SET file_path = ?2 WHERE file_id = ?1 AND file_path IS NOT ?2",
-            params![file_id, input.file_path],
-        )?;
-        (file_id, has_hash)
-    } else {
-        let file_id = LibraryDatabase::allocate_id(transaction)?;
-        transaction.execute(
-            "INSERT INTO media_file
+        )?.execute(params![file_id, input.file_path])?;
+            (file_id, has_hash)
+        } else {
+            let file_id = LibraryDatabase::allocate_id(transaction)?;
+            transaction
+                .prepare_cached(
+                    "INSERT INTO media_file
                  (file_id, content_hash, file_path, mime, size_bytes, width, height,
                   duration_ms, frame_count, perceptual_hash, palette_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                file_id,
-                input.facts.content_hash,
-                input.file_path,
-                input.facts.mime,
-                sqlite_i64(input.facts.size_bytes, "file size")?,
-                input.facts.width,
-                input.facts.height,
-                input
-                    .facts
-                    .duration_ms
-                    .map(|value| sqlite_i64(value, "duration"))
-                    .transpose()?,
-                input.facts.frame_count,
-                input.facts.perceptual_hash,
-                serde_json::to_string(&input.facts.palette)?,
-            ],
-        )?;
-        (file_id, input.facts.perceptual_hash.is_some())
-    };
+                )?
+                .execute(params![
+                    file_id,
+                    input.facts.content_hash,
+                    input.file_path,
+                    input.facts.mime,
+                    sqlite_i64(input.facts.size_bytes, "file size")?,
+                    input.facts.width,
+                    input.facts.height,
+                    input
+                        .facts
+                        .duration_ms
+                        .map(|value| sqlite_i64(value, "duration"))
+                        .transpose()?,
+                    input.facts.frame_count,
+                    input.facts.perceptual_hash,
+                    serde_json::to_string(&input.facts.palette)?,
+                ])?;
+            (file_id, input.facts.perceptual_hash.is_some())
+        };
 
     let root_id = RootId(LibraryDatabase::allocate_id(transaction)?);
     let media_id = MediaId(root_id.0);
-    transaction.execute(
-        "INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, 1)",
-        params![root_id.0, input.stable_key],
-    )?;
-    transaction.execute(
-        "INSERT INTO media_item(media_id, media_name, media_notes, file_id)
+    transaction
+        .prepare_cached(
+            "INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, 1)",
+        )?
+        .execute(params![root_id.0, input.stable_key])?;
+    transaction
+        .prepare_cached(
+            "INSERT INTO media_item(media_id, media_name, media_notes, file_id)
          VALUES (?1, ?2, ?3, ?4)",
-        params![media_id.0, input.media_name, input.notes, file_id],
-    )?;
+        )?
+        .execute(params![media_id.0, input.media_name, input.notes, file_id])?;
     enqueue_file_work(
         transaction,
         file_id,
@@ -185,12 +187,14 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
         )?;
     }
-    transaction.execute(
-        "INSERT INTO library_root
+    transaction
+        .prepare_cached(
+            "INSERT INTO library_root
              (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
               captured_at_ms, modified_at_ms, media_count, total_size_bytes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, 1, ?8)",
-        params![
+        )?
+        .execute(params![
             root_id.0,
             input.media_name,
             input.notes,
@@ -199,20 +203,20 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
             input.captured_at_ms,
             sqlite_i64(input.facts.size_bytes, "root size")?,
-        ],
-    )?;
+        ])?;
     if let Some(source) = &input.source_identity {
-        transaction.execute(
-            "INSERT INTO source_provenance
+        transaction
+            .prepare_cached(
+                "INSERT INTO source_provenance
                  (source_key, source_item_key, media_id, source_text)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
+            )?
+            .execute(params![
                 source.source_key,
                 source.source_item_key,
                 media_id.0,
                 source.source_text
-            ],
-        )?;
+            ])?;
     }
 
     let lifecycle_key = BitmapKey {
@@ -258,11 +262,9 @@ pub(crate) fn insert_one(
         let auto_tags = folder_auto_tags(transaction, *folder_id)?;
         for tag_id in auto_tags {
             let tag_id = TagId(tag_id);
-            let exists = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)",
-                [tag_id.0],
-                |row| row.get::<_, bool>(0),
-            )?;
+            let exists = transaction
+                .prepare_cached("SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)")?
+                .query_row([tag_id.0], |row| row.get::<_, bool>(0))?;
             if !exists {
                 return Err(LibraryError::InvalidState(format!(
                     "folder {} references missing auto-tag {}",
@@ -401,8 +403,9 @@ fn enqueue_file_work(
             )))
         }
     };
-    transaction.execute(
-        "INSERT INTO work_item
+    transaction
+        .prepare_cached(
+            "INSERT INTO work_item
              (file_id, file_hash, work_type, status, priority, attempt_count,
               available_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'pending', ?5, 0, ?4, ?4, ?4)
@@ -411,14 +414,14 @@ fn enqueue_file_work(
              available_at = excluded.available_at, last_error = NULL,
              updated_at = excluded.updated_at
          WHERE work_item.status = 'failed'",
-        params![
+        )?
+        .execute(params![
             file_id,
             content_hash,
             work_type,
             available_at,
             kind.priority()
-        ],
-    )?;
+        ])?;
     Ok(())
 }
 
@@ -579,24 +582,24 @@ fn existing_import(
     reuse_exact_root: bool,
 ) -> Result<Option<ExistingImport>> {
     let stable_media = transaction
-        .query_row(
+        .prepare_cached(
             "SELECT local_id FROM library_item WHERE stable_key = ?1 AND item_kind = 1",
-            [&input.stable_key],
-            |row| row.get::<_, u32>(0),
-        )
+        )?
+        .query_row([&input.stable_key], |row| row.get::<_, u32>(0))
         .optional()?;
     let source_media = input
         .source_identity
         .as_ref()
         .map(|source| {
             transaction
-                .query_row(
+                .prepare_cached(
                     "SELECT media_id FROM source_provenance
                      WHERE source_key = ?1 AND source_item_key = ?2
                      ORDER BY media_id LIMIT 1",
-                    params![source.source_key, source.source_item_key],
-                    |row| row.get::<_, u32>(0),
-                )
+                )?
+                .query_row(params![source.source_key, source.source_item_key], |row| {
+                    row.get::<_, u32>(0)
+                })
                 .optional()
         })
         .transpose()?
@@ -608,7 +611,7 @@ fn existing_import(
     }
     let exact_media = if reuse_exact_root {
         transaction
-            .query_row(
+            .prepare_cached(
                 "SELECT media.media_id
                  FROM media_item media
                  JOIN media_file file ON file.file_id = media.file_id
@@ -616,9 +619,8 @@ fn existing_import(
                  WHERE file.content_hash = ?1
                  ORDER BY root.root_id IS NULL, media.media_id
                  LIMIT 1",
-                [&input.facts.content_hash],
-                |row| row.get::<_, u32>(0),
-            )
+            )?
+            .query_row([&input.facts.content_hash], |row| row.get::<_, u32>(0))
             .optional()?
     } else {
         None

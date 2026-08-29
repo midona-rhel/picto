@@ -49,7 +49,7 @@ impl Library {
                     )
                     .optional()?
                 {
-                    if status == "failed" {
+                    if matches!(status.as_str(), "failed" | "succeeded") {
                         transaction.execute(
                             "UPDATE ingest_job
                              SET source_kind = ?1, source_path = ?2, source_item_id = ?3,
