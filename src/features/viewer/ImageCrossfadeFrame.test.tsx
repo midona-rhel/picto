@@ -1,5 +1,5 @@
 import { createRef } from 'react';
-import { act, fireEvent, render } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 
@@ -65,7 +65,7 @@ describe('ImageCrossfadeFrame', () => {
     expect(container.querySelector('[data-progressive-media-content]')).toHaveAttribute('data-visible', 'false');
   });
 
-  it('keeps the painted thumbnail until the incoming thumbnail node is decoded', async () => {
+  it('replaces the ready thumbnail and its geometry in the same render', () => {
     const props = {
       frameRef: createRef<HTMLDivElement>(),
       fullImageRef: createRef<HTMLImageElement>(),
@@ -80,22 +80,21 @@ describe('ImageCrossfadeFrame', () => {
       <ImageCrossfadeFrame {...props} thumbnailUrl="first-thumb.jpg" />,
     );
 
-    rerender(<ImageCrossfadeFrame {...props} thumbnailUrl="second-thumb.jpg" />);
+    rerender(<ImageCrossfadeFrame
+      {...props}
+      imageSize={{ width: 800, height: 1200 }}
+      thumbnailUrl="second-thumb.jpg"
+    />);
 
-    expect(container.querySelector('[data-image-crossfade-thumbnail="painted"]')).toHaveAttribute(
-      'src',
-      'first-thumb.jpg',
-    );
-    const incoming = container.querySelector<HTMLImageElement>('[data-image-crossfade-thumbnail="incoming"]');
-    expect(incoming).toHaveAttribute('src', 'second-thumb.jpg');
-    expect(incoming).toHaveStyle({ opacity: '0' });
-
-    await act(async () => { fireEvent.load(incoming!); });
-
-    expect(container.querySelector('[data-image-crossfade-thumbnail="incoming"]')).toBeNull();
-    expect(container.querySelector('[data-image-crossfade-thumbnail="painted"]')).toHaveAttribute(
+    expect(container.querySelectorAll('[data-image-crossfade-layer="thumbnail"]')).toHaveLength(1);
+    expect(container.querySelector('[data-image-crossfade-thumbnail="displayed"]')).toHaveAttribute(
       'src',
       'second-thumb.jpg',
     );
+    expect(container.querySelector('.image-crossfade-frame')).toHaveStyle({
+      width: '800px',
+      height: '1200px',
+      aspectRatio: '800 / 1200',
+    });
   });
 });

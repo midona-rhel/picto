@@ -179,20 +179,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const navigatorRef = useRef<HTMLDivElement>(null);
   const navViewportRef = useRef<HTMLDivElement>(null);
 
-  // ── Image size ──
-  const imageSize = useMemo<ImageSize | null>(() => {
-    if (!currentImage?.width || !currentImage?.height) return null;
-    return { width: currentImage.width, height: currentImage.height };
-  }, [currentImage?.width, currentImage?.height]);
-
-  const imageSizeRef = useRef(imageSize);
-  imageSizeRef.current = imageSize;
-
-  // ── Zoom/pan ──
-  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef], {
-    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
-  });
-
   // ── Media pipeline ──
   const neighborHashes = useMemo(() => {
     const r: string[] = [];
@@ -211,11 +197,31 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     neighborHashes,
   });
 
+  // Geometry follows the image the pipeline is actually displaying. During
+  // navigation that may intentionally lag behind currentImage until the next
+  // thumbnail is decoded.
+  const displayedImage = pipeline.displayedHash
+    ? images.find((image) => image.hash === pipeline.displayedHash) ?? currentImage
+    : currentImage;
+  const imageSize = useMemo<ImageSize | null>(() => {
+    if (!displayedImage?.width || !displayedImage?.height) return null;
+    return { width: displayedImage.width, height: displayedImage.height };
+  }, [displayedImage?.width, displayedImage?.height]);
+  const displayedImageHash = displayedImage?.hash ?? null;
+
+  const imageSizeRef = useRef(imageSize);
+  imageSizeRef.current = imageSize;
+
+  // ── Zoom/pan ──
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef], {
+    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
+  });
+
   // Fit image to window as soon as we know the image dimensions.
   // Track which hash we last fitted so we only fit once per image.
   const lastFittedHashRef = useRef<string | null>(null);
   useEffect(() => {
-    const h = currentImage?.hash ?? null;
+    const h = displayedImageHash;
     if (!h || !imageSize) return;
     if (lastFittedHashRef.current === h) return;
     lastFittedHashRef.current = h;
@@ -236,12 +242,12 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         : Math.min(cw / imageSize.width, ch / imageSize.height);
       zoom.setState({ scale, tx: 0, ty: 0 });
     }
-  }, [currentImage?.hash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [displayedImageHash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cache zoom state on change
   useEffect(() => {
-    if (currentImage?.hash) zoomCache.set(currentImage.hash, zoom.state);
-  }, [zoom.state, currentImage?.hash]);
+    if (displayedImageHash) zoomCache.set(displayedImageHash, zoom.state);
+  }, [zoom.state, displayedImageHash]);
 
   // ── Proportional zoom on container resize ──
   const prevContainerDimsRef = useRef({ w: 0, h: 0 });
