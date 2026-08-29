@@ -186,14 +186,15 @@ Stop cancels at the attempt level, not just the run level:
   the leased worker process is terminated (SIGKILL), the open attempt settles as `cancelled`
   through the recovery path, and the lease releases. Stop can therefore never hang on a stuck
   extractor; the same bound applies during restart recovery.
-- The `ingesting` wait is bounded too: canonical ingest is one local SQLite transaction; if it
-  has not committed within 30 seconds, Stop treats it as the crash case — the process-level
-  recovery path applies and settlement happens exactly once via the provenance check.
-- Forced termination never takes down unrelated work: an execution holds an exclusive lease on
-  the worker process serving it (one process per active execution, or an exclusively assigned
-  pool member). If the shared control service itself must be killed, that is a declared
-  collateral event — every open attempt across executions settles through the same recovery
-  path, and the event is logged as such.
+- An issued canonical ingest transaction always finishes — it is local Rust/SQLite work with
+  bounded lock acquisition (busy_timeout), and nothing can or should abort it mid-commit. Stop
+  therefore returns "cancellation requested" immediately; the in-flight post's settlement
+  completes asynchronously, and the lease releases once that settlement commits. Only the
+  extractor side has a kill path.
+- Forced termination never takes down unrelated work, because the worker topology is one
+  bounded reusable pool whose members are exclusively leased to a single attempt at a time —
+  never a process spawned per execution, never one killable worker shared concurrently. Killing
+  a leased member affects exactly its own attempt.
 
 ### Crash-Safe Ingest Boundary
 
@@ -276,32 +277,13 @@ CREATE UNIQUE INDEX idx_source_run_one_running_query ON source_run_query(run_id)
 CREATE UNIQUE INDEX idx_one_gallery_execution_per_run ON source_run_query(run_id)
     WHERE owner_kind = 'gallery';
 
--- Ownership coherence: a query-owned row must belong to its run's
--- subscription; a gallery-owned row must live on a gallery run. INSERT and
--- UPDATE are both covered.
-CREATE TRIGGER run_query_owner_coherence_insert
-BEFORE INSERT ON source_run_query
-WHEN (NEW.owner_kind = 'query' AND (
-          (SELECT r.requested_by FROM source_run r WHERE r.run_id = NEW.run_id) = 'gallery'
-          OR (SELECT r.subscription_id FROM source_run r WHERE r.run_id = NEW.run_id)
-             IS NOT (SELECT q.subscription_id FROM subscription_query q WHERE q.query_id = NEW.query_id)))
-  OR (NEW.owner_kind = 'gallery' AND
-          (SELECT r.requested_by FROM source_run r WHERE r.run_id = NEW.run_id) != 'gallery')
-BEGIN SELECT RAISE(ABORT, 'execution owner does not match its run'); END;
-
--- Rows are born pending; every later transition goes through the UPDATE
--- triggers. Terminal or running rows cannot be inserted directly.
-CREATE TRIGGER run_query_born_pending
-BEFORE INSERT ON source_run_query
-WHEN NEW.status != 'pending'
-BEGIN SELECT RAISE(ABORT, 'run queries are inserted pending'); END;
-
--- A gallery-owned execution may not start before its gallery_job exists.
-CREATE TRIGGER gallery_execution_requires_job
-BEFORE UPDATE OF status ON source_run_query
-WHEN NEW.status = 'running' AND NEW.owner_kind = 'gallery'
-    AND NOT EXISTS (SELECT 1 FROM gallery_job g WHERE g.run_query_id = NEW.run_query_id)
-BEGIN SELECT RAISE(ABORT, 'gallery execution requires its gallery_job'); END;
+-- Execution identity is immutable after insertion; every other invariant on
+-- these rows (owner coherence, born-pending states, gallery-job presence)
+-- lives in the single typed Rust transition path and its contract tests,
+-- not in defensive SQL.
+CREATE TRIGGER run_query_identity_immutable
+BEFORE UPDATE OF run_id, owner_kind, query_id ON source_run_query
+BEGIN SELECT RAISE(ABORT, 'execution identity is immutable'); END;
 
 CREATE TABLE source_post_attempt (
     attempt_id INTEGER PRIMARY KEY,
@@ -351,31 +333,15 @@ CREATE TABLE gallery_job (
     dismissed_at TEXT
 ) STRICT;
 
--- Enforced invariants (not comments): terminal attempts carry reasons, Added
--- carries roots, gallery imports carry exactly one collection root. Attempts
--- are born `discovered`, so every terminal transition passes the UPDATE
--- triggers — terminal rows cannot be inserted directly.
-CREATE TRIGGER attempt_born_discovered
-BEFORE INSERT ON source_post_attempt
-WHEN NEW.state != 'discovered'
-BEGIN SELECT RAISE(ABORT, 'attempts are inserted discovered'); END;
-
-CREATE TRIGGER attempt_terminal_reason_required
-BEFORE UPDATE OF state ON source_post_attempt
-WHEN NEW.state IN ('skipped','failed','cancelled') AND NEW.terminal_reason IS NULL
-BEGIN SELECT RAISE(ABORT, 'terminal attempt requires a reason'); END;
-
+-- The two enforced-value invariants SQLite owns: Added carries live roots,
+-- and a gallery settle is exactly one collection root. Reason codes,
+-- timestamps, and state ordering are the Rust transition path's contract.
 CREATE TRIGGER attempt_added_requires_live_roots
 BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state = 'added' AND NOT EXISTS
     (SELECT 1 FROM source_attempt_root r
      WHERE r.attempt_id = NEW.attempt_id AND r.root_id IS NOT NULL)
 BEGIN SELECT RAISE(ABORT, 'added attempt requires live result roots'); END;
-
-CREATE TRIGGER attempt_settled_timestamp
-BEFORE UPDATE OF state ON source_post_attempt
-WHEN NEW.state IN ('added','skipped','failed','cancelled') AND NEW.settled_at IS NULL
-BEGIN SELECT RAISE(ABORT, 'terminal attempt requires settled_at'); END;
 
 CREATE TRIGGER gallery_added_requires_one_collection_root
 BEFORE UPDATE OF state ON source_post_attempt
@@ -393,27 +359,10 @@ cursor_value, updated_at, PRIMARY KEY(query_id, cursor_scope))`. Single-stream p
 scope (`'feed'`). Settlement updates only the current scope, atomically with the attempt outcome.
 Run state, counters, phase, downloaded counts, and warnings live in the attempt tables for both
 owners; `gallery_job` holds identity and presentation only and **references its execution**
-(`gallery_job.run_query_id`), matching one cascade graph. Deletion is trigger-complete, so an
-orphaned gallery execution is structurally impossible rather than asserted:
-
-```sql
--- An active gallery job cannot be deleted; Stop it first.
-CREATE TRIGGER gallery_job_delete_requires_terminal
-BEFORE DELETE ON gallery_job
-WHEN EXISTS (SELECT 1 FROM source_run_query rq
-             WHERE rq.run_query_id = OLD.run_query_id
-               AND rq.status IN ('pending','running'))
-BEGIN SELECT RAISE(ABORT, 'stop the gallery job before dismissing it'); END;
-
--- Dismissing the job removes its whole execution (run cascades run_query).
-CREATE TRIGGER gallery_job_dismissal_cleans_execution
-AFTER DELETE ON gallery_job
-BEGIN
-    DELETE FROM source_run
-    WHERE run_id = (SELECT rq.run_id FROM source_run_query rq
-                    WHERE rq.run_query_id = OLD.run_query_id);
-END;
-```
+(`gallery_job.run_query_id`), matching one cascade graph. Dismissal is one explicit Rust
+transaction: refuse while the execution is active (Stop first), then delete the job and its
+`source_run` (whose `source_run_query` rows cascade) together. That path and its contract test —
+not defensive SQL — own the no-orphan guarantee.
 
 Do not use a gallery-dl archive database as a second history authority. Picto's source identities,
 provenance, and post outcomes already provide the required idempotency.
@@ -446,9 +395,12 @@ Enforce these in code and tests:
 
 ### Use The Library, Not CLI Orchestration
 
-Prefer one reusable gallery-dl service process, driven by the persisted Rust worker, importing the
-vendored `gallery_dl` package directly. Do not create an uncontrolled Python process per query. If
-multiple processes remain, every request must acquire a token from one shared per-domain limiter.
+The extractor topology is one bounded reusable pool of Python worker processes, driven by the
+persisted Rust worker, importing the vendored `gallery_dl` package directly. A pool member is
+exclusively leased to one attempt at a time (so cancellation can kill it without collateral) and
+returns to the pool at settlement. Do not create an uncontrolled process per query and do not
+share one member across concurrent attempts. Every request acquires a token from one shared
+per-domain limiter.
 Cancellation, fairness, and retry/backoff are defined centrally in the Rust worker; cursor
 advancement and retries cannot belong to provider adapters. The Python process is an extractor
 service, not a durable worker and not an authority.
