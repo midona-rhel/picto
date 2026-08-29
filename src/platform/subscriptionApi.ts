@@ -220,8 +220,12 @@ export async function getSubscriptionOverview() {
   };
 }
 
+/** Sites the backend supports but the UI does not offer. */
+const REMOVED_SITE_IDS = new Set(['webtoons']);
+
 export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
-  return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) => sites.map(mapSite));
+  return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) =>
+    sites.filter((site) => !REMOVED_SITE_IDS.has(site.id)).map(mapSite));
 }
 
 export function getSubscriptionCovers(): Promise<Map<string, SubscriptionCover>> {
