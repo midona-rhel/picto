@@ -23,7 +23,6 @@ import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { GlassModal } from '../../shared/ui/GlassModal';
 import { ConfirmModal } from '../modals/ConfirmModal';
-import { EmptyState } from '../subscriptions/components/EmptyState';
 import { ActionButton } from '../subscriptions/components/ActionButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
@@ -779,7 +778,7 @@ export function TagManagerScreen() {
         >
           <div className={styles.tagCanvas} ref={tagCanvasRef}>
             {!loading && tags.length === 0 && (
-              <EmptyState title="No tags found" description="Try a different search or group." />
+              <div className={styles.noTags}>No tags</div>
             )}
             <div
               className={styles.tagListInner}

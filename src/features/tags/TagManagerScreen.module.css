@@ -219,6 +219,16 @@
   padding: 8px 0 24px;
 }
 
+.noTags {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-secondary);
+  font: var(--font-size-md) var(--font-family-ui);
+  pointer-events: none;
+}
+
 .tagListInner {
   position: relative;
   width: 100%;

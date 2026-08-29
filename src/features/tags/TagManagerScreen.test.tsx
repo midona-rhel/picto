@@ -154,6 +154,16 @@ describe('TagManagerScreen', () => {
     expect(search).toHaveFocus();
   });
 
+  it('shows a plain centered label when there are no tags', async () => {
+    mocks.getPaginated.mockResolvedValue({ tags: [], next_cursor: null, revision: 1 });
+    mocks.getNamespaceSummary.mockResolvedValue([]);
+
+    await renderScreen();
+
+    expect(await screen.findByText('No tags')).toBeInTheDocument();
+    expect(screen.queryByText('Try a different search or group.')).not.toBeInTheDocument();
+  });
+
   it('browses zero-count tags and follows the opaque cursor', async () => {
     await renderScreen();
 
