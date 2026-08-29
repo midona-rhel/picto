@@ -29,6 +29,7 @@ CREATE TABLE media_file (
 CREATE TABLE media_item (
     media_id INTEGER PRIMARY KEY REFERENCES library_item(local_id) ON DELETE CASCADE,
     media_name TEXT NOT NULL CHECK (length(media_name) <= 1024),
+    media_notes TEXT,
     file_id INTEGER NOT NULL REFERENCES media_file(file_id) ON DELETE RESTRICT
 ) STRICT;
 

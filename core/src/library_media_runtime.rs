@@ -1,16 +1,37 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use picto_library::database::WorkPriority;
-use picto_library::{ClaimedMediaWork, FileId, LabColor, MediaFactsUpdate, MediaId, MediaWorkKind};
+use picto_library::{
+    ClaimedMediaWork, FileId, LabColor, LibraryError, MediaFactsUpdate, MediaId, MediaWorkKind,
+};
 
 use crate::library_application::LibraryApplication;
 use crate::media_capabilities::ThumbnailBackend;
 use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 
+pub fn drain_blob_cleanup(application: &LibraryApplication, limit: usize) -> Result<usize, String> {
+    application
+        .library()
+        .clean_pending_blobs(limit, |pending| {
+            application
+                .blobs()
+                .delete(&pending.content_hash)
+                .map_err(|error| {
+                    LibraryError::InvalidState(format!(
+                        "failed to delete blob {}: {error}",
+                        pending.content_hash
+                    ))
+                })
+        })
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CanonicalMediaWorkReport {
     pub claimed: usize,
     pub succeeded: usize,
+    pub perceptual_hashes_updated: usize,
     pub retried: usize,
     pub failed: usize,
 }
@@ -48,9 +69,10 @@ pub async fn drain_batch(
     let mut completed = Vec::new();
     for item in work {
         match execute(application, &item, now.timestamp_millis()).await {
-            Ok(()) => {
+            Ok(perceptual_hash_updated) => {
                 completed.push(item.work_id);
                 report.succeeded += 1;
+                report.perceptual_hashes_updated += usize::from(perceptual_hash_updated);
             }
             Err(error) => {
                 let (terminal, _) = application
@@ -105,7 +127,7 @@ async fn execute(
     application: &LibraryApplication,
     work: &ClaimedMediaWork,
     changed_at_ms: i64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let file_id = work
         .file_id
         .ok_or_else(|| format!("work {} has no physical file", work.work_id))?;
@@ -121,10 +143,11 @@ async fn execute(
     match work.kind {
         MediaWorkKind::Thumbnail => {
             ensure_thumbnail(application, &target, &mut source).await?;
+            Ok(false)
         }
         MediaWorkKind::DominantColors => {
             if !source.caps.can_dominant_colors {
-                return Ok(());
+                return Ok(false);
             }
             let image = derivative_image(application, &target, &mut source).await?;
             let palette = crate::media_processing::colors::extract_dominant_colors(&image, 10)
@@ -147,10 +170,11 @@ async fn execute(
                     changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
+            Ok(false)
         }
         MediaWorkKind::PerceptualHash => {
             if !source.caps.can_perceptual_hash {
-                return Ok(());
+                return Ok(false);
             }
             let image = derivative_image(application, &target, &mut source).await?;
             let hash = crate::media_processing::compute_phash_base64_from_image(&image)
@@ -166,15 +190,56 @@ async fn execute(
                     changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
+            Ok(true)
         }
-        MediaWorkKind::AiTag | MediaWorkKind::BlobDelete => {
-            return Err(format!(
-                "work {} is not derivative media work",
-                work.work_id
-            ));
-        }
+        MediaWorkKind::AiTag | MediaWorkKind::BlobDelete => Err(format!(
+            "work {} is not derivative media work",
+            work.work_id
+        )),
     }
-    Ok(())
+}
+
+pub fn has_ready_perceptual_hash_work(
+    application: &LibraryApplication,
+    now: &str,
+) -> Result<bool, String> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::Maintenance, |connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM work_item
+                         WHERE work_type = 'perceptual_hash'
+                           AND (status = 'running'
+                                OR (status = 'pending' AND available_at <= ?1))
+                     )",
+                    [now],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub async fn settle_new_perceptual_hashes(
+    application: Arc<LibraryApplication>,
+    updated: usize,
+) -> Result<Option<picto_library::DuplicateScanResult>, String> {
+    if updated == 0
+        || has_ready_perceptual_hash_work(&application, &chrono::Utc::now().to_rfc3339())?
+    {
+        return Ok(None);
+    }
+    tokio::task::spawn_blocking(move || {
+        crate::duplicates::scan_library(
+            &application,
+            crate::duplicates::DEFAULT_GLOBAL_DISTANCE_THRESHOLD,
+        )
+    })
+    .await
+    .map_err(|error| format!("Automatic duplicate scan stopped: {error}"))?
+    .map(Some)
 }
 
 fn load_target(application: &LibraryApplication, file_id: FileId) -> Result<WorkTarget, String> {
@@ -316,6 +381,7 @@ mod tests {
         let report = drain_batch(&application, 8).await.unwrap();
         assert_eq!(report.claimed, 3);
         assert_eq!(report.succeeded, 3);
+        assert_eq!(report.perceptual_hashes_updated, 1);
         assert_eq!(report.retried, 0);
         assert!(application
             .blobs()
@@ -330,5 +396,82 @@ mod tests {
             .claim_derivative_work(8, &chrono::Utc::now().to_rfc3339())
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn newly_computed_phashes_settle_duplicate_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let application =
+            Arc::new(LibraryApplication::create(directory.path().join("library")).unwrap());
+        let first_path = directory.path().join("first.png");
+        RgbImage::from_pixel(32, 32, Rgb([30, 120, 220]))
+            .save(&first_path)
+            .unwrap();
+        let first_bytes = fs::read(&first_path).unwrap();
+        let mut second_bytes = first_bytes.clone();
+        second_bytes.extend_from_slice(b"picto-visual-duplicate");
+        let second_path = directory.path().join("second.png");
+        fs::write(&second_path, &second_bytes).unwrap();
+
+        for (index, (path, bytes)) in [(first_path, first_bytes), (second_path, second_bytes)]
+            .into_iter()
+            .enumerate()
+        {
+            let content_hash = hex::encode(Sha256::digest(&bytes));
+            application
+                .library()
+                .enqueue_ingest_job(
+                    &PreparedIngestJob {
+                        job_key: format!("manual:duplicate-{index}"),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(PreparedImport {
+                            stable_key: format!("duplicate-{index}"),
+                            media_name: format!("duplicate-{index}.png"),
+                            file_path: path.to_string_lossy().into_owned(),
+                            facts: ImmutableMediaFacts {
+                                mime: "image/png".into(),
+                                size_bytes: bytes.len() as u64,
+                                width: Some(32),
+                                height: Some(32),
+                                duration_ms: None,
+                                frame_count: Some(1),
+                                content_hash,
+                                perceptual_hash: None,
+                                palette: Vec::new(),
+                            },
+                            lifecycle: Lifecycle::Active,
+                            rating: Rating::Unrated,
+                            notes: None,
+                            tags: Vec::new(),
+                            folders: Vec::new(),
+                            source_urls: Vec::new(),
+                            source_identity: None,
+                            imported_at_ms: 1_700_000_000_000 + index as i64,
+                            captured_at_ms: None,
+                        }),
+                    },
+                    "2026-08-28T12:00:00Z",
+                )
+                .unwrap();
+        }
+        crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+
+        let report = drain_batch(&application, 8).await.unwrap();
+        assert_eq!(report.perceptual_hashes_updated, 2);
+        let result = settle_new_perceptual_hashes(
+            Arc::clone(&application),
+            report.perceptual_hashes_updated,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.candidate_count, 1);
+        assert_eq!(
+            application.library().sidebar_counts().unwrap().duplicates,
+            1
+        );
     }
 }

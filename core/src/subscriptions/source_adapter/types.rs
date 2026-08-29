@@ -31,5 +31,6 @@ pub struct DownloadedItem {
 #[derive(Debug, Clone)]
 pub struct FailedDownloadedItem {
     pub metadata: ParsedMetadata,
+    pub item_url: Option<String>,
     pub error_message: String,
 }

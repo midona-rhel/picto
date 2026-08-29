@@ -83,9 +83,9 @@ pub fn start_tutorial(
     workers.push((
         "library-tutorial-subscription",
         tokio::spawn(async move {
-            let worker = crate::subscription_runtime_v2::SubscriptionWorker::with_cancellation(
+            let worker = crate::subscription_runtime::SubscriptionWorker::with_cancellation(
                 &source_application,
-                crate::tutorial_source_v2::TutorialSourceRunner::new(fixture_root),
+                crate::tutorial_source::TutorialSourceRunner::new(fixture_root),
                 source_cancel.clone(),
             );
             let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -131,7 +131,7 @@ fn start_subscription_workers(
             }
         }),
     )];
-    let schedule = Arc::new(Mutex::new(crate::subscriptions_v2::DomainSchedule::new()));
+    let schedule = Arc::new(Mutex::new(crate::subscriptions::DomainSchedule::new()));
     for index in 0..4 {
         let worker_application = Arc::clone(&application);
         let worker_cancel = cancel.child_token();
@@ -144,10 +144,10 @@ fn start_subscription_workers(
                 _ => "library-subscription-4",
             },
             tokio::spawn(async move {
-                let runner = crate::onlyfans_source_v2::SubscriptionSourceRouter::open(
+                let runner = crate::onlyfans_source::SubscriptionSourceRouter::open(
                     worker_application.root(),
                 );
-                let worker = crate::subscription_runtime_v2::SubscriptionWorker::with_shared_schedule(
+                let worker = crate::subscription_runtime::SubscriptionWorker::with_shared_schedule(
                     &worker_application,
                     runner,
                     worker_schedule,
@@ -269,12 +269,29 @@ fn start_derivative_worker(
     tokio::spawn(async move {
         let mut idle = tokio::time::interval(Duration::from_millis(50));
         idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut duplicate_scan_dirty = false;
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = idle.tick() => {
-                    if let Err(error) = crate::library_media_runtime::drain_batch(&application, 8).await {
-                        tracing::warn!(%error, "Canonical derivative batch failed");
+                    if let Err(error) = crate::library_media_runtime::drain_blob_cleanup(&application, 8) {
+                        tracing::warn!(%error, "Canonical blob cleanup failed");
+                    }
+                    match crate::library_media_runtime::drain_batch(&application, 8).await {
+                        Err(error) => tracing::warn!(%error, "Canonical derivative batch failed"),
+                        Ok(report) => {
+                            duplicate_scan_dirty |= report.perceptual_hashes_updated != 0;
+                            if duplicate_scan_dirty {
+                                match crate::library_media_runtime::settle_new_perceptual_hashes(
+                                    Arc::clone(&application),
+                                    1,
+                                ).await {
+                                    Ok(Some(_)) => duplicate_scan_dirty = false,
+                                    Ok(None) => {}
+                                    Err(error) => tracing::warn!(%error, "Automatic duplicate scan failed"),
+                                }
+                            }
+                        }
                     }
                 }
             }

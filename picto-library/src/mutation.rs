@@ -8,8 +8,8 @@ use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::WorkPriority;
 use crate::history::{
     FolderDefinitionState, HistoryEntry, SemanticChange, SessionHistory,
-    SmartFolderDefinitionState, StructuralRootState, StructuralState, TagDefinitionState,
-    TagNamespaceDefinitionState,
+    SmartFolderDefinitionState, StructuralMediaNoteState, StructuralRootState, StructuralState,
+    TagDefinitionState, TagNamespaceDefinitionState,
 };
 use crate::ingest;
 use crate::model::{
@@ -492,6 +492,19 @@ impl Library {
             |connection, snapshot| {
                 let selection = crate::selection::resolve(connection, &snapshot, target)?;
                 crate::selection::summarize(connection, &snapshot, target, &selection)
+            },
+        )
+    }
+
+    pub fn collection_note_draft(
+        &self,
+        target: &SelectionTarget,
+    ) -> Result<crate::model::CollectionNoteDraft> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                crate::selection::collection_note_draft(connection, &snapshot, target)
             },
         )
     }
@@ -1160,6 +1173,23 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        self.ingest_batch_with_identity_reuse(inputs, true)
+    }
+
+    /// Converter-only import path. It preserves every legacy root while still
+    /// sharing physical files by content hash.
+    pub fn ingest_conversion_batch(
+        &self,
+        inputs: &[PreparedImport],
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        self.ingest_batch_with_identity_reuse(inputs, false)
+    }
+
+    fn ingest_batch_with_identity_reuse(
+        &self,
+        inputs: &[PreparedImport],
+        reuse_identity: bool,
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
@@ -1181,7 +1211,14 @@ impl Library {
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
                 for input in inputs {
-                    let output = ingest::insert_one(transaction, revision, next, input)?;
+                    let output = ingest::insert_one(
+                        transaction,
+                        revision,
+                        next,
+                        input,
+                        true,
+                        reuse_identity,
+                    )?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
                     resources.extend(output.resources);
@@ -1234,6 +1271,23 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with_identity_reuse(input, true)
+    }
+
+    /// Converter-only collection path. Source identities are copied, but are
+    /// not interpreted as retry keys while reconstructing legacy structure.
+    pub fn ingest_conversion_collection(
+        &self,
+        input: &PreparedCollectionImport,
+    ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with_identity_reuse(input, false)
+    }
+
+    fn ingest_collection_with_identity_reuse(
+        &self,
+        input: &PreparedCollectionImport,
+        reuse_identity: bool,
+    ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
                 "a collection import requires at least one media member".into(),
@@ -1252,33 +1306,67 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let mut next = (*snapshot).clone();
                 let mut root_ids = Vec::with_capacity(input.members.len());
+                let mut created_root_ids = Vec::with_capacity(input.members.len());
+                let mut requested_cover = None;
                 let mut resources = BTreeSet::new();
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
-                for member in &input.members {
-                    let output = ingest::insert_one(transaction, revision, next, member)?;
+                for (index, member) in input.members.iter().enumerate() {
+                    let output = ingest::insert_one(
+                        transaction,
+                        revision,
+                        next,
+                        member,
+                        false,
+                        reuse_identity,
+                    )?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
+                    if output.created_root {
+                        if index == input.cover_index {
+                            requested_cover = Some(output.root_id);
+                        }
+                        created_root_ids.push(output.root_id);
+                    }
                     resources.extend(output.resources);
                     bitmap_keys.extend(output.bitmap_keys);
                     folder_ids.extend(output.folder_ids);
                 }
-                let output = crate::group::organize(
-                    transaction,
-                    revision,
-                    next,
-                    &GroupRequest {
-                        target: SelectionTarget::Explicit {
-                            root_ids: root_ids.clone(),
-                        },
-                        cover_root_id: root_ids[input.cover_index],
-                        winning_collection_id: None,
-                        name: input.name.clone(),
-                        modified_at_ms: input.modified_at_ms,
-                    },
-                    true,
-                )?;
-                let mut next = output.snapshot;
+                let preserve_singleton_collection = !reuse_identity && created_root_ids.len() == 1;
+                let (published_root, affected) =
+                    if created_root_ids.len() >= 2 || preserve_singleton_collection {
+                        let output = crate::group::organize(
+                            transaction,
+                            revision,
+                            next,
+                            &GroupRequest {
+                                target: SelectionTarget::Explicit {
+                                    root_ids: created_root_ids.clone(),
+                                },
+                                cover_root_id: requested_cover.unwrap_or(created_root_ids[0]),
+                                winning_collection_id: None,
+                                name: input.name.clone(),
+                                notes: input.members[input.cover_index].notes.clone(),
+                                modified_at_ms: input.modified_at_ms,
+                            },
+                            true,
+                        )?;
+                        next = output.snapshot;
+                        resources.insert("collections".to_owned());
+                        (output.collection_id, output.affected)
+                    } else {
+                        let published_root = created_root_ids
+                            .first()
+                            .copied()
+                            .unwrap_or(root_ids[input.cover_index]);
+                        (
+                            published_root,
+                            root_ids
+                                .iter()
+                                .map(|root| root.0)
+                                .collect::<RoaringBitmap>(),
+                        )
+                    };
                 ingest::persist_touched(
                     transaction,
                     revision,
@@ -1287,19 +1375,15 @@ impl Library {
                     folder_ids,
                     root_ids.iter().copied(),
                 )?;
-                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-                resources.extend([
-                    "collections".to_owned(),
-                    "tags".to_owned(),
-                    "folders".to_owned(),
-                ]);
+                crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                resources.extend(["tags".to_owned(), "folders".to_owned()]);
                 let receipt = PublicationCoordinator::receipt(
                     revision,
                     resources,
-                    std::iter::once(output.collection_id),
+                    std::iter::once(published_root),
                 );
                 Ok((
-                    (output.collection_id, receipt.clone()),
+                    (published_root, receipt.clone()),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
@@ -1635,6 +1719,41 @@ impl Library {
             |_| Ok(self.history.protected_cleanup_files()),
             |connection, protected| crate::duplicate::ready_cleanup(connection, &protected, limit),
         )
+    }
+
+    /// Delete unreferenced physical files while retaining the serialized writer.
+    /// Readers continue through WAL; canonical ingestion cannot race a cleanup
+    /// by attaching a new media item to the file being removed.
+    pub fn clean_pending_blobs(
+        &self,
+        limit: usize,
+        mut delete: impl FnMut(&PendingBlobCleanup) -> Result<()>,
+    ) -> Result<usize> {
+        let protected = self.history.protected_cleanup_files();
+        self.database
+            .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
+                let mut removed = 0;
+                for pending in cleanup {
+                    delete(&pending)?;
+                    let deleted = transaction.execute(
+                        "DELETE FROM media_file
+                         WHERE file_id = ?1
+                           AND NOT EXISTS(
+                               SELECT 1 FROM media_item WHERE file_id = ?1
+                           )",
+                        [pending.file_id.0],
+                    )?;
+                    if deleted != 1 {
+                        return Err(LibraryError::InvalidState(format!(
+                            "blob cleanup file {} became referenced",
+                            pending.file_id.0
+                        )));
+                    }
+                    removed += 1;
+                }
+                Ok(removed)
+            })
     }
 
     pub fn update_media_facts(
@@ -2453,6 +2572,81 @@ impl Library {
                                 },
                             )
                         }),
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        push_history(&history, history_entry);
+        Ok(receipt)
+    }
+
+    pub fn create_tag_namespace(&self, name: &str) -> Result<MutationReceipt> {
+        let name = required_name("tag namespace", name)?;
+        if name.contains(':') {
+            return Err(LibraryError::InvalidInput(
+                "tag namespace cannot contain a colon".into(),
+            ));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let history = self.history.clone();
+        let (receipt, _, history_entry) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let duplicate = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tag_namespace WHERE display_name = ?1)",
+                    [&name],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if duplicate {
+                    return Err(LibraryError::InvalidInput(format!(
+                        "tag namespace {name} already exists"
+                    )));
+                }
+                let namespace_id = TagNamespaceId(LibraryDatabase::allocate_id(transaction)?);
+                let state = TagNamespaceDefinitionState {
+                    namespace_id,
+                    stable_key: uuid::Uuid::new_v4().to_string(),
+                    display_name: name.clone(),
+                };
+                transaction.execute(
+                    "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![state.namespace_id.0, state.stable_key, state.display_name,],
+                )?;
+                insert_cloud_journal(
+                    transaction,
+                    revision,
+                    "tag.namespace.create",
+                    None,
+                    serde_json::json!({
+                        "namespace_id": namespace_id.0,
+                        "name": name,
+                    }),
+                    now_ms(),
+                )?;
+                let mut next = (*snapshot).clone();
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec!["tags".into(), "navigation".into()],
+                    Vec::new(),
+                );
+                Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(HistoryEntry::for_command(
+                            "tags.group.create",
+                            "Create tag namespace",
+                            SemanticChange::TagNamespaceDefinition {
+                                before: None,
+                                after: Some(state),
+                            },
+                        )),
                     },
                 ))
             },
@@ -3475,7 +3669,11 @@ impl Library {
         Ok(receipt)
     }
 
-    pub fn sort_folder_items_by_name(&self, folder_id: FolderId) -> Result<MutationReceipt> {
+    pub fn sort_folder_items(
+        &self,
+        folder_id: FolderId,
+        field: crate::model::ContentSortField,
+    ) -> Result<MutationReceipt> {
         let ordered = self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
@@ -3487,22 +3685,42 @@ impl Library {
                     .map(AsRef::as_ref)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let mut statement = connection
-                    .prepare_cached("SELECT name FROM library_root WHERE root_id = ?1")?;
-                let mut values = roots
-                    .iter()
-                    .map(|root_id| {
-                        statement
-                            .query_row([root_id.0], |row| row.get::<_, String>(0))
-                            .map(|name| (name.to_lowercase(), *root_id))
-                            .map_err(Into::into)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                values.sort();
-                Ok(values
-                    .into_iter()
-                    .map(|(_, root_id)| root_id)
-                    .collect::<Vec<_>>())
+                let root_ids = serde_json::to_string(
+                    &roots.iter().map(|root_id| root_id.0).collect::<Vec<_>>(),
+                )?;
+                let order = match field {
+                    crate::model::ContentSortField::Name => {
+                        "lower(root.name), root.root_id"
+                    }
+                    crate::model::ContentSortField::ImportedAt => {
+                        "root.imported_at_ms DESC, root.root_id"
+                    }
+                    crate::model::ContentSortField::CreatedAt => {
+                        "root.captured_at_ms IS NULL, root.captured_at_ms DESC, root.root_id"
+                    }
+                    crate::model::ContentSortField::ModifiedAt => {
+                        "root.modified_at_ms DESC, root.root_id"
+                    }
+                    crate::model::ContentSortField::Size => {
+                        "root.total_size_bytes DESC, root.root_id"
+                    }
+                    crate::model::ContentSortField::Notes => {
+                        "NULLIF(trim(root.notes), '') IS NULL, lower(root.notes), lower(root.name), root.root_id"
+                    }
+                };
+                let sql = format!(
+                    "SELECT root.root_id
+                     FROM json_each(?1) selected
+                     JOIN library_root root
+                       ON root.root_id = CAST(selected.value AS INTEGER)
+                     ORDER BY {order}"
+                );
+                let mut statement = connection.prepare(&sql)?;
+                let ordered = statement
+                    .query_map([root_ids], |row| row.get::<_, u32>(0))?
+                    .map(|value| value.map(RootId))
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(ordered)
             },
         )?;
         self.reorder_folder_items(folder_id, &ordered)
@@ -4222,11 +4440,11 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let before = transaction
+                let (before, before_notes) = transaction
                     .query_row(
-                        "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                        "SELECT cover_media_id, notes FROM library_root WHERE root_id = ?1",
                         [collection_id.0],
-                        |row| row.get::<_, u32>(0).map(MediaId),
+                        |row| Ok((MediaId(row.get(0)?), row.get::<_, Option<String>>(1)?)),
                     )
                     .map_err(|error| match error {
                         rusqlite::Error::QueryReturnedNoRows => {
@@ -4240,11 +4458,11 @@ impl Library {
                 } else {
                     crate::group::set_cover(transaction, &mut next, collection_id, cover_media_id)?;
                     let affected = [collection_id.0].into_iter().collect();
-                    crate::smart::settle_affected_for(
-                        transaction,
-                        &mut next,
-                        &affected,
-                        crate::predicate::DependencyChange::CoverFacts,
+                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                    let after_notes = transaction.query_row(
+                        "SELECT notes FROM library_root WHERE root_id = ?1",
+                        [collection_id.0],
+                        |row| row.get::<_, Option<String>>(0),
                     )?;
                     transaction.execute(
                         "INSERT INTO cloud_journal
@@ -4264,6 +4482,8 @@ impl Library {
                             root_id: collection_id,
                             before,
                             after: cover_media_id,
+                            before_notes,
+                            after_notes,
                         },
                     ))
                 };
@@ -5475,17 +5695,19 @@ fn apply_semantic_change(
             root_id,
             before,
             after,
+            before_notes,
+            after_notes,
         } => {
-            let (expected, replacement) = if use_after {
-                (*before, *after)
+            let (expected, replacement, expected_notes, replacement_notes) = if use_after {
+                (*before, *after, before_notes, after_notes)
             } else {
-                (*after, *before)
+                (*after, *before, after_notes, before_notes)
             };
-            let current = transaction
+            let (current, current_notes) = transaction
                 .query_row(
-                    "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                    "SELECT cover_media_id, notes FROM library_root WHERE root_id = ?1",
                     [root_id.0],
-                    |row| row.get::<_, u32>(0).map(MediaId),
+                    |row| Ok((MediaId(row.get(0)?), row.get::<_, Option<String>>(1)?)),
                 )
                 .map_err(|error| match error {
                     rusqlite::Error::QueryReturnedNoRows => {
@@ -5493,12 +5715,21 @@ fn apply_semantic_change(
                     }
                     error => error.into(),
                 })?;
-            if current != expected {
+            if current != expected || &current_notes != expected_notes {
                 return Err(LibraryError::InvalidState(format!(
                     "cannot replay history because collection {root_id} cover changed"
                 )));
             }
             crate::group::set_cover(transaction, snapshot, *root_id, replacement)?;
+            transaction.execute(
+                "UPDATE library_root SET notes = ?2 WHERE root_id = ?1",
+                rusqlite::params![root_id.0, replacement_notes],
+            )?;
+            if replacement_notes.is_some() {
+                Arc::make_mut(&mut snapshot.notes_present).insert(root_id.0);
+            } else {
+                Arc::make_mut(&mut snapshot.notes_present).remove(root_id.0);
+            }
             affected.insert(root_id.0);
             resources.insert("roots".into());
             resources.insert("collections".into());
@@ -6026,6 +6257,13 @@ fn restore_structure(
             "cannot replay history because collection structure changed".into(),
         ));
     }
+    if load_structural_media_notes(transaction, &expected.projection, affected)?
+        != *expected.media_notes
+    {
+        return Err(LibraryError::InvalidState(
+            "cannot replay history because retained media notes changed".into(),
+        ));
+    }
 
     for root_id in affected {
         if snapshot.collection_orders.contains_key(&RootId(root_id)) {
@@ -6087,6 +6325,13 @@ fn restore_structure(
         )?;
         crate::fts::mark_one(transaction, root.root_id, root.modified_at_ms)?;
     }
+
+    let mut restore_media_notes =
+        transaction.prepare_cached("UPDATE media_item SET media_notes = ?2 WHERE media_id = ?1")?;
+    for media in replacement.media_notes.iter() {
+        restore_media_notes.execute(rusqlite::params![media.media_id.0, media.notes])?;
+    }
+    drop(restore_media_notes);
 
     restore_structure_bitmaps(transaction, revision, snapshot, &replacement.projection)?;
     restore_structure_orders(transaction, revision, snapshot, &replacement.projection)?;
@@ -7006,8 +7251,41 @@ fn capture_structure(
 ) -> Result<StructuralState> {
     Ok(StructuralState {
         roots: Arc::new(load_structural_roots(transaction, affected)?),
+        media_notes: Arc::new(load_structural_media_notes(
+            transaction,
+            snapshot,
+            affected,
+        )?),
         projection: Arc::new(snapshot.clone()),
     })
+}
+
+fn load_structural_media_notes(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    affected: &RoaringBitmap,
+) -> Result<Vec<StructuralMediaNoteState>> {
+    let mut media_ids = snapshot
+        .media_owner
+        .iter()
+        .filter_map(|(media_id, owner)| affected.contains(owner.0).then_some(media_id))
+        .collect::<Vec<_>>();
+    media_ids.sort_unstable();
+    let mut statement =
+        transaction.prepare_cached("SELECT media_notes FROM media_item WHERE media_id = ?1")?;
+    media_ids
+        .into_iter()
+        .map(|media_id| {
+            statement
+                .query_row([media_id], |row| {
+                    Ok(StructuralMediaNoteState {
+                        media_id: MediaId(media_id),
+                        notes: row.get(0)?,
+                    })
+                })
+                .map_err(Into::into)
+        })
+        .collect()
 }
 
 fn load_structural_roots(

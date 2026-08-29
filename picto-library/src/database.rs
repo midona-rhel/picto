@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::{Condvar, Mutex, RwLock};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
@@ -8,6 +10,66 @@ use crate::schema;
 use crate::{LibraryError, Result};
 
 const DEFAULT_READERS: usize = 8;
+const GATE_HISTOGRAM_BUCKETS: usize = 32;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PublicationGateStats {
+    pub samples: u64,
+    pub p95_micros: u64,
+    pub max_micros: u64,
+}
+
+struct PublicationGateMetrics {
+    samples: AtomicU64,
+    max_micros: AtomicU64,
+    histogram: [AtomicU64; GATE_HISTOGRAM_BUCKETS],
+}
+
+impl Default for PublicationGateMetrics {
+    fn default() -> Self {
+        Self {
+            samples: AtomicU64::new(0),
+            max_micros: AtomicU64::new(0),
+            histogram: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+}
+
+impl PublicationGateMetrics {
+    fn record(&self, micros: u64) {
+        let bucket = if micros <= 1 {
+            0
+        } else {
+            (u64::BITS - (micros - 1).leading_zeros()) as usize
+        }
+        .min(GATE_HISTOGRAM_BUCKETS - 1);
+        self.histogram[bucket].fetch_add(1, Ordering::Relaxed);
+        self.samples.fetch_add(1, Ordering::Relaxed);
+        self.max_micros.fetch_max(micros, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> PublicationGateStats {
+        let samples = self.samples.load(Ordering::Relaxed);
+        if samples == 0 {
+            return PublicationGateStats::default();
+        }
+        let target = samples.saturating_mul(95).div_ceil(100);
+        let mut cumulative = 0;
+        let mut p95_micros = 0;
+        for (bucket, count) in self.histogram.iter().enumerate() {
+            cumulative += count.load(Ordering::Relaxed);
+            if cumulative >= target {
+                p95_micros = 1u64 << bucket;
+                break;
+            }
+        }
+        PublicationGateStats {
+            samples,
+            p95_micros,
+            max_micros: self.max_micros.load(Ordering::Relaxed),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkPriority {
@@ -130,6 +192,7 @@ pub struct LibraryDatabase {
     writer: Mutex<Connection>,
     readers: Arc<ReadPool>,
     publication_gate: RwLock<()>,
+    publication_gate_metrics: PublicationGateMetrics,
     scheduler: Arc<WriterScheduler>,
 }
 
@@ -166,6 +229,7 @@ impl LibraryDatabase {
                 maximum: DEFAULT_READERS,
             }),
             publication_gate: RwLock::new(()),
+            publication_gate_metrics: PublicationGateMetrics::default(),
             scheduler: Arc::new(WriterScheduler::default()),
         })
     }
@@ -178,6 +242,10 @@ impl LibraryDatabase {
         self.read(WorkPriority::VisibleRead, |connection| {
             schema::validate(connection)
         })
+    }
+
+    pub fn publication_gate_stats(&self) -> PublicationGateStats {
+        self.publication_gate_metrics.snapshot()
     }
 
     pub fn read<T>(
@@ -258,11 +326,14 @@ impl LibraryDatabase {
             "UPDATE library_meta SET revision = ?1 WHERE singleton = 1",
             [revision as i64],
         )?;
-        let after_publication = {
+        let (after_publication, gate_micros) = {
             let _gate = self.publication_gate.write();
+            let started = Instant::now();
             transaction.commit()?;
-            publish(revision, delta)
+            let output = publish(revision, delta);
+            (output, started.elapsed().as_micros() as u64)
         };
+        self.publication_gate_metrics.record(gate_micros);
         Ok((output, revision, after_publication))
     }
 
@@ -295,11 +366,14 @@ impl LibraryDatabase {
             "UPDATE library_meta SET revision = ?1 WHERE singleton = 1",
             [revision as i64],
         )?;
-        let after_publication = {
+        let (after_publication, gate_micros) = {
             let _gate = self.publication_gate.write();
+            let started = Instant::now();
             transaction.commit()?;
-            publish(revision, delta)
+            let output = publish(revision, delta);
+            (output, started.elapsed().as_micros() as u64)
         };
+        self.publication_gate_metrics.record(gate_micros);
         Ok(Some((output, revision, after_publication)))
     }
 

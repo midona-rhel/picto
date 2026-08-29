@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct AcceptedFormat {
     pub extension: &'static str,
     pub mime_type: &'static str,

@@ -12,23 +12,25 @@ ingestion. FTS and derivative settlement are intentionally outside canonical ing
 
 | Measurement | Existing backend baseline | Greenfield result |
 |---|---:|---:|
-| Concurrent reader p95 | 4.69 ms | 1.633 ms |
-| Concurrent reader p99 | Not recorded | 2.419 ms |
-| Concurrent reader maximum | Not recorded | 8.302 ms |
-| Warm page read p95 | Not recorded | 0.284 ms |
-| Sidebar counts, 100k roots | Not recorded | 3.393 ms |
-| Selection summary, 94k active roots | 36 ms at 90k | 4.755 ms |
-| Add tag to 94k active roots | 42 ms at 90k | 4.915 ms |
-| Move 94k active roots to Trash | Not recorded | 0.961 ms |
-| Canonical ingest database work | About 4 ms/item | 0.192 ms/item |
-| Ingest publication batch p95 | Not recorded | 14.053 ms |
-| Estimated projection memory | Not recorded | 16.700 MiB |
-| Projection checkpoint write | Not recorded | 53.374 ms |
-| Checkpoint-backed reopen | Not recorded | 33.124 ms |
+| Concurrent reader p95 | 4.69 ms | 1.877 ms |
+| Concurrent reader p99 | Not recorded | 2.838 ms |
+| Concurrent reader maximum | Not recorded | 5.101 ms |
+| Warm page read p95 | Not recorded | 0.371 ms |
+| Sidebar counts, 100k roots | Not recorded | 4.592 ms |
+| Selection summary, 94k active roots | 36 ms at 90k | 4.743 ms |
+| Add tag to 94k active roots | 42 ms at 90k | 5.292 ms |
+| Move 94k active roots to Trash | Not recorded | 0.892 ms |
+| Canonical ingest database work | About 4 ms/item | 0.240 ms/item |
+| Ingest publication batch p95 | Not recorded | 13.550 ms |
+| Publication gate p95 | Not recorded | 4.096 ms |
+| Publication gate maximum | Not recorded | 5.678 ms |
+| Estimated projection memory | Not recorded | 17.684 MiB |
+| Projection checkpoint write | Not recorded | 64.088 ms |
+| Checkpoint-backed reopen | Not recorded | 37.374 ms |
 | Full projection recovery | Not recorded | 255.884 ms |
 | Projection checkpoint size | Not recorded | 12,214,412 bytes |
 
-This run uses the final 64-item canonical publication cap. Selection summary timing includes six
+This run uses the measured 48-item canonical publication cap. Selection summary timing includes six
 ordered preview hashes, shared metadata, image-root capability, and collection action candidates.
 
 The numbers are a development ledger, not a portable hardware guarantee. Release acceptance still

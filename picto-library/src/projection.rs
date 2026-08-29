@@ -144,6 +144,14 @@ impl<V: Clone> ShardedIdMap<V> {
             .and_then(|shard| shard.get(&((id & ID_MAP_SHARD_MASK) as u16)))
     }
 
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &V)> {
+        self.shards.iter().flat_map(|(high, shard)| {
+            shard
+                .iter()
+                .map(move |(low, value)| ((high << ID_MAP_SHARD_SHIFT) | u32::from(*low), value))
+        })
+    }
+
     pub(crate) fn insert(&mut self, id: u32, value: V) -> Option<V> {
         Arc::make_mut(
             self.shards

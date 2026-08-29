@@ -100,45 +100,80 @@ pub async fn enqueue_manual_import(
         }
     }
 
-    let mut prepared = Vec::new();
+    let mut collection_members = Vec::new();
+    let mut preparation_errors = Vec::new();
+    let mut prepared_count = 0usize;
+    let mut job_index = 0usize;
     for (index, candidate) in candidates.into_iter().enumerate() {
-        let folder_id = if input.preserve_structure {
-            ensure_relative_folder(
-                application,
-                input.parent_folder_id,
-                candidate.relative_parent.as_deref(),
-                &mut folders,
-            )?
+        let candidate_result = if is_zip(&candidate.path) && input.expand_archives {
+            prepare_archive(&candidate.path, input, None, now.timestamp_millis()).await
         } else {
-            input.parent_folder_id
+            prepare_import(
+                &candidate.path,
+                input,
+                None,
+                format!("manual:{invocation}:{index}"),
+                now.timestamp_millis(),
+            )
+            .await
+            .map(|value| vec![value])
         };
-        if is_zip(&candidate.path) && input.expand_archives {
-            match prepare_archive(&candidate.path, input, folder_id, now.timestamp_millis()).await {
-                Ok(mut members) => prepared.append(&mut members),
-                Err(error) if error.starts_with("Unsupported media:") => report.skipped += 1,
-                Err(error) => return Err(error),
+        match candidate_result {
+            Ok(mut values) => {
+                let folder_id = if input.preserve_structure {
+                    ensure_relative_folder(
+                        application,
+                        input.parent_folder_id,
+                        candidate.relative_parent.as_deref(),
+                        &mut folders,
+                    )?
+                } else {
+                    input.parent_folder_id
+                };
+                for value in &mut values {
+                    value.folders = folder_id.into_iter().collect();
+                }
+                prepared_count += values.len();
+                let collect_as_collection =
+                    input.group_files || report.discovered == 1 && values.len() > 1;
+                if collect_as_collection {
+                    collection_members.append(&mut values);
+                } else {
+                    for value in values {
+                        let job = PreparedIngestJob {
+                            job_key: format!("manual:{invocation}:{job_index}"),
+                            source_kind: "manual".into(),
+                            source_path: value.file_path.clone(),
+                            source_item_id: None,
+                            delete_after_ingest: input.delete_after_ingest,
+                            payload: PreparedIngestPayload::Item(value),
+                        };
+                        enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
+                        job_index += 1;
+                    }
+                }
             }
-            continue;
-        }
-        match prepare_import(
-            &candidate.path,
-            input,
-            folder_id,
-            format!("manual:{invocation}:{index}"),
-            now.timestamp_millis(),
-        )
-        .await
-        {
-            Ok(value) => prepared.push(value),
-            Err(error) if error.starts_with("Unsupported media:") => report.skipped += 1,
-            Err(error) => return Err(error),
+            Err(error) => {
+                report.skipped += 1;
+                preparation_errors.push(error);
+            }
         }
     }
 
-    if prepared.is_empty() {
-        return Ok(report);
+    if prepared_count == 0 {
+        if input.preserve_structure && input.include_folders_without_media {
+            return Ok(report);
+        }
+        let detail = preparation_errors
+            .first()
+            .map(|error| format!(" First error: {error}"))
+            .unwrap_or_default();
+        return Err(format!(
+            "No supported media files were found in the selected import.{}",
+            detail
+        ));
     }
-    if input.group_files || prepared.len() > 1 && report.discovered == 1 {
+    if !collection_members.is_empty() {
         let name = collection_name(&input.paths);
         let job = PreparedIngestJob {
             job_key: format!("manual:{invocation}:collection"),
@@ -147,25 +182,13 @@ pub async fn enqueue_manual_import(
             source_item_id: None,
             delete_after_ingest: input.delete_after_ingest || report.discovered == 1,
             payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
-                members: prepared,
+                members: collection_members,
                 cover_index: 0,
                 name,
                 modified_at_ms: now.timestamp_millis(),
             }),
         };
         enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
-    } else {
-        for (index, value) in prepared.into_iter().enumerate() {
-            let job = PreparedIngestJob {
-                job_key: format!("manual:{invocation}:{index}"),
-                source_kind: "manual".into(),
-                source_path: value.file_path.clone(),
-                source_item_id: None,
-                delete_after_ingest: input.delete_after_ingest,
-                payload: PreparedIngestPayload::Item(value),
-            };
-            enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
-        }
     }
     Ok(report)
 }
@@ -734,6 +757,54 @@ mod tests {
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.media.len(), 2);
         assert_eq!(details.tag_ids.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn folder_import_queues_valid_media_and_skips_a_later_invalid_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("Downloads");
+        fs::create_dir(&source).unwrap();
+        png(&source.join("a-good.png"), [10, 20, 30]);
+        fs::write(source.join("z-empty.png"), []).unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
+        folder_input.preserve_structure = true;
+
+        let report = enqueue_manual_import(&application, &folder_input)
+            .await
+            .unwrap();
+        assert_eq!(report.discovered, 2);
+        assert_eq!(report.queued, 1);
+        assert_eq!(report.skipped, 1);
+
+        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+        assert_eq!(settled.ingested, 1);
+        let imported = application.library().details(settled.root_ids[0]).unwrap();
+        let folder = application
+            .navigation()
+            .unwrap()
+            .folders
+            .into_iter()
+            .find(|folder| folder.name == "Downloads")
+            .expect("the successful file should create its preserved folder");
+        assert_eq!(imported.folder_ids, vec![folder.folder_id]);
+    }
+
+    #[tokio::test]
+    async fn invalid_folder_import_reports_an_error_without_creating_structure() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("Downloads");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("empty.png"), []).unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
+        folder_input.preserve_structure = true;
+
+        let error = enqueue_manual_import(&application, &folder_input)
+            .await
+            .unwrap_err();
+        assert!(error.contains("No supported media files"));
+        assert!(application.navigation().unwrap().folders.is_empty());
     }
 
     #[tokio::test]

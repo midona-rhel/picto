@@ -615,6 +615,7 @@ fn canonical_post_url(
     category: Option<&str>,
     post_id: Option<&str>,
     item_url: Option<&str>,
+    origin_url: Option<&str>,
 ) -> Option<String> {
     match category {
         Some("webtoons") => {
@@ -649,7 +650,15 @@ fn canonical_post_url(
         Some("exhentai" | "ehentai") => {
             let post_id = post_id?;
             let token = field_text(json, "token").or_else(|| field_text(json, "gallery_token"))?;
-            return Some(format!("https://e-hentai.org/g/{post_id}/{token}/"));
+            let host = origin_url
+                .and_then(|raw| url::Url::parse(raw).ok())
+                .and_then(|url| match url.host_str() {
+                    Some("exhentai.org" | "www.exhentai.org") => Some("exhentai.org"),
+                    Some("e-hentai.org" | "www.e-hentai.org") => Some("e-hentai.org"),
+                    _ => None,
+                })
+                .unwrap_or("e-hentai.org");
+            return Some(format!("https://{host}/g/{post_id}/{token}/"));
         }
         Some("furaffinity") => {
             let post_id = post_id?;
@@ -824,12 +833,21 @@ fn source_urls(
 
 /// Normalize raw gallery-dl metadata into Picto's one subscription metadata shape.
 pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
-    parse_metadata_with_url(json, None)
+    parse_metadata_with_url_and_origin(json, None, None)
 }
 
+#[cfg(test)]
 pub(super) fn parse_metadata_with_url(
     json: &serde_json::Value,
     item_url: Option<&str>,
+) -> ParsedMetadata {
+    parse_metadata_with_url_and_origin(json, item_url, None)
+}
+
+pub(super) fn parse_metadata_with_url_and_origin(
+    json: &serde_json::Value,
+    item_url: Option<&str>,
+    origin_url: Option<&str>,
 ) -> ParsedMetadata {
     let category = field_text(json, "category")
         .map(|category| canonical_metadata_category(&category).to_string());
@@ -888,8 +906,13 @@ pub(super) fn parse_metadata_with_url(
         })
         .and_then(|raw| normalize_metadata_text(&raw));
     let post_id = post_id(json);
-    let canonical_post_url =
-        canonical_post_url(json, category.as_deref(), post_id.as_deref(), item_url);
+    let canonical_post_url = canonical_post_url(
+        json,
+        category.as_deref(),
+        post_id.as_deref(),
+        item_url,
+        origin_url,
+    );
     let media_url = media_url(json, category.as_deref(), item_url);
     let source_urls = source_urls(json, canonical_post_url.clone(), media_url.clone());
     let source_url = canonical_post_url
@@ -954,7 +977,7 @@ pub fn extract_creator_identifier(json: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_metadata, parse_metadata_with_url};
+    use super::{parse_metadata, parse_metadata_with_url, parse_metadata_with_url_and_origin};
     use serde_json::json;
 
     #[test]
@@ -1057,6 +1080,36 @@ mod tests {
             Some("https://e-hentai.org/g/2771523/3fc69c861a/")
         );
         assert_ne!(first.item_key, last.item_key);
+    }
+
+    #[test]
+    fn exhentai_canonical_url_preserves_the_requested_gallery_host() {
+        let metadata = json!({
+            "category": "exhentai",
+            "gid": 1169267,
+            "token": "1d91fd6979"
+        });
+
+        let public = parse_metadata_with_url_and_origin(
+            &metadata,
+            None,
+            Some("https://e-hentai.org/g/1169267/1d91fd6979/"),
+        );
+        let private = parse_metadata_with_url_and_origin(
+            &metadata,
+            None,
+            Some("https://exhentai.org/g/1169267/1d91fd6979/"),
+        );
+
+        assert_eq!(
+            public.canonical_post_url.as_deref(),
+            Some("https://e-hentai.org/g/1169267/1d91fd6979/")
+        );
+        assert_eq!(
+            private.canonical_post_url.as_deref(),
+            Some("https://exhentai.org/g/1169267/1d91fd6979/")
+        );
+        assert_eq!(private.source_url, private.canonical_post_url);
     }
 
     #[test]

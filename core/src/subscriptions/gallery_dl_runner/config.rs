@@ -56,7 +56,7 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
             if let Some(cursor) = opts
                 .source_cursor
                 .as_ref()
-                .filter(|cursor| !cursor.is_empty())
+                .filter(|cursor| !cursor.is_empty() && cursor.as_str() != "patreon:first-page")
             {
                 site.insert("cursor".into(), serde_json::json!(cursor));
             }
@@ -90,19 +90,6 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         }
         extractor.insert("tumblr".into(), serde_json::Value::Object(tumblr));
     }
-    // ArtStation's generic gallery-dl post range counts assets, not projects,
-    // and can split a multi-asset project. Scan a cumulative project prefix
-    // instead; the archive skips prior assets while the prefix grows deeper.
-    if opts.site_id == "artstation" {
-        if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
-            let max_posts = opts.range_start.saturating_sub(1).saturating_add(limit);
-            extractor.insert(
-                "artstation".into(),
-                serde_json::json!({"max-posts": max_posts}),
-            );
-        }
-    }
-
     if let Some(prefix) = opts
         .archive_prefix
         .as_ref()
@@ -409,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn artstation_limits_projects_without_splitting_project_assets() {
+    fn artstation_does_not_cap_candidates_before_accepted_posts() {
         let opts = RunOptions {
             subscription_id: Some(1),
             query_id: Some(2),
@@ -426,10 +413,7 @@ mod tests {
         };
 
         let config = build_config(&opts, std::path::Path::new("/tmp"));
-        assert_eq!(
-            config["extractor"]["artstation"]["max-posts"].as_u64(),
-            Some(6)
-        );
+        assert!(config["extractor"].get("artstation").is_none());
     }
 
     #[test]
@@ -574,6 +558,27 @@ mod tests {
         assert!(config["extractor"]["patreon"]
             .get("picto-post-skip")
             .is_none());
+    }
+
+    #[test]
+    fn patreon_first_page_resume_marker_is_not_sent_to_the_api() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "patreon".to_string(),
+            url: "https://www.patreon.com/creator/posts".to_string(),
+            post_limit: Some(2),
+            range_start: 1,
+            source_cursor: Some("patreon:first-page".to_string()),
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert!(config["extractor"]["patreon"].get("cursor").is_none());
     }
 
     #[test]

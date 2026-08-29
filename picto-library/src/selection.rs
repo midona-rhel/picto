@@ -2,7 +2,7 @@ use roaring::RoaringBitmap;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FolderId, Rating, RootId, RootKind, TagId};
+use crate::model::{CollectionNoteDraft, FolderId, Rating, RootId, RootKind, TagId};
 use crate::projection::ProjectionSnapshot;
 use crate::query::{self, RootQuery};
 use crate::{LibraryError, Result};
@@ -224,6 +224,34 @@ pub fn summarize(
         has_source_urls,
         all_selected_roots_have_images,
         revision: snapshot.revision,
+    })
+}
+
+pub fn collection_note_draft(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    target: &SelectionTarget,
+) -> Result<CollectionNoteDraft> {
+    let ordered = resolve_ordered(connection, snapshot, target)?;
+    let mut statement =
+        connection.prepare_cached("SELECT notes FROM library_root WHERE root_id = ?1")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut notes = Vec::new();
+    for root_id in ordered {
+        let value = statement.query_row([root_id.0], |row| row.get::<_, Option<String>>(0))?;
+        let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        if seen.insert(value.clone()) {
+            notes.push(value);
+        }
+    }
+    let notes = notes.join("\n\n");
+    Ok(CollectionNoteDraft {
+        source_count: seen.len() as u64,
+        byte_length: notes.len() as u64,
+        maximum_bytes: crate::model::MAX_ROOT_NOTES_BYTES as u64,
+        notes,
     })
 }
 

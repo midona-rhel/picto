@@ -295,35 +295,37 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
         b: 0.0,
         weight: 1.0,
     };
-    let (loser_member, _) = library
-        .ingest(&imported(
-            "loser-member",
-            "shared-loser",
-            "image/png",
-            1_024,
-            Some(800),
-            Some(600),
-            None,
-            loser_color,
-        ))
+    let losers = library
+        .ingest_conversion_batch(&[
+            imported(
+                "loser-member",
+                "shared-loser",
+                "image/png",
+                1_024,
+                Some(800),
+                Some(600),
+                None,
+                loser_color,
+            ),
+            imported(
+                "loser-standalone",
+                "shared-loser",
+                "image/png",
+                1_024,
+                Some(800),
+                Some(600),
+                None,
+                LabColor {
+                    l: 1.0,
+                    a: 1.0,
+                    b: 1.0,
+                    weight: 1.0,
+                },
+            ),
+        ])
         .unwrap();
-    let (loser_standalone, _) = library
-        .ingest(&imported(
-            "loser-standalone",
-            "shared-loser",
-            "image/png",
-            1_024,
-            Some(800),
-            Some(600),
-            None,
-            LabColor {
-                l: 1.0,
-                a: 1.0,
-                b: 1.0,
-                weight: 1.0,
-            },
-        ))
-        .unwrap();
+    let loser_member = losers[0].0;
+    let loser_standalone = losers[1].0;
     let (support, _) = library
         .ingest(&imported(
             "support",
@@ -356,6 +358,7 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
             cover_root_id: loser_member,
             winning_collection_id: None,
             name: Some("Preserved collection".into()),
+            notes: None,
             modified_at_ms: 1_700_000_000_050,
         })
         .unwrap();
@@ -514,7 +517,7 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
         vec![picto_library::PendingBlobCleanup {
             file_id: loser_file,
             content_hash: "shared-loser".into(),
-            file_path: "/tmp/loser-member.bin".into(),
+            file_path: "/tmp/loser-standalone.bin".into(),
         }]
     );
 }
@@ -529,10 +532,9 @@ fn duplicate_publication_uses_the_shared_broad_receipt_cap() {
         b: 0.0,
         weight: 1.0,
     };
-    let mut loser_file = None;
-    for index in 0..=picto_library::publication::MAX_RECEIPT_IDS {
-        let (root_id, _) = library
-            .ingest(&imported(
+    let inputs = (0..=picto_library::publication::MAX_RECEIPT_IDS)
+        .map(|index| {
+            imported(
                 &format!("cap-loser-{index}"),
                 "cap-shared-loser",
                 "image/png",
@@ -541,9 +543,18 @@ fn duplicate_publication_uses_the_shared_broad_receipt_cap() {
                 Some(10),
                 None,
                 color.clone(),
-            ))
-            .unwrap();
-        loser_file.get_or_insert_with(|| file_id(&library, root_id));
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut loser_roots = Vec::with_capacity(inputs.len());
+    for chunk in inputs.chunks(picto_library::ingest::MAX_INGEST_BATCH) {
+        loser_roots.extend(
+            library
+                .ingest_conversion_batch(chunk)
+                .unwrap()
+                .into_iter()
+                .map(|(root_id, _)| root_id),
+        );
     }
     let (winner, _) = library
         .ingest(&imported(
@@ -557,7 +568,7 @@ fn duplicate_publication_uses_the_shared_broad_receipt_cap() {
             color,
         ))
         .unwrap();
-    let loser_file = loser_file.unwrap();
+    let loser_file = file_id(&library, loser_roots[0]);
     let winner_file = file_id(&library, winner);
     library.publication().flush();
 

@@ -11,7 +11,7 @@ use picto_library::{LibraryError, MutationReceipt};
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::library_application::LibraryApplication;
-use crate::subscriptions_v2::{
+use crate::subscriptions::{
     ClaimedQueryRun, CreatedRun, DomainSchedule, NormalizedPost, RecoveryCounts,
 };
 
@@ -44,7 +44,12 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                     "UPDATE subscription_run
                      SET status = 'pending', started_at = NULL, finished_at = NULL,
                          failure_kind = NULL, error_message = NULL
-                     WHERE status = 'running'",
+                     WHERE status = 'running'
+                       AND EXISTS (
+                           SELECT 1 FROM subscription_run_query query_run
+                           WHERE query_run.run_id = subscription_run.run_id
+                             AND query_run.status = 'running'
+                       )",
                     [],
                 )?;
                 let counts = RecoveryCounts { runs, query_runs };
@@ -82,13 +87,13 @@ pub fn schedule_due_runs(
                 }
                 let mut created = Vec::new();
                 for (subscription_id, schedule) in due {
-                    let run = crate::subscriptions_v2::create_run_in(
+                    let run = crate::subscriptions::create_run_in(
                         transaction,
                         subscription_id,
                         "scheduled",
                         now,
                     )?;
-                    let next = crate::subscriptions_v2::next_schedule_at(&schedule, now)
+                    let next = crate::subscriptions::next_schedule_at(&schedule, now)
                         .map_err(sql_error)?;
                     transaction.execute(
                         "UPDATE subscription SET next_run_at = ?1 WHERE subscription_id = ?2",
@@ -133,7 +138,8 @@ pub fn claim_next_query(
                          JOIN subscription s ON s.subscription_id = r.subscription_id
                          WHERE qr.status = 'pending' AND qr.available_at <= ?1
                            AND r.status IN ('pending', 'running')
-                           AND q.paused = 0 AND s.paused = 0
+                           AND s.paused = 0
+                           AND (q.paused = 0 OR r.requested_by = 'manual-query')
                            AND NOT EXISTS (
                                SELECT 1 FROM subscription_run_query active_rq
                                JOIN subscription_query active_q ON active_q.query_id = active_rq.query_id
@@ -323,7 +329,63 @@ pub fn mark_source_items_downloaded(
                          WHERE source_item_id = ?2 AND state = 'pending'",
                         params![now, source_item_id],
                     )?;
+                    transaction.execute(
+                        "UPDATE subscription_issue
+                         SET status = 'resolved', last_seen_at = ?1, resolved_at = ?1
+                         WHERE issue_key = ?2 AND status IN ('open', 'acknowledged')",
+                        params![now, format!("source_item:{source_item_id}:download")],
+                    )?;
                 }
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+pub fn mark_source_item_failed(
+    application: &LibraryApplication,
+    subscription_id: i64,
+    query_id: i64,
+    source_item_id: i64,
+    error: &str,
+    now: &str,
+) -> Result<(), String> {
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            WorkPriority::CanonicalIngest,
+            resources(),
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE source_item
+                     SET state = 'failed', last_error = ?1, updated_at = ?2
+                     WHERE source_item_id = ?3
+                       AND media_item_id IS NULL
+                       AND state != 'deleted'
+                       AND (state != 'failed' OR last_error IS NOT ?1)",
+                    params![error, now, source_item_id],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+                transaction.execute(
+                    "INSERT INTO subscription_issue (
+                         issue_key, subscription_id, query_id, issue_kind, message,
+                         status, first_seen_at, last_seen_at
+                     ) VALUES (?1, ?2, ?3, 'download_item', ?4, 'open', ?5, ?5)
+                     ON CONFLICT(issue_key) DO UPDATE SET
+                         message = excluded.message, status = 'open',
+                         last_seen_at = excluded.last_seen_at, resolved_at = NULL",
+                    params![
+                        format!("source_item:{source_item_id}:download"),
+                        subscription_id,
+                        query_id,
+                        error,
+                        now,
+                    ],
+                )?;
                 Ok((changed != 0).then_some(()))
             },
         )
@@ -460,7 +522,9 @@ pub fn complete_query(
         )?;
         transaction.execute(
             "UPDATE subscription_issue SET status = 'resolved', last_seen_at = ?1, resolved_at = ?1
-             WHERE query_id = ?2 AND status = 'open'",
+             WHERE query_id = ?2
+               AND status IN ('open', 'acknowledged')
+               AND issue_key LIKE 'query:%'",
             params![now, query.query_id],
         )?;
         settle_run(transaction, query.run_id, now)?;
@@ -577,6 +641,90 @@ pub fn mark_credential_failure(
     credential_health(application, site_id, "invalid", now, Some(message))
 }
 
+pub fn settle_ingest_runs(application: &LibraryApplication, now: &str) -> Result<(), String> {
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            WorkPriority::CanonicalIngest,
+            resources(),
+            [],
+            |transaction, _| {
+                let failed_queries = transaction.execute(
+                    "UPDATE subscription_run_query
+                     SET status = 'failed', failure_kind = 'ingest',
+                         error_message = COALESCE((
+                             SELECT job.last_error
+                             FROM subscription_run_source_item linked
+                             JOIN ingest_job job USING(source_item_id)
+                             WHERE linked.run_query_id = subscription_run_query.run_query_id
+                               AND job.status = 'failed'
+                             ORDER BY job.ingest_job_id LIMIT 1
+                         ), 'Canonical ingest failed')
+                     WHERE status = 'succeeded'
+                       AND EXISTS (
+                           SELECT 1
+                           FROM subscription_run_source_item linked
+                           JOIN ingest_job job USING(source_item_id)
+                           WHERE linked.run_query_id = subscription_run_query.run_query_id
+                             AND job.status = 'failed'
+                       )",
+                    [],
+                )?;
+                let run_ids = {
+                    let mut statement = transaction.prepare(
+                        "SELECT run_id FROM subscription_run
+                         WHERE status = 'running' ORDER BY run_id",
+                    )?;
+                    let run_ids = statement
+                        .query_map([], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    run_ids
+                };
+                let mut settled = 0;
+                for run_id in run_ids {
+                    settled += settle_run(transaction, run_id, now)? as usize;
+                }
+                Ok((failed_queries != 0 || settled != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+pub fn acknowledge_subscription_issues(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<Option<MutationReceipt>, String> {
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            WorkPriority::ForegroundMutation,
+            ["subscriptions".to_owned()],
+            [],
+            |transaction, _| {
+                let exists = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM subscription WHERE subscription_id = ?1)",
+                    [subscription_id],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !exists {
+                    return Err(LibraryError::NotFound(format!(
+                        "subscription {subscription_id}"
+                    )));
+                }
+                let changed = transaction.execute(
+                    "UPDATE subscription_issue
+                     SET status = 'acknowledged'
+                     WHERE subscription_id = ?1 AND status = 'open'",
+                    [subscription_id],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|published| published.map(|(_, receipt)| receipt))
+        .map_err(|error| error.to_string())
+}
+
 fn credential_health(
     application: &LibraryApplication,
     site_id: &str,
@@ -620,7 +768,11 @@ fn write_transition(
         .map_err(|error| error.to_string())
 }
 
-fn settle_run(transaction: &Transaction<'_>, run_id: i64, now: &str) -> picto_library::Result<()> {
+fn settle_run(
+    transaction: &Transaction<'_>,
+    run_id: i64,
+    now: &str,
+) -> picto_library::Result<bool> {
     let (pending, running, failed, cancelled): (i64, i64, i64, i64) = transaction.query_row(
         "SELECT
              COALESCE(SUM(status = 'pending'), 0),
@@ -632,7 +784,19 @@ fn settle_run(transaction: &Transaction<'_>, run_id: i64, now: &str) -> picto_li
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
     if pending != 0 || running != 0 {
-        return Ok(());
+        return Ok(false);
+    }
+    let downloaded = transaction.query_row(
+        "SELECT COUNT(*)
+         FROM subscription_run_query query_run
+         JOIN subscription_run_source_item linked USING(run_query_id)
+         JOIN source_item item USING(source_item_id)
+         WHERE query_run.run_id = ?1 AND item.state = 'downloaded'",
+        [run_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if downloaded != 0 && failed == 0 && cancelled == 0 {
+        return Ok(false);
     }
     let status = if failed != 0 {
         "failed"
@@ -641,12 +805,12 @@ fn settle_run(transaction: &Transaction<'_>, run_id: i64, now: &str) -> picto_li
     } else {
         "succeeded"
     };
-    transaction.execute(
+    let changed = transaction.execute(
         "UPDATE subscription_run SET status = ?1, finished_at = ?2
          WHERE run_id = ?3 AND status IN ('pending', 'running')",
         params![status, now, run_id],
     )?;
-    Ok(())
+    Ok(changed != 0)
 }
 
 fn validate_post(post: &NormalizedPost) -> Result<(), String> {

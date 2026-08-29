@@ -90,9 +90,16 @@ pub struct StructuralRootState {
     pub total_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuralMediaNoteState {
+    pub media_id: MediaId,
+    pub notes: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StructuralState {
     pub roots: Arc<Vec<StructuralRootState>>,
+    pub media_notes: Arc<Vec<StructuralMediaNoteState>>,
     pub projection: Arc<ProjectionSnapshot>,
 }
 
@@ -124,6 +131,8 @@ pub enum SemanticChange {
         root_id: RootId,
         before: MediaId,
         after: MediaId,
+        before_notes: Option<String>,
+        after_notes: Option<String>,
     },
     TagName {
         tag_id: crate::TagId,
@@ -184,10 +193,12 @@ impl SemanticChange {
         match self {
             Self::AuxiliaryJson {
                 key, before, after, ..
-            } => key.len()
-                + before.as_deref().map(str::len).unwrap_or(0)
-                + after.as_deref().map(str::len).unwrap_or(0)
-                + 64,
+            } => {
+                key.len()
+                    + before.as_deref().map(str::len).unwrap_or(0)
+                    + after.as_deref().map(str::len).unwrap_or(0)
+                    + 64
+            }
             Self::Bitmap { before, after, .. } => {
                 before.serialized_size() + after.serialized_size() + 64
             }
@@ -202,7 +213,15 @@ impl SemanticChange {
                         + 40
                 })
                 .sum(),
-            Self::CollectionCover { .. } => 64,
+            Self::CollectionCover {
+                before_notes,
+                after_notes,
+                ..
+            } => {
+                before_notes.as_deref().map(str::len).unwrap_or(0)
+                    + after_notes.as_deref().map(str::len).unwrap_or(0)
+                    + 64
+            }
             Self::TagName { before, after, .. } => before.len() + after.len() + 32,
             Self::TagNamespaceName { before, after, .. } => before.len() + after.len() + 32,
             Self::TagNamespaceDefinition { before, after } => before
@@ -283,7 +302,14 @@ impl SemanticChange {
                             + 96
                     })
                     .sum::<usize>();
+                let media_notes = before
+                    .media_notes
+                    .iter()
+                    .chain(after.media_notes.iter())
+                    .map(|media| media.notes.as_deref().map(str::len).unwrap_or(0) + 16)
+                    .sum::<usize>();
                 roots
+                    + media_notes
                     + affected.serialized_size()
                     + before.projection.estimated_bytes()
                     + after.projection.estimated_bytes()

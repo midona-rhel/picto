@@ -11,10 +11,13 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
 
-pub const MAX_INGEST_BATCH: usize = 64;
+// On the supported release host, 48 tag-rich roots stays below one frame while
+// retaining nearly all of the transaction amortization from a 64-item batch.
+pub const MAX_INGEST_BATCH: usize = 48;
 
 pub(crate) struct IngestResult {
     pub root_id: RootId,
+    pub created_root: bool,
     pub snapshot: ProjectionSnapshot,
     pub resources: Vec<String>,
     pub bitmap_keys: Vec<BitmapKey>,
@@ -26,16 +29,69 @@ pub(crate) fn insert_one(
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
+    reuse_exact_root: bool,
+    reuse_identity: bool,
 ) -> Result<IngestResult> {
-    if let Some(root_id) = existing_root(transaction, &snapshot, input)? {
-        snapshot.revision = revision;
-        return Ok(IngestResult {
-            root_id,
-            snapshot,
-            resources: vec!["roots".into()],
-            bitmap_keys: Vec::new(),
-            folder_ids: Vec::new(),
-        });
+    if reuse_identity {
+        if let Some(existing) = existing_import(transaction, &snapshot, input, reuse_exact_root)? {
+            refresh_existing_file(transaction, existing.media_id, input)?;
+            let mut bitmap_keys = Vec::new();
+            let mut added_tags = 0u64;
+            for name in &input.tags {
+                let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(name).copied() {
+                    tag_id
+                } else {
+                    let tag_id = ensure_tag(transaction, name)?;
+                    Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name.clone(), tag_id);
+                    tag_id
+                };
+                if Arc::make_mut(&mut snapshot.tags)
+                    .entry(tag_id)
+                    .or_default()
+                    .insert(existing.root_id.0)
+                {
+                    added_tags += 1;
+                    bitmap_keys.push(BitmapKey {
+                        domain: BitmapDomain::Tag,
+                        key_id: tag_id.0,
+                    });
+                }
+            }
+            if added_tags != 0 {
+                let counts = Arc::make_mut(&mut snapshot.tag_count);
+                counts.insert(
+                    existing.root_id.0,
+                    counts
+                        .value(existing.root_id.0)
+                        .unwrap_or(0)
+                        .saturating_add(added_tags),
+                );
+            }
+            if let Some(source) = &input.source_identity {
+                transaction.execute(
+                    "INSERT INTO source_provenance
+                     (source_key, source_item_key, media_id, source_text)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(source_key, source_item_key, media_id) DO UPDATE SET
+                     source_text = excluded.source_text",
+                    params![
+                        source.source_key,
+                        source.source_item_key,
+                        existing.media_id.0,
+                        source.source_text
+                    ],
+                )?;
+            }
+            snapshot.revision = revision;
+            return Ok(IngestResult {
+                root_id: existing.root_id,
+                created_root: false,
+                snapshot,
+                resources: vec!["roots".into(), "tags".into()],
+                bitmap_keys,
+                folder_ids: Vec::new(),
+            });
+        }
     }
     if transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM deletion_tombstone WHERE stable_key = ?1)",
@@ -47,15 +103,20 @@ pub(crate) fn insert_one(
         ));
     }
 
-    let file_id = if let Some(file_id) = transaction
+    let existing_file = transaction
         .query_row(
-            "SELECT file_id FROM media_file WHERE content_hash = ?1",
+            "SELECT file_id, perceptual_hash IS NOT NULL
+             FROM media_file WHERE content_hash = ?1",
             [&input.facts.content_hash],
-            |row| row.get::<_, u32>(0),
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, bool>(1)?)),
         )
-        .optional()?
-    {
-        file_id
+        .optional()?;
+    let (file_id, physical_has_perceptual_hash) = if let Some((file_id, has_hash)) = existing_file {
+        transaction.execute(
+            "UPDATE media_file SET file_path = ?2 WHERE file_id = ?1 AND file_path IS NOT ?2",
+            params![file_id, input.file_path],
+        )?;
+        (file_id, has_hash)
     } else {
         let file_id = LibraryDatabase::allocate_id(transaction)?;
         transaction.execute(
@@ -81,7 +142,7 @@ pub(crate) fn insert_one(
                 serde_json::to_string(&input.facts.palette)?,
             ],
         )?;
-        file_id
+        (file_id, input.facts.perceptual_hash.is_some())
     };
 
     let root_id = RootId(LibraryDatabase::allocate_id(transaction)?);
@@ -91,8 +152,9 @@ pub(crate) fn insert_one(
         params![root_id.0, input.stable_key],
     )?;
     transaction.execute(
-        "INSERT INTO media_item(media_id, media_name, file_id) VALUES (?1, ?2, ?3)",
-        params![media_id.0, input.media_name, file_id],
+        "INSERT INTO media_item(media_id, media_name, media_notes, file_id)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![media_id.0, input.media_name, input.notes, file_id],
     )?;
     enqueue_file_work(
         transaction,
@@ -110,7 +172,7 @@ pub(crate) fn insert_one(
             input.imported_at_ms,
         )?;
     }
-    if input.facts.perceptual_hash.is_none() {
+    if !physical_has_perceptual_hash {
         enqueue_file_work(
             transaction,
             file_id,
@@ -290,6 +352,7 @@ pub(crate) fn insert_one(
     snapshot.revision = revision;
     Ok(IngestResult {
         root_id,
+        created_root: true,
         snapshot,
         resources: vec![
             "roots".into(),
@@ -328,7 +391,11 @@ fn enqueue_file_work(
              (file_id, file_hash, work_type, status, priority, attempt_count,
               available_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'pending', ?5, 0, ?4, ?4, ?4)
-         ON CONFLICT DO NOTHING",
+         ON CONFLICT DO UPDATE SET
+             status = 'pending', priority = excluded.priority, attempt_count = 0,
+             available_at = excluded.available_at, last_error = NULL,
+             updated_at = excluded.updated_at
+         WHERE work_item.status = 'failed'",
         params![
             file_id,
             content_hash,
@@ -340,11 +407,69 @@ fn enqueue_file_work(
     Ok(())
 }
 
-fn existing_root(
+fn refresh_existing_file(
+    transaction: &Transaction<'_>,
+    media_id: MediaId,
+    input: &PreparedImport,
+) -> Result<()> {
+    let (file_id, has_palette, has_perceptual_hash) = transaction.query_row(
+        "SELECT file.file_id, file.palette_json != '[]', file.perceptual_hash IS NOT NULL
+         FROM media_item media
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE media.media_id = ?1",
+        [media_id.0],
+        |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, bool>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        },
+    )?;
+    transaction.execute(
+        "UPDATE media_file SET file_path = ?2 WHERE file_id = ?1 AND file_path IS NOT ?2",
+        params![file_id, input.file_path],
+    )?;
+    enqueue_file_work(
+        transaction,
+        file_id,
+        &input.facts.content_hash,
+        "thumbnail",
+        input.imported_at_ms,
+    )?;
+    if !has_palette {
+        enqueue_file_work(
+            transaction,
+            file_id,
+            &input.facts.content_hash,
+            "dominant_colors",
+            input.imported_at_ms,
+        )?;
+    }
+    if !has_perceptual_hash {
+        enqueue_file_work(
+            transaction,
+            file_id,
+            &input.facts.content_hash,
+            "perceptual_hash",
+            input.imported_at_ms,
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExistingImport {
+    media_id: MediaId,
+    root_id: RootId,
+}
+
+fn existing_import(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     input: &PreparedImport,
-) -> Result<Option<RootId>> {
+    reuse_exact_root: bool,
+) -> Result<Option<ExistingImport>> {
     let stable_media = transaction
         .query_row(
             "SELECT local_id FROM library_item WHERE stable_key = ?1 AND item_kind = 1",
@@ -373,12 +498,30 @@ fn existing_root(
             "stable and source identities resolve to different media".into(),
         ));
     }
-    Ok(stable_media.or(source_media).map(|media_id| {
-        snapshot
+    let exact_media = if reuse_exact_root {
+        transaction
+            .query_row(
+                "SELECT media.media_id
+                 FROM media_item media
+                 JOIN media_file file ON file.file_id = media.file_id
+                 WHERE file.content_hash = ?1
+                 ORDER BY media.media_id
+                 LIMIT 1",
+                [&input.facts.content_hash],
+                |row| row.get::<_, u32>(0),
+            )
+            .optional()?
+    } else {
+        None
+    };
+    let media_id = stable_media.or(source_media).or(exact_media);
+    Ok(media_id.map(|media_id| ExistingImport {
+        media_id: MediaId(media_id),
+        root_id: snapshot
             .media_owner
             .get(media_id)
             .copied()
-            .unwrap_or(RootId(media_id))
+            .unwrap_or(RootId(media_id)),
     }))
 }
 

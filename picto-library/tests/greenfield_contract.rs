@@ -4,8 +4,8 @@ use picto_library::predicate::{
 use picto_library::query::{ItemScope, PageRequest, RootQuery};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
-    GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle, PreparedImport, Rating,
-    RootKind, RootTagAssignment, SmartFolderInput,
+    ContentSortField, GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle,
+    PreparedImport, Rating, RootKind, RootTagAssignment, SmartFolderInput,
 };
 use tempfile::TempDir;
 
@@ -96,6 +96,44 @@ fn fresh_schema_reopens_and_rejects_unrelated_sqlite_files() {
     let missing = directory.path().join("missing.sqlite");
     assert!(Library::open(&missing).is_err());
     assert!(!missing.exists());
+}
+
+#[test]
+fn startup_removes_only_view_preferences_for_missing_navigation_targets() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                for scope in ["grid:defaults", "folder:999", "smart:999"] {
+                    transaction.execute(
+                        "INSERT INTO view_pref(scope, value_json) VALUES (?1, '{}')",
+                        [scope],
+                    )?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+
+    let reopened = Library::open(&path).unwrap();
+    let scopes = reopened
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(connection
+                    .prepare("SELECT scope FROM view_pref ORDER BY scope")?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            },
+        )
+        .unwrap();
+    assert_eq!(scopes, ["grid:defaults"]);
 }
 
 #[test]
@@ -522,6 +560,35 @@ fn tag_rename_changes_only_the_dictionary() {
 }
 
 #[test]
+fn empty_tag_namespace_creation_is_published_and_undoable() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+
+    let receipt = library.create_tag_namespace("creator").unwrap();
+    assert!(receipt.resources.contains(&"tags".to_string()));
+    let created = library
+        .tag_namespaces()
+        .unwrap()
+        .into_iter()
+        .find(|namespace| namespace.name == "creator")
+        .unwrap();
+    assert_eq!(created.tag_count, 0);
+
+    library.undo().unwrap().unwrap();
+    assert!(!library
+        .tag_namespaces()
+        .unwrap()
+        .iter()
+        .any(|namespace| namespace.name == "creator"));
+    library.redo().unwrap().unwrap();
+    assert!(library
+        .tag_namespaces()
+        .unwrap()
+        .iter()
+        .any(|namespace| namespace.name == "creator"));
+}
+
+#[test]
 fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -695,6 +762,7 @@ fn ai_tag_assignments_union_member_predictions_onto_one_collection_root() {
             cover_root_id: video,
             winning_collection_id: None,
             name: Some("AI collection".into()),
+            notes: None,
             modified_at_ms: 1_700_000_000_100,
         })
         .unwrap();
@@ -923,12 +991,18 @@ fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
     );
     assert!(library.move_folder(parent, Some(first_child)).is_err());
 
-    let (first, _) = library
-        .ingest(&imported("alpha", Lifecycle::Active, &[]))
-        .unwrap();
-    let (second, _) = library
-        .ingest(&imported("beta", Lifecycle::Active, &[]))
-        .unwrap();
+    let mut alpha = imported("alpha", Lifecycle::Active, &[]);
+    alpha.imported_at_ms = 100;
+    alpha.captured_at_ms = Some(100);
+    alpha.facts.size_bytes = 100;
+    alpha.notes = Some("zulu".into());
+    let mut beta = imported("beta", Lifecycle::Active, &[]);
+    beta.imported_at_ms = 200;
+    beta.captured_at_ms = Some(200);
+    beta.facts.size_bytes = 200;
+    beta.notes = Some("alpha".into());
+    let (first, _) = library.ingest(&alpha).unwrap();
+    let (second, _) = library.ingest(&beta).unwrap();
     library
         .add_to_folder(
             &SelectionTarget::Explicit {
@@ -963,7 +1037,9 @@ fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
             .collect::<Vec<_>>(),
         vec![second, first]
     );
-    library.sort_folder_items_by_name(first_child).unwrap();
+    library
+        .sort_folder_items(first_child, ContentSortField::Name)
+        .unwrap();
     assert_eq!(
         library
             .query(&folder_query, &PageRequest::default())
@@ -974,6 +1050,25 @@ fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
             .collect::<Vec<_>>(),
         vec![first, second]
     );
+    for field in [
+        ContentSortField::ImportedAt,
+        ContentSortField::CreatedAt,
+        ContentSortField::ModifiedAt,
+        ContentSortField::Size,
+        ContentSortField::Notes,
+    ] {
+        library.sort_folder_items(first_child, field).unwrap();
+        assert_eq!(
+            library
+                .query(&folder_query, &PageRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|item| item.root_id)
+                .collect::<Vec<_>>(),
+            vec![second, first]
+        );
+    }
     assert_eq!(
         library
             .folders()
@@ -1135,6 +1230,7 @@ fn selection_summary_returns_six_ordered_previews_and_structural_collection_cand
             cover_root_id: roots[0],
             winning_collection_id: None,
             name: Some("Preview collection".into()),
+            notes: None,
             modified_at_ms: 1_700_000_000_100,
         })
         .unwrap();
@@ -1196,6 +1292,7 @@ fn selection_image_compatibility_treats_a_collection_as_one_root_with_images() {
             cover_root_id: image,
             winning_collection_id: None,
             name: Some("Mixed media".into()),
+            notes: None,
             modified_at_ms: 1_700_000_000_100,
         })
         .unwrap();
@@ -1605,6 +1702,184 @@ fn prepared_collection_import_never_publishes_standalone_members() {
 }
 
 #[test]
+fn exact_hash_ingest_reuses_the_owner_and_transfers_only_tags() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let original = imported("exact-original", Lifecycle::Active, &["state:original"]);
+    let (root_id, _) = library.ingest(&original).unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Maintenance,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE work_item SET status = 'failed', attempt_count = 8,
+                         last_error = 'stale path'
+                     WHERE work_type = 'thumbnail'",
+                    [],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    let mut repeated = imported("exact-repeat", Lifecycle::Inbox, &["state:incoming"]);
+    repeated.facts.content_hash = original.facts.content_hash.clone();
+    repeated.rating = Rating::Five;
+    repeated.notes = Some("must not replace root metadata".into());
+    let (reused_root_id, _) = library.ingest(&repeated).unwrap();
+
+    assert_eq!(reused_root_id, root_id);
+    assert_eq!(
+        library
+            .query(&query(ItemScope::All), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        library
+            .query(&query(ItemScope::Inbox), &PageRequest::default())
+            .unwrap()
+            .total,
+        0
+    );
+    let snapshot = library.projections().snapshot();
+    let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
+    assert!(snapshot.tags[&incoming_tag].contains(root_id.0));
+    assert!(snapshot.ratings[&Rating::Unrated].contains(root_id.0));
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_file", [], |row| row
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT file_path FROM media_file", [], |row| row
+                            .get::<_, String>(0))?,
+                    repeated.file_path
+                );
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT status || ':' || attempt_count FROM work_item
+                         WHERE work_type = 'thumbnail'",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )?,
+                    "pending:0"
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT COUNT(*) FROM source_provenance", [], |row| row
+                            .get::<_, i64>(0))?,
+                    2
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut original = imported("collection-existing", Lifecycle::Inbox, &["state:original"]);
+    original.facts.perceptual_hash = Some("already-computed".into());
+    let (existing_root, _) = library.ingest(&original).unwrap();
+
+    let mut repeated = imported("collection-repeat", Lifecycle::Inbox, &["state:incoming"]);
+    repeated.facts.content_hash = original.facts.content_hash.clone();
+    let members = vec![
+        repeated,
+        imported("collection-new-a", Lifecycle::Inbox, &["source:post"]),
+        imported("collection-new-b", Lifecycle::Inbox, &["source:post"]),
+    ];
+    let (collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members,
+            cover_index: 1,
+            name: Some("Filtered collection".into()),
+            modified_at_ms: 1_700_000_003_000,
+        })
+        .unwrap();
+
+    assert_ne!(collection, existing_root);
+    let inbox = library
+        .query(&query(ItemScope::Inbox), &PageRequest::default())
+        .unwrap();
+    assert_eq!(inbox.total, 2);
+    assert_eq!(inbox.media_count, 4);
+    let exact_matches = library
+        .query(
+            &query(ItemScope::MediaMatches {
+                item_id: collection.0,
+            }),
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(exact_matches.total, 2);
+    assert_eq!(
+        exact_matches
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([existing_root, collection])
+    );
+    assert_eq!(
+        library.projections().snapshot().collection_orders[&collection].len(),
+        3
+    );
+    let snapshot = library.projections().snapshot();
+    let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
+    assert!(!snapshot.tags[&incoming_tag].contains(existing_root.0));
+    assert!(snapshot.tags[&incoming_tag].contains(collection.0));
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_file", [], |row| row
+                        .get::<_, i64>(0))?,
+                    3
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
+                        .get::<_, i64>(0))?,
+                    4
+                );
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM work_item WHERE work_type = 'perceptual_hash'",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )?,
+                    2
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
+#[test]
 fn large_prepared_collection_publishes_as_one_coherent_root() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -1777,6 +2052,7 @@ fn collections_are_one_root_and_mime_filters_include_every_member() {
             cover_root_id: image,
             winning_collection_id: None,
             name: Some("Pair".into()),
+            notes: None,
             modified_at_ms: 1_700_000_000_100,
         })
         .unwrap();
@@ -2009,6 +2285,7 @@ fn details_keep_collection_organization_on_the_root_and_media_in_vector_order() 
             cover_root_id: cover,
             winning_collection_id: None,
             name: Some("Details collection".into()),
+            notes: None,
             modified_at_ms: 500,
         })
         .unwrap();
@@ -2069,6 +2346,7 @@ fn derivative_updates_refresh_only_roots_using_the_changed_file_as_cover() {
             cover_root_id: cover,
             winning_collection_id: None,
             name: None,
+            notes: None,
             modified_at_ms: 1_700_000_001_000,
         })
         .unwrap();
@@ -2178,6 +2456,7 @@ fn detaching_restores_one_root_and_keeps_collection_organization_on_the_root() {
             cover_root_id: image,
             winning_collection_id: None,
             name: Some("Detach pair".into()),
+            notes: None,
             modified_at_ms: 1_700_000_002_000,
         })
         .unwrap();
@@ -2300,6 +2579,7 @@ fn detaching_many_members_is_one_exact_reversible_publication() {
             cover_root_id: first,
             winning_collection_id: None,
             name: Some("Detach many".into()),
+            notes: None,
             modified_at_ms: 1_700_000_002_200,
         })
         .unwrap();
@@ -2407,6 +2687,7 @@ fn organizing_a_collection_is_reversible_without_persisted_history() {
             cover_root_id: first,
             winning_collection_id: None,
             name: Some("Undo group".into()),
+            notes: None,
             modified_at_ms: 1_700_000_003_000,
         })
         .unwrap();
@@ -2432,6 +2713,80 @@ fn organizing_a_collection_is_reversible_without_persisted_history() {
     assert_eq!(regrouped.total, 1);
     assert_eq!(regrouped.items[0].root_id, collection);
     assert_eq!(regrouped.items[0].kind, RootKind::Collection);
+}
+
+#[test]
+fn collection_members_retain_notes_through_group_cover_undo_and_ungroup() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut first_import = imported("noted-one", Lifecycle::Active, &[]);
+    first_import.notes = Some("First member note".into());
+    let mut second_import = imported("noted-two", Lifecycle::Active, &[]);
+    second_import.notes = Some("Second member note".into());
+    let converted = library
+        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .unwrap();
+    let first = converted[0].0;
+    let second = converted[1].0;
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![first, second],
+    };
+
+    let draft = library.collection_note_draft(&target).unwrap();
+    assert_eq!(draft.notes, "First member note\n\nSecond member note");
+    assert_eq!(draft.source_count, 2);
+
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target,
+            cover_root_id: first,
+            winning_collection_id: None,
+            name: Some("Noted collection".into()),
+            notes: Some(draft.notes.clone()),
+            modified_at_ms: 1_700_000_004_000,
+        })
+        .unwrap();
+    let grouped = library.details(collection).unwrap();
+    assert_eq!(grouped.root.notes.as_deref(), Some(draft.notes.as_str()));
+    assert_eq!(
+        grouped.media[0].media_notes.as_deref(),
+        Some("First member note")
+    );
+    assert_eq!(
+        grouped.media[1].media_notes.as_deref(),
+        Some("Second member note")
+    );
+
+    library
+        .set_collection_cover(
+            collection,
+            picto_library::MediaId(second.0),
+            1_700_000_004_100,
+        )
+        .unwrap();
+    assert_eq!(
+        library.details(collection).unwrap().root.notes.as_deref(),
+        Some("Second member note")
+    );
+    library.undo().unwrap().unwrap();
+    let restored_cover = library.details(collection).unwrap();
+    assert_eq!(restored_cover.root.cover_media_id.0, first.0);
+    assert_eq!(
+        restored_cover.root.notes.as_deref(),
+        Some(draft.notes.as_str())
+    );
+
+    library
+        .ungroup_collection(collection, 1_700_000_004_200)
+        .unwrap();
+    assert_eq!(
+        library.details(first).unwrap().root.notes.as_deref(),
+        Some("First member note")
+    );
+    assert_eq!(
+        library.details(second).unwrap().root.notes.as_deref(),
+        Some("Second member note")
+    );
 }
 
 #[test]
@@ -2517,8 +2872,11 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     first_import.facts.content_hash = shared_hash.into();
     let mut second_import = imported("delete-second", Lifecycle::Active, &["creator:two"]);
     second_import.facts.content_hash = shared_hash.into();
-    let (first, _) = library.ingest(&first_import).unwrap();
-    let (second, _) = library.ingest(&second_import).unwrap();
+    let converted = library
+        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .unwrap();
+    let first = converted[0].0;
+    let second = converted[1].0;
 
     let first_target = SelectionTarget::Explicit {
         root_ids: vec![first],
@@ -2544,7 +2902,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .permanently_delete(&second_target, 1_700_000_000_600)
         .unwrap();
     assert_eq!(cleanup.len(), 1);
-    assert_eq!(cleanup[0].file_path, first_import.file_path);
+    assert_eq!(cleanup[0].file_path, second_import.file_path);
     assert_eq!(library.history().state().entries, history_before_delete);
     assert_eq!(library.counts().unwrap().trash, 0);
 
@@ -2586,4 +2944,16 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let reopened = Library::open(&path).unwrap();
     assert_eq!(reopened.counts().unwrap().trash, 0);
     assert_eq!(reopened.history().state().entries, 0);
+    let mut removed = Vec::new();
+    assert_eq!(
+        reopened
+            .clean_pending_blobs(10, |pending| {
+                removed.push(pending.content_hash.clone());
+                Ok(())
+            })
+            .unwrap(),
+        1
+    );
+    assert_eq!(removed, vec![shared_hash]);
+    assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
 }

@@ -86,7 +86,7 @@ pub(crate) fn detach_many(
         .collect::<Vec<_>>();
     let mut media_rows = Vec::with_capacity(media_ids.len());
     let mut statement = transaction.prepare_cached(
-        "SELECT media.media_name, file.mime, file.size_bytes, file.width, file.height,
+        "SELECT media.media_name, media.media_notes, file.mime, file.size_bytes, file.width, file.height,
                 file.duration_ms, file.palette_json
          FROM media_item media JOIN media_file file ON file.file_id = media.file_id
          WHERE media.media_id = ?1",
@@ -98,17 +98,18 @@ pub(crate) fn detach_many(
         let row = statement.query_row([media_id.0], |row| {
             Ok((
                 row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
                 CoverFacts {
-                    mime: row.get(1)?,
-                    size_bytes: row.get::<_, i64>(2)? as u64,
-                    width: row.get(3)?,
-                    height: row.get(4)?,
-                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
-                    palette: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                    mime: row.get(2)?,
+                    size_bytes: row.get::<_, i64>(3)? as u64,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                    duration_ms: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+                    palette: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
                 },
             ))
         })?;
-        media_rows.push((*media_id, row.0, row.1));
+        media_rows.push((*media_id, row.0, row.1, row.2));
     }
     drop(statement);
     let remaining = members
@@ -116,11 +117,13 @@ pub(crate) fn detach_many(
         .copied()
         .filter(|member| !selected.contains(member.0))
         .collect::<Vec<_>>();
-    let detached_size = media_rows.iter().try_fold(0u64, |total, (_, _, facts)| {
-        total
-            .checked_add(facts.size_bytes)
-            .ok_or_else(|| LibraryError::InvalidState("detached media size overflow".into()))
-    })?;
+    let detached_size = media_rows
+        .iter()
+        .try_fold(0u64, |total, (_, _, _, facts)| {
+            total
+                .checked_add(facts.size_bytes)
+                .ok_or_else(|| LibraryError::InvalidState("detached media size overflow".into()))
+        })?;
     let remaining_size = collection
         .total_size_bytes
         .checked_sub(detached_size)
@@ -174,11 +177,11 @@ pub(crate) fn detach_many(
          VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?6, ?7, 1, ?8)",
     )?;
     let urls = serde_json::to_string(&collection.urls)?;
-    for (media_id, media_name, facts) in &media_rows {
+    for (media_id, media_name, media_notes, facts) in &media_rows {
         insert_root.execute(params![
             media_id.0,
             media_name,
-            collection.notes,
+            media_notes,
             urls,
             collection.imported_at_ms,
             collection.captured_at_ms,
@@ -265,7 +268,9 @@ pub(crate) fn detach_many(
         };
         after.splice(
             insertion..insertion,
-            media_rows.iter().map(|(media_id, _, _)| RootId(media_id.0)),
+            media_rows
+                .iter()
+                .map(|(media_id, _, _, _)| RootId(media_id.0)),
         );
         ordering::replace(
             transaction,
@@ -286,7 +291,7 @@ pub(crate) fn detach_many(
             .insert(collection_id, Arc::new(remaining.clone()));
     }
     let owners = Arc::make_mut(&mut snapshot.media_owner);
-    for (media_id, _, _) in &media_rows {
+    for (media_id, _, _, _) in &media_rows {
         owners.insert(media_id.0, RootId(media_id.0));
     }
     if removes_collection {
@@ -301,7 +306,7 @@ pub(crate) fn detach_many(
             refresh_cover_projection(transaction, &mut snapshot, collection_id)?;
         }
     }
-    for (media_id, _, facts) in &media_rows {
+    for (media_id, _, _, facts) in &media_rows {
         add_media_root_projection(
             &mut snapshot,
             RootId(media_id.0),
@@ -337,7 +342,7 @@ pub(crate) fn detach_many(
     Ok(DetachResult {
         root_ids: media_rows
             .iter()
-            .map(|(media_id, _, _)| RootId(media_id.0))
+            .map(|(media_id, _, _, _)| RootId(media_id.0))
             .collect(),
         affected,
         snapshot,
@@ -361,10 +366,26 @@ pub(crate) fn set_cover(
             "media {cover_media_id} is not a member of collection {collection_id}"
         )));
     }
-    transaction.execute(
-        "UPDATE library_root SET cover_media_id = ?2 WHERE root_id = ?1",
-        params![collection_id.0, cover_media_id.0],
+    let media_notes = transaction.query_row(
+        "SELECT media_notes FROM media_item WHERE media_id = ?1",
+        [cover_media_id.0],
+        |row| row.get::<_, Option<String>>(0),
     )?;
+    transaction.execute(
+        "UPDATE library_root SET cover_media_id = ?2, notes = ?3 WHERE root_id = ?1",
+        params![collection_id.0, cover_media_id.0, media_notes],
+    )?;
+    let modified_at_ms = transaction.query_row(
+        "SELECT modified_at_ms FROM library_root WHERE root_id = ?1",
+        [collection_id.0],
+        |row| row.get(0),
+    )?;
+    crate::fts::mark_one(transaction, collection_id, modified_at_ms)?;
+    if media_notes.is_some() {
+        Arc::make_mut(&mut snapshot.notes_present).insert(collection_id.0);
+    } else {
+        Arc::make_mut(&mut snapshot.notes_present).remove(collection_id.0);
+    }
     let facts = load_cover_facts(transaction, cover_media_id)?;
     remove_cover_projection(snapshot, collection_id);
     add_cover_projection(snapshot, collection_id, &facts);
@@ -456,7 +477,7 @@ pub(crate) fn ungroup(
 
     let mut media_rows = Vec::with_capacity(members.len());
     let mut statement = transaction.prepare_cached(
-        "SELECT media.media_name, file.mime, file.size_bytes, file.width, file.height,
+        "SELECT media.media_name, media.media_notes, file.mime, file.size_bytes, file.width, file.height,
                 file.duration_ms, file.palette_json
          FROM media_item media JOIN media_file file ON file.file_id = media.file_id
          WHERE media.media_id = ?1",
@@ -465,17 +486,18 @@ pub(crate) fn ungroup(
         let row = statement.query_row([media_id.0], |row| {
             Ok((
                 row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
                 CoverFacts {
-                    mime: row.get(1)?,
-                    size_bytes: row.get::<_, i64>(2)? as u64,
-                    width: row.get(3)?,
-                    height: row.get(4)?,
-                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
-                    palette: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                    mime: row.get(2)?,
+                    size_bytes: row.get::<_, i64>(3)? as u64,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                    duration_ms: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+                    palette: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
                 },
             ))
         })?;
-        media_rows.push((*media_id, row.0, row.1));
+        media_rows.push((*media_id, row.0, row.1, row.2));
     }
     drop(statement);
 
@@ -489,7 +511,7 @@ pub(crate) fn ungroup(
         "DELETE FROM library_item WHERE local_id = ?1",
         [collection_id.0],
     )?;
-    for (media_id, media_name, facts) in &media_rows {
+    for (media_id, media_name, media_notes, facts) in &media_rows {
         transaction.execute(
             "INSERT INTO library_root
                  (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
@@ -498,7 +520,7 @@ pub(crate) fn ungroup(
             params![
                 media_id.0,
                 media_name,
-                collection.notes,
+                media_notes,
                 serde_json::to_string(&collection.urls)?,
                 collection.imported_at_ms,
                 collection.captured_at_ms,
@@ -591,10 +613,10 @@ pub(crate) fn ungroup(
     Arc::make_mut(&mut snapshot.collection_orders).remove(&collection_id);
     remove_root_projections(&mut snapshot, &[collection_id.0].into_iter().collect());
     let owners = Arc::make_mut(&mut snapshot.media_owner);
-    for (media_id, _, _) in &media_rows {
+    for (media_id, _, _, _) in &media_rows {
         owners.insert(media_id.0, RootId(media_id.0));
     }
-    for (media_id, _, facts) in &media_rows {
+    for (media_id, _, _, facts) in &media_rows {
         add_media_root_projection(
             &mut snapshot,
             RootId(media_id.0),
@@ -733,6 +755,16 @@ pub(crate) fn organize(
         .map(|root| root.imported_at_ms)
         .max()
         .unwrap_or(request.modified_at_ms);
+    let notes = request
+        .notes
+        .as_deref()
+        .filter(|notes| !notes.trim().is_empty());
+    if notes.is_some_and(|notes| notes.len() > crate::model::MAX_ROOT_NOTES_BYTES) {
+        return Err(LibraryError::InvalidInput(format!(
+            "collection notes exceed the {} byte limit",
+            crate::model::MAX_ROOT_NOTES_BYTES
+        )));
+    }
 
     if request.winning_collection_id.is_none() {
         transaction.execute(
@@ -742,6 +774,12 @@ pub(crate) fn organize(
     }
 
     for root in &roots {
+        if root.kind == RootKind::Media {
+            transaction.execute(
+                "UPDATE media_item SET media_notes = ?2 WHERE media_id = ?1",
+                params![root.root_id.0, root.notes],
+            )?;
+        }
         if root.root_id != collection_id {
             transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root.root_id.0])?;
             transaction.execute(
@@ -775,7 +813,7 @@ pub(crate) fn organize(
         params![
             collection_id.0,
             name,
-            cover.notes,
+            notes,
             serde_json::to_string(&urls)?,
             cover.cover_media_id.0,
             imported_at,
@@ -844,7 +882,7 @@ pub(crate) fn organize(
         request.modified_at_ms,
         tag_count,
         folder_count,
-        cover.notes.is_some(),
+        notes.is_some(),
         !urls.is_empty(),
         has_image,
     );

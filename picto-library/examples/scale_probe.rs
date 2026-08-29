@@ -132,6 +132,16 @@ fn main() -> picto_library::Result<()> {
     println!("sidebar_active_count={}", counts.all);
     println!("add_tag_all_ms={:.3}", millis(tag_elapsed));
     println!("lifecycle_all_ms={:.3}", millis(lifecycle_elapsed));
+    let gate = library.database().publication_gate_stats();
+    println!("publication_gate_samples={}", gate.samples);
+    println!(
+        "publication_gate_p95_ms={:.3}",
+        gate.p95_micros as f64 / 1_000.0
+    );
+    println!(
+        "publication_gate_max_ms={:.3}",
+        gate.max_micros as f64 / 1_000.0
+    );
     let projection_bytes = library.projections().snapshot().estimated_bytes();
     println!("projection_estimated_bytes={projection_bytes}");
     println!(

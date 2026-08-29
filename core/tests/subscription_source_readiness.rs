@@ -3,14 +3,15 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use picto_core::app::Application;
 use picto_core::blob_store::{mime_to_extension, BlobStore};
-use picto_core::onlyfans_source_v2::SubscriptionSourceRouter;
-use picto_core::store::Store;
-use picto_core::subscription_catalog_v2::{NewSubscription, NewSubscriptionQuery};
-use picto_core::subscription_runtime_v2::SubscriptionWorker;
+use picto_core::library_application::LibraryApplication;
+use picto_core::onlyfans_source::SubscriptionSourceRouter;
+use picto_core::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
+use picto_core::subscription_runtime::SubscriptionWorker;
 use picto_core::subscriptions::gallery_dl_runner::site_by_id;
 use picto_core::subscriptions::source_adapter::describe_site;
+use picto_library::database::WorkPriority;
+use picto_library::{LibraryError, Lifecycle, RootId, RootKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct MediaEvidence {
@@ -65,7 +66,7 @@ async fn live_subscription_source_persistence_certification() {
 }
 
 async fn certify_selected_source() -> Result<(), String> {
-    picto_core::state_v2::init_tracing();
+    picto_core::state::init_tracing();
     let site_id = required_env("PICTO_LIVE_SUBSCRIPTION_SITE")?;
     let query_text = required_env("PICTO_LIVE_SUBSCRIPTION_QUERY")?;
     let batch_size = requested_batch_size()?;
@@ -82,8 +83,8 @@ async fn certify_selected_source() -> Result<(), String> {
 
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
     let root = temp.path();
-    let application = open_application(root)?;
-    let (subscription_id, _) = application.create_subscription_definition(
+    let application = LibraryApplication::create(root)?;
+    let (subscription_id, _) = application.create_subscription_definition_library(
         &NewSubscription {
             name: format!("certify-{site_id}"),
             schedule: "manual".into(),
@@ -101,8 +102,8 @@ async fn certify_selected_source() -> Result<(), String> {
     )?;
 
     let first_run = execute_run(&application, subscription_id, batch_size).await?;
-    require_success(first_run, application.store())?;
-    let first = read_evidence(application.store(), subscription_id)?;
+    require_success(first_run, &application)?;
+    let first = read_evidence(&application, subscription_id)?;
     validate_evidence(root, &site_id, &first)?;
     if first.posts.is_empty() {
         return Err("source run succeeded without materializing any media posts".into());
@@ -113,26 +114,26 @@ async fn certify_selected_source() -> Result<(), String> {
             first.traversed_post_count
         ));
     }
-    let checkpoint = read_checkpoint(application.store(), subscription_id)?;
+    let checkpoint = read_checkpoint(&application, subscription_id)?;
     drop(application);
 
-    let reopened = open_application(root)?;
-    let after_restart = read_evidence(reopened.store(), subscription_id)?;
+    let reopened = LibraryApplication::open(root)?;
+    let after_restart = read_evidence(&reopened, subscription_id)?;
     if first != after_restart {
         return Err("closing and reopening changed persisted source or media identity".into());
     }
-    if checkpoint != read_checkpoint(reopened.store(), subscription_id)? {
+    if checkpoint != read_checkpoint(&reopened, subscription_id)? {
         return Err("closing and reopening changed the durable continuation cursor".into());
     }
 
     // One more source post proves that the next run continues from persisted
     // state instead of replaying the first source window.
     let second_run = execute_run(&reopened, subscription_id, 1).await?;
-    require_success(second_run, reopened.store())?;
-    let continued = read_evidence(reopened.store(), subscription_id)?;
+    require_success(second_run, &reopened)?;
+    let continued = read_evidence(&reopened, subscription_id)?;
     validate_evidence(root, &site_id, &continued)?;
     require_prefix_preserved(&first, &continued)?;
-    let continued_checkpoint = read_checkpoint(reopened.store(), subscription_id)?;
+    let continued_checkpoint = read_checkpoint(&reopened, subscription_id)?;
     if continued.posts.len() == first.posts.len() && continued_checkpoint == checkpoint {
         return Err("continuation neither materialized media nor advanced source history".into());
     }
@@ -156,45 +157,50 @@ async fn certify_selected_source() -> Result<(), String> {
     Ok(())
 }
 
-fn open_application(root: &Path) -> Result<Application, String> {
-    Ok(Application::try_new(Arc::new(Store::open(root)?))?)
-}
-
 async fn execute_run(
-    application: &Application,
+    application: &LibraryApplication,
     subscription_id: i64,
     _batch_size: u32,
 ) -> Result<RunEvidence, String> {
     let now = Utc::now().to_rfc3339();
-    let (created, _) = application.request_subscription_run(subscription_id, &now)?;
+    let (created, _) = application.request_subscription_run_library(subscription_id, &now)?;
     if !created.created {
         return Err("subscription already had an active run".into());
     }
-    let runner = SubscriptionSourceRouter::open(application.store().library_root());
+    let runner = SubscriptionSourceRouter::open(application.root());
     let worker = SubscriptionWorker::new(application, runner);
     worker.tick(&Utc::now().to_rfc3339()).await?;
+    loop {
+        let report = picto_core::library_ingest_runtime::run_batch(application, 64)?;
+        if report.ingested == 0 && report.failed == 0 {
+            break;
+        }
+    }
     Ok(RunEvidence {
         run_id: created.run_id,
         status: "finished",
     })
 }
 
-fn require_success(run: RunEvidence, store: &Store) -> Result<(), String> {
+fn require_success(run: RunEvidence, application: &LibraryApplication) -> Result<(), String> {
     let (status, query_status, failure_kind, error): (
         String,
         String,
         Option<String>,
         Option<String>,
-    ) = store.read(|connection| {
-        connection.query_row(
-            "SELECT sr.status, srq.status, srq.failure_kind, srq.error_message
+    ) = application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row(
+                "SELECT sr.status, srq.status, srq.failure_kind, srq.error_message
              FROM subscription_run sr
              JOIN subscription_run_query srq ON srq.run_id = sr.run_id
              WHERE sr.run_id = ?1",
-            [run.run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-    })?;
+                [run.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        })
+        .map_err(|error| error.to_string())?;
     if status != "succeeded" || query_status != "succeeded" {
         return Err(format!(
             "run {} did not succeed: run={status}, query={query_status}, kind={failure_kind:?}, error={error:?}",
@@ -205,48 +211,44 @@ fn require_success(run: RunEvidence, store: &Store) -> Result<(), String> {
     Ok(())
 }
 
-fn read_evidence(store: &Store, subscription_id: i64) -> Result<Evidence, String> {
-    store.read_result(|connection| {
-        let traversed_post_count = connection
-            .query_row(
+fn read_evidence(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<Evidence, String> {
+    let mut evidence = application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            let traversed_post_count = connection.query_row(
                 "SELECT COUNT(DISTINCT ssp.source_post_id)
                  FROM subscription_source_post ssp
                  WHERE ssp.subscription_id = ?1",
                 [subscription_id],
                 |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| error.to_string())? as usize;
-        let unsettled_items: i64 = connection
-            .query_row(
+            )? as usize;
+            let unsettled_items: i64 = connection.query_row(
                 "SELECT COUNT(*)
                  FROM subscription_source_post ssp
                  JOIN source_item si ON si.source_post_id = ssp.source_post_id
                  WHERE ssp.subscription_id = ?1 AND si.state <> 'ingested'",
                 [subscription_id],
                 |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if unsettled_items != 0 {
-            return Err(format!(
-                "successful run retained {unsettled_items} non-ingested source items"
-            ));
-        }
-        let mut statement = connection
-            .prepare(
+            )?;
+            if unsettled_items != 0 {
+                return Err(LibraryError::InvalidState(format!(
+                    "successful run retained {unsettled_items} non-ingested source items"
+                )));
+            }
+            let mut statement = connection.prepare(
                 "SELECT sp.source_post_id, sp.post_key, sp.canonical_url,
                         sp.creator_name, sp.title, sp.description, sp.captured_at,
-                        sp.root_item_id, li.kind, lr.lifecycle
+                        sp.root_item_id
                  FROM subscription_source_post ssp
                  JOIN source_post sp ON sp.source_post_id = ssp.source_post_id
-                 LEFT JOIN library_item li ON li.item_id = sp.root_item_id
-                 LEFT JOIN library_root lr ON lr.item_id = sp.root_item_id
                  WHERE ssp.subscription_id = ?1
                    AND sp.root_item_id IS NOT NULL
                  ORDER BY sp.source_post_id",
-            )
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([subscription_id], |row| {
+            )?;
+            let rows = statement.query_map([subscription_id], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -256,99 +258,113 @@ fn read_evidence(store: &Store, subscription_id: i64) -> Result<Evidence, String
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<i64>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, Option<String>>(9)?,
                 ))
-            })
-            .map_err(|error| error.to_string())?;
-        let mut posts = Vec::new();
-        for row in rows {
-            let (
-                source_post_id,
-                post_key,
-                canonical_url,
-                creator_name,
-                title,
-                description,
-                captured_at,
-                root_item_id,
-                root_kind,
-                lifecycle,
-            ) = row.map_err(|error| error.to_string())?;
-            let mut item_statement = connection
-                .prepare(
+            })?;
+            let mut posts = Vec::new();
+            for row in rows {
+                let (
+                    source_post_id,
+                    post_key,
+                    canonical_url,
+                    creator_name,
+                    title,
+                    description,
+                    captured_at,
+                    root_item_id,
+                ) = row?;
+                let mut item_statement = connection.prepare(
                     "SELECT si.source_item_id, si.item_key, si.position, si.media_item_id,
-                            mf.file_hash, mf.mime_type, mf.size_bytes,
-                            COUNT(mt.tag_id)
+                            mf.content_hash, mf.mime, mf.size_bytes
                      FROM source_item si
-                     JOIN media_asset ma ON ma.item_id = si.media_item_id
-                     JOIN media_file mf ON mf.file_id = ma.file_id
-                     LEFT JOIN media_tag mt ON mt.media_item_id = ma.item_id
+                     JOIN media_item mi ON mi.media_id = si.media_item_id
+                     JOIN media_file mf ON mf.file_id = mi.file_id
                      WHERE si.source_post_id = ?1 AND si.state = 'ingested'
-                     GROUP BY si.source_item_id
                      ORDER BY si.position, si.source_item_id",
-                )
-                .map_err(|error| error.to_string())?;
-            let items = item_statement
-                .query_map([source_post_id], |row| {
-                    Ok(MediaEvidence {
-                        source_item_id: row.get(0)?,
-                        item_key: row.get(1)?,
-                        position: row.get(2)?,
-                        media_item_id: row.get(3)?,
-                        file_hash: row.get(4)?,
-                        mime_type: row.get(5)?,
-                        size_bytes: row.get(6)?,
-                        tag_count: row.get(7)?,
-                    })
-                })
-                .map_err(|error| error.to_string())?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|error| error.to_string())?;
-            let root_item_id = root_item_id
-                .ok_or_else(|| format!("source post {source_post_id} has no visible root"))?;
-            let collection_member_order =
-                picto_core::canonical_bitmap::load_order(connection, "group", root_item_id)
-                    .map_err(|error| error.to_string())?
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(i64::from)
-                    .collect::<Vec<i64>>();
-            let rooted_media_count: i64 = connection
-                .query_row(
+                )?;
+                let items = item_statement
+                    .query_map([source_post_id], |row| {
+                        Ok(MediaEvidence {
+                            source_item_id: row.get(0)?,
+                            item_key: row.get(1)?,
+                            position: row.get(2)?,
+                            media_item_id: row.get(3)?,
+                            file_hash: row.get(4)?,
+                            mime_type: row.get(5)?,
+                            size_bytes: row.get(6)?,
+                            tag_count: 0,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let root_item_id = root_item_id.ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "source post {source_post_id} has no visible root"
+                    ))
+                })?;
+                let collection_member_order = picto_library::ordering::load(
+                    connection,
+                    picto_library::ordering::OrderOwnerKind::Collection,
+                    u32::try_from(root_item_id)
+                        .map_err(|_| LibraryError::InvalidState("root ID exceeds u32".into()))?,
+                )?
+                .unwrap_or_default()
+                .into_iter()
+                .map(i64::from)
+                .collect::<Vec<i64>>();
+                let rooted_media_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM library_root
-                     WHERE item_id IN (
+                     WHERE root_id IN (
                          SELECT media_item_id FROM source_item
                          WHERE source_post_id = ?1 AND state = 'ingested'
                      )",
                     [source_post_id],
                     |row| row.get(0),
-                )
-                .map_err(|error| error.to_string())?;
-            posts.push(PostEvidence {
-                source_post_id,
-                post_key,
-                canonical_url: canonical_url
-                    .ok_or_else(|| format!("source post {source_post_id} has no canonical URL"))?,
-                creator_name,
-                title,
-                description,
-                captured_at,
-                root_item_id,
-                root_kind: root_kind
-                    .ok_or_else(|| format!("source post {source_post_id} root is missing"))?,
-                lifecycle: lifecycle
-                    .ok_or_else(|| format!("source post {source_post_id} root is hidden"))?,
-                items,
-                collection_member_order,
-                rooted_media_count,
-            });
-        }
-        Ok(Evidence {
-            traversed_post_count,
-            posts,
+                )?;
+                posts.push(PostEvidence {
+                    source_post_id,
+                    post_key,
+                    canonical_url: canonical_url.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "source post {source_post_id} has no canonical URL"
+                        ))
+                    })?,
+                    creator_name,
+                    title,
+                    description,
+                    captured_at,
+                    root_item_id,
+                    root_kind: String::new(),
+                    lifecycle: String::new(),
+                    items,
+                    collection_member_order,
+                    rooted_media_count,
+                });
+            }
+            Ok(Evidence {
+                traversed_post_count,
+                posts,
+            })
         })
-    })
+        .map_err(|error| error.to_string())?;
+    for post in &mut evidence.posts {
+        let details = application.details(RootId(
+            u32::try_from(post.root_item_id).map_err(|_| "root ID exceeds u32".to_string())?,
+        ))?;
+        post.root_kind = match details.root.kind {
+            RootKind::Media => "media",
+            RootKind::Collection => "collection",
+        }
+        .into();
+        post.lifecycle = match details.lifecycle {
+            Lifecycle::Active => "active",
+            Lifecycle::Inbox => "inbox",
+            Lifecycle::Trash => "trash",
+        }
+        .into();
+        for item in &mut post.items {
+            item.tag_count = details.tag_ids.len() as i64;
+        }
+    }
+    Ok(evidence)
 }
 
 fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<(), String> {
@@ -488,15 +504,21 @@ fn require_sanitized_text(post_key: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn read_checkpoint(store: &Store, subscription_id: i64) -> Result<String, String> {
-    store.read(|connection| {
-        connection.query_row(
-            "SELECT COALESCE(resume_cursor, '<null>')
+fn read_checkpoint(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<String, String> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row(
+                "SELECT COALESCE(resume_cursor, '<null>')
              FROM subscription_query WHERE subscription_id = ?1",
-            [subscription_id],
-            |row| row.get(0),
-        )
-    })
+                [subscription_id],
+                |row| row.get(0),
+            )?)
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn require_prefix_preserved(before: &Evidence, after: &Evidence) -> Result<(), String> {

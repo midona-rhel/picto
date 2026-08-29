@@ -1,4 +1,3 @@
-mod gallery_dl;
 mod types;
 
 use serde::Serialize;
@@ -11,7 +10,6 @@ use crate::subscriptions::gallery_dl_runner::{
     normalize_twitter_username, normalize_webtoons_url, site_by_id, SiteEntry,
 };
 
-pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
 pub use types::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
 
 #[derive(Debug, Clone, Serialize)]

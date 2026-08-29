@@ -12,8 +12,9 @@ use picto_library::{Library, RootId};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::{LibraryChanged, LIBRARY_CHANGED_EVENT};
+use crate::ai_models::AiModelDownload;
 use crate::blob_store::BlobStore;
+use crate::dto::{LibraryChanged, LIBRARY_CHANGED_EVENT};
 
 const DATABASE_FILE: &str = "library.sqlite";
 
@@ -23,9 +24,24 @@ pub struct LibraryApplication {
     blobs: Arc<BlobStore>,
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
     ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
-    ai_model_downloads: tokio::sync::Mutex<HashMap<String, crate::app::AiModelDownload>>,
+    ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
-    ai_worker_status: std::sync::Mutex<crate::app::AiWorkerStatus>,
+    ai_worker_status: std::sync::Mutex<AiWorkerStatus>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AiWorkerStatus {
+    pub active: bool,
+    pub detail: String,
+}
+
+impl Default for AiWorkerStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            detail: "Idle".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -86,7 +102,7 @@ impl LibraryApplication {
             ai_prediction_cache: crate::ai_tagger::inference::new_prediction_cache(),
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
-            ai_worker_status: std::sync::Mutex::new(crate::app::AiWorkerStatus::default()),
+            ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
         })
     }
 
@@ -114,7 +130,7 @@ impl LibraryApplication {
 
     pub(crate) fn ai_model_downloads(
         &self,
-    ) -> &tokio::sync::Mutex<HashMap<String, crate::app::AiModelDownload>> {
+    ) -> &tokio::sync::Mutex<HashMap<String, AiModelDownload>> {
         &self.ai_model_downloads
     }
 
@@ -129,7 +145,7 @@ impl LibraryApplication {
         }
     }
 
-    pub(crate) fn ai_worker_status(&self) -> crate::app::AiWorkerStatus {
+    pub(crate) fn ai_worker_status(&self) -> AiWorkerStatus {
         self.ai_worker_status
             .lock()
             .map(|status| status.clone())
@@ -165,6 +181,15 @@ impl LibraryApplication {
     ) -> Result<picto_library::selection::SelectionSummary, String> {
         self.library
             .selection_summary(target)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn collection_note_draft(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<picto_library::CollectionNoteDraft, String> {
+        self.library
+            .collection_note_draft(target)
             .map_err(|error| error.to_string())
     }
 
@@ -268,6 +293,7 @@ impl LibraryApplication {
                 cover_root_id: input.cover_root_id,
                 winning_collection_id: input.winning_collection_id,
                 name: input.name,
+                notes: input.notes,
                 modified_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(|error| error.to_string())?;
@@ -491,12 +517,13 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
-    pub fn sort_folder_items_by_name(
+    pub fn sort_folder_items(
         &self,
         folder_id: picto_library::FolderId,
+        field: picto_library::ContentSortField,
     ) -> Result<picto_library::MutationReceipt, String> {
         self.library
-            .sort_folder_items_by_name(folder_id)
+            .sort_folder_items(folder_id, field)
             .map_err(|error| error.to_string())
     }
 
@@ -714,6 +741,15 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn create_tag_namespace(
+        &self,
+        name: &str,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        self.library
+            .create_tag_namespace(name)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn delete_tag_namespace(
         &self,
         namespace_id: picto_library::TagNamespaceId,
@@ -723,14 +759,14 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
-    pub fn application_settings(&self) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+    pub fn application_settings(&self) -> Result<crate::settings::SettingsSnapshot, String> {
         self.settings_value("setting", "application")
     }
 
     pub fn view_preferences(
         &self,
         scope: &str,
-    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+    ) -> Result<crate::settings::SettingsSnapshot, String> {
         let scope = required_shell_value("View preference scope", scope)?;
         self.settings_value("view_pref", &scope)
     }
@@ -800,7 +836,7 @@ impl LibraryApplication {
         &self,
         table: &str,
         key: &str,
-    ) -> Result<crate::settings_v2::SettingsSnapshot, String> {
+    ) -> Result<crate::settings::SettingsSnapshot, String> {
         let value = self
             .library
             .read_auxiliary_json(table, key)
@@ -808,7 +844,7 @@ impl LibraryApplication {
             .map(|encoded| serde_json::from_str(&encoded).map_err(|error| error.to_string()))
             .transpose()?
             .unwrap_or_else(|| serde_json::json!({}));
-        Ok(crate::settings_v2::SettingsSnapshot {
+        Ok(crate::settings::SettingsSnapshot {
             value,
             revision: self
                 .library
@@ -958,7 +994,7 @@ impl LibraryApplication {
             item_ids: event
                 .item_ids
                 .into_iter()
-                .map(|root_id| crate::app::ItemId(i64::from(root_id.0)))
+                .map(|root_id| root_id.0)
                 .collect(),
         };
         crate::events::emit(LIBRARY_CHANGED_EVENT, &event);

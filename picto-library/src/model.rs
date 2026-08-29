@@ -57,6 +57,17 @@ pub enum RootKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ContentSortField {
+    Name,
+    ImportedAt,
+    CreatedAt,
+    ModifiedAt,
+    Size,
+    Notes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Lifecycle {
     Active,
     Inbox,
@@ -150,6 +161,7 @@ pub struct RootRecord {
 pub struct MediaRecord {
     pub media_id: MediaId,
     pub media_name: String,
+    pub media_notes: Option<String>,
     pub file_id: FileId,
     pub file_path: String,
     pub facts: ImmutableMediaFacts,
@@ -212,6 +224,11 @@ pub struct TagNamespaceRecord {
     pub namespace_id: TagNamespaceId,
     pub name: String,
     pub tag_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateTagNamespaceInput {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -469,6 +486,7 @@ pub struct GroupRequest {
     pub cover_root_id: RootId,
     pub winning_collection_id: Option<RootId>,
     pub name: Option<String>,
+    pub notes: Option<String>,
     pub modified_at_ms: i64,
 }
 
@@ -478,6 +496,17 @@ pub struct OrganizeCollectionInput {
     pub cover_root_id: RootId,
     pub winning_collection_id: Option<RootId>,
     pub name: Option<String>,
+    pub notes: Option<String>,
+}
+
+pub const MAX_ROOT_NOTES_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionNoteDraft {
+    pub notes: String,
+    pub source_count: u64,
+    pub byte_length: u64,
+    pub maximum_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

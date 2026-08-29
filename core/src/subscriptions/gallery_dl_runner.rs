@@ -59,7 +59,7 @@ pub struct RunOptions {
     pub site_id: String,
     /// Full source URL built by the subscription source adapter.
     pub url: String,
-    /// Maximum source posts to process. None = unlimited.
+    /// Maximum source posts with supported downloaded media. None = unlimited.
     pub post_limit: Option<u32>,
     /// Starting source-post index (1-based). Used by range-offset pagination.
     pub range_start: u32,
@@ -90,6 +90,13 @@ pub struct RunSummary {
     pub skipped_archive_items: usize,
     pub source_cursor: Option<String>,
     pub source_page_items: usize,
+}
+
+#[derive(Debug)]
+pub enum StreamEvent {
+    PostTraversed(ParsedMetadata),
+    MediaDownloaded(DownloadedItem),
+    PostComplete(tokio::sync::oneshot::Sender<()>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,11 +160,10 @@ fn config_bool_at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<boo
 }
 
 fn bridge_ranges(start: u32, limit: Option<u32>) -> (Option<String>, Option<String>) {
-    let range = limit.map(|limit| {
-        let start = start.max(1);
-        let end = start.saturating_add(limit).saturating_sub(1);
-        format!("{start}-{end}")
-    });
+    // The bridge stops after `limit` successfully downloaded source posts.
+    // Keep the extractor range open so archive hits, inaccessible posts, and
+    // posts without usable files do not consume that budget.
+    let range = limit.map(|_| format!("{}-", start.max(1)));
 
     (range, None)
 }
@@ -176,7 +182,10 @@ fn bridge_ranges_for_site(
     if site_id == "artstation" {
         return (None, None);
     }
-    if matches!(site_id, "patreon" | "tumblr") {
+    if matches!(
+        site_id,
+        "furaffinity" | "hentaifoundry" | "newgrounds" | "patreon" | "tumblr"
+    ) {
         return (None, None);
     }
     if matches!(site_id, "idolcomplex" | "sankaku") {
@@ -188,11 +197,7 @@ fn bridge_ranges_for_site(
         return (None, None);
     }
     if site_id == "webtoons" {
-        let child_range = limit.map(|limit| {
-            let start = start.max(1);
-            let end = start.saturating_add(limit).saturating_sub(1);
-            format!("{start}-{end}")
-        });
+        let child_range = limit.map(|_| format!("{}-", start.max(1)));
         return (None, child_range);
     }
     bridge_ranges(start, limit)
@@ -251,13 +256,12 @@ impl GalleryDlRunner {
         &self.binary_path
     }
 
-    /// Run gallery-dl, streaming downloaded items through `item_tx` as they arrive.
+    /// Run gallery-dl, preserving source-post and media event order.
     /// Returns a summary (exit code, stderr) after the process finishes.
     pub async fn run(
         &self,
         opts: &RunOptions,
-        item_tx: tokio::sync::mpsc::Sender<DownloadedItem>,
-        post_tx: Option<tokio::sync::mpsc::Sender<ParsedMetadata>>,
+        event_tx: tokio::sync::mpsc::Sender<StreamEvent>,
     ) -> Result<RunSummary, String> {
         let run_start = std::time::Instant::now();
         let launch = self.launch_spec()?;
@@ -305,6 +309,10 @@ impl GalleryDlRunner {
             "post_range": post_range,
             "child_range": child_range,
             "post_limit": opts.post_limit,
+            "accepted_extensions": crate::media_processing::formats::ACCEPTED_FORMATS
+                .iter()
+                .map(|format| format.extension)
+                .collect::<Vec<_>>(),
             "range_start": opts.range_start,
             "source_cursor": opts.source_cursor,
             "abort_threshold": opts.abort_threshold,
@@ -362,7 +370,7 @@ impl GalleryDlRunner {
         };
         cmd.arg("--request")
             .arg(&request_path)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -378,6 +386,10 @@ impl GalleryDlRunner {
             .spawn()
             .map_err(|e| format!("Failed to spawn gallery-dl: {e}"))?;
 
+        let mut child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "gallery-dl bridge stdin was not piped".to_string())?;
         let child_stdout = child.stdout.take();
         let child_stderr = child.stderr.take();
 
@@ -385,6 +397,7 @@ impl GalleryDlRunner {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(std::time::Instant::now());
         let stdout_progress = progress_tx.clone();
+        let origin_url = opts.url.clone();
         let stdout_handle = tokio::spawn(async move {
             let mut stats = BridgeOutputStats::default();
             if let Some(out) = child_stdout {
@@ -402,6 +415,7 @@ impl GalleryDlRunner {
                         event.event.as_str(),
                         "item_discovered"
                             | "post_traversed"
+                            | "post_complete"
                             | "item_downloaded"
                             | "item_skipped_archive"
                             | "item_failed_final"
@@ -410,7 +424,11 @@ impl GalleryDlRunner {
                         stdout_progress.send_replace(std::time::Instant::now());
                     }
                     let metadata = event.metadata.as_ref().map(|raw| {
-                        metadata::parse_metadata_with_url(raw, event.item_url.as_deref())
+                        metadata::parse_metadata_with_url_and_origin(
+                            raw,
+                            event.item_url.as_deref(),
+                            Some(&origin_url),
+                        )
                     });
                     match event.event.as_str() {
                         "item_discovered" => {
@@ -418,10 +436,40 @@ impl GalleryDlRunner {
                         }
                         "post_traversed" => {
                             stats.source_page_items += 1;
-                            if let (Some(post_tx), Some(metadata)) = (&post_tx, metadata) {
-                                if post_tx.send(metadata).await.is_err() {
-                                    tracing::warn!("gallery-dl bridge: post receiver dropped");
+                            if let Some(metadata) = metadata {
+                                if event_tx
+                                    .send(StreamEvent::PostTraversed(metadata))
+                                    .await
+                                    .is_err()
+                                {
+                                    tracing::warn!("gallery-dl bridge: event receiver dropped");
                                 }
+                            }
+                        }
+                        "post_complete" => {
+                            let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
+                            if event_tx
+                                .send(StreamEvent::PostComplete(acknowledge))
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!("gallery-dl bridge: event receiver dropped");
+                                break;
+                            }
+                            if acknowledged.await.is_err() {
+                                tracing::warn!(
+                                    "gallery-dl bridge: post completion was not acknowledged"
+                                );
+                                break;
+                            }
+                            use tokio::io::AsyncWriteExt;
+                            if child_stdin.write_all(b"continue\n").await.is_err()
+                                || child_stdin.flush().await.is_err()
+                            {
+                                tracing::warn!(
+                                    "gallery-dl bridge: could not acknowledge post completion"
+                                );
+                                break;
                             }
                         }
                         "item_downloaded" => {
@@ -432,11 +480,11 @@ impl GalleryDlRunner {
                                 continue;
                             };
                             log_bridge_item_intake(&metadata);
-                            if item_tx
-                                .send(DownloadedItem {
+                            if event_tx
+                                .send(StreamEvent::MediaDownloaded(DownloadedItem {
                                     file_path: PathBuf::from(file_path),
                                     metadata,
-                                })
+                                }))
                                 .await
                                 .is_err()
                             {
@@ -449,14 +497,19 @@ impl GalleryDlRunner {
                         }
                         "item_failed_final" => {
                             if let Some(metadata) = metadata {
-                                let item_url =
-                                    event.item_url.as_deref().unwrap_or("unknown media URL");
+                                let item_url = event.item_url;
                                 let error_message = event
                                     .error_message
                                     .filter(|message| !message.trim().is_empty())
-                                    .unwrap_or_else(|| format!("Could not download {item_url}"));
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "Could not download {}",
+                                            item_url.as_deref().unwrap_or("unknown media URL")
+                                        )
+                                    });
                                 stats.failed_items.push(FailedDownloadedItem {
                                     metadata,
+                                    item_url,
                                     error_message,
                                 });
                             }
@@ -785,7 +838,7 @@ mod tests {
     fn post_limit_maps_to_one_gallery_dl_post_range() {
         assert_eq!(
             bridge_ranges(101, Some(50)),
-            (Some("101-150".to_string()), None)
+            (Some("101-".to_string()), None)
         );
     }
 
@@ -797,15 +850,21 @@ mod tests {
         );
         assert_eq!(
             bridge_ranges_for_site("danbooru", 5, Some(2)),
-            (Some("5-6".to_string()), None)
+            (Some("5-".to_string()), None)
         );
+        for site_id in ["furaffinity", "hentaifoundry", "newgrounds"] {
+            assert_eq!(
+                bridge_ranges_for_site(site_id, 101, Some(100)),
+                (None, None)
+            );
+        }
         assert_eq!(
             bridge_ranges_for_site("idolcomplex", 5, Some(2)),
-            (Some("1-2".to_string()), None)
+            (Some("1-".to_string()), None)
         );
         assert_eq!(
             bridge_ranges_for_site("sankaku", 5, Some(2)),
-            (Some("1-2".to_string()), None)
+            (Some("1-".to_string()), None)
         );
     }
 
@@ -813,7 +872,7 @@ mod tests {
     fn webtoons_uses_child_range_without_splitting_episode_images() {
         assert_eq!(
             bridge_ranges_for_site("webtoons", 5, Some(2)),
-            (None, Some("5-6".to_string()))
+            (None, Some("5-".to_string()))
         );
         assert_eq!(bridge_ranges_for_site("webtoons", 1, None), (None, None));
     }

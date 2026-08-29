@@ -799,7 +799,7 @@ fn import_roots(
             &maps.folders,
         )?);
         standalone_old_ids.push(root.id);
-        if standalone_inputs.len() == 64 {
+        if standalone_inputs.len() == picto_library::ingest::MAX_INGEST_BATCH {
             flush_standalone(
                 library,
                 &mut standalone_inputs,
@@ -845,7 +845,7 @@ fn import_roots(
             .or_else(|| parse_timestamp(&root.created_at))
             .unwrap_or_default();
         let (new_root, _) = library
-            .ingest_collection(&PreparedCollectionImport {
+            .ingest_conversion_collection(&PreparedCollectionImport {
                 members: inputs,
                 cover_index,
                 name: root.label.clone(),
@@ -855,6 +855,14 @@ fn import_roots(
         maps.roots.insert(root.id, new_root);
         let details = library.details(new_root).map_err(|e| e.to_string())?;
         for (old_media, new_media) in members.iter().zip(details.media.iter()) {
+            let source = media
+                .get(old_media)
+                .ok_or_else(|| format!("collection member {old_media} disappeared"))?;
+            if new_media.media_notes != source.notes {
+                return Err(format!(
+                    "collection member {old_media} retained notes did not survive conversion"
+                ));
+            }
             maps.media.insert(*old_media, new_media.media_id);
         }
         set_stable_key(library, new_root.0, &root.stable_key)?;
@@ -871,7 +879,9 @@ fn flush_standalone(
     if inputs.is_empty() {
         return Ok(());
     }
-    let outputs = library.ingest_batch(inputs).map_err(|e| e.to_string())?;
+    let outputs = library
+        .ingest_conversion_batch(inputs)
+        .map_err(|e| e.to_string())?;
     for (old_id, (root_id, _)) in old_ids.drain(..).zip(outputs) {
         maps.roots.insert(old_id, root_id);
         maps.media.insert(old_id, MediaId(root_id.0));

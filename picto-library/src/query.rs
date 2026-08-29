@@ -24,6 +24,7 @@ pub enum ItemScope {
     All,
     Inbox,
     Trash,
+    MediaMatches { item_id: u32 },
     RecentlyViewed,
     Untagged,
     Uncategorized,
@@ -245,7 +246,7 @@ pub fn details(
 
 fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<MediaRecord>> {
     let mut statement = connection.prepare_cached(
-        "SELECT media.media_name, file.file_id, file.file_path, file.mime,
+        "SELECT media.media_name, media.media_notes, file.file_id, file.file_path, file.mime,
                 file.size_bytes, file.width, file.height, file.duration_ms,
                 file.frame_count, file.content_hash, file.perceptual_hash,
                 file.palette_json
@@ -258,11 +259,11 @@ fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<Medi
         .map(|media_id| {
             statement
                 .query_row([media_id.0], |row| {
-                    let palette_json = row.get::<_, String>(11)?;
+                    let palette_json = row.get::<_, String>(12)?;
                     let palette =
                         serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
                             rusqlite::Error::FromSqlConversionFailure(
-                                11,
+                                12,
                                 rusqlite::types::Type::Text,
                                 Box::new(error),
                             )
@@ -270,17 +271,18 @@ fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<Medi
                     Ok(MediaRecord {
                         media_id: *media_id,
                         media_name: row.get(0)?,
-                        file_id: FileId(row.get(1)?),
-                        file_path: row.get(2)?,
+                        media_notes: row.get(1)?,
+                        file_id: FileId(row.get(2)?),
+                        file_path: row.get(3)?,
                         facts: ImmutableMediaFacts {
-                            mime: row.get(3)?,
-                            size_bytes: row.get::<_, i64>(4)? as u64,
-                            width: row.get(5)?,
-                            height: row.get(6)?,
-                            duration_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
-                            frame_count: row.get(8)?,
-                            content_hash: row.get(9)?,
-                            perceptual_hash: row.get(10)?,
+                            mime: row.get(4)?,
+                            size_bytes: row.get::<_, i64>(5)? as u64,
+                            width: row.get(6)?,
+                            height: row.get(7)?,
+                            duration_ms: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+                            frame_count: row.get(9)?,
+                            content_hash: row.get(10)?,
+                            perceptual_hash: row.get(11)?,
                             palette,
                         },
                     })
@@ -406,6 +408,7 @@ fn scope_bitmap(
         ItemScope::All => snapshot.active().clone(),
         ItemScope::Inbox => snapshot.lifecycle(Lifecycle::Inbox).clone(),
         ItemScope::Trash => snapshot.lifecycle(Lifecycle::Trash).clone(),
+        ItemScope::MediaMatches { item_id } => media_match_roots(connection, snapshot, *item_id)?,
         ItemScope::Untagged => {
             let mut values = snapshot.active().clone();
             values &= snapshot.tag_count.between(Some(0), Some(0));
@@ -442,6 +445,56 @@ fn scope_bitmap(
             values
         }
     })
+}
+
+fn media_match_roots(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    item_id: u32,
+) -> Result<RoaringBitmap> {
+    let media_ids = snapshot
+        .collection_orders
+        .get(&RootId(item_id))
+        .map(|members| {
+            members
+                .iter()
+                .map(|media_id| media_id.0)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![item_id]);
+    let mut file_ids = RoaringBitmap::new();
+    for chunk in media_ids.chunks(500) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT file_id FROM media_item WHERE media_id IN ({placeholders})");
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(chunk), |row| {
+            row.get::<_, u32>(0)
+        })?;
+        file_ids.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+    }
+
+    let file_ids = file_ids.iter().collect::<Vec<_>>();
+    let mut roots = RoaringBitmap::new();
+    for chunk in file_ids.chunks(500) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT media_id FROM media_item WHERE file_id IN ({placeholders})");
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(chunk), |row| {
+            row.get::<_, u32>(0)
+        })?;
+        for media_id in rows {
+            if let Some(root_id) = snapshot.media_owner.get(media_id?).copied() {
+                roots.insert(root_id.0);
+            }
+        }
+    }
+    Ok(roots)
 }
 
 fn scan_integer(
