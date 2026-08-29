@@ -31,6 +31,7 @@ class GalleryBridgePostBoundaryTests(unittest.TestCase):
         sys.stdin = io.StringIO("ack\nack\n")
         self.job = bridge.PictoDownloadJob.__new__(bridge.PictoDownloadJob)
         self.job._post_gate = bridge._AcceptedPostGate(2, ["jpg"])
+        self.job._post_terminal_mode = None
 
     def tearDown(self):
         bridge._emit = self.original_emit
@@ -73,6 +74,40 @@ class GalleryBridgePostBoundaryTests(unittest.TestCase):
             self.events,
             ["post_traversed", "item_downloaded", "post_complete"],
         )
+
+    def test_single_media_posts_settle_before_the_extractor_advances(self):
+        self.job._post_terminal_mode = "single"
+        first = PathFormat("post-1", "/tmp/one.jpg")
+        next_post = PathFormat("post-2", "/tmp/two.jpg")
+
+        self.job._on_post(first)
+        self.job._on_after(first)
+        self.job._on_post(next_post)
+
+        self.assertEqual(
+            self.events,
+            [
+                "post_traversed",
+                "item_downloaded",
+                "post_complete",
+                "post_traversed",
+            ],
+        )
+
+    def test_counted_posts_settle_only_after_the_last_media_item(self):
+        self.job._post_terminal_mode = "count-one"
+        first = PathFormat("post-1", "/tmp/one.jpg")
+        first.kwdict.update({"num": 1, "count": 2})
+        last = PathFormat("post-1", "/tmp/two.jpg")
+        last.kwdict.update({"num": 2, "count": 2})
+
+        self.job._on_post(first)
+        self.job._on_after(first)
+        self.assertNotIn("post_complete", self.events)
+        self.job._on_post(last)
+        self.job._on_after(last)
+
+        self.assertEqual(self.events[-1], "post_complete")
 
     def test_limit_stops_before_announcing_the_next_post(self):
         self.job._post_gate = bridge._AcceptedPostGate(1, ["jpg"])

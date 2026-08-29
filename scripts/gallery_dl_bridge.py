@@ -663,11 +663,13 @@ class PictoDownloadJob:
         url: str,
         post_limit: int | None = None,
         accepted_extensions: list[str] | None = None,
+        post_terminal_mode: str | None = None,
     ):
         from gallery_dl import job
 
         bridge = self
         self._post_gate = _AcceptedPostGate(post_limit, accepted_extensions)
+        self._post_terminal_mode = post_terminal_mode
 
         # Hooks must be registered at CLASS level: dispatching extractors
         # (twitter user → timeline, furaffinity gallery/scraps, ...) spawn
@@ -745,24 +747,53 @@ class PictoDownloadJob:
             item_url=_item_url(pathfmt),
             metadata=metadata,
         )
+        if self._is_terminal_item(metadata):
+            self._acknowledge_current_post()
 
     def _on_skip(self, pathfmt):
+        metadata = _event_metadata(pathfmt)
         _emit(
             "item_skipped_archive",
             item_url=_item_url(pathfmt),
-            metadata=_event_metadata(pathfmt),
+            metadata=metadata,
         )
+        if self._is_terminal_item(metadata):
+            self._acknowledge_current_post()
 
     def _on_error(self, pathfmt):
+        metadata = _event_metadata(pathfmt)
         messages = list(dict.fromkeys(_recent_download_errors))
         _emit(
             "item_failed_final",
             item_url=_item_url(pathfmt),
-            metadata=_event_metadata(pathfmt),
+            metadata=metadata,
             file_path=pathfmt.path,
             temp_path=getattr(pathfmt, "temppath", None),
             error_message="; ".join(messages) or None,
         )
+        if self._is_terminal_item(metadata):
+            self._acknowledge_current_post()
+
+    def _is_terminal_item(self, metadata: dict[str, Any]) -> bool:
+        mode = self._post_terminal_mode
+        if mode == "single":
+            return True
+        if mode not in ("count-one", "count-zero"):
+            return False
+        parent = metadata.get("_parent")
+        sources = (metadata, parent if isinstance(parent, dict) else {})
+        for source in sources:
+            count = source.get("count") or source.get("page_count")
+            num = source.get("num")
+            try:
+                count = int(count)
+                num = int(num)
+            except (TypeError, ValueError):
+                continue
+            if count < 1:
+                continue
+            return num >= count if mode == "count-one" else num + 1 >= count
+        return False
 
     def run(self) -> int:
         status = self._job.run()
@@ -932,6 +963,7 @@ def main() -> int:
             request["url"],
             request.get("post_limit"),
             request.get("accepted_extensions"),
+            request.get("post_terminal_mode"),
         )
         status = bridge_job.run()
     except Exception:

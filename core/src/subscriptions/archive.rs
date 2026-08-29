@@ -3,14 +3,18 @@
 //! Reset behavior is domain policy, not controller glue. Keeping it isolated
 //! makes reset semantics testable without dragging run orchestration with it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
-    format!("picto_s{subscription_id}_q{query_id}_")
+fn subscription_archive_root(library_root: &Path, subscription_id: i64) -> PathBuf {
+    library_root
+        .join("source-runners/gallery-dl")
+        .join(format!("subscription-{subscription_id}"))
 }
 
-pub fn subscription_archive_prefix(subscription_id: i64) -> String {
-    format!("picto_s{subscription_id}_q")
+pub fn query_archive_path(library_root: &Path, subscription_id: i64, query_id: i64) -> PathBuf {
+    subscription_archive_root(library_root, subscription_id)
+        .join(format!("query-{query_id}"))
+        .join("archive.sqlite3")
 }
 
 /// Remove archive entries for specific posts of one query, so an interrupted
@@ -19,7 +23,8 @@ pub fn subscription_archive_prefix(subscription_id: i64) -> String {
 /// the post could never complete.
 pub async fn clear_post_archive_entries_at_root(
     library_root: &Path,
-    archive_prefix: &str,
+    subscription_id: i64,
+    query_id: i64,
     post_ids: &[String],
 ) -> Result<(), String> {
     if post_ids.is_empty() {
@@ -27,24 +32,44 @@ pub async fn clear_post_archive_entries_at_root(
     }
     let patterns: Vec<String> = post_ids
         .iter()
-        .map(|post_id| format!("{}%{}%", escape_like(archive_prefix), escape_like(post_id)))
+        .map(|post_id| format!("%{}%", escape_like(post_id)))
         .collect();
-    clear_archive_patterns_at_root(library_root, patterns)
-        .await
-        .map(|_| ())
+    clear_archive_patterns_at_path(
+        query_archive_path(library_root, subscription_id, query_id),
+        patterns,
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Forget every gallery-dl archive entry owned by one subscription while
-/// preserving entries for all other subscriptions.
-pub async fn clear_subscription_archive_entries_at_root(
+/// preserving every other subscription's physically separate state.
+pub fn clear_subscription_archive_entries_at_root(
     library_root: &Path,
     subscription_id: i64,
 ) -> Result<usize, String> {
-    let pattern = format!(
-        "{}%",
-        escape_like(&subscription_archive_prefix(subscription_id))
-    );
-    clear_archive_patterns_at_root(library_root, vec![pattern]).await
+    let archive_root = subscription_archive_root(library_root, subscription_id);
+    remove_state_directory(&archive_root, "subscription")
+}
+
+pub fn clear_query_archive_at_root(
+    library_root: &Path,
+    subscription_id: i64,
+    query_id: i64,
+) -> Result<usize, String> {
+    let archive_path = query_archive_path(library_root, subscription_id, query_id);
+    let query_root = archive_path
+        .parent()
+        .expect("query archive always has a parent directory");
+    remove_state_directory(query_root, "query")
+}
+
+fn remove_state_directory(path: &Path, owner: &str) -> Result<usize, String> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(1),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(format!("Failed to clear gallery-dl {owner} state: {error}")),
+    }
 }
 
 fn escape_like(value: &str) -> String {
@@ -54,11 +79,10 @@ fn escape_like(value: &str) -> String {
         .replace('_', "\\_")
 }
 
-async fn clear_archive_patterns_at_root(
-    library_root: &Path,
+async fn clear_archive_patterns_at_path(
+    archive_path: PathBuf,
     patterns: Vec<String>,
 ) -> Result<usize, String> {
-    let archive_path = library_root.join("gdl-archive.sqlite3");
     if !archive_path.exists() {
         return Ok(0);
     }

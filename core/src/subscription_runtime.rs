@@ -693,13 +693,10 @@ async fn release_post_archive(
     query: &ClaimedQueryRun,
     post_key: &str,
 ) {
-    let prefix = crate::subscriptions::archive::subscription_query_archive_prefix(
-        query.subscription_id,
-        query.query_id,
-    );
     let _ = crate::subscriptions::archive::clear_post_archive_entries_at_root(
         application.root(),
-        &prefix,
+        query.subscription_id,
+        query.query_id,
         &[post_key.to_string()],
     )
     .await;
@@ -1195,20 +1192,12 @@ mod tests {
             application
                 .request_subscription_run_library(subscription_id, "2026-08-29T00:01:00Z")
                 .unwrap();
-            tick(
-                &application,
-                &mut schedule,
-                &runner,
-                "2026-08-29T00:01:01Z",
-            )
-            .await
-            .unwrap();
-            let rerun = crate::subscription_activity::list_runs_library(
-                &application,
-                subscription_id,
-                1,
-            )
-            .unwrap();
+            tick(&application, &mut schedule, &runner, "2026-08-29T00:01:01Z")
+                .await
+                .unwrap();
+            let rerun =
+                crate::subscription_activity::list_runs_library(&application, subscription_id, 1)
+                    .unwrap();
             assert_eq!(rerun.runs[0].status, "succeeded");
             assert_eq!(rerun.runs[0].counts.posts_added, 0);
             assert_eq!(rerun.runs[0].counts.posts_skipped, 1);

@@ -597,7 +597,6 @@ pub async fn dispatch_library_async(
                     application.root(),
                     subscription_id,
                 )
-                .await
             {
                 let _ = application.delete_subscription_library(subscription_id);
                 return Err(error);
@@ -629,8 +628,7 @@ pub async fn dispatch_library_async(
             crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
                 application.root(),
                 input.subscription_id,
-            )
-            .await?;
+            )?;
             let title = application
                 .library()
                 .auxiliary_read(

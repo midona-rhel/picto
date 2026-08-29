@@ -171,34 +171,43 @@ fn html_to_plain_text(raw: &str) -> Option<String> {
 }
 
 fn normalize_metadata_text(raw: &str) -> Option<String> {
+    static BRACKET_TAGS: OnceLock<regex::Regex> = OnceLock::new();
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.contains('<') && trimmed.contains('>') {
-        return html_to_plain_text(trimmed);
+    let tags = BRACKET_TAGS.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\[/?(?:b|i|u|s|code|quote|section|spoiler|url)(?:=[^\]]*)?\]",
+        )
+        .expect("valid bracketed markup regex")
+    });
+    let plain = tags.replace_all(trimmed, " ");
+    if plain.contains('<') && plain.contains('>') {
+        return html_to_plain_text(&plain);
     }
-    if trimmed.contains('&') && trimmed.contains(';') {
-        return html_to_plain_text(trimmed);
+    if plain.contains('&') && plain.contains(';') {
+        return html_to_plain_text(&plain);
     }
-    Some(trimmed.to_string())
+    let plain = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!plain.is_empty()).then_some(plain)
 }
 
 fn mastodon_description(json: &serde_json::Value) -> Option<String> {
     let raw = field_text(json, "content")?;
-    html_to_plain_text(&raw)
+    normalize_metadata_text(&raw)
 }
 
 fn deviantart_description(json: &serde_json::Value) -> Option<String> {
     let raw = field_text(json, "description")?;
-    html_to_plain_text(&raw)
+    normalize_metadata_text(&raw)
 }
 
 fn tumblr_description(json: &serde_json::Value) -> Option<String> {
     ["caption", "body", "summary"]
         .into_iter()
         .find_map(|field| field_text(json, field))
-        .and_then(|raw| html_to_plain_text(&raw))
+        .and_then(|raw| normalize_metadata_text(&raw))
 }
 
 fn canonical_patreon_url(json: &serde_json::Value) -> Option<String> {
@@ -1218,6 +1227,17 @@ mod tests {
         assert!(parsed
             .tags
             .contains(&("species".to_string(), "canine".to_string())));
+    }
+
+    #[test]
+    fn descriptions_strip_bracketed_markup_without_losing_note_text() {
+        let parsed = parse_metadata(&json!({
+            "category": "patreon",
+            "id": 42,
+            "description": "[quote]Midna 🐺💦[/quote] <b>[url=https://example.com]Follow-up[/url]</b>"
+        }));
+
+        assert_eq!(parsed.description.as_deref(), Some("Midna 🐺💦 Follow-up"));
     }
 
     #[test]

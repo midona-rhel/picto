@@ -99,6 +99,23 @@ impl GalleryDlSourceRunner {
         // incomplete (for example, seven archived pages plus one new page),
         // which must never be published as a gallery.
         let use_download_archive = query.site_id != "ehentai";
+        let archive_path = use_download_archive
+            .then(|| {
+                crate::subscriptions::archive::query_archive_path(
+                    &self.library_root,
+                    query.subscription_id,
+                    query.query_id,
+                )
+            })
+            .unwrap_or_default();
+        if let Some(parent) = archive_path.parent().filter(|_| use_download_archive) {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                RunnerFailure::terminal(
+                    RunnerFailureKind::Runtime,
+                    format!("Could not create gallery-dl query state: {error}"),
+                )
+            })?;
+        }
         let options = RunOptions {
             subscription_id: Some(query.subscription_id),
             query_id: Some(query.query_id),
@@ -109,15 +126,8 @@ impl GalleryDlSourceRunner {
             source_cursor: batch.source_cursor.clone(),
             abort_threshold: batch.history_complete.then_some(PERIODIC_ABORT_THRESHOLD),
             auth,
-            archive_path: use_download_archive
-                .then(|| self.library_root.join("gdl-archive.sqlite3"))
-                .unwrap_or_default(),
-            archive_prefix: use_download_archive.then(|| {
-                crate::subscriptions::archive::subscription_query_archive_prefix(
-                    query.subscription_id,
-                    query.query_id,
-                )
-            }),
+            archive_path,
+            archive_prefix: None,
             cancel,
         };
 
@@ -157,23 +167,6 @@ impl GalleryDlSourceRunner {
                 &mut ignored_non_media,
             )
             .await?;
-        }
-        for failed in &summary.failed_items {
-            let failed = normalize_failed_download(
-                &query.site_id,
-                failed.metadata.clone(),
-                failed.item_url.clone(),
-                failed.error_message.clone(),
-            )?;
-            output
-                .send(SourceEvent::MediaFailed(failed))
-                .await
-                .map_err(|_| {
-                    RunnerFailure::terminal(
-                        RunnerFailureKind::Runtime,
-                        "subscription receiver closed",
-                    )
-                })?;
         }
         let result = settle_summary(
             summary,
@@ -224,6 +217,23 @@ impl GalleryDlSourceRunner {
                             .await?;
                 }
             }
+            StreamEvent::MediaFailed(item) => {
+                let failed = normalize_failed_download(
+                    &query.site_id,
+                    item.metadata,
+                    item.item_url,
+                    item.error_message,
+                )?;
+                output
+                    .send(SourceEvent::MediaFailed(failed))
+                    .await
+                    .map_err(|_| {
+                        RunnerFailure::terminal(
+                            RunnerFailureKind::Runtime,
+                            "subscription receiver closed",
+                        )
+                    })?;
+            }
             StreamEvent::PostComplete(acknowledge) => {
                 if let Some(mut item) = pending_item.take() {
                     set_post_complete(&mut item, true);
@@ -253,13 +263,10 @@ impl GalleryDlSourceRunner {
             Ok(item) => Ok(item),
             Err(error) => {
                 if let Some(post_key) = post_key {
-                    let prefix = crate::subscriptions::archive::subscription_query_archive_prefix(
-                        query.subscription_id,
-                        query.query_id,
-                    );
                     let _ = crate::subscriptions::archive::clear_post_archive_entries_at_root(
                         &self.library_root,
-                        &prefix,
+                        query.subscription_id,
+                        query.query_id,
                         &[post_key],
                     )
                     .await;
@@ -272,8 +279,12 @@ impl GalleryDlSourceRunner {
 
 fn effective_batch_size(query: &ClaimedQueryRun, override_size: Option<u32>) -> u32 {
     override_size.unwrap_or_else(|| {
-        provider_process_post_limit(&query.site_id)
-            .expect("validated gallery provider has an execution policy")
+        if gallery_dl_runner::post_terminal_mode(&query.site_id).is_some() {
+            query.source_post_batch_size()
+        } else {
+            provider_process_post_limit(&query.site_id)
+                .expect("validated gallery provider has an execution policy")
+        }
     })
 }
 
@@ -1178,9 +1189,11 @@ mod tests {
     }
 
     #[test]
-    fn every_gallery_provider_has_an_explicit_single_post_process_window() {
+    fn providers_without_terminal_item_boundaries_use_single_post_process_windows() {
         for site in crate::subscriptions::gallery_dl_runner::SITES {
-            if site.id != "onlyfans" {
+            if site.id != "onlyfans"
+                && crate::subscriptions::gallery_dl_runner::post_terminal_mode(site.id).is_none()
+            {
                 assert_eq!(
                     provider_process_post_limit(site.id),
                     Some(1),
@@ -1193,6 +1206,16 @@ mod tests {
         let query = claimed_query();
         assert_eq!(effective_batch_size(&query, None), 1);
         assert_eq!(effective_batch_size(&query, Some(2)), 2);
+
+        let mut e621 = claimed_query();
+        e621.site_id = "e621".into();
+        e621.initial_post_limit = Some(10);
+        assert_eq!(effective_batch_size(&e621, None), 10);
+
+        let mut deviantart = claimed_query();
+        deviantart.site_id = "deviantart".into();
+        deviantart.initial_post_limit = Some(10);
+        assert_eq!(effective_batch_size(&deviantart, None), 10);
     }
 
     #[test]

@@ -508,8 +508,7 @@ impl LibraryApplication {
         crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
             self.root(),
             subscription_id,
-        )
-        .await?;
+        )?;
         crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
         Ok(receipt)
     }
@@ -704,7 +703,22 @@ impl LibraryApplication {
         &self,
         query_id: i64,
     ) -> Result<picto_library::MutationReceipt, String> {
-        finish_subscription_mutation(
+        let subscription_id = self
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT subscription_id FROM subscription_query WHERE query_id = ?1",
+                            [query_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let receipt = finish_subscription_mutation(
             self,
             self.library()
                 .auxiliary_semantic_write_if_changed(
@@ -726,7 +740,13 @@ impl LibraryApplication {
                     },
                 )
                 .map_err(|error| error.to_string())?,
-        )
+        )?;
+        crate::subscriptions::archive::clear_query_archive_at_root(
+            self.root(),
+            subscription_id,
+            query_id,
+        )?;
+        Ok(receipt)
     }
 
     pub fn rename_subscription_library(
@@ -956,7 +976,7 @@ impl LibraryApplication {
         subscription_id: i64,
     ) -> Result<picto_library::MutationReceipt, String> {
         crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
-        finish_subscription_mutation(
+        let receipt = finish_subscription_mutation(
             self,
             self.library()
                 .auxiliary_semantic_write_if_changed(
@@ -984,7 +1004,12 @@ impl LibraryApplication {
                     },
                 )
                 .map_err(|error| error.to_string())?,
-        )
+        )?;
+        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+            self.root(),
+            subscription_id,
+        )?;
+        Ok(receipt)
     }
 
     pub fn request_subscription_run_library(
@@ -2084,21 +2109,31 @@ mod tests {
             .join(format!("subscription-{subscription_id}/query-1"));
         std::fs::create_dir_all(&provider_state).unwrap();
         std::fs::write(provider_state.join("state.db"), b"stale").unwrap();
-        let archive =
-            rusqlite::Connection::open(application.root().join("gdl-archive.sqlite3")).unwrap();
+        let archive_path = crate::subscriptions::archive::query_archive_path(
+            application.root(),
+            subscription_id,
+            1,
+        );
+        std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+        let archive = rusqlite::Connection::open(&archive_path).unwrap();
         archive
             .execute_batch("CREATE TABLE archive (entry TEXT PRIMARY KEY);")
             .unwrap();
         archive
-            .execute(
-                "INSERT INTO archive(entry) VALUES (?1), (?2)",
-                params![
-                    format!("picto_s{subscription_id}_q1_reset-post"),
-                    "picto_s999_q1_other-post",
-                ],
-            )
+            .execute("INSERT INTO archive(entry) VALUES (?1)", ["reset-post"])
             .unwrap();
         drop(archive);
+        let other_archive_path =
+            crate::subscriptions::archive::query_archive_path(application.root(), 999, 1);
+        std::fs::create_dir_all(other_archive_path.parent().unwrap()).unwrap();
+        let other_archive = rusqlite::Connection::open(&other_archive_path).unwrap();
+        other_archive
+            .execute_batch(
+                "CREATE TABLE archive (entry TEXT PRIMARY KEY);
+                 INSERT INTO archive(entry) VALUES ('same-query-post');",
+            )
+            .unwrap();
+        drop(other_archive);
 
         application
             .library()
@@ -2247,15 +2282,7 @@ mod tests {
             )
             .unwrap();
         assert!(!provider_state.exists());
-        let archive =
-            rusqlite::Connection::open(application.root().join("gdl-archive.sqlite3")).unwrap();
-        let remaining = archive
-            .prepare("SELECT entry FROM archive ORDER BY entry")
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        assert_eq!(remaining, vec!["picto_s999_q1_other-post"]);
+        assert!(!archive_path.exists());
+        assert!(other_archive_path.exists());
     }
 }

@@ -44,6 +44,16 @@ pub use sites::{
     SiteEntry, SITES,
 };
 
+pub fn post_terminal_mode(site_id: &str) -> Option<&'static str> {
+    match site_id {
+        "danbooru" | "e621" | "furaffinity" | "gelbooru" | "hentaifoundry" | "idolcomplex"
+        | "konachan" | "rule34" | "safebooru" | "sankaku" | "yandere" => Some("single"),
+        "baraag" | "deviantart" | "tumblr" | "twitter" | "webtoons" => Some("count-one"),
+        "pixiv" | "pixivuser" => Some("count-zero"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GalleryDlAuthConfig {
     pub site_category: String,
@@ -96,6 +106,7 @@ pub struct RunSummary {
 pub enum StreamEvent {
     PostTraversed(ParsedMetadata),
     MediaDownloaded(DownloadedItem),
+    MediaFailed(FailedDownloadedItem),
     PostComplete(tokio::sync::oneshot::Sender<()>),
 }
 
@@ -318,6 +329,7 @@ impl GalleryDlRunner {
             "abort_threshold": opts.abort_threshold,
             "archive_path": (!opts.archive_path.as_os_str().is_empty()).then(|| opts.archive_path.display().to_string()),
             "archive_prefix": opts.archive_prefix,
+            "post_terminal_mode": post_terminal_mode(&opts.site_id),
         });
         let request_path = temp_dir.join("bridge-request.json");
         tokio::fs::write(
@@ -508,11 +520,22 @@ impl GalleryDlRunner {
                                             item_url.as_deref().unwrap_or("unknown media URL")
                                         )
                                     });
-                                stats.failed_items.push(FailedDownloadedItem {
+                                let failed = FailedDownloadedItem {
                                     metadata,
                                     item_url,
                                     error_message,
-                                });
+                                };
+                                stats.failed_items.push(failed.clone());
+                                if event_tx
+                                    .send(StreamEvent::MediaFailed(failed))
+                                    .await
+                                    .is_err()
+                                {
+                                    tracing::warn!(
+                                        "gallery-dl bridge: receiver dropped after media failure"
+                                    );
+                                    break;
+                                }
                             }
                         }
                         "source_cursor" => {
