@@ -62,6 +62,9 @@ jobs:
         working-directory: native/picto-node
         run: npm ci
 
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path core/Cargo.toml --locked
+
       - name: Run alpha verify gate
         run: npm run gate:alpha
 
