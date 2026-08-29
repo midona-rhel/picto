@@ -166,7 +166,7 @@
 .sourceControlOpen .sourceAction {
   position: relative;
   z-index: calc(var(--layer-overlay) + 1);
-  border-left: 0;
+  border-left: 1px solid var(--inspector-separator, var(--color-border-secondary));
   outline: 0;
   background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
   box-shadow: none;
@@ -178,7 +178,7 @@
   top: 0;
   bottom: 0;
   left: -2px;
-  width: 3px;
+  width: 2px;
   background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
   content: '';
   pointer-events: none;
@@ -186,7 +186,15 @@
 
 .sourceAction:disabled { cursor: default; }
 .sourceAction:not(:disabled):hover,
-.urlActionBtn:hover { opacity: 1; }
+.sourceAction:not(:disabled):focus-visible,
+.urlActionBtn:hover,
+.urlActionBtn:focus-visible,
+.urlText:hover,
+.urlText:focus-visible {
+  outline: 0;
+  background: var(--inspector-field-surface, var(--color-surface-hover));
+  opacity: 1;
+}
 
 @keyframes fieldExpand {
   from { opacity: 0.92; }
@@ -226,8 +234,6 @@
 .urlRow + .urlRow {
   border-top: 1px solid color-mix(in srgb, var(--inspector-separator, var(--color-border-secondary)) 55%, transparent);
 }
-
-.urlRow:hover { background: var(--inspector-field-surface, var(--color-surface-hover)); }
 
 .urlText,
 .urlEditInput {
