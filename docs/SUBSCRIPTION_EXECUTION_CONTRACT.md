@@ -8,7 +8,7 @@ settlement semantics.
 
 For each query, Picto performs these steps in order:
 
-1. Request one source post.
+1. Select the next source post from the provider's metadata page.
 2. Record the post as traversed as soon as its metadata is available.
 3. Determine whether the post contains usable media.
 4. If it has no usable media, advance to the next post without incrementing posts added.
@@ -18,8 +18,9 @@ For each query, Picto performs these steps in order:
 7. After canonical ingestion succeeds, increment posts added.
 8. Only then request the next source post.
 
-A provider must not discover a large source window and download it later as a bulk phase. It must
-not download or ingest media belonging to a later post while the current post is unsettled.
+A provider may prefetch a bounded page of post metadata when its native API requires pagination,
+but it must not publish a later traversal or download or ingest media belonging to a later post
+while the current post is unsettled.
 
 ## Limits And Progress
 
