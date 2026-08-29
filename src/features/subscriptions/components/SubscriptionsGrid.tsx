@@ -160,7 +160,10 @@ export function SubscriptionsGrid({
           && isSubscriptionCompleted(sub),
         waitingForInbox: sub.run_status === 'inbox_full',
       })),
-  ].sort((a, b) => b.items - a.items || a.name.localeCompare(b.name));
+  ].sort((left, right) => (
+    left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true })
+    || left.key.localeCompare(right.key)
+  ));
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const anchorIndexRef = useRef<number | null>(null);
