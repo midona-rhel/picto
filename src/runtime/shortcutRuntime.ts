@@ -37,9 +37,47 @@ function textSurfaceOwns(event: KeyboardEvent): boolean {
   return selection != null && !selection.isCollapsed && selection.rangeCount > 0;
 }
 
+function elementForNode(node: Node | null): HTMLElement | null {
+  if (node instanceof HTMLElement) return node;
+  return node?.parentElement ?? null;
+}
+
+function selectOwnedTextSurface(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    try {
+      target.select();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const targetElement = target instanceof HTMLElement ? target : null;
+  const editable = targetElement?.closest<HTMLElement>('[contenteditable]:not([contenteditable="false"])');
+  const selection = window.getSelection();
+  const selectedElement = elementForNode(selection?.anchorNode ?? null);
+  const surface = editable
+    ?? targetElement?.closest<HTMLElement>('[data-picto-text-shortcuts]')
+    ?? selectedElement?.closest<HTMLElement>('[data-picto-text-shortcuts]');
+  if (!surface || !selection) return false;
+
+  const range = document.createRange();
+  range.selectNodeContents(surface);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
 function dispatchShortcut(event: KeyboardEvent): void {
   if (suspensionLeases.size > 0) return;
-  if (standardTextCommand(event) && textSurfaceOwns(event)) return;
+  if (standardTextCommand(event) && textSurfaceOwns(event)) {
+    if (event.key.toLowerCase() === 'a' && selectOwnedTextSurface(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    return;
+  }
   const editable = isEditableTarget(event.target);
   for (const scope of orderedScopes()) {
     if (editable && !scope.allowInEditable) continue;

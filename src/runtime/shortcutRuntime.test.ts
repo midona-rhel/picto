@@ -103,4 +103,42 @@ describe('shortcutRuntime', () => {
     expect(handler).not.toHaveBeenCalled();
     panel.remove();
   });
+
+  it('keeps Select All inside the focused text field', () => {
+    const handler = vi.fn(() => true);
+    registerShortcutScope(handler);
+    const input = document.createElement('input');
+    input.value = 'filter these logs';
+    document.body.append(input);
+    input.setSelectionRange(4, 9);
+
+    const event = press('a', input, { metaKey: true });
+
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    expect(handler).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    input.remove();
+  });
+
+  it('keeps Select All inside an explicit log text surface', () => {
+    const handler = vi.fn(() => true);
+    registerShortcutScope(handler);
+    const panel = document.createElement('section');
+    panel.dataset.pictoTextShortcuts = '';
+    panel.textContent = 'first log\nsecond log';
+    const outside = document.createElement('div');
+    outside.textContent = 'outside text';
+    document.body.append(panel, outside);
+
+    const event = press('a', panel, { ctrlKey: true });
+
+    expect(window.getSelection()?.toString()).toBe('first log\nsecond log');
+    expect(window.getSelection()?.toString()).not.toContain('outside text');
+    expect(handler).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    window.getSelection()?.removeAllRanges();
+    panel.remove();
+    outside.remove();
+  });
 });
