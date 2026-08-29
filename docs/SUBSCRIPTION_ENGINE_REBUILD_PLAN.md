@@ -1,5 +1,11 @@
 # Picto Subscription Engine Rebuild
 
+> Status: deferred design reference, not a `0.6.0-alpha` release gate. The replacement
+> `gallery_job`/attempt schema and pull/ack engine described below are not implemented. The release
+> therefore retains the working per-query gallery-dl archive and transient E-Hentai gallery path;
+> delete them only in the same change that ships their replacement. The temporary schema converter
+> and Picto-owned Webtoons support have been removed.
+
 ## Objective
 
 Replace the current subscription and gallery-download orchestration with one small, durable,
