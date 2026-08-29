@@ -1,11 +1,12 @@
 import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom } from '../state/navigation';
-import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
+import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 
-const { createFolderMock, deleteFoldersMock, sortFolderItemsMock } = vi.hoisted(() => ({
+const { createFolderMock, deleteFoldersMock, renameFolderMock, sortFolderItemsMock } = vi.hoisted(() => ({
   createFolderMock: vi.fn(),
   deleteFoldersMock: vi.fn(),
+  renameFolderMock: vi.fn(),
   sortFolderItemsMock: vi.fn(),
 }));
 
@@ -16,7 +17,7 @@ vi.mock('../platform/folderApi', () => ({
   deleteFolders: deleteFoldersMock,
   getFolderCoverHashes: vi.fn(),
   moveFolder: vi.fn(),
-  renameFolder: vi.fn(),
+  renameFolder: renameFolderMock,
   reorderFolderChildren: vi.fn(),
   setFolderMetadata: vi.fn(),
   setFolderWatchConfig: vi.fn(),
@@ -44,9 +45,25 @@ describe('foldersController deletion settlement', () => {
   beforeEach(() => {
     deleteFoldersMock.mockReset();
     createFolderMock.mockReset();
+    renameFolderMock.mockReset();
     sortFolderItemsMock.mockReset();
     store.set(activeNodeIdAtom, 'system:active');
     store.set(pendingSidebarRevealNodeIdAtom, null);
+  });
+
+  it('keeps the committed folder name visible while the backend settles', async () => {
+    let finishRename!: () => void;
+    renameFolderMock.mockImplementation(() => new Promise<void>((resolve) => { finishRename = resolve; }));
+    store.set(sidebarNodesAtom, [{
+      id: 'folder:7', kind: 'folder', parent_id: 'section:folders', name: 'Before',
+      sort_order: 0, count: 0, freshness: 'exact', selectable: true,
+    }]);
+
+    const rename = foldersController.rename(7, 'After');
+    expect(store.get(sidebarNodesAtom)[0]?.name).toBe('After');
+    finishRename();
+    await rename;
+    expect(store.get(sidebarNodesAtom)[0]?.name).toBe('After');
   });
 
   it('requests that a newly created folder is revealed in the sidebar', async () => {

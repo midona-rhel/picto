@@ -129,6 +129,17 @@ export const removeSmartFolderNodeAtom = atom(
   },
 );
 
+export const patchSmartFolderNodeAtom = atom(
+  null,
+  (get, set, { smartFolderId, patch }: { smartFolderId: number; patch: Partial<SidebarNodeDto> }) => {
+    const sid = `smart:${smartFolderId}`;
+    set(
+      sidebarNodesAtom,
+      get(sidebarNodesAtom).map((n) => (n.id === sid ? { ...n, ...patch } : n)),
+    );
+  },
+);
+
 // ── Batch delta atoms (used by runtime settle) ───────────────────
 
 /** Apply folder parent changes from state_changed event. */

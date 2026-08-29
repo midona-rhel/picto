@@ -12,7 +12,11 @@ import type {
   SmartFolderCommandPayload,
 } from '../shared/types/canonical';
 import { activeNodeIdAtom } from '../state/navigation';
-import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
+import {
+  patchSmartFolderNodeAtom,
+  pendingSidebarRevealNodeIdAtom,
+  sidebarNodesAtom,
+} from '../state/sidebar';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 import { gridController } from './gridController';
@@ -72,8 +76,20 @@ export const smartFoldersController = {
   },
 
   async update(id: number, folder: SmartFolderCommandPayload): Promise<void> {
-    await updateSmartFolder(id, folder);
-    await announceUndoableMutation('smart_folders.update');
+    const nodeId = `smart:${id}`;
+    const previousName = store.get(sidebarNodesAtom).find((node) => node.id === nodeId)?.name;
+    store.set(patchSmartFolderNodeAtom, { smartFolderId: id, patch: { name: folder.name } });
+    try {
+      await updateSmartFolder(id, folder);
+      await announceUndoableMutation('smart_folders.update');
+      store.set(patchSmartFolderNodeAtom, { smartFolderId: id, patch: { name: folder.name } });
+    } catch (error) {
+      const currentName = store.get(sidebarNodesAtom).find((node) => node.id === nodeId)?.name;
+      if (previousName != null && currentName === folder.name) {
+        store.set(patchSmartFolderNodeAtom, { smartFolderId: id, patch: { name: previousName } });
+      }
+      throw error;
+    }
   },
 
   async preview(id: number, folder: SmartFolderCommandPayload): Promise<void> {

@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { activeNodeIdAtom } from '../state/navigation';
-import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
+import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 
 const mocks = vi.hoisted(() => ({
   fetchTree: vi.fn().mockResolvedValue(undefined),
   loadFirstPage: vi.fn().mockResolvedValue(undefined),
   createSmartFolder: vi.fn(),
+  updateSmartFolder: vi.fn(),
   announceUndoableMutation: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -21,7 +22,7 @@ vi.mock('../platform/smartFolderApi', () => ({
   deleteSmartFolder: vi.fn(),
   moveSmartFolder: vi.fn(),
   reorderSmartFolders: vi.fn(),
-  updateSmartFolder: vi.fn(),
+  updateSmartFolder: mocks.updateSmartFolder,
 }));
 vi.mock('../runtime/historyRuntime', () => ({
   announceUndoableMutation: mocks.announceUndoableMutation,
@@ -34,9 +35,32 @@ describe('smart folder refresh', () => {
     mocks.fetchTree.mockClear();
     mocks.loadFirstPage.mockClear();
     mocks.createSmartFolder.mockReset();
+    mocks.updateSmartFolder.mockReset();
     mocks.announceUndoableMutation.mockClear();
     getDefaultStore().set(activeNodeIdAtom, 'system:active');
     getDefaultStore().set(pendingSidebarRevealNodeIdAtom, null);
+  });
+
+  it('keeps the committed smart-folder name visible while the backend settles', async () => {
+    let finishUpdate!: () => void;
+    mocks.updateSmartFolder.mockImplementation(() => new Promise<void>((resolve) => { finishUpdate = resolve; }));
+    getDefaultStore().set(sidebarNodesAtom, [{
+      id: 'smart:9', kind: 'smart_folder', parent_id: 'section:smart_folders', name: 'Before',
+      sort_order: 0, count: 0, freshness: 'exact', selectable: true,
+    }]);
+    const payload = {
+      name: 'After', parent_id: null, icon: null, color: null, notes: null,
+      view: {
+        filter: { kind: 'all' as const, value: [] },
+        sort: { field: 'name' as const, direction: 'ascending' as const, random_seed: null },
+      },
+    };
+
+    const update = smartFoldersController.update(9, payload);
+    expect(getDefaultStore().get(sidebarNodesAtom)[0]?.name).toBe('After');
+    finishUpdate();
+    await update;
+    expect(getDefaultStore().get(sidebarNodesAtom)[0]?.name).toBe('After');
   });
 
   it('creates a non-filtering hierarchy group with an empty predicate', async () => {

@@ -23,7 +23,7 @@ import {
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import { activeNodeIdAtom } from '../state/navigation';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
-import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
+import { patchFolderNodeAtom, pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
@@ -80,8 +80,21 @@ export const foldersController = {
   },
 
   async rename(folderId: number, newName: string): Promise<void> {
-    await renameFolder(folderId, newName);
-    await announceUndoableMutation('folders.rename');
+    const previousName = store.get(sidebarNodesAtom)
+      .find((node) => node.id === folderNodeId(folderId))?.name;
+    store.set(patchFolderNodeAtom, { folderId, patch: { name: newName } });
+    try {
+      await renameFolder(folderId, newName);
+      await announceUndoableMutation('folders.rename');
+      store.set(patchFolderNodeAtom, { folderId, patch: { name: newName } });
+    } catch (error) {
+      const currentName = store.get(sidebarNodesAtom)
+        .find((node) => node.id === folderNodeId(folderId))?.name;
+      if (previousName != null && currentName === newName) {
+        store.set(patchFolderNodeAtom, { folderId, patch: { name: previousName } });
+      }
+      throw error;
+    }
   },
 
   async duplicate(folderId: number): Promise<string> {
