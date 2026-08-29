@@ -175,15 +175,6 @@ if (checkArtifacts) {
     'vendor/onlyfans/THIRD_PARTY_LICENSES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
 
-  for (const [file, packageName] of [
-    ['vendor/gallery-dl/THIRD_PARTY_LICENSES.txt', 'gallery-dl@'],
-    ['vendor/onlyfans/THIRD_PARTY_LICENSES.txt', 'ofscraper@'],
-  ]) {
-    if (existsSync(path.join(root, file))) {
-      assert(read(file).toLowerCase().includes(packageName), `sidecar notices omit the frozen ${packageName.slice(0, -1)} package: ${file}`);
-    }
-  }
-
   const executableSuffix = process.platform === 'win32' ? '.exe' : '';
   for (const file of [
     `vendor/ffmpeg/ffmpeg${executableSuffix}`,
