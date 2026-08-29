@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "napi build --platform --release",
+    "build:local": "napi build",
     "build:debug": "napi build --platform"
   },
   "devDependencies": {
