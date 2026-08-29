@@ -132,7 +132,7 @@ def _install_sankaku_cursor_adapter() -> None:
 
 
 def _install_deviantart_deviation_adapter() -> None:
-    """Bound gallery runs by whole deviations and expose a durable cursor.
+    """Expose whole deviations and a durable source cursor.
 
     The gallery extractor already emits every supported target in a deviation.
     Re-queuing each result through the direct-deviation extractor repeats the
@@ -148,24 +148,18 @@ def _install_deviantart_deviation_adapter() -> None:
     original_gallery_deviations = gallery.deviations
 
     def gallery_deviations_as_children(self):
-        limit = self.config("picto-post-limit")
-        limit = max(0, int(limit)) if limit else None
         initial_skip = max(0, int(self.config("picto-post-skip") or 0))
         skip = initial_skip
         emitted = 0
-        exhausted = True
+        exhausted = False
         try:
             for item in original_gallery_deviations(self):
                 if skip:
                     skip -= 1
                     continue
-                if limit is not None and emitted >= limit:
-                    exhausted = False
-                    break
-
-                emitted += 1
                 if isinstance(item, tuple):
                     yield item
+                    emitted += 1
                     continue
 
                 deviation_id = item.get("deviationid", "?")
@@ -178,9 +172,12 @@ def _install_deviantart_deviation_adapter() -> None:
                         "Skipping post %s (currently inaccessible)",
                         deviation_id,
                     )
+                    emitted += 1
                     continue
 
                 yield item
+                emitted += 1
+            exhausted = True
         finally:
             _emit(
                 "source_cursor",
@@ -190,6 +187,57 @@ def _install_deviantart_deviation_adapter() -> None:
 
     gallery.deviations = gallery_deviations_as_children
     gallery._picto_expand_deviations = True
+
+
+def _install_early_post_window(extractor) -> None:
+    """Skip source post IDs before extractors request their detail pages."""
+    if getattr(extractor, "_picto_source_posts", False):
+        return
+    original_items = extractor.items
+
+    def items_in_source_batches(self):
+        source_posts = self.posts
+        skip = max(0, int(self.config("picto-post-skip") or 0))
+        start = skip
+        emitted = 0
+        exhausted = False
+
+        def bounded_posts():
+            nonlocal skip, emitted, exhausted
+            for post in source_posts():
+                if skip:
+                    skip -= 1
+                    continue
+                yield post
+                emitted += 1
+            exhausted = True
+
+        self.posts = bounded_posts
+        try:
+            yield from original_items(self)
+        finally:
+            del self.posts
+            cursor = "" if exhausted else f"range:{start + emitted + 1}"
+            _emit("source_cursor", cursor=cursor, item_count=emitted)
+
+    extractor.items = items_in_source_batches
+    extractor._picto_source_posts = True
+
+
+def _install_detail_page_post_adapters(site_id: str) -> None:
+    """Install early source windows for sites that resolve one page per post."""
+    if site_id == "furaffinity":
+        from gallery_dl.extractor import furaffinity
+
+        _install_early_post_window(furaffinity.FuraffinityExtractor)
+    elif site_id == "hentaifoundry":
+        from gallery_dl.extractor import hentaifoundry
+
+        _install_early_post_window(hentaifoundry.HentaifoundryExtractor)
+    elif site_id == "newgrounds":
+        from gallery_dl.extractor import newgrounds
+
+        _install_early_post_window(newgrounds.NewgroundsExtractor)
 
 
 def _install_tumblr_post_adapter() -> None:
@@ -202,16 +250,12 @@ def _install_tumblr_post_adapter() -> None:
     original_posts = api.posts
 
     def posts_with_limit_and_cursor(self, blog, params):
-        limit = self.extractor.config("picto-post-limit")
-        limit = max(0, int(limit)) if limit else None
         start_offset = max(0, int(self.extractor.config("offset") or 0))
         emitted = 0
         try:
             for post in original_posts(self, blog, params):
-                if limit is not None and emitted >= limit:
-                    break
-                emitted += 1
                 yield post
+                emitted += 1
         finally:
             # Tumblr's API offset counts every source post, including posts
             # without supported image media. Rust must resume from this raw
@@ -342,9 +386,8 @@ def _install_patreon_attachment_adapter() -> None:
 
     def pagination_in_source_batches(self, url):
         headers = {"Content-Type": "application/vnd.api+json"}
-        limit = max(0, int(self.config("picto-post-limit") or 0))
         skip = max(0, int(self.config("picto-post-skip") or 0))
-        emitted = 0
+        self._picto_source_exhausted = False
 
         while url:
             self._update_cursor(url)
@@ -356,15 +399,10 @@ def _install_patreon_attachment_adapter() -> None:
                     skip -= 1
                     continue
                 yield self._process(post, included)
-                emitted += 1
 
             url = (page.get("links") or {}).get("next")
-            if limit and emitted >= limit:
-                # Persist the API's next page, not the page that contained the
-                # final post in this batch.
-                self._update_cursor(url or "")
-                return
 
+        self._picto_source_exhausted = True
         self._update_cursor("")
 
     def attachments_without_preflight(self, post):
@@ -380,9 +418,14 @@ def _install_patreon_attachment_adapter() -> None:
         return text.filename_from_url(url)
 
     def finalize_with_cursor(self, status):
-        # Patreon updates this cursor before each API page. A bounded gallery-dl
-        # post range stops with the next page cursor still available.
-        _emit("source_cursor", cursor=self._cursor or "")
+        if getattr(self, "_picto_source_exhausted", False):
+            cursor = ""
+        else:
+            # A successful-post gate can stop in the middle of an API page.
+            # Reopening that page is safe because gallery-dl's archive skips
+            # files already accepted by Picto.
+            cursor = self._cursor or "patreon:first-page"
+        _emit("source_cursor", cursor=cursor)
         return original_finalize(self, status)
 
     extractor._attachments = attachments_without_preflight
@@ -406,27 +449,25 @@ def _install_subscribestar_post_adapter() -> None:
         needle_next_page = 'data-role="infinite_scroll-next_page" href="'
         page = self.request(url, params=params).text
         skip = max(0, int(self.config("picto-post-skip") or 0))
-        limit = max(0, int(self.config("picto-post-limit") or 0))
         emitted = 0
         start = skip
-        exhausted = True
+        exhausted = False
         try:
             while True:
                 posts = page.split('<div class="post ')[1:]
                 if not posts:
+                    exhausted = True
                     return
                 for post in posts:
                     if skip:
                         skip -= 1
                         continue
-                    if limit and emitted >= limit:
-                        exhausted = False
-                        return
-                    emitted += 1
                     yield post
+                    emitted += 1
 
                 next_url = text.extr(posts[-1], needle_next_page, '"')
                 if not next_url:
+                    exhausted = True
                     return
                 page = self.request_json(
                     self.root + text.unescape(next_url)
@@ -480,6 +521,82 @@ def _item_url(pathfmt) -> Any:
     return _json_safe(pathfmt.kwdict.get("url") or pathfmt.kwdict.get("_url"))
 
 
+def _post_identity(metadata: dict[str, Any]) -> str:
+    category = str(metadata.get("category") or "")
+    parent = metadata.get("_parent")
+    parent = parent if isinstance(parent, dict) else {}
+    if category == "webtoons":
+        for source in (metadata, parent):
+            title_no = source.get("title_no")
+            episode_no = source.get("episode_no")
+            if title_no is not None and episode_no is not None:
+                return f"webtoons:episode:{title_no}:{episode_no}"
+    fields = {
+        "artstation": ("hash_id", "project_hash_id", "project_id"),
+        "deviantart": ("deviationid",),
+        "ehentai": ("gid", "gallery_id"),
+        "exhentai": ("gid", "gallery_id"),
+        "hentaifoundry": ("index", "id"),
+        "newgrounds": ("index", "id"),
+        "twitter": ("tweet_id", "id"),
+        "subscribestar": ("post_id", "id"),
+    }.get(category, ("id", "post_id"))
+    for source in (metadata, parent):
+        for field in fields:
+            value = source.get(field)
+            if value is not None and str(value).strip():
+                return f"{category}:{field}:{value}"
+    for field in ("post_url", "canonical_url", "url"):
+        value = metadata.get(field)
+        if value is not None and str(value).strip():
+            return f"{category}:{field}:{value}"
+    return f"{category}:metadata:{json.dumps(metadata, sort_keys=True, default=str)}"
+
+
+class _AcceptedPostGate:
+    def __init__(self, limit: int | None, accepted_extensions: list[str] | None):
+        self.limit = max(0, int(limit or 0))
+        self.accepted_extensions = {
+            str(extension).lower().lstrip(".")
+            for extension in (accepted_extensions or ())
+        }
+        self.traversed: set[str] = set()
+        self.accepted: set[str] = set()
+        self.current: str | None = None
+        self.current_has_media = False
+
+    def begin(self, metadata: dict[str, Any]) -> tuple[bool, str]:
+        identity = _post_identity(metadata)
+        if identity in self.traversed:
+            return False, identity
+        if self.limit and len(self.accepted) >= self.limit:
+            from gallery_dl import exception
+
+            self.current = None
+            raise exception.StopExtraction()
+        self.traversed.add(identity)
+        self.current = identity
+        self.current_has_media = False
+        return True, identity
+
+    def downloaded(self, path: str, metadata: dict[str, Any]) -> None:
+        path = str(path)
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if self.accepted_extensions and extension not in self.accepted_extensions:
+            return
+        if self.current is not None:
+            self.current_has_media = True
+
+    def has_current(self) -> bool:
+        return self.current is not None
+
+    def complete(self) -> None:
+        if self.current is not None and self.current_has_media:
+            self.accepted.add(self.current)
+        self.current = None
+        self.current_has_media = False
+
+
 _recent_download_errors: list[str] = []
 
 
@@ -517,8 +634,9 @@ def _configure_source_window(config, request: dict[str, Any]) -> None:
     range_start = max(1, int(request.get("range_start") or 1))
     if source_cursor := request.get("source_cursor"):
         config.set((), "picto-post-skip", 0)
-        config.set((), "picto-source-cursor", source_cursor)
-        config.set((), "picto-next", source_cursor)
+        if source_cursor != "patreon:first-page":
+            config.set((), "picto-source-cursor", source_cursor)
+            config.set((), "picto-next", source_cursor)
         if request.get("site_id") == "tumblr":
             config.set((), "offset", source_cursor)
     else:
@@ -528,10 +646,16 @@ def _configure_source_window(config, request: dict[str, Any]) -> None:
 
 
 class PictoDownloadJob:
-    def __init__(self, url: str):
+    def __init__(
+        self,
+        url: str,
+        post_limit: int | None = None,
+        accepted_extensions: list[str] | None = None,
+    ):
         from gallery_dl import job
 
         bridge = self
+        self._post_gate = _AcceptedPostGate(post_limit, accepted_extensions)
 
         # Hooks must be registered at CLASS level: dispatching extractors
         # (twitter user → timeline, furaffinity gallery/scraps, ...) spawn
@@ -547,6 +671,7 @@ class PictoDownloadJob:
                     {
                         "prepare": bridge._safe_hook(bridge._on_prepare),
                         "post": bridge._safe_hook(bridge._on_post),
+                        "post-after": bridge._safe_hook(bridge._on_post_complete),
                         "after": bridge._safe_hook(bridge._on_after),
                         "skip": bridge._safe_hook(bridge._on_skip),
                         "error": bridge._safe_hook(bridge._on_error),
@@ -560,7 +685,11 @@ class PictoDownloadJob:
         def wrapped(pathfmt):
             try:
                 return fn(pathfmt)
-            except Exception:
+            except Exception as error:
+                from gallery_dl import exception
+
+                if isinstance(error, exception.ControlException):
+                    raise
                 traceback.print_exc(file=sys.stderr)
                 raise
 
@@ -575,17 +704,31 @@ class PictoDownloadJob:
         )
 
     def _on_post(self, pathfmt):
-        _emit(
-            "post_traversed",
-            metadata=_event_metadata(pathfmt),
-        )
+        metadata = _event_metadata(pathfmt)
+        first_visit, _ = self._post_gate.begin(metadata)
+        if first_visit:
+            _emit("post_traversed", metadata=metadata)
+
+    def _on_post_complete(self, _pathfmt):
+        if not self._post_gate.has_current():
+            return
+        _emit("post_complete")
+        # Rust acknowledges only after every file from this post has been
+        # persisted and its canonical ingest work has been durably queued.
+        if not sys.stdin.readline():
+            from gallery_dl import exception
+
+            raise exception.StopExtraction()
+        self._post_gate.complete()
 
     def _on_after(self, pathfmt):
+        metadata = _event_metadata(pathfmt)
+        self._post_gate.downloaded(pathfmt.path, metadata)
         _emit(
             "item_downloaded",
             file_path=pathfmt.path,
             item_url=_item_url(pathfmt),
-            metadata=_event_metadata(pathfmt),
+            metadata=metadata,
         )
 
     def _on_skip(self, pathfmt):
@@ -705,6 +848,7 @@ def main() -> int:
         _install_sankaku_cursor_adapter()
     if request.get("site_id") == "deviantart":
         _install_deviantart_deviation_adapter()
+    _install_detail_page_post_adapters(request.get("site_id"))
     if request.get("site_id") == "tumblr":
         _install_tumblr_post_adapter()
     if request.get("site_id") == "fanbox":
@@ -721,7 +865,15 @@ def main() -> int:
     config.clear()
     if config_path := request.get("config_path"):
         config.load([config_path], strict=True)
-    source_batched_sites = {"deviantart", "patreon", "subscribestar", "tumblr"}
+    source_batched_sites = {
+        "deviantart",
+        "furaffinity",
+        "hentaifoundry",
+        "newgrounds",
+        "patreon",
+        "subscribestar",
+        "tumblr",
+    }
     if request.get("post_range") and request.get("site_id") not in source_batched_sites:
         config.set((), "post-range", request["post_range"])
     if request.get("child_range"):
@@ -743,7 +895,11 @@ def main() -> int:
         url=request.get("url"),
     )
     try:
-        bridge_job = PictoDownloadJob(request["url"])
+        bridge_job = PictoDownloadJob(
+            request["url"],
+            request.get("post_limit"),
+            request.get("accepted_extensions"),
+        )
         status = bridge_job.run()
     except Exception:
         traceback.print_exc(file=sys.stderr)
