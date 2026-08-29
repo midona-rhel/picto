@@ -608,7 +608,14 @@ export function createAuthSessions({
     if (inspecting || completed || !popup || popup.isDestroyed() || !adapter?.inspect) return;
     inspecting = true;
     try {
-      await applyResult(await adapter.inspect(popup.webContents));
+      // A page mid-navigation (or a challenge interstitial) can leave
+      // executeJavaScript unresolved; without a bound, one hung inspection
+      // wedges the poll loop for the rest of the session.
+      const result = await Promise.race([
+        adapter.inspect(popup.webContents),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+      ]);
+      await applyResult(result);
     } catch (error) {
       emit({ status: 'error', message: error instanceof Error ? error.message : 'Failed to inspect login state.' });
     } finally {
