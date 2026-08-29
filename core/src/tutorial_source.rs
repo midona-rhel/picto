@@ -107,15 +107,12 @@ async fn prepare_fixture(
         .map_err(|error| {
             RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
         })?;
-    let hash_path = path.to_path_buf();
-    let content_hash = tokio::task::spawn_blocking(move || {
-        crate::media_processing::get_hash_from_path(&hash_path).map(hex::encode)
-    })
-    .await
-    .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::Runtime, error.to_string()))?
-    .map_err(|error| {
-        RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
-    })?;
+    let content_hash = crate::media_processing::get_hash_from_path_background(path.to_path_buf())
+        .await
+        .map(hex::encode)
+        .map_err(|error| {
+            RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())
+        })?;
     let size_bytes = std::fs::metadata(path)
         .map_err(|error| {
             RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error.to_string())

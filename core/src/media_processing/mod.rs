@@ -27,7 +27,7 @@ use std::path::Path;
 pub use analysis::get_file_info;
 pub use detection::{get_mime, is_allowed_mime, is_image};
 pub use formats::has_supported_extension;
-pub use hashing::{get_hash_from_bytes, get_hash_from_path};
+pub use hashing::{get_hash_from_bytes, get_hash_from_path, get_hash_from_path_background};
 pub use phash::{
     compute_phash, compute_phash_base64, compute_phash_base64_from_image, compute_phash_from_image,
 };

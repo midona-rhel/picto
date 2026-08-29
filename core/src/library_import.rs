@@ -556,13 +556,10 @@ async fn prepare_import(
         return Err(format!("Unsupported media: {}", path.display()));
     }
     let hash_path = path.to_path_buf();
-    let content_hash = tokio::task::spawn_blocking(move || {
-        crate::media_processing::get_hash_from_path(&hash_path)
-            .map(hex::encode)
-            .map_err(|error| format!("Failed to hash {}: {error}", hash_path.display()))
-    })
-    .await
-    .map_err(|error| format!("Media hash worker failed: {error}"))??;
+    let content_hash = crate::media_processing::get_hash_from_path_background(hash_path.clone())
+        .await
+        .map(hex::encode)
+        .map_err(|error| format!("Failed to hash {}: {error}", hash_path.display()))?;
     let size_bytes = fs::metadata(path)
         .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?
         .len();
