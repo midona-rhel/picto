@@ -617,7 +617,7 @@ export function createLibraryHostService({
     sendToAllWindows('library-meta-changed', { path: libraryPath });
   }
 
-  async function initializeInitialLibrary(libraryPath) {
+  async function initializeInitialLibrary(libraryPath, { remember = true } = {}) {
     await cleanupStaleTutorialLibraries();
     await applyPlatformLibraryIcon(libraryPath);
     openingLibraryPath = libraryPath;
@@ -631,7 +631,7 @@ export function createLibraryHostService({
     }
     setCurrentLibraryRoot(libraryPath);
     openingLibraryPath = null;
-    await addLibraryToHistory(libraryPath);
+    if (remember) await addLibraryToHistory(libraryPath);
     sendToAllWindows('library-switched', { path: libraryPath });
   }
 

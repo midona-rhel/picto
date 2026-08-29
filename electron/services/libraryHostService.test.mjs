@@ -221,3 +221,33 @@ test('guided tour opens an unpersisted isolated library and restores the origina
   expect(calls).toContainEqual(['rm', '/tmp/picto-guided-tour-test-2', { recursive: true, force: true }]);
   expect(events.at(-1)).toEqual(['library-switched', { path: '/Pictures/Main.library', restored: true }]);
 });
+
+test('forced startup libraries do not replace the user last-opened library', async () => {
+  const histories = [];
+  const opened = [];
+  let current = null;
+  const service = createLibraryHostService({
+    fs: { readdir: async () => [] },
+    path,
+    dialog: {},
+    openLibrary: async (libraryPath) => opened.push(libraryPath),
+    closeLibrary: async () => {},
+    addLibraryToHistory: async (libraryPath) => histories.push(libraryPath),
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({}),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => current,
+    setCurrentLibraryRoot: (value) => { current = value; },
+    createMainWindow: () => {},
+    sendToAllWindows: () => {},
+    buildAppMenu: () => {},
+  });
+
+  await service.initializeInitialLibrary('/tmp/automation.library', { remember: false });
+
+  expect(opened).toEqual(['/tmp/automation.library']);
+  expect(current).toBe('/tmp/automation.library');
+  expect(histories).toEqual([]);
+});

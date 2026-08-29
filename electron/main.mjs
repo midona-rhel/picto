@@ -366,15 +366,18 @@ async function bootstrapApplication() {
   }
 
   if (libraryToOpen) {
+    const rememberInitialLibrary = !process.env.PICTO_LIBRARY_ROOT;
     console.info('[main] initializing library', { libraryToOpen });
-    const opening = libraryHost.initializeInitialLibrary(libraryToOpen);
+    const opening = libraryHost.initializeInitialLibrary(libraryToOpen, {
+      remember: rememberInitialLibrary,
+    });
     console.info('[main] creating main window for library reconciliation');
     const mainWin = windowManager.createWindow('main');
     setMainWindow(mainWin);
     await opening;
     reportPackagedSmoke('native-library-initialized');
     console.info('[main] library initialized in native core');
-    console.info('[main] library history updated');
+    if (rememberInitialLibrary) console.info('[main] library history updated');
   } else {
     setCurrentLibraryRoot(null);
     console.info('[main] no initial library selected; starting without an open library');
