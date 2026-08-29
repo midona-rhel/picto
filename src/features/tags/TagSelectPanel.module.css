@@ -172,6 +172,14 @@
   transition: background-color 60ms ease;
 }
 
+.createTagRow {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  grid-column: 1 / -1;
+  background: var(--glass-bg);
+}
+
 .tagRow:hover {
   background: var(--color-surface-hover);
 }

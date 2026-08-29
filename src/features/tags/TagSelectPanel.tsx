@@ -188,6 +188,7 @@ export function TagSelectPanel() {
   // prevents a slower previous view from replacing the current result.
   useEffect(() => {
     if (!open) return;
+    if (listRef.current) listRef.current.scrollTop = 0;
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
     if (!query.trim()) {
@@ -502,7 +503,7 @@ export function TagSelectPanel() {
                         <div
                           key={fullTag}
                           data-tag-index={itemIndex}
-                          className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
+                          className={`${styles.tagRow} ${isCreate ? styles.createTagRow : ''} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
                           style={{
                             '--tag-color': tagGroupColor(tag.namespace, tagPreferences.tagGroupColors),
                           } as React.CSSProperties}

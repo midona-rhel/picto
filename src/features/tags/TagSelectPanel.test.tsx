@@ -4,6 +4,7 @@ import { createStore, Provider } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { TagSelectPanel } from './TagSelectPanel';
+import styles from './TagSelectPanel.module.css';
 
 const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
@@ -111,7 +112,9 @@ describe('TagSelectPanel assignment', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'creator:carol' } });
     const createLabel = await screen.findByText('creator:carol');
-    expect(createLabel.closest('[data-tag-index]')).toHaveTextContent('Create "creator:carol"');
+    const createRow = createLabel.closest('[data-tag-index]');
+    expect(createRow).toHaveTextContent('Create "creator:carol"');
+    expect(createRow).toHaveClass(styles.createTagRow);
     fireEvent.click(createLabel);
 
     expect(onApplyTags).toHaveBeenLastCalledWith(['creator:carol']);
