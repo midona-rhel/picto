@@ -5,6 +5,7 @@ import type { ExportFormat } from '../shared/types/generated/application/ExportF
 import type { ExportResult } from '../shared/types/generated/application/ExportResult';
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { FolderTreeAnalysis } from '../shared/types/generated/application/FolderTreeAnalysis';
 import type { EntityTarget, Lifecycle } from '../shared/types/canonical';
 import { compileGridQuery, createEmptyItemFilters } from '../shared/lib/itemFilters';
 
@@ -158,6 +159,15 @@ export function addMedia(paths: string[], params: {
     delete_after_ingest: params.delete_after_ingest ?? false,
     group_files: params.group_files ?? false,
   });
+}
+
+export function analyzeFolderTree(params: {
+  path: string;
+  destination_folder_id: number | null;
+  include_subfolders: boolean;
+  include_source_root: boolean;
+}): Promise<FolderTreeAnalysis> {
+  return invoke<FolderTreeAnalysis>('imports.folder.analyze', params);
 }
 
 export function exportMedia(target: EntityTarget, config: {

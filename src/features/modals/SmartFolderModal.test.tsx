@@ -96,4 +96,23 @@ describe('SmartFolderModal', () => {
     });
     expect(screen.queryByDisplayValue('Reference')).not.toBeInTheDocument();
   });
+
+  it('caps each smart folder at ten local rules', async () => {
+    renderWithProviders(
+      <SmartFolderModal
+        open
+        mode="create"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('dialog', { name: 'New Smart Folder' });
+    for (let index = 1; index < 10; index += 1) {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Add rule' })[0]);
+    }
+    expect(screen.getAllByRole('button', { name: 'Add rule' })).toHaveLength(10);
+    expect(screen.getAllByRole('button', { name: 'Add rule' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getByRole('button', { name: 'Add group' })).toBeDisabled();
+  });
 });

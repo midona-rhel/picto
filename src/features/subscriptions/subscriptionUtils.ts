@@ -16,8 +16,12 @@ export function isGalleryImportJob(subscription: SubscriptionInfo): boolean {
 
 export function getSubscriptionRunTarget(
   subscription: SubscriptionInfo,
+  mode?: string | null,
 ): number {
-  return subscription.posts_per_run || DEFAULT_SOURCE_POST_BATCH_SIZE;
+  const perQuery = subscription.posts_per_run || DEFAULT_SOURCE_POST_BATCH_SIZE;
+  if (mode === 'manual-query') return perQuery;
+  const activeQueries = subscription.queries.filter((query) => !query.paused).length;
+  return perQuery * Math.max(1, activeQueries);
 }
 
 export function formatRelativeTime(value: string | null | undefined): string {
@@ -68,10 +72,12 @@ export function getSubscriptionSiteSummary(
 
 export function describeSubscriptionState(input: {
   paused: boolean;
+  running?: boolean;
   progress?: SubscriptionProgressEvent | null;
   failedPostCount: number;
   openIssueCount: number;
 }): 'running' | 'paused' | 'attention' | 'idle' {
+  if (input.running) return 'running';
   if (input.paused) return 'paused';
   if (input.progress) return 'running';
   if (input.failedPostCount > 0 || input.openIssueCount > 0) return 'attention';

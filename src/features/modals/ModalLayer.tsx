@@ -140,6 +140,7 @@ export function ModalLayer() {
           setFolderWatch({ ...folderWatch, open: false });
         } : undefined}
         initial={folderWatch.initial}
+        folderId={folderWatch.folderId ?? null}
       />
 
       <FolderAutoTagsModal
@@ -188,6 +189,7 @@ export function ModalLayer() {
         open={folderImport.open}
         onClose={() => setFolderImport({ ...folderImport, open: false })}
         path={folderImport.path}
+        targetFolderId={folderImport.targetFolderId}
         onImport={(options) => {
           void filesController.addMedia([folderImport.path], {
             preserve_structure: options.preserveStructure,

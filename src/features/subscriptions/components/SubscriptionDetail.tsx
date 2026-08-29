@@ -134,8 +134,9 @@ export function SubscriptionDetail({
   const metrics = snapshot.listMetrics[subscription.id];
   const waitingForInbox = subscription.run_status === 'inbox_full';
   const running = progress != null || snapshot.runningSubscriptionIds.includes(subscription.id);
-  const state = waitingForInbox || subscription.paused ? 'paused' : running ? 'running' : describeSubscriptionState({
+  const state = waitingForInbox ? 'paused' : describeSubscriptionState({
     paused: subscription.paused,
+    running,
     progress,
     failedPostCount: metrics?.failedPostCount ?? 0,
     openIssueCount: metrics?.openIssueCount ?? 0,
@@ -150,8 +151,9 @@ export function SubscriptionDetail({
   const persistedPostCount = subscription.queries.reduce((total, query) => total + query.posts_found, 0);
   const traversedCount = progress?.posts_traversed ?? latestRun?.posts_traversed ?? 0;
   const postsAddedCount = progress?.posts_added ?? latestRun?.posts_added ?? persistedPostCount;
+  const postsSkippedCount = progress?.posts_skipped ?? latestRun?.posts_skipped ?? 0;
   const filesDownloadedCount = progress?.files_downloaded ?? latestRun?.files_downloaded ?? 0;
-  const runTarget = getSubscriptionRunTarget(subscription);
+  const runTarget = getSubscriptionRunTarget(subscription, progress?.mode);
   const runAdded = progress?.posts_added ?? 0;
   const runProgressPercent = runTarget > 0 ? Math.min(100, (runAdded / runTarget) * 100) : 0;
   const failedQuery = useMemo(() => subscription.queries.reduce<SubscriptionQueryInfo | null>((latest, query) => {
@@ -274,6 +276,7 @@ export function SubscriptionDetail({
         <div className={styles.subscriptionProperties}>
           <div className={styles.subscriptionProperty}><span>Posts traversed</span><strong>{traversedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>Posts added</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Posts skipped</span><strong>{postsSkippedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>Files downloaded</span><strong>{filesDownloadedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>Last check</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
           <div className={styles.subscriptionProperty}>

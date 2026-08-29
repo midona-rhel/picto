@@ -25,11 +25,24 @@ import { activeNodeIdAtom } from '../state/navigation';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { patchFolderNodeAtom, pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
+import { showErrorNotification } from '../shared/lib/notifications';
 
 const store = getDefaultStore();
 
 function folderNodeId(folderId: number): string {
   return `folder:${folderId}`;
+}
+
+async function warnOnFolderDepth<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (reason) {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (message.includes('folders may be nested at most 8 levels deep')) {
+      showErrorNotification({ title: 'Folder depth limit', message });
+    }
+    throw reason;
+  }
 }
 
 function settleDeletedFolders(receipts: FolderMutationReceipt[]): void {
@@ -72,7 +85,10 @@ export function bulkFolderDeletionMessage(selectedCount: number): string {
 
 export const foldersController = {
   async create(name: string, parentId?: number | null): Promise<string> {
-    const result = await createFolder({ name, parent_id: parentId ?? null });
+    const result = await warnOnFolderDepth(() => createFolder({
+      name,
+      parent_id: parentId ?? null,
+    }));
     await announceUndoableMutation('folders.create');
     const nodeId = folderNodeId(result.folder_id);
     store.set(pendingSidebarRevealNodeIdAtom, nodeId);
@@ -98,7 +114,7 @@ export const foldersController = {
   },
 
   async duplicate(folderId: number): Promise<string> {
-    const result = await duplicateFolder(folderId);
+    const result = await warnOnFolderDepth(() => duplicateFolder(folderId));
     await announceUndoableMutation('folders.duplicate');
     return folderNodeId(result.folder_id);
   },
@@ -138,7 +154,7 @@ export const foldersController = {
   },
 
   async move(folderId: number, parentFolderId: number | null, moves: [number, number][]) {
-    await moveFolder(folderId, parentFolderId);
+    await warnOnFolderDepth(() => moveFolder(folderId, parentFolderId));
     if (moves.length > 0) {
       const orderedIds = [...moves]
         .sort((left, right) => left[1] - right[1])

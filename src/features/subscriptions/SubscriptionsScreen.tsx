@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { pushSubscriptionsHistory } from '../../state/navigationHistory';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { confirmModalAtom } from '../../state/modals';
@@ -24,6 +24,7 @@ import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
 import { AddGalleryDialog, type AddGalleryInput } from './components/AddGalleryDialog';
 import { isGalleryImportJob } from './subscriptionUtils';
+import { createSubscriptionActionQueue } from './subscriptionActionQueue';
 import {
   EMPTY_SUBSCRIPTION_DETAIL_STATE,
   beginSubscriptionDetailRefresh,
@@ -56,6 +57,7 @@ export function SubscriptionsScreen() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [coverTarget, setCoverTarget] = useState<{ id: string; name: string } | null>(null);
   const [galleryDialogOpen, setGalleryDialogOpen] = useState(false);
+  const actionQueue = useRef(createSubscriptionActionQueue());
 
   const confirm = useCallback(
     (opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }, action: () => void) => {
@@ -121,21 +123,23 @@ export function SubscriptionsScreen() {
     contextMenu.close();
   }, [selection?.kind, selection?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const act = useCallback(async (key: string, action: () => Promise<unknown>, options?: { refresh?: boolean }) => {
-    setBusyKey(key);
-    try {
-      await action();
-      if (options?.refresh !== false) await refreshSubscriptionsWorkspace();
-      return true;
-    } catch (err) {
-      showErrorNotification({
-        title: 'Subscription action failed',
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    } finally {
-      setBusyKey(null);
-    }
+  const act = useCallback((key: string, action: () => Promise<unknown>, options?: { refresh?: boolean }) => {
+    return actionQueue.current(async () => {
+      setBusyKey(key);
+      try {
+        await action();
+        if (options?.refresh !== false) await refreshSubscriptionsWorkspace();
+        return true;
+      } catch (err) {
+        showErrorNotification({
+          title: 'Subscription action failed',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      } finally {
+        setBusyKey(null);
+      }
+    });
   }, [setBusyKey]);
 
   const loadMoreHealth = useCallback(async () => {

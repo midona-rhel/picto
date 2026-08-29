@@ -26,6 +26,8 @@ import { compileSmartFolderPredicate, editorPredicateFromFilter } from './smart-
 import { getFieldDef, defaultOperator, defaultValue, isListField, FIELD_DEFS } from './smart-folder/fieldConfig';
 import styles from './SmartFolderModal.module.css';
 
+const MAX_LOCAL_RULES = 10;
+
 // ── Icon picker popover — compact button that opens a floating dropdown ──
 
 function IconPickerPopover({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
@@ -178,6 +180,7 @@ export function SmartFolderModal({
   const title = mode === 'create'
     ? 'New Smart Folder'
     : editor === 'rules' ? 'Edit Rules' : 'Edit Smart Folder';
+  const ruleCount = predicate.groups.reduce((total, group) => total + group.rules.length, 0);
 
   useEffect(() => {
     if (!open) return;
@@ -283,7 +286,12 @@ export function SmartFolderModal({
   }, []);
 
   const handleGroupAdd = useCallback(() => {
-    setPredicate((current) => ({ groups: [...current.groups, defaultGroup()] }));
+    setPredicate((current) => {
+      const count = current.groups.reduce((total, group) => total + group.rules.length, 0);
+      return count >= MAX_LOCAL_RULES
+        ? current
+        : { groups: [...current.groups, defaultGroup()] };
+    });
   }, []);
 
   return (
@@ -299,7 +307,7 @@ export function SmartFolderModal({
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={handleSave}
-            disabled={!name.trim() || (showRules && !editorReady)}
+            disabled={!name.trim() || (showRules && (!editorReady || ruleCount > MAX_LOCAL_RULES))}
             type="button"
           >
             {mode === 'create' ? 'Create' : 'Save Changes'}
@@ -357,6 +365,7 @@ export function SmartFolderModal({
                   onRemove={() => handleGroupRemove(index)}
                   onAdd={handleGroupAdd}
                   canRemove={predicate.groups.length > 1}
+                  canAdd={ruleCount < MAX_LOCAL_RULES}
                 />
               ))}
             </div>

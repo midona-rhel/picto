@@ -7,4 +7,4 @@
  * can be counted as downloaded and failed when its bytes arrived but its
  * durable ingest job later failed.
  */
-export type ActivityCounts = { posts_traversed: number, posts_added: number, fetched: number, downloaded: number, queued: number, ingested: number, failed: number, deleted: number, };
+export type ActivityCounts = { posts_traversed: number, posts_added: number, posts_skipped: number, fetched: number, downloaded: number, queued: number, ingested: number, failed: number, deleted: number, };

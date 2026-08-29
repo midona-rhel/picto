@@ -44,6 +44,10 @@ function showNotification(tone: NotificationTone, options: ShowNotificationOptio
   emit();
 }
 
+function isFolderDepthLimit(message: string): boolean {
+  return message.includes('folders may be nested at most 8 levels deep');
+}
+
 export function subscribeToNotifications(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -77,6 +81,14 @@ export function clearNotifications(): void {
 }
 
 export function showErrorNotification(options: ShowNotificationOptions): void {
+  if (isFolderDepthLimit(options.message)) {
+    showNotification('warning', {
+      ...options,
+      title: 'Folder depth limit',
+      message: 'Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.',
+    });
+    return;
+  }
   showNotification('error', options);
 }
 

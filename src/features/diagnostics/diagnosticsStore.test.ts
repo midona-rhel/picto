@@ -27,6 +27,15 @@ describe('diagnosticsStore', () => {
     expect(getDiagnosticsSnapshot()).toEqual([]);
   });
 
+  test('does not surface expected cloud status polling before a library opens', () => {
+    recordIpcCall('cloud.status.get', 3, new Error('No library is open. Call open_library() first.'));
+    recordIpcCall('cloud.status.get', 3, new Error('Cloud provider failed'));
+
+    expect(getDiagnosticsSnapshot()).toMatchObject([
+      { level: 'ERROR', source: 'ipc', target: 'cloud.status.get', message: 'Cloud provider failed' },
+    ]);
+  });
+
   test('clears entries without retaining stale snapshots', () => {
     addDiagnostic({
       level: 'INFO',

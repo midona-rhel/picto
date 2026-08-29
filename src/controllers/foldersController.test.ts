@@ -2,6 +2,7 @@ import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom } from '../state/navigation';
 import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
+import { clearNotifications, getCurrentNotification } from '../shared/lib/notifications';
 
 const { createFolderMock, deleteFoldersMock, renameFolderMock, sortFolderItemsMock } = vi.hoisted(() => ({
   createFolderMock: vi.fn(),
@@ -47,6 +48,7 @@ describe('foldersController deletion settlement', () => {
     createFolderMock.mockReset();
     renameFolderMock.mockReset();
     sortFolderItemsMock.mockReset();
+    clearNotifications();
     store.set(activeNodeIdAtom, 'system:active');
     store.set(pendingSidebarRevealNodeIdAtom, null);
   });
@@ -73,6 +75,20 @@ describe('foldersController deletion settlement', () => {
 
     expect(createFolderMock).toHaveBeenCalledWith({ name: 'Child', parent_id: 7 });
     expect(store.get(pendingSidebarRevealNodeIdAtom)).toBe('folder:42');
+  });
+
+  it('warns when creating a folder would exceed the hierarchy limit', async () => {
+    createFolderMock.mockRejectedValue(
+      new Error('invalid input: folders may be nested at most 8 levels deep'),
+    );
+
+    await expect(foldersController.create('Too deep', 8)).rejects.toThrow('at most 8');
+
+    expect(getCurrentNotification()).toMatchObject({
+      tone: 'warning',
+      title: 'Folder depth limit',
+      message: expect.stringContaining('Choose a higher destination'),
+    });
   });
 
   it('sorts folder contents by the requested field', async () => {

@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
+import { analyzeFolderTree } from '../../platform/folderApi';
+import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
+import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
 
 export interface FolderImportOptions {
   preserveStructure: boolean;
@@ -15,11 +18,13 @@ export function FolderImportModal({
   path,
   onClose,
   onImport,
+  targetFolderId,
 }: {
   open: boolean;
   path: string;
   onClose: () => void;
   onImport: (options: FolderImportOptions) => void;
+  targetFolderId: number | null;
 }) {
   const [options, setOptions] = useState<FolderImportOptions>({
     preserveStructure: true,
@@ -28,6 +33,10 @@ export function FolderImportModal({
     includeFoldersWithoutMedia: false,
     watchSourceFolder: false,
   });
+  const [analysis, setAnalysis] = useState<FolderTreeAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const consolidationMessage = folderConsolidationMessage(analysis);
 
   useEffect(() => {
     if (!open) return;
@@ -39,6 +48,33 @@ export function FolderImportModal({
       watchSourceFolder: false,
     });
   }, [open, path]);
+
+  useEffect(() => {
+    if (!open || !path || !options.preserveStructure) {
+      setAnalysis(null);
+      setAnalysisError(null);
+      return;
+    }
+    let cancelled = false;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    void analyzeFolderTree({
+      path,
+      destination_folder_id: targetFolderId,
+      include_subfolders: options.includeSubfolders,
+      include_source_root: true,
+    }).then((result) => {
+      if (!cancelled) setAnalysis(result);
+    }).catch((reason) => {
+      if (!cancelled) {
+        setAnalysis(null);
+        setAnalysisError(reason instanceof Error ? reason.message : String(reason));
+      }
+    }).finally(() => {
+      if (!cancelled) setAnalyzing(false);
+    });
+    return () => { cancelled = true; };
+  }, [open, options.includeSubfolders, options.preserveStructure, path, targetFolderId]);
 
   const toggle = (key: keyof FolderImportOptions) => {
     setOptions((current) => {
@@ -63,6 +99,7 @@ export function FolderImportModal({
           <button
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onImport(options)}
+            disabled={analyzing || analysisError != null}
             type="button"
             data-modal-primary="true"
           >
@@ -73,6 +110,17 @@ export function FolderImportModal({
     >
       <div className={modalStyles.stack}>
         <p className={modalStyles.helpText}>Import <strong>{folderName}</strong></p>
+        {analyzing && <p className={modalStyles.helpText}>Checking the folder structure...</p>}
+        {consolidationMessage && (
+          <div className={modalStyles.warningBox} role="status">
+            {consolidationMessage}
+          </div>
+        )}
+        {analysisError && (
+          <div className={modalStyles.warningBox} role="alert">
+            Picto could not inspect this folder. Choose it again or check that it is still available.
+          </div>
+        )}
         <div className={modalStyles.rowSpread}>
           <span className={modalStyles.fieldLabel}>Preserve folder structure</span>
           <ToggleSwitch on={options.preserveStructure} onChange={() => toggle('preserveStructure')} />

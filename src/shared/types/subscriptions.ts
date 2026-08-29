@@ -69,6 +69,7 @@ export interface SubscriptionProgressEvent {
   query_name?: string | null;
   posts_traversed: number;
   posts_added: number;
+  posts_skipped: number;
   files_downloaded: number;
   gallery_total_items?: number | null;
   files_skipped: number;
@@ -102,6 +103,7 @@ export interface SubscriptionRunRecord {
   error_message: string | null;
   posts_traversed: number;
   posts_added: number;
+  posts_skipped: number;
   media_added: number;
   files_downloaded: number;
   files_skipped: number;

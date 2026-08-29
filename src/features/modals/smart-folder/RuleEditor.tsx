@@ -31,6 +31,7 @@ export interface RuleEditorProps {
   onRemove: () => void;
   onAdd: () => void;
   canRemove: boolean;
+  canAdd: boolean;
 }
 
 function ColorRuleInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -72,7 +73,7 @@ function ColorRuleInput({ value, onChange }: { value: string; onChange: (value: 
   );
 }
 
-export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleEditorProps) {
+export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd }: RuleEditorProps) {
   const fieldDef = getFieldDef(rule.field);
   const isBetween = rule.op === 'between';
   const [acceptedFormats, setAcceptedFormats] = useState<{ value: string; label: string }[]>([]);
@@ -300,11 +301,12 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
       >
         <span className={styles.conditionGlyph} aria-hidden="true" />
       </button></KbdTooltip>
-      <KbdTooltip label="Add rule"><button
+      <KbdTooltip label={canAdd ? 'Add rule' : 'Maximum 10 rules'}><button
         className={styles.conditionButton}
         onClick={onAdd}
         type="button"
         aria-label="Add rule"
+        disabled={!canAdd}
       >
         <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />
       </button></KbdTooltip>

@@ -171,6 +171,16 @@
   line-height: var(--line-height-sm);
 }
 
+.warningBox {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #e8a33d) 45%, var(--color-border-secondary));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning, #e8a33d) 9%, var(--color-control-surface));
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
 /* ── Layout primitives ── */
 
 .stack { display: flex; flex-direction: column; gap: 16px; }

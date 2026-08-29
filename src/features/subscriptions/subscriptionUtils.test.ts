@@ -97,10 +97,19 @@ describe('subscription state', () => {
       openIssueCount: 0,
     })).toBe('paused');
   });
+
+  it('shows the actual run while future automatic runs are paused', () => {
+    expect(describeSubscriptionState({
+      paused: true,
+      running: true,
+      failedPostCount: 0,
+      openIssueCount: 0,
+    })).toBe('running');
+  });
 });
 
 describe('subscription run target', () => {
-  it('uses one subscription-wide post limit across all active queries', () => {
+  it('sums the per-query post limit across active queries', () => {
     const value = subscription([
       query({ id: 'initial', completed_initial_run: false }),
       query({ id: 'periodic', completed_initial_run: true }),
@@ -108,20 +117,26 @@ describe('subscription run target', () => {
     ]);
     value.posts_per_run = 40;
 
-    expect(getSubscriptionRunTarget(value)).toBe(40);
+    expect(getSubscriptionRunTarget(value)).toBe(80);
   });
 
-  it('uses one hundred source posts for the subscription by default', () => {
+  it('uses one hundred source posts per active query by default', () => {
     expect(getSubscriptionRunTarget(subscription([
       query({ id: 'one' }),
       query({ id: 'two' }),
       query({ id: 'paused', paused: true }),
-    ]))).toBe(100);
+    ]))).toBe(200);
   });
 
   it('does not invent a source-specific limit for account feeds', () => {
     const value = subscription([query({ site_id: 'twitter' })]);
     expect(getSubscriptionRunTarget(value)).toBe(100);
+  });
+
+  it('uses one query budget for a manually selected query run', () => {
+    const value = subscription([query({ id: 'one' }), query({ id: 'two' })]);
+    value.posts_per_run = 40;
+    expect(getSubscriptionRunTarget(value, 'manual-query')).toBe(40);
   });
 });
 

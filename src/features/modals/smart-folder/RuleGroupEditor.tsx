@@ -21,6 +21,7 @@ export interface RuleGroupEditorProps {
   onRemove: () => void;
   onAdd: () => void;
   canRemove: boolean;
+  canAdd: boolean;
 }
 
 const MATCH_MODE_OPTIONS = [
@@ -32,7 +33,7 @@ function makeDefaultRule(): SmartFolderPredicateRule {
   return { field: 'tags', op: defaultOperator('tags'), values: [] };
 }
 
-export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }: RuleGroupEditorProps) {
+export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove, canAdd }: RuleGroupEditorProps) {
   const handleMatchModeChange = useCallback(
     (value: string) => onChange({ ...group, match_mode: value as 'all' | 'any' }),
     [group, onChange],
@@ -53,11 +54,12 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
 
   const handleRuleAdd = useCallback(
     (afterIndex: number) => {
+      if (!canAdd) return;
       const nextRules = [...group.rules];
       nextRules.splice(afterIndex + 1, 0, makeDefaultRule());
       onChange({ ...group, rules: nextRules });
     },
-    [group, onChange],
+    [canAdd, group, onChange],
   );
 
   const handleRuleRemove = useCallback(
@@ -98,6 +100,7 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
               onRemove={() => handleRuleRemove(index)}
               onAdd={() => handleRuleAdd(index)}
               canRemove={group.rules.length > 1}
+              canAdd={canAdd}
             />
           ))}
         </div>
@@ -112,11 +115,12 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
           >
             <span className={styles.conditionGlyph} aria-hidden="true" />
           </button></KbdTooltip>
-          <KbdTooltip label="Add group"><button
+          <KbdTooltip label={canAdd ? 'Add group' : 'Maximum 10 rules'}><button
             className={styles.conditionButton}
             onClick={onAdd}
             type="button"
             aria-label="Add group"
+            disabled={!canAdd}
           >
             <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />
           </button></KbdTooltip>

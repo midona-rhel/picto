@@ -7,6 +7,9 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput } from '../../shared/ui/GlassInput';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
+import { analyzeFolderTree } from '../../platform/folderApi';
+import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
+import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
 
 const STATUS_OPTIONS = [
   { value: 'inherit', label: 'Inherit' },
@@ -27,15 +30,20 @@ export interface FolderWatchModalProps {
   onSave: (config: FolderWatchConfig) => void;
   onRemove?: () => void;
   initial?: Partial<FolderWatchConfig>;
+  folderId: number | null;
 }
 
 export function FolderWatchModal({
-  open, onClose, onSave, onRemove, initial,
+  open, onClose, onSave, onRemove, initial, folderId,
 }: FolderWatchModalProps) {
   const [watchPath, setWatchPath] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [subfolders, setSubfolders] = useState(false);
   const [importStatusMode, setImportStatusMode] = useState('inherit');
+  const [analysis, setAnalysis] = useState<FolderTreeAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const consolidationMessage = folderConsolidationMessage(analysis);
 
   useEffect(() => {
     if (open) {
@@ -43,8 +51,33 @@ export function FolderWatchModal({
       setEnabled(initial?.enabled ?? true);
       setSubfolders(initial?.subfolders ?? false);
       setImportStatusMode(initial?.importStatusMode ?? 'inherit');
+      setAnalysis(null);
+      setAnalysisError(null);
     }
   }, [open, initial]);
+
+  useEffect(() => {
+    if (!open || !watchPath || folderId == null) return;
+    let cancelled = false;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    void analyzeFolderTree({
+      path: watchPath,
+      destination_folder_id: folderId,
+      include_subfolders: subfolders,
+      include_source_root: false,
+    }).then((result) => {
+      if (!cancelled) setAnalysis(result);
+    }).catch((reason) => {
+      if (!cancelled) {
+        setAnalysis(null);
+        setAnalysisError(reason instanceof Error ? reason.message : String(reason));
+      }
+    }).finally(() => {
+      if (!cancelled) setAnalyzing(false);
+    });
+    return () => { cancelled = true; };
+  }, [folderId, open, subfolders, watchPath]);
 
   const browse = useCallback(async () => {
     try {
@@ -75,7 +108,7 @@ export function FolderWatchModal({
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onSave({ watchPath, enabled, subfolders, importStatusMode })}
-            disabled={!watchPath}
+            disabled={!watchPath || analyzing || analysisError != null}
             type="button"
           >
             Save
@@ -101,6 +134,18 @@ export function FolderWatchModal({
           <span className={modalStyles.fieldLabel}>Watch Subfolders</span>
           <ToggleSwitch on={subfolders} onChange={() => setSubfolders(!subfolders)} />
         </div>
+
+        {analyzing && <p className={modalStyles.helpText}>Checking the folder structure...</p>}
+        {consolidationMessage && (
+          <div className={modalStyles.warningBox} role="status">
+            {consolidationMessage}
+          </div>
+        )}
+        {analysisError && (
+          <div className={modalStyles.warningBox} role="alert">
+            Picto could not inspect this folder. Choose it again or check that it is still available.
+          </div>
+        )}
 
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>Import Status</label>

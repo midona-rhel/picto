@@ -57,6 +57,10 @@ export function recordIpcCall(
   // observer its own largest source of noise.
   if (command === 'diagnostics.snapshot') return;
   const failed = error !== undefined;
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  // Cloud status polling starts before the library gate has finished opening a
+  // library. That unavailable state is expected and retried by the caller.
+  if (command === 'cloud.status.get' && failed && /^No library is open\b/i.test(errorMessage)) return;
   // Successful, routine IPC is not actionable support information. Keep slow
   // calls and failures; native mutation audit events cover user-visible work.
   if (!failed && durationMs < 16) return;
@@ -66,7 +70,7 @@ export function recordIpcCall(
     source: 'ipc',
     target: command,
     message: failed
-      ? String(error instanceof Error ? error.message : error)
+      ? errorMessage
       : nativeDurationMs == null
         ? 'Completed'
         : `Round trip ${durationMs.toFixed(1)} ms · delivery/render ${rendererDurationMs!.toFixed(1)} ms`,

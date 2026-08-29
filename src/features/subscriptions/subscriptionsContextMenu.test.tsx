@@ -11,9 +11,13 @@ const subscription = {
   queries: [],
 } as unknown as SubscriptionInfo;
 
-function resetEntry(running: boolean, onReset = vi.fn()): [MenuItem, typeof onReset] {
+function resetEntry(
+  running: boolean,
+  onReset = vi.fn(),
+  target = subscription,
+): [MenuItem, typeof onReset] {
   const entries = buildSubscriptionMenu({
-    subscription,
+    subscription: target,
     running,
     onRun: vi.fn(),
     onStop: vi.fn(),
@@ -45,5 +49,11 @@ describe('subscription context menu', () => {
     const [entry] = resetEntry(true);
 
     expect(entry.disabled).toBe(true);
+  });
+
+  it('keeps reset disabled when a running subscription is paused', () => {
+    const [pausedEntry] = resetEntry(true, vi.fn(), { ...subscription, paused: true });
+
+    expect(pausedEntry.disabled).toBe(true);
   });
 });
