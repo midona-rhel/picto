@@ -216,21 +216,34 @@ export function TagSelectPanel() {
 
   // Display tags — "selected" mode shows entity's tags directly (not from paginated search)
   const displayTags = useMemo(() => {
+    let candidates: CanonicalTagRecord[];
     if (sidebarMode === 'selected') {
-      return [...entityTagKeys].map(tagRecord).sort((a, b) => {
+      candidates = [...entityTagKeys].map(tagRecord).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);
         return a.subname.localeCompare(b.subname);
       });
-    }
-    if (sidebarMode === 'starred') {
-      return tagPreferences.starredTags.map(tagRecord).sort((left, right) => (
+    } else if (sidebarMode === 'starred') {
+      candidates = tagPreferences.starredTags.map(tagRecord).sort((left, right) => (
         formatTag(left).localeCompare(formatTag(right))
       ));
+    } else {
+      candidates = tags;
     }
-    return tags;
-  }, [tags, sidebarMode, entityTagKeys, tagPreferences.starredTags]);
+
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const seen = new Set<string>();
+    return candidates.filter((tag) => {
+      const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
+      if (seen.has(visibleName)) return false;
+      seen.add(visibleName);
+      const searchableName = normalizedQuery.includes(':')
+        ? formatTag(tag).toLocaleLowerCase()
+        : visibleName;
+      return !normalizedQuery || searchableName.includes(normalizedQuery);
+    });
+  }, [tags, sidebarMode, entityTagKeys, query, tagPreferences.starredTags]);
 
   const createTag = useMemo(() => {
     const trimmed = query.trim();
@@ -252,9 +265,9 @@ export function TagSelectPanel() {
   const columnCount = layout === 'grid' ? 2 : 1;
   const navigableTags = createTag ? [createTag, ...displayTags] : displayTags;
   const displayPages = useMemo(() => Array.from(
-    { length: Math.ceil(navigableTags.length / PAGE_SIZE) },
-    (_, index) => navigableTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
-  ), [navigableTags]);
+    { length: Math.ceil(displayTags.length / PAGE_SIZE) },
+    (_, index) => displayTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
+  ), [displayTags]);
 
   // Load more on scroll near bottom
   useEffect(() => {
@@ -484,6 +497,22 @@ export function TagSelectPanel() {
               </div>
             ) : (
               <div className={styles.tagPages}>
+                {createTag ? (
+                  <div
+                    data-tag-index={0}
+                    className={`${styles.tagRow} ${styles.createTagRow} ${focusIdx === 0 ? styles.tagRowFocused : ''}`}
+                    onClick={() => toggleTag(createTag)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                  >
+                    <IconPlus aria-hidden="true" className={styles.createTagIcon} size={10} />
+                    <span className={styles.tagName}>
+                      Create &quot;<strong>{formatTag(createTag)}</strong>&quot;
+                    </span>
+                  </div>
+                ) : null}
                 {displayPages.map((page, pageIndex) => (
                   <div
                     className={styles.tagGrid}
@@ -493,27 +522,21 @@ export function TagSelectPanel() {
                     }}
                   >
                     {page.map((tag, pageItemIndex) => {
-                      const itemIndex = pageIndex * PAGE_SIZE + pageItemIndex;
+                      const itemIndex = (createTag ? 1 : 0) + pageIndex * PAGE_SIZE + pageItemIndex;
                       const fullTag = formatTag(tag);
                       const isExcluded = excluded.has(fullTag);
                       const showChecked = selectedTags.has(fullTag);
                       const isFocused = itemIndex === focusIdx;
-                      const isCreate = tag.tag_id === 0 && createTag != null && fullTag === formatTag(createTag);
                       return (
                         <div
                           key={fullTag}
                           data-tag-index={itemIndex}
-                          className={`${styles.tagRow} ${isCreate ? styles.createTagRow : ''} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
+                          className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
                           style={{
                             '--tag-color': tagGroupColor(tag.namespace, tagPreferences.tagGroupColors),
                           } as React.CSSProperties}
                           onClick={() => toggleTag(tag)}
                           onContextMenu={(event) => {
-                        if (isCreate) {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          return;
-                        }
                         if (onApplyTagFilter) {
                           event.preventDefault();
                           event.stopPropagation();
@@ -544,9 +567,7 @@ export function TagSelectPanel() {
                               {isExcluded ? <IconX size={10} /> : showChecked ? <IconCheck size={10} /> : null}
                             </div>
                           ) : null}
-                          {isCreate ? (
-                            <IconPlus aria-hidden="true" className={styles.createTagIcon} size={10} />
-                          ) : tagPreferences.starredTags.includes(fullTag) ? (
+                          {tagPreferences.starredTags.includes(fullTag) ? (
                             <IconStar aria-hidden="true" className={styles.tagStar} size={10} fill="currentColor" />
                           ) : (
                             <IconBookmark
@@ -559,11 +580,9 @@ export function TagSelectPanel() {
                             />
                           )}
                           <span className={styles.tagName}>
-                            {isCreate ? <>Create &quot;<strong>{fullTag}</strong>&quot;</> : (
-                              query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)
-                            )}
+                            {query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)}
                           </span>
-                          {!isCreate && showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
+                          {showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
                         </div>
                       );
                     })}

@@ -103,6 +103,15 @@ describe('TagSelectPanel assignment', () => {
   it('creates and assigns a missing tag directly from search', async () => {
     const store = createStore();
     const onApplyTags = vi.fn();
+    mocks.getPaginated.mockResolvedValue({
+      tags: [
+        { tag_id: 1, namespace_id: 1, namespace: 'creator', subname: 'alice', active_count: 4, assignment_count: 4 },
+        { tag_id: 3, namespace_id: 2, namespace: 'female', subname: 'alice', active_count: 4, assignment_count: 4 },
+        { tag_id: 2, namespace_id: 1, namespace: 'creator', subname: 'bob', active_count: 2, assignment_count: 2 },
+      ],
+      next_cursor: null,
+      revision: 1,
+    });
     store.set(tagSelectPortalAtom, { open: true, selectedTags: [], onApplyTags });
 
     await act(async () => {
@@ -110,14 +119,17 @@ describe('TagSelectPanel assignment', () => {
       await Promise.resolve();
     });
 
-    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'creator:carol' } });
-    const createLabel = await screen.findByText('creator:carol');
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'creator:a' } });
+    const createLabel = await screen.findByText('creator:a');
     const createRow = createLabel.closest('[data-tag-index]');
-    expect(createRow).toHaveTextContent('Create "creator:carol"');
+    expect(createRow).toHaveTextContent('Create "creator:a"');
     expect(createRow).toHaveClass(styles.createTagRow);
+    expect(createRow?.parentElement?.firstElementChild).toBe(createRow);
+    expect((await screen.findByText('alice')).closest('[data-tag-index]')).toHaveAttribute('data-tag-index', '1');
+    expect(document.querySelectorAll('[data-tag-index]')).toHaveLength(2);
     fireEvent.click(createLabel);
 
-    expect(onApplyTags).toHaveBeenLastCalledWith(['creator:carol']);
+    expect(onApplyTags).toHaveBeenLastCalledWith(['creator:a']);
   });
 
   it('updates filters and matching mode immediately', async () => {
