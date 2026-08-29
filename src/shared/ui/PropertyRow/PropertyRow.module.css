@@ -1,30 +1,35 @@
 .row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  column-gap: 12px;
   align-items: center;
   height: 20px;
   line-height: 20px;
   white-space: nowrap;
+  font-family: var(--inspector-font-family, var(--font-family-ui));
+  font-size: 11px;
+  font-weight: var(--font-weight-regular);
 }
 
 .label {
   color: var(--inspector-text-primary, var(--color-text-primary));
-  font-size: var(--font-size-caption);
-  min-width: 64px;
-  overflow: hidden;
 }
 
 .value {
-  flex: 1;
+  min-width: 0;
   color: var(--inspector-text-primary, var(--color-text-primary));
-  font-size: var(--font-size-caption);
   text-align: right;
   opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--inspector-mono-font-family, var(--font-family-mono));
+  font-style: normal;
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums slashed-zero;
 }
 
 .valueMono {
   composes: value;
-  font-family: var(--font-family-mono);
-  font-variant-numeric: tabular-nums slashed-zero;
 }
 
 .spinner {

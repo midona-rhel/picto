@@ -121,17 +121,31 @@ describe('SidebarRow', () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it('replaces the count with an accessible activity indicator', () => {
+  it('replaces the count with an accessible subscription pause control', () => {
+    const onClick = vi.fn();
     render(
       <SidebarRow
         label="Subscriptions"
         count={12}
-        activityLabel="Subscription running"
+        activity={{ state: 'running', actionLabel: 'Pause all subscriptions', onClick }}
         onClick={vi.fn()}
       />,
     );
 
-    expect(screen.getByLabelText('Subscription running')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause all subscriptions' }));
+    expect(onClick).toHaveBeenCalledOnce();
     expect(screen.queryByText('12')).not.toBeInTheDocument();
+  });
+
+  it('keeps the global paused state visible and exposes resume', () => {
+    render(
+      <SidebarRow
+        label="Subscriptions"
+        activity={{ state: 'paused', actionLabel: 'Resume all subscriptions', onClick: vi.fn() }}
+        onClick={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Resume all subscriptions' })).toBeInTheDocument();
   });
 });

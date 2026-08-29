@@ -3,7 +3,7 @@
   border-top: 1px solid var(--inspector-separator, var(--color-border-secondary));
   padding-top: 10px;
   margin-top: 10px;
-  font-size: var(--font-size-sm);
+  font-size: 12px;
 }
 
 .header {
@@ -13,6 +13,9 @@
   cursor: pointer;
   user-select: none;
   color: var(--inspector-text-tertiary, var(--color-text-tertiary));
+  font-family: var(--inspector-font-family, var(--font-family-ui));
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
 }
 
 .header:hover {
@@ -20,14 +23,14 @@
 }
 
 .title {
-  font-family: var(--inspector-font-family, var(--font-family-ui));
-  font-weight: var(--font-weight-bold);
-  font-size: var(--font-size-sm);
+  font: inherit;
 }
 
 .count {
-  font-family: var(--font-family-mono);
   margin-left: 2px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
 }
 
 .chevron {
@@ -48,12 +51,12 @@
   transform: rotate(90deg);
 }
 
-.section:hover .chevron {
+.section:hover .chevron:not(.chevronExpanded) {
   opacity: 0.5;
 }
 
-.header:hover .chevron {
-  opacity: 1 !important;
+.header:hover .chevron:not(.chevronExpanded) {
+  opacity: 0.55;
 }
 
 .content {

@@ -12,6 +12,27 @@
   src: url('../assets/fonts/Geist-Variable.woff2') format('woff2-variations');
 }
 
+/* The inspector's compact property values use the same upright data face as
+ * the reference UI. Keep it local and offline; it is not the application UI
+ * fallback. Fira Mono is distributed under the bundled OFL license. */
+@font-face {
+  font-family: 'Fira Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/FiraMono-Regular.woff2') format('woff2');
+}
+
+/* The reference inspector resolves to Roboto's compact metrics. Give that
+ * surface its own family name so the rest of Picto remains SF Pro/Geist. */
+@font-face {
+  font-family: 'Picto Inspector Roboto';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/Roboto-Variable.woff2') format('woff2');
+}
+
 :root {
   /* One base surface and one contrast family. */
   --theme-background: #18191c;

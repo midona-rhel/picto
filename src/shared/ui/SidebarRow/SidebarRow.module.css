@@ -97,7 +97,6 @@
 .rowInteractive:focus-visible::before {
   background: var(--sidebar-list-highlight-hover-bg);
   opacity: 1;
-  box-shadow: inset 0 0 0 1px var(--color-border-focus);
 }
 
 /* Drag reorder drop indicators */
@@ -187,7 +186,7 @@
   font-size: var(--font-size-caption);
   color: var(--sidebar-count-color, var(--color-text-tertiary));
   font-variant-numeric: tabular-nums slashed-zero;
-  font-family: var(--font-family-mono);
+  font-family: var(--sidebar-mono-font-family, var(--font-family-mono));
   padding: 0 5px;
   text-align: right;
   line-height: var(--sidebar-row-height);
@@ -203,9 +202,35 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
-  min-width: 36px;
+  min-width: 22px;
   height: var(--sidebar-row-height);
-  padding: 0 7px;
+  margin-left: auto;
+}
+
+.activityButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--color-primary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.activityButton:hover,
+.activityButton:focus-visible {
+  background: var(--color-primary-30);
+  outline: none;
+}
+
+.activityButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .activityDot {
@@ -215,6 +240,35 @@
   background: var(--color-primary);
   box-shadow: 0 0 3px var(--color-primary-30);
   animation: subscriptionActivityPulse 2.4s ease-in-out infinite;
+}
+
+.activityPauseIcon,
+.activityPlayIcon {
+  position: absolute;
+  opacity: 0;
+}
+
+.activityButton:hover .activityDot,
+.activityButton:focus-visible .activityDot,
+.activityPaused .activityDot {
+  opacity: 0;
+  animation: none;
+}
+
+.activityButton:hover .activityPauseIcon,
+.activityButton:focus-visible .activityPauseIcon,
+.activityPaused .activityPauseIcon {
+  opacity: 1;
+}
+
+.activityPaused:hover .activityPauseIcon,
+.activityPaused:focus-visible .activityPauseIcon {
+  opacity: 0;
+}
+
+.activityPaused:hover .activityPlayIcon,
+.activityPaused:focus-visible .activityPlayIcon {
+  opacity: 1;
 }
 
 @keyframes subscriptionActivityPulse {

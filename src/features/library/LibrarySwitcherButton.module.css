@@ -13,7 +13,7 @@
   color: var(--sidebar-text-primary, var(--color-text-primary));
   cursor: pointer;
   text-align: left;
-  font-family: var(--font-family-ui);
+  font-family: var(--sidebar-font-family, var(--font-family-ui));
 }
 
 .highlight {

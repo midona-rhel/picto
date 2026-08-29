@@ -22,7 +22,7 @@ export function InspectorSection({ title, count, collapsed: controlledCollapsed,
         <span className={styles.title}>{title}</span>
         {count != null && <span className={styles.count}> ({count})</span>}
         <span className={`${styles.chevron} ${collapsed ? '' : styles.chevronExpanded}`}>
-          <IconChevronRight size={14} />
+          <IconChevronRight size={14} stroke={1.75} />
         </span>
       </div>
       {!collapsed && <div className={styles.content}>{children}</div>}

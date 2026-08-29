@@ -60,18 +60,20 @@ describe('theme surface ownership', () => {
     expect(tokens).toContain("--font-family-ui: 'Geist', system-ui");
     expect(tokens).toContain('--mantine-font-family: var(--font-family-ui);');
     expect(overlay).toContain('.checkBoxChecked {\n  background: var(--color-text-primary);');
-    expect(tags).toContain('.tagRowSelected {\n  background: var(--color-surface-active);');
-    expect(tags).not.toContain('var(--color-selection-bg)');
+    expect(tags).toContain('.tagRowSelected {\n  background: var(--color-selection-bg);');
     expect(tags).not.toContain('--tag-text-dark');
     expect(tagPanel).not.toContain('tagGroupTextColor');
     expect(tagPanel).toContain('fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}');
-    expect(folders).toContain('.rowSelected {\n  background: var(--color-surface-active);');
+    expect(folders).toContain('.checkSelected {\n  background: var(--color-primary);');
   });
 
   it('uses the canonical typography roles for application chrome', () => {
     const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
     const modal = readFileSync(resolve(process.cwd(), 'src/shared/ui/GlassModal/GlassModal.module.css'), 'utf8');
     const sidebarRows = readFileSync(resolve(process.cwd(), 'src/shared/ui/SidebarRow/SidebarRow.module.css'), 'utf8');
+    const sidebar = readFileSync(resolve(process.cwd(), 'src/features/sidebar/Sidebar.module.css'), 'utf8');
+    const librarySwitcher = readFileSync(resolve(process.cwd(), 'src/features/library/LibrarySwitcherButton.module.css'), 'utf8');
+    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
     const tooltip = readFileSync(resolve(process.cwd(), 'src/shared/ui/KbdTooltip/KbdTooltip.module.css'), 'utf8');
 
     expect(tokens).toContain('--font-size-caption: 11px;');
@@ -85,6 +87,13 @@ describe('theme surface ownership', () => {
     expect(modal).toContain('.title {\n  flex: 1;\n  font-size: var(--font-size-lg);\n  font-weight: var(--font-weight-bold);');
     expect(modal).toContain('.fieldLabel {\n  font-size: var(--font-size-md);');
     expect(sidebarRows).toContain('font-size: var(--font-size-md);');
+    expect(appShell).toContain("--sidebar-font-family: 'Picto Inspector Roboto', var(--font-family-ui);");
+    expect(appShell).toContain("--sidebar-mono-font-family: 'Fira Mono', var(--font-family-mono);");
+    expect(sidebar).toContain('font-family: var(--sidebar-font-family, var(--font-family-ui));');
+    expect(sidebar).toContain('var(--sidebar-font-family, var(--font-family-ui))');
+    expect(librarySwitcher).toContain('font-family: var(--sidebar-font-family, var(--font-family-ui));');
+    expect(sidebarRows).toContain('font-family: var(--sidebar-mono-font-family, var(--font-family-mono));');
+    expect(sidebarRows).not.toContain('box-shadow: inset 0 0 0 1px var(--color-border-focus);');
     expect(tooltip).toContain('font-size: var(--font-size-md);');
     expect(tooltip).toContain('font-size: var(--font-size-xs);');
   });
@@ -108,6 +117,7 @@ describe('theme surface ownership', () => {
 
   it('keeps feature surfaces on the shared Picto role hierarchy', () => {
     const select = readFileSync(resolve(process.cwd(), 'src/shared/ui/CmSelect/CmSelect.module.css'), 'utf8');
+    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
     const inspectorSection = readFileSync(resolve(process.cwd(), 'src/shared/ui/InspectorSection/InspectorSection.module.css'), 'utf8');
     const propertyRow = readFileSync(resolve(process.cwd(), 'src/shared/ui/PropertyRow/PropertyRow.module.css'), 'utf8');
     const toolbar = readFileSync(resolve(process.cwd(), 'src/features/grid/GridToolbar.module.css'), 'utf8');
@@ -117,14 +127,46 @@ describe('theme surface ownership', () => {
     const tagManager = readFileSync(resolve(process.cwd(), 'src/features/tags/TagManagerScreen.module.css'), 'utf8');
 
     expect(select.match(/font-size: var\(--font-size-md\);/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(inspectorSection).toContain('font-size: var(--font-size-sm);');
+    expect(inspectorSection).toContain('font-size: 12px;');
     expect(inspectorSection).toContain('font-weight: var(--font-weight-bold);');
-    expect(propertyRow.match(/font-size: var\(--font-size-caption\);/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(inspectorSection).toContain('color: var(--inspector-text-tertiary, var(--color-text-tertiary));');
+    expect(inspectorSection).toContain('.chevronExpanded {\n  opacity: 0;');
+    expect(inspectorSection).toContain('.header:hover .chevron:not(.chevronExpanded) {\n  opacity: 0.55;');
+    expect(propertyRow).toContain('font-size: 11px;');
+    expect(propertyRow).toContain('grid-template-columns: 88px minmax(0, 1fr);');
+    expect(propertyRow).toContain('column-gap: 12px;');
+    expect(propertyRow).toContain('text-align: right;');
+    expect(propertyRow.match(/color: var\(--inspector-text-primary, var\(--color-text-primary\)\);/g)).toHaveLength(2);
+    expect(propertyRow).toContain('font-family: var(--inspector-mono-font-family, var(--font-family-mono));');
+    expect(propertyRow).toContain('opacity: 0.8;');
+    expect(tokens).toContain("font-family: 'Fira Mono';");
+    expect(tokens).toContain("url('../assets/fonts/FiraMono-Regular.woff2')");
+    expect(tokens).toContain("font-family: 'Picto Inspector Roboto';");
+    expect(tokens).toContain("url('../assets/fonts/Roboto-Variable.woff2')");
     expect(toolbar).toContain('font-size: var(--font-size-md);');
     expect(appShell).toContain('font-weight: var(--font-weight-regular);');
+    expect(appShell).toContain("--inspector-font-family: 'Picto Inspector Roboto', var(--font-family-ui);");
+    expect(appShell).toContain("--inspector-mono-font-family: 'Fira Mono', var(--font-family-mono);");
     expect(subscriptions).toContain('font-size: var(--font-size-caption);');
     expect(subscriptions).toContain('font-size: var(--font-size-md);');
     expect(duplicates).toContain('font-size: var(--font-size-md);');
     expect(tagManager).toContain('font: var(--font-size-md)/26px var(--font-family-ui);');
+  });
+
+  it('gives the settings window the same directional macOS rim as the main window', () => {
+    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
+    const settings = readFileSync(resolve(process.cwd(), 'src/features/settings/Settings.module.css'), 'utf8');
+
+    for (const declaration of [
+      'border-top: var(--glass-border-top);',
+      'border-right: var(--glass-border-side);',
+      'border-bottom: var(--glass-border-bottom);',
+      'border-left: var(--glass-border-side);',
+      'border-radius: 10px;',
+    ]) {
+      expect(appShell).toContain(declaration);
+      expect(settings).toContain(declaration);
+    }
+    expect(settings).toContain(":global(html[data-platform='mac']) .root::after");
   });
 });

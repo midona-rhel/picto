@@ -163,6 +163,8 @@
 }
 
 .sidebar {
+  --sidebar-font-family: 'Picto Inspector Roboto', var(--font-family-ui);
+  --sidebar-mono-font-family: 'Fira Mono', var(--font-family-mono);
   position: absolute;
   z-index: var(--layer-sidebar-row);
   top: 0;
@@ -174,6 +176,7 @@
   border-right: 1px solid var(--color-border-secondary);
   transform: translateX(0);
   transition: transform var(--duration-fast) var(--ease-default);
+  font-family: var(--sidebar-font-family);
 }
 
 .sidebar[data-collapsed] {
@@ -199,7 +202,8 @@
   --inspector-separator: var(--color-border-secondary);
   --inspector-field-surface: var(--color-control-surface);
   --inspector-field-focus: var(--color-primary);
-  --inspector-font-family: var(--font-family-ui);
+  --inspector-font-family: 'Picto Inspector Roboto', var(--font-family-ui);
+  --inspector-mono-font-family: 'Fira Mono', var(--font-family-mono);
   position: absolute;
   top: 0;
   right: 0;

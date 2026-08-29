@@ -65,6 +65,25 @@ Picto bundles the Geist Sans variable webfont for Windows and Linux. The publish
 included at `src/shared/assets/fonts/LICENSE-Geist.txt` and copied into release notices.
 
 
+Fira Mono
+---------
+License: SIL Open Font License 1.1
+Source: https://github.com/mozilla/Fira
+
+Picto bundles Fira Mono for compact inspector property values. The published license is included
+at `src/shared/assets/fonts/LICENSE-FiraMono.txt` and copied into release notices.
+
+
+Roboto
+------
+License: SIL Open Font License 1.1
+Source: https://github.com/google/fonts/tree/main/ofl/roboto
+
+Picto bundles Roboto under an inspector-only family name to reproduce the compact reference
+metrics without changing the application's SF Pro/Geist UI stack. The published license is
+included at `src/shared/assets/fonts/LICENSE-Roboto.txt` and copied into release notices.
+
+
 Generated dependency notices
 ----------------------------
 `npm run generate:license-notices` derives notices from `package-lock.json`, locked Cargo metadata,

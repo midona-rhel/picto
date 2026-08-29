@@ -8,7 +8,7 @@
 
 import type { MouseEvent, ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
-import { IconChevronRight, IconPlus } from '@tabler/icons-react';
+import { IconChevronRight, IconPlayerPause, IconPlayerPlay, IconPlus } from '@tabler/icons-react';
 import { KbdTooltip } from '../KbdTooltip';
 import { showTreeGuidesAtom } from '../../../state/navigation';
 import styles from './SidebarRow.module.css';
@@ -95,7 +95,12 @@ interface RowProps {
   icon?: ReactNode;
   label?: string;
   count?: number | null;
-  activityLabel?: string;
+  activity?: {
+    state: 'running' | 'paused';
+    actionLabel: string;
+    busy?: boolean;
+    onClick: () => void;
+  };
   active?: boolean;
   selected?: boolean;
   dropTarget?: boolean;
@@ -129,7 +134,7 @@ function StandardRow({
   icon,
   label,
   count,
-  activityLabel,
+  activity,
   active,
   selected,
   dropTarget,
@@ -166,7 +171,7 @@ function StandardRow({
 
   const showGuides = useAtomValue(showTreeGuidesAtom);
   const hasVisibleCount = count != null && count > 0;
-  const hasTrailingStatus = hasVisibleCount || activityLabel != null;
+  const hasTrailingStatus = hasVisibleCount || activity != null;
 
   const rowIndent = indent * INDENT_PX;
   const rowStyle = {
@@ -263,9 +268,23 @@ function StandardRow({
       <div className={`${styles.rowContent} ${hasTrailingStatus ? styles.rowContentWithCount : ''}`}>
         {icon && <span className={styles.icon}>{icon}</span>}
         {children ?? (label != null && <span className={styles.label}>{label}</span>)}
-        {activityLabel ? (
-          <span className={styles.activitySlot} aria-label={activityLabel}>
-            <span className={styles.activityDot} aria-hidden="true" />
+        {activity ? (
+          <span className={styles.activitySlot}>
+            <button
+              type="button"
+              className={`${styles.activityButton} ${activity.state === 'paused' ? styles.activityPaused : ''}`}
+              aria-label={activity.actionLabel}
+              title={activity.actionLabel}
+              disabled={activity.busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                activity.onClick();
+              }}
+            >
+              <span className={styles.activityDot} aria-hidden="true" />
+              <IconPlayerPause className={styles.activityPauseIcon} size={14} stroke={1.8} aria-hidden="true" />
+              <IconPlayerPlay className={styles.activityPlayIcon} size={14} stroke={1.8} aria-hidden="true" />
+            </button>
           </span>
         ) : hasVisibleCount && (
           <span className={styles.count}>
