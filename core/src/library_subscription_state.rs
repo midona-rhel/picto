@@ -204,7 +204,33 @@ pub fn claim_next_query(
                     settle_run(transaction, candidate.run_id, now)?;
                     return Ok(Some(None));
                 }
-                candidate.run_post_limit = Some(remaining);
+                // Downloads settle ahead of canonical ingestion. A post that is
+                // downloaded but not yet ingested is invisible to the accepted
+                // count above, so an unreserved claim would hand out a window
+                // that overruns the added-post budget once ingestion catches
+                // up. Reserve those in-flight posts; when they fill the whole
+                // remaining budget, wait for ingestion instead of claiming or
+                // prematurely settling (a skip releases its reservation on the
+                // next tick).
+                let in_flight_posts: u32 = transaction
+                    .query_row(
+                        "SELECT COUNT(DISTINCT item.source_post_id)
+                         FROM subscription_run_source_item linked
+                         JOIN source_item item USING(source_item_id)
+                         JOIN source_post post ON post.source_post_id = item.source_post_id
+                         WHERE linked.run_query_id = ?1
+                           AND item.state IN ('pending', 'downloaded')
+                           AND post.root_item_id IS NULL",
+                        [candidate.run_query_id],
+                        |row| row.get::<_, i64>(0),
+                    )?
+                    .try_into()
+                    .unwrap_or(u32::MAX);
+                let claimable = remaining.saturating_sub(in_flight_posts);
+                if claimable == 0 {
+                    return Ok(None);
+                }
+                candidate.run_post_limit = Some(claimable);
                 if transaction.execute(
                     "UPDATE subscription_run_query
                      SET status = 'running', started_at = ?1, attempt_count = attempt_count + 1,
@@ -1128,5 +1154,118 @@ mod tests {
             })
             .unwrap();
         assert_eq!(statuses, ["succeeded", "running"]);
+    }
+
+    #[test]
+    fn downloaded_but_not_ingested_posts_reserve_the_added_post_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Reservation".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(2),
+            periodic_post_limit: Some(2),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let mut schedule = DomainSchedule::new();
+        let first = claim_next_query(&application, &mut schedule, "2026-08-29T00:00:01Z")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.source_post_batch_size(), 2);
+
+        // The window downloads two posts, but neither has been canonically
+        // ingested yet: no roots exist, items sit in `downloaded`.
+        for post in ["post-1", "post-2"] {
+            let ids = record_post(
+                &application,
+                first.run_query_id,
+                &NormalizedPost {
+                    site_id: first.site_id.clone(),
+                    post_key: post.into(),
+                    canonical_url: None,
+                    creator_name: None,
+                    title: None,
+                    description: None,
+                    captured_at: None,
+                    metadata_json: None,
+                    items: vec![NormalizedItem {
+                        item_key: format!("{post}:media"),
+                        position: 0,
+                        media_url: None,
+                        canonical_url: None,
+                    }],
+                },
+                "2026-08-29T00:00:02Z",
+            )
+            .unwrap();
+            mark_source_items_downloaded(
+                &application,
+                &[ids[&format!("{post}:media")]],
+                "2026-08-29T00:00:03Z",
+            )
+            .unwrap();
+        }
+        complete_query(&application, &first, None, "2026-08-29T00:00:04Z").unwrap();
+
+        // Both in-flight posts cover the whole budget: nothing is claimable
+        // and the query must NOT settle as succeeded while ingestion is
+        // pending — the claim waits.
+        let mut waiting_schedule = DomainSchedule::new();
+        assert!(claim_next_query(&application, &mut waiting_schedule, "2026-08-29T00:00:05Z")
+            .unwrap()
+            .is_none());
+        let status: String = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT status FROM subscription_run_query WHERE run_query_id = ?1",
+                        [first.run_query_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(status, "pending", "reserved budget must not settle the query");
+
+        // One post skips (its item resolves without a root): the reservation
+        // is released and exactly one slot becomes claimable again.
+        application
+            .library()
+            .auxiliary_write(
+                WorkPriority::CanonicalIngest,
+                ["subscriptions".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested'
+                         WHERE item_key = 'post-1:media'",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let mut retry_schedule = DomainSchedule::new();
+        let second = claim_next_query(&application, &mut retry_schedule, "2026-08-29T00:00:06Z")
+            .unwrap()
+            .expect("a released reservation makes budget claimable again");
+        assert_eq!(
+            second.source_post_batch_size(),
+            1,
+            "the still-in-flight post keeps its slot reserved"
+        );
     }
 }
