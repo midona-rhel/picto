@@ -185,6 +185,9 @@ export function SubscriptionsScreen() {
 
   const busy = busyKey != null;
   const galleryJobs = snapshot?.subscriptions.filter(isGalleryImportJob) ?? [];
+  const galleryImportRunning = galleryJobs.some(
+    (job) => snapshot?.runningSubscriptionIds.includes(job.id) || progressBySubscriptionId.has(job.id),
+  );
   const visibleSubscriptions = snapshot?.subscriptions.filter(
     (subscription) => !isGalleryImportJob(subscription),
   ) ?? [];
@@ -332,6 +335,7 @@ export function SubscriptionsScreen() {
             runningSubscriptionIds={snapshot.runningSubscriptionIds}
             onSelect={navigateTo}
             onAdd={() => setWizard({ open: true })}
+            galleryImportRunning={galleryImportRunning}
             onAddGallery={() => setGalleryDialogOpen(true)}
             onOpenAccounts={() => setAccountsModal({ open: true, focusSiteId: null })}
             onSubscriptionMenu={(position, id) => {
@@ -375,7 +379,7 @@ export function SubscriptionsScreen() {
 
       <AddGalleryDialog
         open={galleryDialogOpen}
-        busy={busy}
+        busy={busy || galleryImportRunning}
         onAdd={(result) => void addGallery(result)}
         onClose={() => setGalleryDialogOpen(false)}
       />

@@ -573,6 +573,35 @@ pub async fn dispatch_library_async(
                 .split('/')
                 .nth(4)
                 .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
+            let gallery_import_running = application
+                .library()
+                .auxiliary_read(
+                    picto_library::database::WorkPriority::VisibleRead,
+                    |connection| {
+                        connection
+                            .query_row(
+                                "SELECT EXISTS (
+                                     SELECT 1
+                                     FROM subscription_run run
+                                     JOIN subscription_query query
+                                       ON query.subscription_id = run.subscription_id
+                                     WHERE run.status IN ('pending', 'running')
+                                       AND query.site_id = 'ehentai'
+                                       AND query.display_name = 'Gallery import'
+                                 )",
+                                [],
+                                |row| row.get::<_, bool>(0),
+                            )
+                            .map_err(Into::into)
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            if gallery_import_running {
+                return Err(
+                    "A gallery download is already running. Wait for it to finish before adding another."
+                        .into(),
+                );
+            }
             let definition = NewSubscription {
                 name: format!(
                     "{} Gallery {gallery_id}",

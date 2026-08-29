@@ -118,6 +118,7 @@ export function SubscriptionsGrid({
   runningSubscriptionIds,
   onSelect,
   onAdd,
+  galleryImportRunning,
   onAddGallery,
   onOpenAccounts,
   onSubscriptionMenu,
@@ -131,6 +132,8 @@ export function SubscriptionsGrid({
   runningSubscriptionIds: string[];
   onSelect: (selection: SubscriptionsSelection) => void;
   onAdd: () => void;
+  /** Only one gallery download runs at a time — the button locks while one is active. */
+  galleryImportRunning: boolean;
   onAddGallery: () => void;
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
@@ -261,7 +264,7 @@ export function SubscriptionsGrid({
           <ActionButton variant="primary" onClick={onAdd}>
             <IconPlus size={14} /> Add
           </ActionButton>
-          <ActionButton variant="secondary" onClick={onAddGallery}>
+          <ActionButton variant="secondary" disabled={galleryImportRunning} onClick={onAddGallery}>
             <IconLibraryPlus size={14} /> Add Gallery
           </ActionButton>
           <ActionButton variant="ghost" onClick={onOpenAccounts}>
