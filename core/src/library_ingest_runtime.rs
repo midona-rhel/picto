@@ -2,7 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use picto_library::{
-    ClaimedIngestJob, LibraryError, PreparedImport, PreparedIngestPayload, RootId,
+    ClaimedIngestJob, LibraryError, PreparedCollectionImport, PreparedImport,
+    PreparedIngestPayload, RootId,
 };
 
 use crate::library_application::LibraryApplication;
@@ -49,16 +50,30 @@ pub fn run_batch(
         .get("aiTaggerAutoOnImport")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let mut items = Vec::new();
-    let mut collections = Vec::new();
     for mut job in claimed {
         match prepare_job(application, &mut job) {
             Ok(cleanup) => match job.payload {
                 PreparedIngestPayload::Item(input) => {
-                    items.push((job.ingest_job_id, input, cleanup))
+                    settle_item(
+                        application,
+                        job.ingest_job_id,
+                        input,
+                        cleanup,
+                        &now,
+                        auto_tag,
+                        &mut report,
+                    )?;
                 }
                 PreparedIngestPayload::Collection(input) => {
-                    collections.push((job.ingest_job_id, input, cleanup));
+                    settle_collection(
+                        application,
+                        job.ingest_job_id,
+                        input,
+                        cleanup,
+                        &now,
+                        auto_tag,
+                        &mut report,
+                    )?;
                 }
             },
             Err(error) => {
@@ -71,106 +86,44 @@ pub fn run_batch(
             }
         }
     }
-
-    settle_items(application, items, &now, auto_tag, &mut report)?;
-    for (job_id, input, cleanup) in collections {
-        let ingested = if auto_tag {
-            application
-                .library()
-                .ingest_collection_with_auto_tags(&input)
-        } else {
-            application.library().ingest_collection(&input)
-        };
-        match ingested {
-            Ok((root_id, _)) => {
-                reconcile_ingested_sources(application, &input.members, root_id, &now)?;
-                application
-                    .library()
-                    .complete_ingest_jobs(&[job_id], &now)
-                    .map_err(|error| error.to_string())?;
-                report.ingested += 1;
-                report.root_ids.push(root_id);
-                report.cleanup_failures += cleanup_sources(cleanup);
-            }
-            Err(error) => {
-                if matches!(error, LibraryError::ImportDeleted) {
-                    settle_deleted_import(application, job_id, &input.members, &now)?;
-                    report.skipped += 1;
-                    report.cleanup_failures += cleanup_sources(cleanup);
-                } else {
-                    application
-                        .library()
-                        .fail_ingest_job(job_id, &error.to_string(), &now)
-                        .map_err(|failure| failure.to_string())?;
-                    mark_failed_sources(application, &input.members, &error.to_string(), &now)?;
-                    report.failed += 1;
-                }
-            }
-        }
-    }
     crate::library_subscription_state::settle_ingest_runs(application, &now)?;
     Ok(report)
 }
 
-fn settle_items(
+fn settle_item(
     application: &LibraryApplication,
-    jobs: Vec<(i64, PreparedImport, Vec<PathBuf>)>,
+    job_id: i64,
+    input: PreparedImport,
+    cleanup: Vec<PathBuf>,
     now: &str,
     auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
-    if jobs.is_empty() {
-        return Ok(());
-    }
-    let inputs = jobs
-        .iter()
-        .map(|(_, input, _)| input.clone())
-        .collect::<Vec<_>>();
     let ingested = if auto_tag {
-        application.library().ingest_batch_with_auto_tags(&inputs)
+        application
+            .library()
+            .ingest_batch_with_auto_tags(std::slice::from_ref(&input))
+            .map(|mut values| values.remove(0))
     } else {
-        application.library().ingest_batch(&inputs)
+        application.library().ingest(&input)
     };
     match ingested {
-        Ok(outputs) => {
-            for (input, (root_id, _)) in inputs.iter().zip(&outputs) {
-                reconcile_ingested_sources(
-                    application,
-                    std::slice::from_ref(input),
-                    *root_id,
-                    now,
-                )?;
-            }
-            let job_ids = jobs
-                .iter()
-                .map(|(job_id, _, _)| *job_id)
-                .collect::<Vec<_>>();
+        Ok((root_id, _)) => {
+            reconcile_ingested_sources(application, std::slice::from_ref(&input), root_id, now)?;
             application
                 .library()
-                .complete_ingest_jobs(&job_ids, now)
+                .complete_ingest_jobs(&[job_id], now)
                 .map_err(|error| error.to_string())?;
-            report.ingested += outputs.len();
-            report
-                .root_ids
-                .extend(outputs.into_iter().map(|(root_id, _)| root_id));
-            report.cleanup_failures += jobs
-                .into_iter()
-                .map(|(_, _, cleanup)| cleanup_sources(cleanup))
-                .sum::<usize>();
-            Ok(())
-        }
-        Err(_) if jobs.len() > 1 => {
-            for job in jobs {
-                settle_items(application, vec![job], now, auto_tag, report)?;
-            }
+            report.ingested += 1;
+            report.root_ids.push(root_id);
+            report.cleanup_failures += cleanup_sources(cleanup);
             Ok(())
         }
         Err(error) => {
-            let job_id = jobs[0].0;
             if matches!(error, LibraryError::ImportDeleted) {
-                settle_deleted_import(application, job_id, std::slice::from_ref(&jobs[0].1), now)?;
+                settle_deleted_import(application, job_id, std::slice::from_ref(&input), now)?;
                 report.skipped += 1;
-                report.cleanup_failures += cleanup_sources(jobs[0].2.clone());
+                report.cleanup_failures += cleanup_sources(cleanup);
             } else {
                 application
                     .library()
@@ -178,7 +131,7 @@ fn settle_items(
                     .map_err(|failure| failure.to_string())?;
                 mark_failed_sources(
                     application,
-                    std::slice::from_ref(&jobs[0].1),
+                    std::slice::from_ref(&input),
                     &error.to_string(),
                     now,
                 )?;
@@ -187,6 +140,51 @@ fn settle_items(
             Ok(())
         }
     }
+}
+
+fn settle_collection(
+    application: &LibraryApplication,
+    job_id: i64,
+    input: PreparedCollectionImport,
+    cleanup: Vec<PathBuf>,
+    now: &str,
+    auto_tag: bool,
+    report: &mut CanonicalIngestRunReport,
+) -> Result<(), String> {
+    let ingested = if auto_tag {
+        application
+            .library()
+            .ingest_collection_with_auto_tags(&input)
+    } else {
+        application.library().ingest_collection(&input)
+    };
+    match ingested {
+        Ok((root_id, _)) => {
+            reconcile_ingested_sources(application, &input.members, root_id, now)?;
+            application
+                .library()
+                .complete_ingest_jobs(&[job_id], now)
+                .map_err(|error| error.to_string())?;
+            report.ingested += 1;
+            report.root_ids.push(root_id);
+            report.cleanup_failures += cleanup_sources(cleanup);
+        }
+        Err(error) => {
+            if matches!(error, LibraryError::ImportDeleted) {
+                settle_deleted_import(application, job_id, &input.members, now)?;
+                report.skipped += 1;
+                report.cleanup_failures += cleanup_sources(cleanup);
+            } else {
+                application
+                    .library()
+                    .fail_ingest_job(job_id, &error.to_string(), now)
+                    .map_err(|failure| failure.to_string())?;
+                mark_failed_sources(application, &input.members, &error.to_string(), now)?;
+                report.failed += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn settle_deleted_import(
@@ -548,6 +546,54 @@ mod tests {
             )
             .unwrap();
         assert_eq!(work, 3);
+    }
+
+    #[test]
+    fn standalone_jobs_settle_as_individual_publications() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        for (index, color) in [[10, 20, 30, 255], [40, 50, 60, 255], [70, 80, 90, 255]]
+            .into_iter()
+            .enumerate()
+        {
+            let path = directory.path().join(format!("source-{index}.png"));
+            let input = image_import(&path, &format!("runtime-root-{index}"), color);
+            application
+                .library()
+                .enqueue_ingest_job(
+                    &PreparedIngestJob {
+                        job_key: format!("manual:runtime-root-{index}"),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(input),
+                    },
+                    "2026-08-28T12:00:00Z",
+                )
+                .unwrap();
+        }
+
+        let report = run_batch(&application, 64).unwrap();
+        assert_eq!(report.claimed, 3);
+        assert_eq!(report.ingested, 3);
+        let journal = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT COUNT(*), COUNT(DISTINCT revision)
+                             FROM cloud_journal WHERE operation_kind = 'root.ingest'",
+                            [],
+                            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(journal, (3, 3));
     }
 
     #[test]
