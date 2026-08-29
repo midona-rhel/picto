@@ -931,9 +931,9 @@ mod weak_name_tests {
             "twitter_2085395535410712592",
             "ehentai_8df0b5400a",
             "idolcomplex_1084425",
-            // OnlyFans file stems like "0ig3r76odf_source" never become names:
-            // its bridge always emits a title. The hash-shaped stems below can.
-            "3840x5766_d491bd8d7f1b2feda50ced84657785a6",
+            // OnlyFans file stems ("0ig3r76odf_source", "3840x5766_<hex>")
+            // never become names: its bridge always emits a title. The plain
+            // hex stems gallery-dl can emit are covered in the test above.
             "f1nn5ter - 2026-08-24",
         ] {
             assert!(is_weak_name(generated), "{generated} should be weak");
