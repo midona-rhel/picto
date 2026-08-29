@@ -27,6 +27,8 @@ import {
   inspectorCollapsedAtom, toggleInspectorAtom, toggleBothPanelsAtom,
   inspectorWidthAtom, setInspectorWidthAtom,
   INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
+  sidebarWidthAtom, setSidebarWidthAtom,
+  SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH,
   displayedSurfaceNodeIdAtom,
   showTreeGuidesAtom,
   sidebarPreferencesAtom,
@@ -306,6 +308,8 @@ export function AppShell() {
   const canForward = useAtomValue(canGoForwardAtom);
   const inspectorWidth = useAtomValue(inspectorWidthAtom);
   const setInspectorWidth = useSetAtom(setInspectorWidthAtom);
+  const sidebarWidth = useAtomValue(sidebarWidthAtom);
+  const setSidebarWidth = useSetAtom(setSidebarWidthAtom);
   const toggleSidebar = useSetAtom(toggleSidebarAtom);
   const toggleInspector = useSetAtom(toggleInspectorAtom);
   const toggleBothPanels = useSetAtom(toggleBothPanelsAtom);
@@ -348,8 +352,10 @@ export function AppShell() {
 
   // ── Inspector resize drag ──
   const inspectorDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
+  const sidebarDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
   const shellRef = useRef<HTMLDivElement>(null);
   const inspectorElRef = useRef<HTMLDivElement>(null);
+  const sidebarElRef = useRef<HTMLDivElement>(null);
   const onInspectorResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const el = inspectorElRef.current;
@@ -358,6 +364,7 @@ export function AppShell() {
     d.startX = e.clientX;
     d.startWidth = el?.offsetWidth ?? inspectorWidth;
     el?.classList.add(styles.inspectorDragging);
+    shellRef.current?.classList.add(styles.railDragging);
 
     // Coalesce mousemove bursts to one layout write per frame.
     let pendingWidth = -1;
@@ -367,6 +374,7 @@ export function AppShell() {
       if (pendingWidth < 0) return;
       if (el) el.style.width = `${pendingWidth}px`;
       shellRef.current?.style.setProperty('--inspector-width', `${pendingWidth}px`);
+      shellRef.current?.style.setProperty('--titlebar-inspector-width', `${pendingWidth}px`);
       pendingWidth = -1;
     };
     const onMove = (ev: MouseEvent) => {
@@ -381,6 +389,7 @@ export function AppShell() {
       if (rafId) cancelAnimationFrame(rafId);
       flush();
       el?.classList.remove(styles.inspectorDragging);
+      shellRef.current?.classList.remove(styles.railDragging);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       setInspectorWidth(el?.offsetWidth ?? d.startWidth);
@@ -388,6 +397,48 @@ export function AppShell() {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   }, [inspectorWidth, setInspectorWidth]);
+
+  const onSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = sidebarElRef.current;
+    const drag = sidebarDragRef.current;
+    drag.dragging = true;
+    drag.startX = e.clientX;
+    drag.startWidth = el?.offsetWidth ?? sidebarWidth;
+    el?.classList.add(styles.sidebarDragging);
+    shellRef.current?.classList.add(styles.railDragging);
+
+    let pendingWidth = -1;
+    let rafId = 0;
+    const flush = () => {
+      rafId = 0;
+      if (pendingWidth < 0) return;
+      shellRef.current?.style.setProperty('--sidebar-width', `${pendingWidth}px`);
+      pendingWidth = -1;
+    };
+    const onMove = (event: MouseEvent) => {
+      if (!drag.dragging) return;
+      const delta = event.clientX - drag.startX;
+      pendingWidth = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, Math.round(drag.startWidth + delta)),
+      );
+      if (!rafId) rafId = requestAnimationFrame(flush);
+    };
+    const onUp = () => {
+      if (!drag.dragging) return;
+      drag.dragging = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      flush();
+      el?.classList.remove(styles.sidebarDragging);
+      shellRef.current?.classList.remove(styles.railDragging);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      setSidebarWidth(el?.offsetWidth ?? drag.startWidth);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [setSidebarWidth, sidebarWidth]);
 
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
   const setSidebarPreferences = useSetAtom(sidebarPreferencesAtom);
@@ -537,6 +588,7 @@ export function AppShell() {
       ref={shellRef}
       className={`${styles.shell} ${isMacPlatform ? styles.shellMac : ''}`}
       style={{
+        '--sidebar-width': `${sidebarWidth}px`,
         '--inspector-width': showInspector ? `${inspectorWidth}px` : '0px',
         '--sidebar-body-width': sidebarCollapsed ? '0px' : 'var(--sidebar-width)',
         '--titlebar-inspector-width': reserveInspectorTitlebar ? `${inspectorWidth}px` : '0px',
@@ -610,11 +662,15 @@ export function AppShell() {
 
       <div className={styles.body}>
         <div
+          ref={sidebarElRef}
           className={styles.sidebar}
           data-help-id="sidebar"
           data-collapsed={sidebarCollapsed || undefined}
         >
           <Sidebar />
+          {!sidebarCollapsed && (
+            <div className={styles.sidebarResizeHandle} onMouseDown={onSidebarResizeStart} />
+          )}
         </div>
         <div
           className={styles.main}

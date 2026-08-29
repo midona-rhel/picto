@@ -112,3 +112,21 @@ export const setInspectorWidthAtom = atom(null, (_get, set, width: number) => {
   set(inspectorWidthAtom, clamped);
   localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, String(clamped));
 });
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'picto-sidebar-width';
+export const SIDEBAR_MIN_WIDTH = 220;
+export const SIDEBAR_MAX_WIDTH = 500;
+const SIDEBAR_DEFAULT_WIDTH = 300;
+const storedSidebarWidth = (() => {
+  const value = parseInt(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) ?? '', 10);
+  return Number.isFinite(value)
+    ? Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value))
+    : SIDEBAR_DEFAULT_WIDTH;
+})();
+
+export const sidebarWidthAtom = atom(storedSidebarWidth);
+export const setSidebarWidthAtom = atom(null, (_get, set, width: number) => {
+  const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+  set(sidebarWidthAtom, clamped);
+  localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clamped));
+});

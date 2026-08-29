@@ -179,6 +179,37 @@
   font-family: var(--sidebar-font-family);
 }
 
+.railDragging,
+.railDragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.sidebarDragging * {
+  transition: none !important;
+}
+
+.sidebarResizeHandle {
+  position: absolute;
+  top: 0;
+  right: -1px;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  border-right: 1px solid var(--sidebar-border-color, var(--color-border-secondary));
+  transition: border 200ms ease;
+  transition-delay: 100ms;
+}
+
+.sidebarResizeHandle:hover,
+.sidebarDragging .sidebarResizeHandle {
+  border-right-width: 2px;
+  border-color: var(--color-primary-70);
+  transition-delay: 0ms;
+}
+
 .sidebar[data-collapsed] {
   pointer-events: none;
   transform: translateX(calc(-1 * var(--sidebar-width)));
@@ -300,7 +331,8 @@
   transition-delay: 100ms;
 }
 
-.inspectorResizeHandle:hover {
+.inspectorResizeHandle:hover,
+.inspectorDragging .inspectorResizeHandle {
   border-left-width: 2px;
   border-color: var(--color-primary-70);
   transition-delay: 0ms;
