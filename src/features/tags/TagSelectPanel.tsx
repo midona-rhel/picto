@@ -91,6 +91,11 @@ export function TagSelectPanel() {
   const [assignedTagKeys, setAssignedTagKeys] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [hasSettledRemoteResult, setHasSettledRemoteResult] = useState(false);
+  const [settledRemoteView, setSettledRemoteView] = useState<{ query: string; namespace: string | null }>({
+    query: '',
+    namespace: null,
+  });
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
@@ -137,8 +142,7 @@ export function TagSelectPanel() {
   ]), [excludedTagFilters, selectedTagFilters, tags]);
 
   // Load initial tags + namespaces
-  const loadTags = useCallback((search: string, ns?: string | null) => {
-    const generation = ++requestGenerationRef.current;
+  const requestTags = useCallback((search: string, ns: string | null, generation: number) => {
     loadingCursorRef.current = null;
     setLoadingMore(false);
     const params: Parameters<typeof tagsController.getPaginated>[0] = {
@@ -150,20 +154,28 @@ export function TagSelectPanel() {
       if (generation !== requestGenerationRef.current) return;
       setTags(result.tags);
       setCursor(result.next_cursor);
+      setSettledRemoteView({ query: search, namespace: ns });
+      setHasSettledRemoteResult(true);
       setFocusIdx(-1);
     }).catch(() => {});
   }, []);
 
+  const loadTags = useCallback((search: string, ns?: string | null) => {
+    const generation = ++requestGenerationRef.current;
+    requestTags(search, ns ?? null, generation);
+  }, [requestTags]);
+
   const loadMore = useCallback(() => {
     if (!cursor || loadingCursorRef.current === cursor) return;
+    const requestedNamespace = sidebarMode === 'namespace' ? activeNamespace : null;
+    if (query !== settledRemoteView.query || requestedNamespace !== settledRemoteView.namespace) return;
     const generation = requestGenerationRef.current;
     loadingCursorRef.current = cursor;
     setLoadingMore(true);
-    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
-      search: query.trim() || null,
-      namespace: ns,
+      search: settledRemoteView.query.trim() || null,
+      namespace: settledRemoteView.namespace,
       cursor,
     }).then((result) => {
       if (generation !== requestGenerationRef.current) return;
@@ -176,7 +188,7 @@ export function TagSelectPanel() {
       loadingCursorRef.current = null;
       setLoadingMore(false);
     });
-  }, [cursor, query, sidebarMode, activeNamespace]);
+  }, [activeNamespace, cursor, query, settledRemoteView, sidebarMode]);
 
   // Load namespaces on open
   useEffect(() => {
@@ -190,19 +202,24 @@ export function TagSelectPanel() {
     if (!open) return;
     if (listRef.current) listRef.current.scrollTop = 0;
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    if (!query.trim()) {
-      loadTags(query, ns);
+    const generation = ++requestGenerationRef.current;
+    if (sidebarMode === 'selected' || sidebarMode === 'starred') {
       return;
     }
-    searchTimerRef.current = setTimeout(() => loadTags(query, ns), 150);
+    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
+    if (!query.trim()) {
+      requestTags(query, ns, generation);
+      return;
+    }
+    searchTimerRef.current = setTimeout(() => requestTags(query, ns, generation), 150);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
-  }, [query, open, loadTags, sidebarMode, activeNamespace]);
+  }, [query, open, requestTags, sidebarMode, activeNamespace]);
 
   // Reset on open
   useEffect(() => {
     if (open) {
       setQuery('');
+      setHasSettledRemoteResult(false);
       setSettingsOpen(false);
       setSelectedTags(new Set(entityTagKeys));
       setExcluded(new Set(excludedTagFilters?.map((tag) => tag.name) ?? customExcludedTags ?? []));
@@ -232,7 +249,8 @@ export function TagSelectPanel() {
       candidates = tags;
     }
 
-    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
+    const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLocaleLowerCase();
     const seen = new Set<string>();
     return candidates.filter((tag) => {
       const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
@@ -243,17 +261,18 @@ export function TagSelectPanel() {
         : visibleName;
       return !normalizedQuery || searchableName.includes(normalizedQuery);
     });
-  }, [tags, sidebarMode, entityTagKeys, query, tagPreferences.starredTags]);
+  }, [tags, sidebarMode, entityTagKeys, query, settledRemoteView.query, tagPreferences.starredTags]);
 
   const createTag = useMemo(() => {
-    const trimmed = query.trim();
+    const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
+    const trimmed = (localView ? query : settledRemoteView.query).trim();
     if (!trimmed || onApplyTagFilter || sidebarMode === 'selected' || sidebarMode === 'starred') return null;
-    const name = sidebarMode === 'namespace' && activeNamespace && !trimmed.includes(':')
-      ? `${activeNamespace}:${trimmed}`
+    const name = settledRemoteView.namespace && !trimmed.includes(':')
+      ? `${settledRemoteView.namespace}:${trimmed}`
       : trimmed;
     const alreadyExists = tags.some((tag) => formatTag(tag).toLocaleLowerCase() === name.toLocaleLowerCase());
     return alreadyExists ? null : tagRecord(name);
-  }, [activeNamespace, onApplyTagFilter, query, sidebarMode, tags]);
+  }, [onApplyTagFilter, query, settledRemoteView, sidebarMode, tags]);
 
   // Namespace groups for sidebar
   const nsGroups = useMemo(() => {
@@ -264,6 +283,12 @@ export function TagSelectPanel() {
 
   const columnCount = layout === 'grid' ? 2 : 1;
   const navigableTags = createTag ? [createTag, ...displayTags] : displayTags;
+  const displayedQuery = sidebarMode === 'selected' || sidebarMode === 'starred'
+    ? query
+    : settledRemoteView.query;
+  const canShowEmpty = sidebarMode === 'selected'
+    || sidebarMode === 'starred'
+    || hasSettledRemoteResult;
   const displayPages = useMemo(() => Array.from(
     { length: Math.ceil(displayTags.length / PAGE_SIZE) },
     (_, index) => displayTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
@@ -491,11 +516,11 @@ export function TagSelectPanel() {
         {/* Content */}
         <div className={`${styles.content} ${!showSidebar ? styles.contentExpanded : ''}`}>
           <div ref={listRef} className={styles.tagListScroller}>
-            {navigableTags.length === 0 ? (
+            {navigableTags.length === 0 && canShowEmpty ? (
               <div className={styles.emptyState}>
                 {sidebarMode === 'selected' ? 'No tags on this entity' : 'No tags found'}
               </div>
-            ) : (
+            ) : navigableTags.length > 0 ? (
               <div className={styles.tagPages}>
                 {createTag ? (
                   <div
@@ -580,8 +605,8 @@ export function TagSelectPanel() {
                             />
                           )}
                           <span className={styles.tagName}>
-                            {query.trim()
-                              ? highlightMatch(displayTagName(tag, tagPreferences.showTagPrefixes), query.trim())
+                            {displayedQuery.trim()
+                              ? highlightMatch(displayTagName(tag, tagPreferences.showTagPrefixes), displayedQuery.trim())
                               : displayTagName(tag, tagPreferences.showTagPrefixes)}
                           </span>
                           {showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
@@ -591,7 +616,7 @@ export function TagSelectPanel() {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
         {settingsOpen ? (

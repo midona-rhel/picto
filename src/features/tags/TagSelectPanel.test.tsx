@@ -132,6 +132,38 @@ describe('TagSelectPanel assignment', () => {
     expect(onApplyTags).toHaveBeenLastCalledWith(['creator:a']);
   });
 
+  it('keeps the settled tag view until the current backend search returns', async () => {
+    const store = createStore();
+    store.set(tagSelectPortalAtom, {
+      open: true,
+      selectedTags: [],
+      onApplyTagFilter: vi.fn(),
+    });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+
+    let resolveSearch!: (value: { tags: []; next_cursor: null; revision: number }) => void;
+    mocks.getPaginated.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSearch = resolve;
+    }));
+
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'missing' } });
+    expect(screen.getByText('alice')).toBeInTheDocument();
+    expect(screen.queryByText('No tags found')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 170));
+      resolveSearch({ tags: [], next_cursor: null, revision: 2 });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('No tags found')).toBeInTheDocument();
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
+  });
+
   it('updates filters and matching mode immediately', async () => {
     const store = createStore();
     const onApplyTagFilter = vi.fn();
