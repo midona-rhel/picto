@@ -92,7 +92,7 @@ impl OnlyFansSourceRunner {
             state_dir,
             output_dir,
             creator: query.query_text.clone(),
-            post_limit: query_limit(),
+            post_limit: i64::from(query.source_post_batch_size().max(1)),
             before: query
                 .resume_cursor
                 .clone()
@@ -300,10 +300,6 @@ fn query_state_dir(root: &Path, subscription_id: i64, query_id: i64) -> PathBuf 
         .join(format!("query-{query_id}"))
 }
 
-fn query_limit() -> i64 {
-    1
-}
-
 #[derive(Serialize)]
 struct BridgeRequest {
     parent_pid: u32,
@@ -462,8 +458,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn onlyfans_uses_its_own_single_post_process_window() {
-        assert_eq!(query_limit(), 1);
+    fn onlyfans_window_covers_the_remaining_added_budget() {
+        let mut query = ClaimedQueryRun {
+            run_query_id: 1,
+            run_id: 1,
+            query_id: 1,
+            subscription_id: 1,
+            site_id: "onlyfans".into(),
+            domain_key: "onlyfans.com".into(),
+            query_kind: "user".into(),
+            query_text: "creator".into(),
+            group_posts: true,
+            requested_by: "manual".into(),
+            initial_post_limit: Some(50),
+            periodic_post_limit: Some(50),
+            run_post_limit: Some(30),
+            initial_run_complete: false,
+            resume_cursor: None,
+            attempt_count: 0,
+        };
+        assert_eq!(query.source_post_batch_size(), 30);
+        query.run_post_limit = Some(0);
+        // A fully consumed budget still requests a minimal window instead of
+        // asking the bridge for zero posts.
+        assert_eq!(query.source_post_batch_size().max(1), 1);
     }
 
     #[test]

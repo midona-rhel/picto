@@ -572,15 +572,17 @@ async fn normalize_media_download(
         return Ok(None);
     }
     let content_hash = hex::encode(
-        crate::media_processing::get_hash_from_path(&file_path).map_err(|error| {
-            RunnerFailure::terminal(
-                RunnerFailureKind::InvalidOutput,
-                format!(
-                    "Could not hash downloaded media {}: {error}",
-                    file_path.display()
-                ),
-            )
-        })?,
+        crate::media_processing::get_hash_from_path_background(file_path.clone())
+            .await
+            .map_err(|error| {
+                RunnerFailure::terminal(
+                    RunnerFailureKind::InvalidOutput,
+                    format!(
+                        "Could not hash downloaded media {}: {error}",
+                        file_path.display()
+                    ),
+                )
+            })?,
     );
     let size_bytes = prepared.size_bytes.unwrap_or_default();
     let created_at = metadata.created_at.clone().or_else(|| {
@@ -1216,10 +1218,14 @@ mod tests {
             "page-window sites run a whole source window per bridge process"
         );
 
-        let mut query = claimed_query();
-        query.site_id = "fanbox".into();
-        assert_eq!(effective_batch_size(&query, None), 1);
-        assert_eq!(effective_batch_size(&query, Some(2)), 2);
+        let mut fanbox = claimed_query();
+        fanbox.site_id = "fanbox".into();
+        fanbox.initial_post_limit = Some(10);
+        assert_eq!(
+            effective_batch_size(&fanbox, None),
+            10,
+            "fanbox pages complete post metadata in bulk and runs page windows"
+        );
 
         let mut e621 = claimed_query();
         e621.site_id = "e621".into();

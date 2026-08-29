@@ -59,7 +59,7 @@ pub fn post_terminal_mode(site_id: &str) -> Option<&'static str> {
 /// request. They run a whole source window in one bridge process instead of
 /// paying a fresh extractor cold-start per post.
 pub fn page_window_site(site_id: &str) -> bool {
-    matches!(site_id, "patreon" | "subscribestar")
+    matches!(site_id, "patreon" | "subscribestar" | "fanbox")
 }
 
 #[derive(Debug, Clone, PartialEq)]
