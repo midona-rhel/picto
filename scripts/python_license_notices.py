@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.metadata
 from pathlib import Path
 
@@ -42,6 +43,8 @@ def write_python_license_notices(destination: Path) -> None:
                 if value.startswith("License :: ")
             ]
             declared = "; ".join(classifiers) or "UNKNOWN"
+        if declared == "UNKNOWN":
+            raise RuntimeError(f"Python distribution {name}@{distribution.version} has no declared license")
         sections.extend(("-" * 80, f"{name}@{distribution.version}", f"License: {declared}", "-" * 80))
         files = _license_files(distribution)
         if not files:
@@ -50,3 +53,15 @@ def write_python_license_notices(destination: Path) -> None:
             sections.extend((license_file.name, "", license_file.read_text(encoding="utf-8", errors="replace")))
         sections.append("")
     destination.write_text("\n".join(sections), encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("destination", type=Path)
+    args = parser.parse_args()
+    write_python_license_notices(args.destination)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

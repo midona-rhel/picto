@@ -103,6 +103,38 @@ for (const crate of cargoMetadata.packages) {
   assert(Boolean(crate.license), `Cargo package has no declared license: ${crate.name}@${crate.version}`);
 }
 
+const modelCatalog = JSON.parse(read('scripts/ai/model-catalog.json'));
+const modelRuntime = read('core/src/ai_tagger/models.rs');
+const coremlArtifacts = JSON.parse(read('scripts/ai/coreml-artifacts.json')).assets ?? {};
+for (const model of modelCatalog.models ?? []) {
+  const label = `${model.slug ?? 'unnamed model'}`;
+  const released = model.release_distribution === true;
+  const registered = modelRuntime.includes(`slug: "${model.slug}".into()`);
+  assert(/^[a-f0-9]{40}$/.test(model.revision ?? ''), `AI model revision must be a full commit SHA: ${label}`);
+  assert(/^https:\/\//.test(model.license_url ?? ''), `AI model must identify its authoritative license page: ${label}`);
+  assert(typeof model.release_distribution === 'boolean', `AI model must declare release_distribution: ${label}`);
+  assert(registered === released, `AI model release registry disagrees with model catalog: ${label}`);
+  if (!released) {
+    assert(!(model.slug in coremlArtifacts), `excluded AI model has a Picto-hosted Core ML artifact: ${label}`);
+    continue;
+  }
+  assert(
+    modelRuntime.includes(`/resolve/${model.revision}/`),
+    `released AI model runtime URL is not pinned to its catalog revision: ${label}`,
+  );
+  if (model.license === 'NOASSERTION') {
+    assert(model.delivery === 'upstream-download', `AI model without explicit terms must be upstream-download only: ${label}`);
+    assert(!(model.slug in coremlArtifacts), `AI model without explicit terms cannot have a Picto-hosted Core ML artifact: ${label}`);
+  } else {
+    assert(Boolean(model.license), `released AI model has no declared license: ${label}`);
+  }
+}
+for (const slug of Object.keys(coremlArtifacts)) {
+  const model = modelCatalog.models?.find((candidate) => candidate.slug === slug);
+  assert(model?.release_distribution === true, `Core ML artifact is not backed by a released model: ${slug}`);
+  assert(model?.license && model.license !== 'NOASSERTION', `Core ML artifact lacks explicit redistribution terms: ${slug}`);
+}
+
 const runtimeRequirements = read('scripts/gallery-dl-runtime-requirements.txt');
 const onlyFansRequirements = read('scripts/onlyfans-bridge-requirements.txt');
 const floatingRequirement = /^\s*[^#\n]+(?:>=|~=|>|<)[^\n]*$/m;
@@ -142,6 +174,15 @@ if (checkArtifacts) {
     'vendor/gallery-dl/THIRD_PARTY_LICENSES.txt',
     'vendor/onlyfans/THIRD_PARTY_LICENSES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
+
+  for (const [file, packageName] of [
+    ['vendor/gallery-dl/THIRD_PARTY_LICENSES.txt', 'gallery-dl@'],
+    ['vendor/onlyfans/THIRD_PARTY_LICENSES.txt', 'ofscraper@'],
+  ]) {
+    if (existsSync(path.join(root, file))) {
+      assert(read(file).toLowerCase().includes(packageName), `sidecar notices omit the frozen ${packageName.slice(0, -1)} package: ${file}`);
+    }
+  }
 
   const executableSuffix = process.platform === 'win32' ? '.exe' : '';
   for (const file of [

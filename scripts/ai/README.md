@@ -19,14 +19,15 @@ workflow:
   after schema, ONNX parity, and warm-performance verification. Invalid local
   Core ML packages fall back to ONNX rather than failing a tagging run.
 - DanbooruTagQuery B16 uses a fixed-shape DINOv3 graph and retains at least 99%
-  of the top 100 ONNX tags across the parity fixture set. Any distribution of
-  the weights or derived Core ML archive must retain the DINOv3 agreement.
+  of the top 100 ONNX tags across the parity fixture set. It remains tooling-only
+  until Picto has an explicit DINOv3 agreement acceptance and retention flow.
 
 AnimeTimm is deliberately excluded from the catalog.
 
 Z3D E621 ConvNext is supported by the converter and benchmark for local
-testing, but is not redistributed because its upstream repository does not
-state redistribution terms.
+testing and is downloaded directly from its upstream repository. Picto does not
+redistribute the model or publish a derived Core ML artifact because upstream
+does not state redistribution terms.
 
 Run the `Core ML Models` workflow manually to rebuild, verify, and publish the
 registered archives. The conversion dependencies are pinned and the archive

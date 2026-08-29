@@ -37,7 +37,6 @@ pub enum ChannelOrder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputActivation {
     Probability,
-    Logit,
 }
 
 /// Model-specific input and label contract retained by the portable runtime.
@@ -46,7 +45,6 @@ pub enum ModelAdapter {
     #[default]
     Wd,
     OppaiOracle,
-    DanbooruTagQuery,
 }
 
 impl Default for OutputActivation {
@@ -107,9 +105,8 @@ pub struct ModelInfo {
 
 /// Static registry of known models.
 ///
-/// WD14 SwinV2 v3 + Z3D E621 ConvNext are the recommended default pair;
-/// EVA02-Large v3 is the highest-accuracy WD variant but several times
-/// slower and ~1.3 GB on disk, so it is marked heavy.
+/// Release registry. Tooling-only conversion candidates remain in
+/// `scripts/ai/model-catalog.json` and must not appear here.
 pub fn known_models() -> Vec<ModelInfo> {
     let mut coreml = serde_json::from_str::<ArtifactRegistry>(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -121,9 +118,9 @@ pub fn known_models() -> Vec<ModelInfo> {
         ModelInfo {
             slug: "wd14-swinv2-v3".into(),
             label: "WD14 SwinV2 v3".into(),
-            onnx_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx".into(),
+            onnx_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/627aef95638667ddcaa3ac8ae625e88ea5b02f51/model.onnx".into(),
             onnx_sha256: "e6774bff34d43bd49f75a47db4ef217dce701c9847b546523eb85ff6dbba1db1".into(),
-            labels_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv".into(),
+            labels_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/627aef95638667ddcaa3ac8ae625e88ea5b02f51/selected_tags.csv".into(),
             labels_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
@@ -139,9 +136,9 @@ pub fn known_models() -> Vec<ModelInfo> {
         ModelInfo {
             slug: "z3d-e621-convnext".into(),
             label: "E621 ConvNext (Z3D)".into(),
-            onnx_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/model.onnx".into(),
+            onnx_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/39b081cafc120253513e6e9c21283892c6994e62/model.onnx".into(),
             onnx_sha256: "672f6c1b987abfdb311c41ecd57efdc0e5b1860944a3722984326316f4655c70".into(),
-            labels_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/tags-selected.csv".into(),
+            labels_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/39b081cafc120253513e6e9c21283892c6994e62/tags-selected.csv".into(),
             labels_sha256: "609c75136b90fc0a87cce111961f172d029ab400299cfa8bbf6830918305aa40".into(),
             input_size: 448,
             // Z3D's reference preprocessing consumes BGR tensors.
@@ -158,9 +155,9 @@ pub fn known_models() -> Vec<ModelInfo> {
         ModelInfo {
             slug: "wd14-eva02-large-v3".into(),
             label: "WD14 EVA02-Large v3".into(),
-            onnx_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx".into(),
+            onnx_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/b25b82a03f7282e41aa2f257a52c7583b710bd1c/model.onnx".into(),
             onnx_sha256: "9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc".into(),
-            labels_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/selected_tags.csv".into(),
+            labels_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/b25b82a03f7282e41aa2f257a52c7583b710bd1c/selected_tags.csv".into(),
             labels_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
@@ -190,28 +187,6 @@ pub fn known_models() -> Vec<ModelInfo> {
             label_categories: None,
             heavy: true,
             coreml: coreml.remove("oppai-oracle-v1-1"),
-        },
-        ModelInfo {
-            slug: "danbooru-tag-query-b16".into(),
-            label: "DanbooruTagQuery B16".into(),
-            onnx_url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/model.onnx".into(),
-            onnx_sha256: "aef21a2a04605ba1b059e6a14471dbc6fec7589753afb92f352336ef60caa987".into(),
-            labels_url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/tag_to_id.json".into(),
-            labels_sha256: "00959521d85ff61574d6cd35ac909dc67cf68cb65ba6267cf27ff64785ee5935".into(),
-            input_size: 448,
-            channel_order: ChannelOrder::Rgb,
-            output_activation: OutputActivation::Logit,
-            adapter: ModelAdapter::DanbooruTagQuery,
-            size_bytes: 387_406_778,
-            dataset: "Danbooru · general, character, series".into(),
-            reference_inference_ms: 13.23,
-            label_categories: Some(RegisteredArtifact {
-                url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/tag_category.json".into(),
-                sha256: "32490933a3054325a6c9d941123fc5ace3fe1f535826756083ce201ef243b396".into(),
-                size: 246_458,
-            }),
-            heavy: false,
-            coreml: coreml.remove("danbooru-tag-query-b16"),
         },
     ]
 }
@@ -381,18 +356,12 @@ mod tests {
     #[test]
     fn product_registry_contains_every_validated_tagger() {
         let models = known_models();
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 4);
         assert!(models.iter().any(|model| {
             model.slug == "oppai-oracle-v1-1"
                 && model.adapter == ModelAdapter::OppaiOracle
                 && model.reference_inference_ms == 86.45
                 && model.coreml.is_some()
-        }));
-        assert!(models.iter().any(|model| {
-            model.slug == "danbooru-tag-query-b16"
-                && model.adapter == ModelAdapter::DanbooruTagQuery
-                && model.reference_inference_ms == 13.23
-                && model.label_categories.is_some()
         }));
     }
 

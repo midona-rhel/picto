@@ -28,7 +28,6 @@ const MODEL_SHORT_LABELS: Record<string, string> = {
   'z3d-e621-convnext': 'Z3D',
   'wd14-eva02-large-v3': 'WD14 EVA',
   'oppai-oracle-v1-1': 'OppaiOracle',
-  'danbooru-tag-query-b16': 'DTQuery',
 };
 
 const AUTO_MODEL_SETTING_KEYS: Record<string, keyof AppSettings> = {
@@ -36,7 +35,6 @@ const AUTO_MODEL_SETTING_KEYS: Record<string, keyof AppSettings> = {
   'z3d-e621-convnext': 'aiTaggerE621Enabled',
   'wd14-eva02-large-v3': 'aiTaggerEva02Enabled',
   'oppai-oracle-v1-1': 'aiTaggerOppaiOracleEnabled',
-  'danbooru-tag-query-b16': 'aiTaggerDanbooruTagQueryEnabled',
 };
 
 /** Threshold settings keys with their tag-namespace dot colors. */

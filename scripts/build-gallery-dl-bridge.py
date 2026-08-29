@@ -15,12 +15,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from python_license_notices import write_python_license_notices
-
-
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "scripts" / "gallery_dl_bridge.py"
 REQUIREMENTS = ROOT / "scripts" / "gallery-dl-bridge-requirements.txt"
+LICENSE_NOTICES = ROOT / "scripts" / "python_license_notices.py"
 DEFAULT_OUTPUT = ROOT / "vendor" / "gallery-dl"
 
 
@@ -91,6 +89,7 @@ def build(output_dir: Path, platform_name: str | None, dry_run: bool) -> Path:
             print("+", sys.executable, "-m venv", venv_dir)
             print("+", venv_python(venv_dir), "-m pip install -r", REQUIREMENTS)
             print("+", " ".join(command_for(venv_dir, staging_dir, platform_name)))
+            print("+", venv_python(venv_dir), LICENSE_NOTICES, output_dir / "THIRD_PARTY_LICENSES.txt")
             return output_path
 
         run([sys.executable, "-m", "venv", str(venv_dir)])
@@ -115,7 +114,7 @@ def build(output_dir: Path, platform_name: str | None, dry_run: bool) -> Path:
 
         output_path.unlink(missing_ok=True)
         shutil.copy2(built_path, output_path)
-        write_python_license_notices(output_dir / "THIRD_PARTY_LICENSES.txt")
+        run([str(builder_python), str(LICENSE_NOTICES), str(output_dir / "THIRD_PARTY_LICENSES.txt")])
         if os.name != "nt":
             output_path.chmod(output_path.stat().st_mode | 0o111)
 

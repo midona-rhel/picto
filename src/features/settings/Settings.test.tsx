@@ -81,7 +81,6 @@ const appSettings = {
   aiTaggerE621Enabled: false,
   aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false,
-  aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerAutoOnImport: false,
   aiTaggerWriteRating: false,
   aiThresholdGeneral: 0.35,

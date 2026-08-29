@@ -455,7 +455,6 @@ fn model_setting_key(slug: &str) -> &'static str {
         "z3d-e621-convnext" => "aiTaggerE621Enabled",
         "wd14-eva02-large-v3" => "aiTaggerEva02Enabled",
         "oppai-oracle-v1-1" => "aiTaggerOppaiOracleEnabled",
-        "danbooru-tag-query-b16" => "aiTaggerDanbooruTagQueryEnabled",
         _ => "",
     }
 }

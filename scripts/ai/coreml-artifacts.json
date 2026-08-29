@@ -16,11 +16,6 @@
       "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v2/oppai-oracle-v1-1-coreml-macos15-v2.zip",
       "sha256": "2eec232916a36c5d9d53963efb041310b559d3b60995914c1d632339bf494506",
       "size": 992693223
-    },
-    "danbooru-tag-query-b16": {
-      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/danbooru-tag-query-b16-coreml-macos15-v1.zip",
-      "sha256": "6b0896cc29d7bdfb2fb2851d961e12b8f9296ef2e7cef1eb011a3c6a5a7d5252",
-      "size": 193023234
     }
   }
 }

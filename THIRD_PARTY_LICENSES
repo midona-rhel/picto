@@ -55,6 +55,24 @@ and Apache-2.0 license files are copied with the runtime and are also included i
 notices.
 
 
+Optional AI models
+------------------
+Picto does not bundle AI model weights. A user may explicitly download a pinned, SHA-256-verified
+model from its upstream repository. WD14 SwinV2 v3, WD14 EVA02-Large v3, and OppaiOracle V1.1 are
+published under Apache-2.0. Z3D E621 ConvNext is labeled `other` by its upstream repository and
+does not publish specific redistribution terms; Picto therefore downloads it only from upstream
+and does not distribute its weights or a derived Core ML artifact.
+
+Sources:
+  https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3
+  https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3
+  https://huggingface.co/Grio43/OppaiOracle
+  https://huggingface.co/toynya/Z3D-E621-Convnext
+
+DanbooruTagQuery/DINOv3 remains developer tooling only and is excluded from the release runtime
+until Picto implements the DINOv3 agreement acceptance and retention requirements.
+
+
 Geist
 -----
 Version: 1.7.2

@@ -129,7 +129,7 @@ async fn download_model_inner(
 
         // Validate the portable pair before adding any platform-specific
         // optimization. A model download must never hide a Core ML compile.
-        let labels = super::labels::parse_model_labels(&temp_dir, model_info.adapter)?;
+        let labels = super::labels::parse_model_labels(&temp_dir)?;
         if labels.is_empty() {
             return Err("Downloaded labels CSV is empty".into());
         }

@@ -108,7 +108,7 @@ impl TaggerSession {
             return Err(format!("Model file not found: {}", model_path.display()));
         }
 
-        let labels = super::labels::parse_model_labels(model_dir, adapter)?;
+        let labels = super::labels::parse_model_labels(model_dir)?;
         let coreml_current = super::models::find_model(slug)
             .is_some_and(|model| super::models::coreml_artifact_is_current(model_dir, &model));
         let (runtime, backend) = create_runtime(
@@ -365,15 +365,6 @@ fn run_ort(session: &mut ort::session::Session, input: &PreparedInput) -> Result
             let mask = ort::value::Tensor::from_array(mask)
                 .map_err(|e| format!("Failed to create padding mask: {e}"))?;
             session.run(ort::inputs![image, mask])
-        }
-        ModelAdapter::DanbooruTagQuery => {
-            let values = normalized_nchw(input, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]);
-            let tensor = ort::value::Tensor::from_array((
-                [input.batch_size, 3, size, size],
-                values.into_boxed_slice(),
-            ))
-            .map_err(|e| format!("Failed to create model input: {e}"))?;
-            session.run(ort::inputs![tensor])
         }
     }
     .map_err(|e| format!("Inference failed: {e}"))?;
@@ -657,7 +648,6 @@ fn append_preprocessed_image(
     let background = match spec.adapter {
         ModelAdapter::Wd => 255,
         ModelAdapter::OppaiOracle => 114,
-        ModelAdapter::DanbooruTagQuery => 0,
     };
     let mut padded = image::RgbImage::from_pixel(
         spec.input_size,
@@ -696,14 +686,9 @@ fn append_preprocessed_image(
     Ok(())
 }
 
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
-}
-
 fn interpret_output(value: f32, activation: OutputActivation) -> Result<f32, String> {
     let confidence = match activation {
         OutputActivation::Probability => value,
-        OutputActivation::Logit => sigmoid(value),
     };
     if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
         return Err(format!(
@@ -806,28 +791,11 @@ mod tests {
     }
 
     #[test]
-    fn query_preprocessing_uses_black_rgb_letterbox() {
-        let input = prepare_input(
-            &png_with_size(1, 2, Rgb([10, 20, 30])),
-            InputSpec {
-                input_size: 2,
-                channel_order: ChannelOrder::Rgb,
-                adapter: ModelAdapter::DanbooruTagQuery,
-            },
-        )
-        .unwrap();
-
-        assert!(input.padding_mask.is_none());
-        assert_eq!(&input.values[0..6], &[10.0, 20.0, 30.0, 0.0, 0.0, 0.0]);
-    }
-
-    #[test]
     fn output_activation_is_explicit_and_validated() {
         assert_eq!(
             interpret_output(0.25, OutputActivation::Probability).unwrap(),
             0.25
         );
-        assert_eq!(interpret_output(0.0, OutputActivation::Logit).unwrap(), 0.5);
         assert!(interpret_output(1.1, OutputActivation::Probability).is_err());
         assert!(interpret_output(f32::NAN, OutputActivation::Probability).is_err());
     }

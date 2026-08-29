@@ -51,7 +51,7 @@ const settings = {
   subscriptionDefaultGroupPosts: true,
   showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {}, sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
-  aiTaggerOppaiOracleEnabled: false, aiTaggerDanbooruTagQueryEnabled: false,
+  aiTaggerOppaiOracleEnabled: false,
   aiTaggerManualModelSlugs: null,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
   aiThresholdGeneral: 0.35, aiThresholdCharacter: 0.35, aiThresholdCopyright: 0.35,
@@ -177,22 +177,19 @@ describe('AiTaggingPanel', () => {
     });
   });
 
-  it('exposes the validated OppaiOracle and DanbooruTagQuery runtimes', async () => {
+  it('exposes the validated OppaiOracle runtime', async () => {
     mocks.status.mockResolvedValue({
       ...status(true),
       models: [
         { ...model, slug: 'oppai-oracle-v1-1', label: 'OppaiOracle V1.1', downloaded: true, referenceInferenceMs: 88.58 },
-        { ...model, slug: 'danbooru-tag-query-b16', label: 'DanbooruTagQuery B16', downloaded: true, referenceInferenceMs: 13.23 },
       ],
     });
     await renderPanel();
 
     expect(await screen.findByText('OppaiOracle')).toBeInTheDocument();
     expect(screen.getByText('test · 1 MB · ≈89 ms/image')).toBeInTheDocument();
-    expect(screen.getByText('test · 1 MB · ≈13 ms/image')).toBeInTheDocument();
 
     expect(screen.getByText('OppaiOracle').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
-    expect(screen.getByText('DTQuery').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
   });
 
   it('exposes the explicit Mac optimization step for supported downloads', async () => {

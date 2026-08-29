@@ -87,7 +87,6 @@ export interface AppSettings {
   aiTaggerE621Enabled: boolean;
   aiTaggerEva02Enabled: boolean;
   aiTaggerOppaiOracleEnabled: boolean;
-  aiTaggerDanbooruTagQueryEnabled: boolean;
   aiTaggerManualModelSlugs: string[] | null;
   aiTaggerAutoOnImport: boolean;
   aiTaggerWriteRating: boolean;
@@ -150,7 +149,6 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   aiTaggerE621Enabled: false,
   aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false,
-  aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerManualModelSlugs: null,
   aiTaggerAutoOnImport: false,
   aiTaggerWriteRating: true,
@@ -311,7 +309,6 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     aiTaggerE621Enabled: booleanValue(storedOrDefault(source, 'aiTaggerE621Enabled', APP_SETTINGS_DEFAULTS.aiTaggerE621Enabled), 'aiTaggerE621Enabled'),
     aiTaggerEva02Enabled: booleanValue(storedOrDefault(source, 'aiTaggerEva02Enabled', APP_SETTINGS_DEFAULTS.aiTaggerEva02Enabled), 'aiTaggerEva02Enabled'),
     aiTaggerOppaiOracleEnabled: booleanValue(storedOrDefault(source, 'aiTaggerOppaiOracleEnabled', APP_SETTINGS_DEFAULTS.aiTaggerOppaiOracleEnabled), 'aiTaggerOppaiOracleEnabled'),
-    aiTaggerDanbooruTagQueryEnabled: booleanValue(storedOrDefault(source, 'aiTaggerDanbooruTagQueryEnabled', APP_SETTINGS_DEFAULTS.aiTaggerDanbooruTagQueryEnabled), 'aiTaggerDanbooruTagQueryEnabled'),
     aiTaggerManualModelSlugs: nullableStringArrayValue(storedOrDefault(source, 'aiTaggerManualModelSlugs', APP_SETTINGS_DEFAULTS.aiTaggerManualModelSlugs), 'aiTaggerManualModelSlugs'),
     aiTaggerAutoOnImport: booleanValue(storedOrDefault(source, 'aiTaggerAutoOnImport', APP_SETTINGS_DEFAULTS.aiTaggerAutoOnImport), 'aiTaggerAutoOnImport'),
     aiTaggerWriteRating: booleanValue(storedOrDefault(source, 'aiTaggerWriteRating', APP_SETTINGS_DEFAULTS.aiTaggerWriteRating), 'aiTaggerWriteRating'),
