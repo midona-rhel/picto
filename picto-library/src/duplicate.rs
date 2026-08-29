@@ -353,12 +353,36 @@ fn compare_candidate_quality(
                 return DuplicateQualityDecision::RightBetter;
             }
         }
-        if left_width == right_width
+        let same_geometry = left_width == right_width
             && left_height == right_height
-            && left.mime_type == right.mime_type
-            && left.frame_count == right.frame_count
-            && distance <= 1
-        {
+            && left.frame_count == right.frame_count;
+        if same_geometry && distance == 0 {
+            let left_fidelity = still_encoding_fidelity(&left.mime_type);
+            let right_fidelity = still_encoding_fidelity(&right.mime_type);
+            match (left_fidelity, right_fidelity) {
+                (EncodingFidelity::Lossless, EncodingFidelity::Lossy) => {
+                    return DuplicateQualityDecision::LeftBetter;
+                }
+                (EncodingFidelity::Lossy, EncodingFidelity::Lossless) => {
+                    return DuplicateQualityDecision::RightBetter;
+                }
+                _ => {}
+            }
+            // Lossless files with equal decoded pixels carry the same visual
+            // information; extra bytes can just mean less efficient compression.
+            if left_fidelity != EncodingFidelity::Lossless
+                || right_fidelity != EncodingFidelity::Lossless
+            {
+                if materially_larger(left.size_bytes, right.size_bytes) {
+                    return DuplicateQualityDecision::LeftBetter;
+                }
+                if materially_larger(right.size_bytes, left.size_bytes) {
+                    return DuplicateQualityDecision::RightBetter;
+                }
+            }
+            return stable_tie();
+        }
+        if same_geometry && left.mime_type == right.mime_type && distance <= 1 {
             return match left.size_bytes.cmp(&right.size_bytes) {
                 std::cmp::Ordering::Greater => DuplicateQualityDecision::LeftBetter,
                 std::cmp::Ordering::Less => DuplicateQualityDecision::RightBetter,
@@ -367,6 +391,28 @@ fn compare_candidate_quality(
         }
     }
     DuplicateQualityDecision::NeedsChoice
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EncodingFidelity {
+    Lossless,
+    Lossy,
+    Unknown,
+}
+
+fn still_encoding_fidelity(mime_type: &str) -> EncodingFidelity {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/png" | "image/bmp" | "image/x-bmp" | "image/tiff" | "image/x-tiff" | "image/gif" => {
+            EncodingFidelity::Lossless
+        }
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => EncodingFidelity::Lossy,
+        _ => EncodingFidelity::Unknown,
+    }
+}
+
+fn materially_larger(candidate_bytes: i64, other_bytes: i64) -> bool {
+    candidate_bytes > other_bytes
+        && (candidate_bytes.max(0) as u128) >= (other_bytes.max(0) as u128) * 2
 }
 
 pub(crate) fn affected_roots(
@@ -843,5 +889,66 @@ fn status_name(status: DuplicateStatus) -> &'static str {
         DuplicateStatus::Detected => "detected",
         DuplicateStatus::NotDuplicate => "not duplicate",
         DuplicateStatus::Resolved => "resolved",
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+
+    fn file(id: u32, mime_type: &str, size_bytes: i64) -> DuplicateFile {
+        DuplicateFile {
+            file_id: FileId(id),
+            file_hash: format!("hash-{id}"),
+            mime_type: mime_type.into(),
+            size_bytes,
+            pixel_width: Some(2_336),
+            pixel_height: Some(1_835),
+            frame_count: None,
+        }
+    }
+
+    #[test]
+    fn exact_visual_match_prefers_lossless_png_over_jpeg() {
+        let jpeg = file(1, "image/jpeg", 321_300);
+        let png = file(2, "image/png", 1_600_000);
+
+        assert_eq!(
+            compare_candidate_quality(&jpeg, &png, 0),
+            DuplicateQualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn exact_visual_match_uses_a_materially_larger_representation_for_unknown_encodings() {
+        let smaller = file(1, "image/webp", 200_000);
+        let larger = file(2, "image/avif", 400_000);
+
+        assert_eq!(
+            compare_candidate_quality(&smaller, &larger, 0),
+            DuplicateQualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn exact_lossless_match_does_not_treat_inefficient_compression_as_quality() {
+        let compact = file(1, "image/png", 200_000);
+        let bloated = file(2, "image/png", 800_000);
+
+        assert_eq!(
+            compare_candidate_quality(&compact, &bloated, 0),
+            DuplicateQualityDecision::AutoTieLeft
+        );
+    }
+
+    #[test]
+    fn cross_format_nonzero_difference_still_requires_a_choice() {
+        let jpeg = file(1, "image/jpeg", 321_300);
+        let png = file(2, "image/png", 1_600_000);
+
+        assert_eq!(
+            compare_candidate_quality(&jpeg, &png, 1),
+            DuplicateQualityDecision::NeedsChoice
+        );
     }
 }
