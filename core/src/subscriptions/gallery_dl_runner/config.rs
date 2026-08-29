@@ -5,13 +5,13 @@ use super::{GalleryDlAuthConfig, RunOptions};
 pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     let mut extractor = serde_json::Map::new();
 
-    let one_second = serde_json::Value::Number(serde_json::Number::from(1));
-    extractor.insert("sleep-request".into(), one_second.clone());
-
-    // gallery-dl downloads synchronously. Pace both its extractor/API requests
-    // and its separate media-download stream at one request per second.
-    extractor.insert("sleep".into(), one_second);
-
+    // Request pacing is NOT configured here. The bridge enforces the
+    // one-request-per-second/domain policy with a reservation limiter at the
+    // requests.Session boundary (scripts/gallery_dl_bridge.py), covering
+    // extractor requests and media downloads on one shared per-host clock.
+    // gallery-dl's own `sleep`/`sleep-request` measure from the previous
+    // response instead, so layering them stacks each request's latency onto
+    // the interval and slows runs ~30% below the allowed rate.
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
 
     // Moebooru and Gelbooru-v0.2 expose categorized tags through the post
@@ -220,16 +220,10 @@ mod tests {
             .get("extractor")
             .and_then(|value| value.as_object())
             .expect("extractor config");
-        assert_eq!(
-            extractor
-                .get("sleep-request")
-                .and_then(|value| value.as_u64()),
-            Some(1)
-        );
-        assert_eq!(
-            extractor.get("sleep").and_then(|value| value.as_u64()),
-            Some(1)
-        );
+        // Pacing lives in the bridge's session limiter; gallery-dl's own
+        // response-relative sleeps must stay unset or they stack on it.
+        assert!(extractor.get("sleep-request").is_none());
+        assert!(extractor.get("sleep").is_none());
         let gelbooru = config
             .get("extractor")
             .and_then(|value| value.get("gelbooru"))
@@ -393,11 +387,8 @@ mod tests {
             .get("extractor")
             .and_then(|value| value.as_object())
             .expect("extractor config");
-        assert_eq!(
-            extractor.get("sleep-request").and_then(|v| v.as_u64()),
-            Some(1)
-        );
-        assert_eq!(extractor.get("sleep").and_then(|v| v.as_u64()), Some(1));
+        assert!(extractor.get("sleep-request").is_none());
+        assert!(extractor.get("sleep").is_none());
         assert!(extractor.get("rule34").is_none());
     }
 
