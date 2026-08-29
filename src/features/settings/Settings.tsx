@@ -88,7 +88,7 @@ interface PanelDef {
 const PANELS: PanelDef[] = [
   {
     id: 'general', label: 'General', icon: IconSettings2,
-    keywords: 'general appearance theme color light dark gray blue purple zoom',
+    keywords: 'general appearance theme color light dark gray blue purple zoom tags group namespace prefix compact',
     description: 'Appearance and zoom.',
   },
   {
@@ -621,6 +621,17 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 label="Show item counts in the sidebar"
                 onChange={() => updateAppSetting({ showSidebarCounts: !(appSettings?.showSidebarCounts ?? true) })}
               />
+            </div>
+          </div>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>Tags</div>
+              <CheckSetting
+                checked={!(appSettings?.showTagPrefixes ?? false)}
+                label="Hide group prefixes"
+                onChange={() => updateAppSetting({ showTagPrefixes: appSettings?.showTagPrefixes === false })}
+              />
+              <p className={styles.settingHint}>Show shorter tag names without changing their underlying group.</p>
             </div>
           </div>
         </>

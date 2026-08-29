@@ -42,7 +42,6 @@ import {
 } from './tagContextMenu';
 import {
   replaceStarredTag,
-  setTagPrefixesVisible,
   setTagStarred,
   useTagPreferences,
 } from './tagPreferences';
@@ -609,10 +608,6 @@ export function TagSelectPanel() {
               <button className={styles.settingsRow} type="button" onClick={toggleCounts}>
                 <span>Show counts</span>
                 <span className={`${shellStyles.checkBox} ${showCounts ? shellStyles.checkBoxChecked : ''}`}>{showCounts ? <IconCheck size={10} /> : null}</span>
-              </button>
-              <button className={styles.settingsRow} type="button" onClick={() => void setTagPrefixesVisible(!tagPreferences.showTagPrefixes)}>
-                <span>Hide group prefixes</span>
-                <span className={`${shellStyles.checkBox} ${!tagPreferences.showTagPrefixes ? shellStyles.checkBoxChecked : ''}`}>{!tagPreferences.showTagPrefixes ? <IconCheck size={10} /> : null}</span>
               </button>
             </div>
           </>

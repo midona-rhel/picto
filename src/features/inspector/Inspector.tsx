@@ -1045,7 +1045,6 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
         {hasTags && tags.map((t) => (
           <TagChip
             key={t.raw} namespace={t.ns} subtag={t.sub}
-            showNamespace={tagPreferences.showTagPrefixes}
             onRemove={onRemove ? () => onRemove(t.raw) : undefined}
             onContextMenu={(e) => {
               e.preventDefault();

@@ -38,6 +38,10 @@
   margin-right: 0;
 }
 
+:global(html[data-hide-tag-prefixes="true"]) .namespace {
+  display: none;
+}
+
 .subtag {
   max-width: 120px;
   overflow: hidden;

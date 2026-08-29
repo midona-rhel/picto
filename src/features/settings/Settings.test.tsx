@@ -74,6 +74,7 @@ const appSettings = {
   subscriptionDefaultGroupPosts: true,
   subscriptionInboxItemLimit: 1000,
   showTagGroups: true,
+  showTagPrefixes: false,
   starredTags: [],
   sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false,
@@ -220,6 +221,20 @@ describe('Settings', () => {
     await waitFor(() => expect(screen.getByText('Appearance')).toBeInTheDocument());
     expect(screen.queryByText('Keyboard')).not.toBeInTheDocument();
     expect(screen.queryByText(/Search results for/)).not.toBeInTheDocument();
+  });
+
+  it('stores compact tag prefixes as a global interface preference', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    const hidePrefixes = screen.getByRole('checkbox', { name: 'Hide group prefixes' });
+    expect(hidePrefixes).toBeChecked();
+    await user.click(hidePrefixes.closest('label')!);
+    await user.click(screen.getByRole('button', { name: 'Save & Close' }));
+
+    await waitFor(() => expect(mocks.replaceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ showTagPrefixes: true }),
+    ));
   });
 
   it('presents keyboard layout with the shortcut settings and shared combo box', async () => {

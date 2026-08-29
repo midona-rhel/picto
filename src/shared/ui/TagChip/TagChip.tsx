@@ -61,13 +61,12 @@ interface Props {
   subtag: string;
   icon?: ReactNode;
   colorRgb?: [number, number, number];
-  showNamespace?: boolean;
   onRemove?: () => void;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export function TagChip({ namespace, subtag, icon, colorRgb, showNamespace = true, onRemove, onClick, onContextMenu }: Props) {
+export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, onContextMenu }: Props) {
   const [r, g, b] = colorRgb ?? NS_COLORS[(namespace ?? '').toLowerCase()] ?? NS_COLORS.default;
   const [darkText, lightText] = tagTextColors([r, g, b]);
   const chipStyle = {
@@ -79,7 +78,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, showNamespace = tru
     '--chip-text-light': lightText,
   } as React.CSSProperties;
 
-  const namespaceVisible = showNamespace && namespace !== 'default' && namespace !== '' && namespace !== 'general';
+  const showNamespace = namespace !== 'default' && namespace !== '' && namespace !== 'general';
 
   return (
     <span
@@ -89,7 +88,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, showNamespace = tru
       onContextMenu={onContextMenu}
     >
       {icon && <span className={styles.iconSlot}>{icon}</span>}
-      {namespaceVisible && <span className={styles.namespace}>{namespace}:</span>}
+      {showNamespace && <span className={styles.namespace}>{namespace}:</span>}
       <span className={styles.subtag}>{subtag}</span>
       {onRemove && (
         <KbdTooltip label="Remove">

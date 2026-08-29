@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { getSettings, patchSettings } from '../../platform/settingsApi';
+import { registerAppSettingsReload } from '../../runtime/appSettingsSettle';
 import { showErrorNotification } from '../../shared/lib/notifications';
 
 export interface TagPreferences {
@@ -12,6 +13,7 @@ export interface TagPreferences {
 const listeners = new Set<() => void>();
 let snapshot: TagPreferences = { showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {} };
 let loadPromise: Promise<void> | null = null;
+let unregisterSettingsReload: (() => void) | null = null;
 
 function emit(): void {
   listeners.forEach((listener) => listener());
@@ -19,6 +21,9 @@ function emit(): void {
 
 function setSnapshot(next: TagPreferences): void {
   snapshot = next;
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.hideTagPrefixes = String(!next.showTagPrefixes);
+  }
   emit();
 }
 
@@ -47,8 +52,19 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+function ensureSettingsReloadRegistered(): void {
+  if (unregisterSettingsReload) return;
+  unregisterSettingsReload = registerAppSettingsReload(() => {
+    loadPromise = null;
+    void ensureLoaded();
+  });
+}
+
 export function useTagPreferences(): TagPreferences {
-  useEffect(() => { void ensureLoaded(); }, []);
+  useEffect(() => {
+    ensureSettingsReloadRegistered();
+    void ensureLoaded();
+  }, []);
   return useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
 }
 
@@ -69,10 +85,6 @@ async function persist(next: TagPreferences, patch: Partial<TagPreferences>): Pr
 
 export function setTagGroupsVisible(visible: boolean): Promise<void> {
   return persist({ ...snapshot, showTagGroups: visible }, { showTagGroups: visible });
-}
-
-export function setTagPrefixesVisible(visible: boolean): Promise<void> {
-  return persist({ ...snapshot, showTagPrefixes: visible }, { showTagPrefixes: visible });
 }
 
 export function setTagStarred(tag: string, starred: boolean): Promise<void> {
