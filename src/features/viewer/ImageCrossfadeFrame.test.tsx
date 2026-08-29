@@ -1,5 +1,5 @@
 import { createRef } from 'react';
-import { render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 
@@ -22,6 +22,7 @@ describe('ImageCrossfadeFrame', () => {
     />);
 
     const frame = container.querySelector('.image-crossfade-frame');
+    expect(frame).toHaveAttribute('data-instant-preview', 'true');
     expect(frame).toHaveStyle({
       left: '50%',
       top: '50%',
@@ -62,5 +63,39 @@ describe('ImageCrossfadeFrame', () => {
 
     expect(container.querySelector('[data-progressive-media-preview]')).toHaveAttribute('data-visible', 'false');
     expect(container.querySelector('[data-progressive-media-content]')).toHaveAttribute('data-visible', 'false');
+  });
+
+  it('keeps the painted thumbnail until the incoming thumbnail node is decoded', async () => {
+    const props = {
+      frameRef: createRef<HTMLDivElement>(),
+      fullImageRef: createRef<HTMLImageElement>(),
+      imageSize: { width: 1200, height: 800 },
+      fullUrl: '',
+      thumbnailVisible: true,
+      fullVisible: false,
+      onThumbnailLoad: vi.fn(),
+      onFullLoad: vi.fn(),
+    };
+    const { container, rerender } = render(
+      <ImageCrossfadeFrame {...props} thumbnailUrl="first-thumb.jpg" />,
+    );
+
+    rerender(<ImageCrossfadeFrame {...props} thumbnailUrl="second-thumb.jpg" />);
+
+    expect(container.querySelector('[data-image-crossfade-thumbnail="painted"]')).toHaveAttribute(
+      'src',
+      'first-thumb.jpg',
+    );
+    const incoming = container.querySelector<HTMLImageElement>('[data-image-crossfade-thumbnail="incoming"]');
+    expect(incoming).toHaveAttribute('src', 'second-thumb.jpg');
+    expect(incoming).toHaveStyle({ opacity: '0' });
+
+    await act(async () => { fireEvent.load(incoming!); });
+
+    expect(container.querySelector('[data-image-crossfade-thumbnail="incoming"]')).toBeNull();
+    expect(container.querySelector('[data-image-crossfade-thumbnail="painted"]')).toHaveAttribute(
+      'src',
+      'second-thumb.jpg',
+    );
   });
 });

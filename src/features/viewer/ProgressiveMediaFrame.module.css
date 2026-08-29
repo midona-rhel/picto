@@ -21,6 +21,10 @@
   opacity: 1;
 }
 
+.frame[data-instant-preview='true'][data-ready='false'] .previewVisible {
+  transition: none;
+}
+
 .content {
   z-index: 2;
   opacity: 0;
