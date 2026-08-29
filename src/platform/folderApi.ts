@@ -139,7 +139,6 @@ export function addMedia(paths: string[], params: {
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
   include_subfolders?: boolean;
-  expand_archives?: boolean;
   include_folders_without_media?: boolean;
   watch_source_folder?: boolean;
   delete_after_ingest?: boolean;
@@ -153,7 +152,6 @@ export function addMedia(paths: string[], params: {
     parent_folder_id: params.parent_folder_id ?? null,
     preserve_structure: params.preserve_structure ?? false,
     include_subfolders: params.include_subfolders ?? true,
-    expand_archives: params.expand_archives ?? true,
     include_folders_without_media: params.include_folders_without_media ?? false,
     watch_source_folder: params.watch_source_folder ?? false,
     delete_after_ingest: params.delete_after_ingest ?? false,

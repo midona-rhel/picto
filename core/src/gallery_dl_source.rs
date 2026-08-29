@@ -498,47 +498,8 @@ pub(crate) async fn normalize_downloads(
     file_path: PathBuf,
     metadata: ParsedMetadata,
 ) -> Result<Vec<DownloadedItem>, RunnerFailure> {
-    if is_zip_path(&file_path) {
-        let entries = crate::media_processing::archive::extract_library_files(&file_path).map_err(
-            |error| {
-                RunnerFailure::terminal(
-                    RunnerFailureKind::InvalidOutput,
-                    format!("{}: {error}", file_path.display()),
-                )
-            },
-        )?;
-        let mut normalized = Vec::with_capacity(entries.len());
-        for (index, entry) in entries.into_iter().enumerate() {
-            let mut entry_metadata = metadata.clone();
-            let base_item_key = entry_metadata.item_key.clone().unwrap_or_else(|| {
-                entry_metadata
-                    .post_id
-                    .clone()
-                    .unwrap_or_else(|| "archive".to_string())
-            });
-            entry_metadata.item_key = Some(format!(
-                "{base_item_key}:zip:{index}:{}",
-                entry.archive_name
-            ));
-            entry_metadata.media_url = None;
-            match normalize_media_download(site_id, entry.path, entry_metadata).await? {
-                Some(mut item) => {
-                    item.force_collection = true;
-                    normalized.push(item)
-                }
-                None => tracing::warn!(
-                    archive = %file_path.display(),
-                    entry = entry.archive_name,
-                    "Ignoring unsupported media-looking ZIP entry"
-                ),
-            }
-        }
-        return Ok(normalized);
-    }
-
     // Standalone audio attachments (voice notes, podcast episodes) are not
-    // library media. Audio stays acceptable only inside ZIP albums above,
-    // where it is part of a collection the post explicitly bundles.
+    // library media.
     Ok(normalize_media_download(site_id, file_path, metadata)
         .await?
         .into_iter()
@@ -553,12 +514,6 @@ pub(crate) async fn normalize_downloads(
             true
         })
         .collect())
-}
-
-fn is_zip_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|value| value.eq_ignore_ascii_case("zip"))
 }
 
 async fn normalize_media_download(
@@ -901,10 +856,7 @@ fn map_failure(kind: FailureKind, message: String) -> RunnerFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use image::{ImageBuffer, ImageFormat, Rgba};
-    use zip::write::SimpleFileOptions;
 
     use super::*;
 
@@ -1010,22 +962,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_zip_imports_every_accepted_entry() {
+    async fn subscription_zip_is_ignored_without_opening_the_archive() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("soundtrack.zip");
-        let image_path = directory.path().join("page.png");
-        ImageBuffer::from_pixel(3, 2, Rgba([1_u8, 2, 3, 255]))
-            .save_with_format(&image_path, ImageFormat::Png)
-            .unwrap();
-        let image_bytes = std::fs::read(image_path).unwrap();
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
-        zip.start_file("pages/001.png", SimpleFileOptions::default())
-            .unwrap();
-        zip.write_all(&image_bytes).unwrap();
-        zip.start_file("readme.txt", SimpleFileOptions::default())
-            .unwrap();
-        zip.write_all(b"not a media asset").unwrap();
-        zip.finish().unwrap();
+        let path = directory.path().join("attachment.zip");
+        std::fs::write(&path, b"this is deliberately not opened as a ZIP").unwrap();
 
         let normalized = normalize_downloads(
             "patreon",
@@ -1039,40 +979,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(normalized.len(), 2);
-        let source = normalized[0].input.source_identity.as_ref().unwrap();
-        assert_eq!(source.source_key, "patreon:58577141");
-        assert!(source.source_item_key.contains(":zip:0:pages/001.png"));
-        assert_eq!(normalized[0].input.facts.mime, "image/png");
-        assert_eq!(normalized[1].input.facts.mime, "text/plain");
-        assert!(normalized.iter().all(|item| item.force_collection));
-    }
-
-    #[tokio::test]
-    async fn subscription_zip_accepts_audio_entries() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("soundtrack.zip");
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
-        zip.start_file("soundtrack.mp3", SimpleFileOptions::default())
-            .unwrap();
-        zip.write_all(b"audio").unwrap();
-        zip.finish().unwrap();
-
-        let normalized = normalize_downloads(
-            "patreon",
-            path,
-            ParsedMetadata {
-                post_id: Some("58577141".into()),
-                item_key: Some("patreon:58577141:soundtrack".into()),
-                ..ParsedMetadata::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(normalized.len(), 1);
-        assert_eq!(normalized[0].input.facts.mime, "audio/mpeg");
-        assert!(normalized[0].force_collection);
+        assert!(normalized.is_empty());
     }
 
     #[tokio::test]
@@ -1094,34 +1001,6 @@ mod tests {
         .unwrap();
 
         assert!(normalized.is_empty());
-    }
-
-    #[tokio::test]
-    async fn subscription_zip_bomb_is_rejected_with_a_clear_error() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("bomb.zip");
-        let options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
-        zip.start_file("page.png", options).unwrap();
-        zip.write_all(&vec![0_u8; 1024 * 1024]).unwrap();
-        zip.finish().unwrap();
-
-        let failure = normalize_downloads(
-            "patreon",
-            path,
-            ParsedMetadata {
-                post_id: Some("unsafe-post".into()),
-                ..ParsedMetadata::default()
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert_eq!(failure.kind, RunnerFailureKind::InvalidOutput);
-        assert!(!failure.retryable);
-        assert!(failure.message.contains("Unsafe ZIP archive"));
-        assert!(failure.message.contains("compression-ratio limit"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ const analyzeFolderTree = vi.hoisted(() => vi.fn());
 vi.mock('../../platform/folderApi', () => ({ analyzeFolderTree }));
 
 describe('FolderImportModal', () => {
-  it('defaults to recursive archive expansion while omitting folders without media', async () => {
+  it('defaults to recursive import while omitting folders without media', async () => {
     analyzeFolderTree.mockResolvedValue({
       source_depth: 2, destination_depth: 0, retained_depth: 2, consolidated_levels: 0,
     });
@@ -27,7 +27,6 @@ describe('FolderImportModal', () => {
     expect(onImport).toHaveBeenCalledWith({
       preserveStructure: true,
       includeSubfolders: true,
-      expandArchives: true,
       includeFoldersWithoutMedia: false,
       watchSourceFolder: false,
     });
@@ -49,7 +48,7 @@ describe('FolderImportModal', () => {
 
     expect(screen.getByText('Preserve folder structure')).toBeInTheDocument();
     expect(screen.getByText('Include subfolders')).toBeInTheDocument();
-    expect(screen.getByText('Extract ZIP archives')).toBeInTheDocument();
+    expect(screen.queryByText('Extract ZIP archives')).not.toBeInTheDocument();
     expect(screen.getByText('Include folders without media')).toBeInTheDocument();
     expect(screen.getByText('Watch this folder')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled());
@@ -72,7 +71,7 @@ describe('FolderImportModal', () => {
 
     const switches = screen.getAllByRole('switch');
     fireEvent.click(switches[0]);
-    fireEvent.click(switches[4]);
+    fireEvent.click(switches[3]);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
 

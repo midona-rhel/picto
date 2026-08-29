@@ -34,7 +34,6 @@ export interface MediaImportParams {
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
   include_subfolders?: boolean;
-  expand_archives?: boolean;
   include_folders_without_media?: boolean;
   watch_source_folder?: boolean;
   delete_after_ingest?: boolean;

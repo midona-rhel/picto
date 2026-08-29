@@ -190,7 +190,6 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     format("3dl", "application/x-3dl-lut"),
     format("ies", "application/x-ies"),
     // Explicit format-extension plugin targets and existing Picto formats.
-    format("zip", "application/zip"),
     format("epub", "application/epub+zip"),
     format("cbz", "application/vnd.comicbook+zip"),
     format("djvu", "image/vnd.djvu"),
@@ -255,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_formats_and_zip_are_accepted() {
+    fn plugin_formats_are_accepted_but_generic_zip_is_not() {
         for path in [
             "document.pdf",
             "photo.jxl",
@@ -270,10 +269,10 @@ mod tests {
             "grade.cube",
             "light.ies",
             "readme.md",
-            "pack.zip",
         ] {
             assert!(has_supported_extension(Path::new(path)), "{path}");
         }
+        assert!(!has_supported_extension(Path::new("pack.zip")));
     }
 
     #[test]

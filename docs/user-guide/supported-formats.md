@@ -53,11 +53,14 @@ Fonts: `.ttf`, `.ttc`, `.otf`, `.woff`.
 Camera RAW: `.3fr`, `.arw`, `.cr2`, `.cr3`, `.crw`, `.dng`, `.erf`, `.mrw`, `.nef`, `.nrw`, `.orf`,
 `.pef`, `.raf`, `.raw`, `.rw2`, `.sr2`, `.srw`, `.x3f`.
 
-## Documents, web files, and archives
+## Documents and web files
 
 `.txt`, `.md`, `.markdown`, `.json`, `.rtf`, `.key`, `.numbers`, `.pages`, `.pdf`, `.potx`, `.ppt`,
 `.pptx`, `.xls`, `.xlsx`, `.doc`, `.docx`, `.eddx`, `.emmx`, `.html`, `.htm`, `.mhtml`, `.url`,
-`.zip`, `.epub`, `.cbz`, `.djvu`, `.djv`, `.swf`, `.eps`.
+`.epub`, `.cbz`, `.djvu`, `.djv`, `.swf`, `.eps`.
+
+Generic `.zip` archives are not imported or opened by Picto. Extract the files outside Picto before
+importing them. Format-specific containers such as EPUB and CBZ remain supported.
 
 PDF, DOCX, PPTX, plain text, Markdown, JSON, RTF, EPUB, CBZ and DjVu have read-only internal
 viewers built on the same document shell. JPEG XL has native decode, thumbnails, image analysis and

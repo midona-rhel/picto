@@ -8,7 +8,6 @@ import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
 export interface FolderImportOptions {
   preserveStructure: boolean;
   includeSubfolders: boolean;
-  expandArchives: boolean;
   includeFoldersWithoutMedia: boolean;
   watchSourceFolder: boolean;
 }
@@ -29,7 +28,6 @@ export function FolderImportModal({
   const [options, setOptions] = useState<FolderImportOptions>({
     preserveStructure: true,
     includeSubfolders: true,
-    expandArchives: true,
     includeFoldersWithoutMedia: false,
     watchSourceFolder: false,
   });
@@ -43,7 +41,6 @@ export function FolderImportModal({
     setOptions({
       preserveStructure: true,
       includeSubfolders: true,
-      expandArchives: true,
       includeFoldersWithoutMedia: false,
       watchSourceFolder: false,
     });
@@ -128,10 +125,6 @@ export function FolderImportModal({
         <div className={modalStyles.rowSpread}>
           <span className={modalStyles.fieldLabel}>Include subfolders</span>
           <ToggleSwitch on={options.includeSubfolders} onChange={() => toggle('includeSubfolders')} />
-        </div>
-        <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Extract ZIP archives</span>
-          <ToggleSwitch on={options.expandArchives} onChange={() => toggle('expandArchives')} />
         </div>
         <div className={modalStyles.rowSpread}>
           <span className={modalStyles.fieldLabel}>Include folders without media</span>

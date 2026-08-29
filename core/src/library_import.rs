@@ -29,8 +29,6 @@ pub struct ManualImportInput {
     pub preserve_structure: bool,
     #[serde(default = "default_true")]
     pub include_subfolders: bool,
-    #[serde(default = "default_true")]
-    pub expand_archives: bool,
     #[serde(default)]
     pub include_folders_without_media: bool,
     #[serde(default)]
@@ -190,19 +188,15 @@ pub async fn enqueue_manual_import(
     let mut prepared_count = 0usize;
     let mut job_index = 0usize;
     for (index, candidate) in candidates.into_iter().enumerate() {
-        let candidate_result = if is_zip(&candidate.path) && input.expand_archives {
-            prepare_archive(&candidate.path, input, None, now.timestamp_millis()).await
-        } else {
-            prepare_import(
-                &candidate.path,
-                input,
-                None,
-                format!("manual:{invocation}:{index}"),
-                now.timestamp_millis(),
-            )
-            .await
-            .map(|value| vec![value])
-        };
+        let candidate_result = prepare_import(
+            &candidate.path,
+            input,
+            None,
+            format!("manual:{invocation}:{index}"),
+            now.timestamp_millis(),
+        )
+        .await
+        .map(|value| vec![value]);
         match candidate_result {
             Ok(mut values) => {
                 let folder_id = if input.preserve_structure {
@@ -399,7 +393,6 @@ pub async fn scan_watched_folders(
         parent_folder_id: None,
         preserve_structure: false,
         include_subfolders: true,
-        expand_archives: false,
         include_folders_without_media: false,
         watch_source_folder: false,
         delete_after_ingest: false,
@@ -506,40 +499,6 @@ fn enqueue(
         .map_err(|error| error.to_string())?;
     report.queued += 1;
     Ok(())
-}
-
-async fn prepare_archive(
-    archive_path: &Path,
-    input: &ManualImportInput,
-    folder_id: Option<FolderId>,
-    imported_at_ms: i64,
-) -> Result<Vec<PreparedImport>, String> {
-    let entries = crate::media_processing::archive::extract_library_files(archive_path)
-        .map_err(|error| format!("Failed to extract {}: {error}", archive_path.display()))?;
-    if entries.is_empty() {
-        return Err(format!(
-            "Unsupported media: {} contains no accepted files",
-            archive_path.display()
-        ));
-    }
-    let mut members = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.into_iter().enumerate() {
-        let mut member = prepare_import(
-            &entry.path,
-            input,
-            folder_id,
-            format!("archive:{}:{index}", archive_path.display()),
-            imported_at_ms,
-        )
-        .await?;
-        member.media_name = Path::new(&entry.archive_name)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or(&member.media_name)
-            .to_owned();
-        members.push(member);
-    }
-    Ok(members)
 }
 
 async fn prepare_import(
@@ -809,12 +768,6 @@ fn is_media_path(path: &Path) -> bool {
     crate::media_processing::has_supported_extension(path)
 }
 
-fn is_zip(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-}
-
 fn watch_job_key(folder_id: FolderId, path: &Path, metadata: &fs::Metadata) -> String {
     let modified = metadata
         .modified()
@@ -864,7 +817,6 @@ mod tests {
             parent_folder_id: None,
             preserve_structure: false,
             include_subfolders: true,
-            expand_archives: true,
             include_folders_without_media: false,
             watch_source_folder: false,
             delete_after_ingest: false,
@@ -897,6 +849,24 @@ mod tests {
             vec!["https://example.test/manual"]
         );
         assert_eq!(details.tag_ids.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn manual_import_does_not_open_generic_zip_archives() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("untrusted.zip");
+        fs::write(&archive, b"not opened").unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+
+        let error = enqueue_manual_import(
+            &application,
+            &input(vec![archive.to_string_lossy().into_owned()], false),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("No supported media files"));
+        assert_eq!(fs::read(&archive).unwrap(), b"not opened");
     }
 
     #[tokio::test]
