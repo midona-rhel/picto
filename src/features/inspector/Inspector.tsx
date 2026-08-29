@@ -68,6 +68,7 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { formatLabelForMime } from '../grid/canvas/primitives';
 import { GroupIcon } from '../../shared/ui/icons/group-icons';
 import { labToHex } from '../../shared/lib/labColor';
+import { tagGroupOrder } from '../tags/tagGroupPresentation';
 
 const store = getDefaultStore();
 
@@ -111,8 +112,13 @@ const EXT: Record<string, string> = {
 };
 function fmtExt(mime: string) { const s = mime.split('/')[1] ?? ''; return EXT[s] ?? s.replace(/^x-/, '').toUpperCase(); }
 
-const NS_ORDER: Record<string, number> = { creator: 0, studio: 1, series: 2, character: 3, person: 4, species: 5, system: 6, '': 7, default: 7 };
-function tagKey(ns: string, sub: string) { return `${(NS_ORDER[ns.toLowerCase()] ?? 7).toString().padStart(2, '0')}:${sub.toLowerCase()}`; }
+function tagKey(ns: string, sub: string) {
+  const normalizedNamespace = ns.toLowerCase();
+  const order = normalizedNamespace === '' || normalizedNamespace === 'general'
+    ? 99
+    : tagGroupOrder(normalizedNamespace);
+  return `${order.toString().padStart(2, '0')}:${sub.toLowerCase()}`;
+}
 
 function hexToRgb(hex: string | null | undefined): [number, number, number] {
   if (!hex) return [134, 142, 150];

@@ -519,6 +519,31 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
+  it('sorts rating tags with the named groups and keeps general tags last', () => {
+    const record = (tagId: number, namespace: string, subname: string) => ({
+      tag_id: tagId,
+      namespace_id: tagId,
+      namespace,
+      subname,
+      active_count: 1,
+      assignment_count: 1,
+    });
+    const populated = {
+      ...entity,
+      resolved_tag_records: [
+        record(201, '', 'armor'),
+        record(202, 'rating', 'questionable'),
+        record(203, 'species', 'wolf'),
+      ],
+    };
+
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: populated });
+    const tags = ['wolf', 'questionable', 'armor'].map((name) => screen.getByText(name));
+    expect(tags[0].compareDocumentPosition(tags[1]) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(tags[1].compareDocumentPosition(tags[2]) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    view.unmount();
+  });
+
   it('keeps Auto Tag in inspector scroll flow with its local action variant', () => {
     const entityView = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
     const action = document.querySelector('[data-inspector-action="auto-tag"]');
