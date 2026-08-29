@@ -48,9 +48,12 @@ if (isDev && process.platform === 'darwin') {
 }
 
 // Single instance guard — prevent multiple Picto processes from running.
-// If another instance is already running, focus its window and quit this one.
 const gotLock = isAutomation || app.requestSingleInstanceLock();
 if (!gotLock) {
+  dialog.showErrorBox(
+    'Picto is already running',
+    'Close the existing Picto process before starting another one.',
+  );
   app.quit();
 }
 
