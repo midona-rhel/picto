@@ -309,6 +309,9 @@ export function TagManagerScreen() {
   const listGeneration = useRef(0);
   const summaryGeneration = useRef(0);
   const viewTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const invalidationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInvalidationRefreshAt = useRef(0);
+  const browseIdentity = useRef<string | null>(null);
   const selectedRef = useRef<CanonicalTagRecord | null>(null);
   const tagCanvasRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(3);
@@ -340,7 +343,10 @@ export function TagManagerScreen() {
   useEffect(() => {
     const generation = ++listGeneration.current;
     let cancelled = false;
-    setLoading(true);
+    const nextBrowseIdentity = `${namespace ?? '*'}\u0000${query}\u0000${showStarred ? 'starred' : 'browse'}`;
+    const browseChanged = browseIdentity.current !== nextBrowseIdentity;
+    browseIdentity.current = nextBrowseIdentity;
+    if (browseChanged) setLoading(true);
     const request = showStarred
       ? Promise.all(tagPreferences.starredTags.map(async (name) => {
           const separator = name.indexOf(':');
@@ -370,10 +376,12 @@ export function TagManagerScreen() {
       if (cancelled || generation !== listGeneration.current) return;
       setTags(page.tags);
       setCursor(page.next_cursor);
-      setViewEpoch((value) => value + 1);
-      setViewTransition('entering');
-      if (viewTransitionTimer.current) clearTimeout(viewTransitionTimer.current);
-      viewTransitionTimer.current = setTimeout(() => setViewTransition('idle'), 140);
+      if (browseChanged) {
+        setViewEpoch((value) => value + 1);
+        setViewTransition('entering');
+        if (viewTransitionTimer.current) clearTimeout(viewTransitionTimer.current);
+        viewTransitionTimer.current = setTimeout(() => setViewTransition('idle'), 140);
+      }
     }).catch((reason: unknown) => {
       if (!cancelled && generation === listGeneration.current) setError(errorMessage(reason));
     }).finally(() => {
@@ -386,6 +394,7 @@ export function TagManagerScreen() {
 
   useEffect(() => () => {
     if (viewTransitionTimer.current) clearTimeout(viewTransitionTimer.current);
+    if (invalidationTimer.current) clearTimeout(invalidationTimer.current);
   }, []);
 
   useEffect(() => {
@@ -398,18 +407,29 @@ export function TagManagerScreen() {
     await reloadNamespaceSummary();
   }, [reloadNamespaceSummary]);
 
+  const scheduleInvalidationRefresh = useCallback(() => {
+    if (invalidationTimer.current) return;
+    const elapsed = Date.now() - lastInvalidationRefreshAt.current;
+    const delay = Math.max(0, 500 - elapsed);
+    invalidationTimer.current = setTimeout(() => {
+      invalidationTimer.current = null;
+      lastInvalidationRefreshAt.current = Date.now();
+      void refreshData();
+    }, delay);
+  }, [refreshData]);
+
   useEffect(() => {
     let cancelled = false;
     const unregister = libraryInvalidation.register('tags', () => {
       if (cancelled) return;
-      void refreshData();
+      scheduleInvalidationRefresh();
     });
     libraryInvalidation.start();
     return () => {
       cancelled = true;
       unregister();
     };
-  }, [refreshData]);
+  }, [scheduleInvalidationRefresh]);
 
   const resetBrowse = useCallback(() => {
     listGeneration.current += 1;

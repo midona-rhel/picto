@@ -270,6 +270,24 @@ describe('TagManagerScreen', () => {
     await waitFor(() => expect(mocks.getNamespaceSummary.mock.calls.length).toBeGreaterThan(summaryCallsBeforeEvent));
   });
 
+  it('coalesces ingestion invalidations without remounting visible tags', async () => {
+    await renderScreen();
+    const visibleTag = await screen.findByRole('button', { name: /^alice/ });
+    const pageCallsBefore = mocks.getPaginated.mock.calls.length;
+    const summaryCallsBefore = mocks.getNamespaceSummary.mock.calls.length;
+
+    await act(async () => {
+      invalidateTags?.();
+      invalidateTags?.();
+      invalidateTags?.();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    await waitFor(() => expect(mocks.getNamespaceSummary.mock.calls.length).toBe(summaryCallsBefore + 1));
+    expect(mocks.getPaginated.mock.calls.length).toBeLessThanOrEqual(pageCallsBefore + 2);
+    expect(screen.getByRole('button', { name: /^alice/ })).toBe(visibleTag);
+  });
+
   it('closes the editor after delete and merge', async () => {
     const user = setupUser();
     await renderScreen();
