@@ -63,6 +63,9 @@ def build(output: Path, platform: str | None, dry_run: bool) -> Path:
         commands = [
             [compatible_python(), "-m", "venv", str(venv)],
             [str(python(venv)), "-m", "pip", "install", "--disable-pip-version-check", "-r", str(REQUIREMENTS)],
+            # `dotenv` is a deprecated metadata-only shim for `python-dotenv` with no
+            # declared license. OF-Scraper already installs the real implementation.
+            [str(python(venv)), "-m", "pip", "uninstall", "--yes", "dotenv"],
             [str(python(venv)), "-m", "PyInstaller", "--clean", "--noconfirm", "--onefile",
              "--name", name(platform).removesuffix(".exe"), "--distpath", str(dist),
              "--workpath", str(root / "work"), "--specpath", str(root / "work"),
