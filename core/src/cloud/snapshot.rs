@@ -18,6 +18,14 @@ pub struct SnapshotArtifact {
     pub artifact_sha256: String,
     pub size_bytes: u64,
     pub compressed_path: PathBuf,
+    database_path: PathBuf,
+}
+
+impl Drop for SnapshotArtifact {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.database_path);
+        let _ = std::fs::remove_file(&self.compressed_path);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,16 +81,19 @@ pub fn create_verified_library(
     let revision = application
         .library()
         .database()
-        .read(picto_library::database::WorkPriority::Cloud, |source| {
-            let revision = picto_library::schema::validate(source)?;
-            let mut destination = Connection::open(&database_path)?;
-            let backup = Backup::new(source, &mut destination)?;
-            backup.run_to_completion(256, Duration::from_millis(5), None)?;
-            drop(backup);
-            validate_library_database(&destination)
-                .map_err(picto_library::LibraryError::InvalidState)?;
-            Ok(revision)
-        })
+        .read_consistent(
+            picto_library::database::WorkPriority::Cloud,
+            Ok,
+            |source, revision| {
+                let mut destination = Connection::open(&database_path)?;
+                let backup = Backup::new(source, &mut destination)?;
+                backup.run_to_completion(256, Duration::from_millis(5), None)?;
+                drop(backup);
+                validate_library_database(&destination)
+                    .map_err(picto_library::LibraryError::InvalidState)?;
+                Ok(revision)
+            },
+        )
         .map_err(|error| format!("Failed to stage SQLite snapshot: {error}"))?;
 
     let database_file = std::fs::File::open(&database_path)
@@ -103,8 +114,6 @@ pub fn create_verified_library(
     let size_bytes = std::fs::metadata(&compressed_path)
         .map_err(|error| format!("Failed to inspect compressed snapshot: {error}"))?
         .len();
-    std::fs::remove_file(&database_path)
-        .map_err(|error| format!("Failed to remove uncompressed snapshot staging file: {error}"))?;
     Ok((
         SnapshotArtifact {
             snapshot_id,
@@ -112,6 +121,7 @@ pub fn create_verified_library(
             artifact_sha256,
             size_bytes,
             compressed_path,
+            database_path,
         },
         revision,
     ))
@@ -120,9 +130,33 @@ pub async fn publish_library(
     application: &LibraryApplication,
     provider: &dyn CloudProvider,
 ) -> Result<SnapshotManifest, String> {
+    set_sync_state(
+        application,
+        "reconciling",
+        "preparing",
+        "Preparing library sync",
+    )?;
+    let result = publish_library_inner(application, provider).await;
+    if let Err(error) = &result {
+        let _ = set_sync_state(application, "error", "idle", error);
+    }
+    result
+}
+
+async fn publish_library_inner(
+    application: &LibraryApplication,
+    provider: &dyn CloudProvider,
+) -> Result<SnapshotManifest, String> {
     let (artifact, database_revision) = create_verified_library(application)?;
     let (library_id, frontier) = identity_and_frontier_library(application)?;
     ensure_manifest_library(application, provider, &library_id).await?;
+    sync_snapshot_blobs(application, provider, &artifact.database_path, &library_id).await?;
+    set_sync_state(
+        application,
+        "reconciling",
+        "snapshot",
+        "Syncing library changes",
+    )?;
     let root = format!("picto/{library_id}/snapshots/{}", artifact.snapshot_id);
     let artifact_path = format!("{root}.sqlite.zst");
     let manifest_path = format!("{root}.json");
@@ -184,8 +218,256 @@ pub async fn publish_library(
             },
         )
         .map_err(|error| error.to_string())?;
-    let _ = std::fs::remove_file(&artifact.compressed_path);
     Ok(manifest)
+}
+
+#[derive(Debug)]
+struct SnapshotBlob {
+    hash: String,
+    extension: String,
+}
+
+async fn sync_snapshot_blobs(
+    application: &LibraryApplication,
+    provider: &dyn CloudProvider,
+    snapshot_database: &Path,
+    library_id: &str,
+) -> Result<(), String> {
+    let total = count_snapshot_blobs(snapshot_database)?;
+    if total == 0 {
+        return Ok(());
+    }
+    set_sync_progress(application, 0, total, "Syncing files")?;
+
+    let staging = application
+        .root()
+        .join("cloud")
+        .join("staging")
+        .join("blobs");
+    std::fs::create_dir_all(&staging)
+        .map_err(|error| format!("Failed to create cloud blob staging directory: {error}"))?;
+    let mut cursor = String::new();
+    let mut completed = 0_i64;
+    loop {
+        let page = load_snapshot_blob_page(snapshot_database, &cursor)?;
+        if page.is_empty() {
+            break;
+        }
+
+        let mut settled = Vec::with_capacity(page.len());
+        for blob in &page {
+            let remote_path = blob_remote_path(library_id, blob)?;
+            let local_path = application
+                .blobs()
+                .original_path_with_ext(&blob.hash, Some(&blob.extension))
+                .map_err(|error| format!("Failed to resolve local original: {error}"))?;
+            let outcome = if local_path.is_file() {
+                if !provider.exists(&remote_path).await? {
+                    provider
+                        .upload_file(&remote_path, local_path, &blob.hash)
+                        .await?;
+                }
+                Ok(())
+            } else if provider.exists(&remote_path).await? {
+                let download =
+                    staging.join(format!("{}-{}.download", blob.hash, uuid::Uuid::new_v4()));
+                let result = async {
+                    provider
+                        .download_file(&remote_path, download.clone(), &blob.hash)
+                        .await?;
+                    application
+                        .blobs()
+                        .write_original_from_path(&blob.hash, &download, Some(&blob.extension))
+                        .map_err(|error| format!("Failed to restore cloud original: {error}"))
+                }
+                .await;
+                let _ = std::fs::remove_file(download);
+                result
+            } else {
+                Err("Original is missing locally and from the sync folder".to_string())
+            };
+            settled.push((blob.hash.clone(), blob.extension.clone(), outcome));
+        }
+        settle_blob_page(application, &settled)?;
+        if let Some((hash, _, Err(error))) = settled.iter().find(|(_, _, result)| result.is_err()) {
+            return Err(format!(
+                "Cloud original {} could not be synced: {error}",
+                &hash[..12]
+            ));
+        }
+        completed += settled.len() as i64;
+        set_sync_progress(application, completed, total, "Syncing files")?;
+        cursor = page.last().expect("non-empty cloud blob page").hash.clone();
+    }
+    Ok(())
+}
+
+fn count_snapshot_blobs(snapshot_database: &Path) -> Result<i64, String> {
+    let snapshot = Connection::open_with_flags(
+        snapshot_database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| format!("Failed to inspect staged cloud snapshot: {error}"))?;
+    snapshot
+        .query_row(
+            "SELECT COUNT(*)
+             FROM media_file AS file
+             LEFT JOIN cloud_blob_state AS blob ON blob.file_hash = file.content_hash
+             WHERE blob.file_hash IS NULL OR blob.state != 'available' OR blob.remote_present = 0",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count cloud originals: {error}"))
+}
+
+fn load_snapshot_blob_page(
+    snapshot_database: &Path,
+    cursor: &str,
+) -> Result<Vec<SnapshotBlob>, String> {
+    let snapshot = Connection::open_with_flags(
+        snapshot_database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|error| format!("Failed to inspect staged cloud snapshot: {error}"))?;
+    let mut statement = snapshot
+        .prepare(
+            "SELECT file.content_hash, file.mime,
+                    COALESCE(blob.remote_extension, '')
+             FROM media_file AS file
+             LEFT JOIN cloud_blob_state AS blob ON blob.file_hash = file.content_hash
+             WHERE file.content_hash > ?1
+               AND (blob.file_hash IS NULL OR blob.state != 'available'
+                    OR blob.remote_present = 0)
+             ORDER BY file.content_hash
+             LIMIT 64",
+        )
+        .map_err(|error| format!("Failed to prepare cloud blob page: {error}"))?;
+    let page = statement
+        .query_map([cursor], |row| {
+            let hash = row.get::<_, String>(0)?;
+            let mime = row.get::<_, String>(1)?;
+            let stored_extension = row.get::<_, String>(2)?;
+            Ok(SnapshotBlob {
+                hash,
+                extension: if stored_extension.is_empty() {
+                    crate::blob_store::mime_to_extension(&mime).to_string()
+                } else {
+                    stored_extension
+                },
+            })
+        })
+        .map_err(|error| format!("Failed to read cloud blob page: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Failed to decode cloud blob page: {error}"))?;
+    Ok(page)
+}
+
+fn blob_remote_path(library_id: &str, blob: &SnapshotBlob) -> Result<String, String> {
+    if blob.hash.len() != 64 || !blob.hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("Invalid media content hash: {}", blob.hash));
+    }
+    Ok(format!(
+        "picto/{library_id}/blobs/f/{}/{}/{}.{}",
+        &blob.hash[..2],
+        &blob.hash[2..4],
+        blob.hash,
+        blob.extension
+    ))
+}
+
+fn settle_blob_page(
+    application: &LibraryApplication,
+    settled: &[(String, String, Result<(), String>)],
+) -> Result<(), String> {
+    application
+        .library()
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                let now = Utc::now().to_rfc3339();
+                for (hash, extension, result) in settled {
+                    if !transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM media_file WHERE content_hash = ?1)",
+                        [hash],
+                        |row| row.get::<_, bool>(0),
+                    )? {
+                        continue;
+                    }
+                    let (state, remote_present, error) = match result {
+                        Ok(()) => ("available", 1_i64, None),
+                        Err(error) => ("missing_remote", 0_i64, Some(error.as_str())),
+                    };
+                    transaction.execute(
+                        "INSERT INTO cloud_blob_state
+                             (file_hash, state, remote_present, remote_extension,
+                              last_error, uploaded_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5,
+                                 CASE WHEN ?3 = 1 THEN ?6 ELSE NULL END, ?6)
+                         ON CONFLICT(file_hash) DO UPDATE SET
+                             state = excluded.state,
+                             remote_present = excluded.remote_present,
+                             remote_extension = excluded.remote_extension,
+                             last_error = excluded.last_error,
+                             uploaded_at = excluded.uploaded_at,
+                             updated_at = excluded.updated_at",
+                        rusqlite::params![hash, state, remote_present, extension, error, now],
+                    )?;
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn set_sync_progress(
+    application: &LibraryApplication,
+    completed: i64,
+    total: i64,
+    message: &str,
+) -> Result<(), String> {
+    application
+        .library()
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state
+                     SET state = 'reconciling', phase = 'blobs', message = ?1,
+                         completed_units = ?2, total_units = ?3
+                     WHERE singleton = 1",
+                    rusqlite::params![message, completed, total],
+                )?;
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn set_sync_state(
+    application: &LibraryApplication,
+    state: &str,
+    phase: &str,
+    message: &str,
+) -> Result<(), String> {
+    application
+        .library()
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state
+                     SET state = ?1, phase = ?2, message = ?3,
+                         blocking = 0, completed_units = 0, total_units = NULL
+                     WHERE singleton = 1",
+                    rusqlite::params![state, phase, message],
+                )?;
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())
 }
 
 pub async fn list_remote_for_library(
@@ -509,7 +791,8 @@ mod tests {
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
                     transaction.execute(
-                        "UPDATE cloud_state SET provider = 'google_drive', paused = 0
+                        "UPDATE cloud_state
+                         SET provider = 'google_drive', paused = 0, state = 'idle'
                          WHERE singleton = 1",
                         [],
                     )?;
@@ -558,5 +841,97 @@ mod tests {
             0,
         )
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn publication_uploads_and_recovers_original_blobs() {
+        let library_root = tempfile::tempdir().unwrap();
+        let cloud_root = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(library_root.path()).unwrap();
+        let bytes = b"canonical cloud original";
+        let hash = hex::encode(Sha256::digest(bytes));
+        application
+            .blobs()
+            .write_original(&hash, bytes, Some("png"))
+            .unwrap();
+        let local_path = application
+            .blobs()
+            .original_path_with_ext(&hash, Some("png"))
+            .unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Cloud,
+                |transaction| {
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (1, ?1, ?2, 'image/png', ?3)",
+                        rusqlite::params![hash, local_path.to_string_lossy(), bytes.len() as i64],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO cloud_blob_state
+                             (file_hash, state, remote_present, remote_extension, updated_at)
+                         VALUES (?1, 'available', 0, 'png', 'incorrect-old-state')",
+                        [&hash],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let provider = DirectoryProvider::open(cloud_root.path()).unwrap();
+        let manifest = publish_library(&application, &provider).await.unwrap();
+        let remote_path = cloud_root
+            .path()
+            .join("picto")
+            .join(&manifest.library_id)
+            .join("blobs/f")
+            .join(&hash[..2])
+            .join(&hash[2..4])
+            .join(format!("{hash}.png"));
+        assert_eq!(std::fs::read(&remote_path).unwrap(), bytes);
+        let state = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT state, remote_present, remote_extension
+                             FROM cloud_blob_state WHERE file_hash = ?1",
+                            [&hash],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, i64>(1)?,
+                                    row.get::<_, String>(2)?,
+                                ))
+                            },
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(state, ("available".into(), 1, "png".into()));
+
+        std::fs::remove_file(&local_path).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Cloud,
+                |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_blob_state SET state = 'queued' WHERE file_hash = ?1",
+                        [&hash],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        publish_library(&application, &provider).await.unwrap();
+        assert_eq!(std::fs::read(local_path).unwrap(), bytes);
     }
 }

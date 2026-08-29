@@ -331,9 +331,12 @@ fn start_cloud_snapshot_worker(
     application: Arc<LibraryApplication>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
-    const SNAPSHOT_AGE: Duration = Duration::from_secs(20 * 60);
+    const CLOUD_IDLE_DELAY: Duration = Duration::from_secs(30);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+        if let Err(error) = crate::cloud::recover_interrupted_sync_library(&application) {
+            tracing::warn!(%error, "Canonical cloud recovery failed");
+        }
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
@@ -343,7 +346,7 @@ fn start_cloud_snapshot_worker(
                     let due = crate::cloud::snapshot_due_library(
                         &application,
                         now_ms,
-                        SNAPSHOT_AGE.as_millis() as i64,
+                        CLOUD_IDLE_DELAY.as_millis() as i64,
                     );
                     match due {
                         Ok(false) => continue,

@@ -87,7 +87,11 @@ pub fn status_library(application: &LibraryApplication) -> Result<CloudSyncStatu
                              WHERE expanded_at_ms IS NULL) +
                             (SELECT COUNT(*) FROM cloud_outbox
                              WHERE published_at IS NULL),
-                            pending_blobs, missing_blobs
+                            (SELECT COUNT(*) FROM cloud_blob_state
+                             WHERE state IN ('queued', 'downloading')
+                                OR (state = 'available' AND remote_present = 0)),
+                            (SELECT COUNT(*) FROM cloud_blob_state
+                             WHERE state IN ('missing_remote', 'corrupt'))
                      FROM cloud_state WHERE singleton = 1",
                     [],
                     |row| {
@@ -200,23 +204,55 @@ pub fn directory_provider_library(
 pub fn snapshot_due_library(
     application: &LibraryApplication,
     now_ms: i64,
-    minimum_age_ms: i64,
+    idle_age_ms: i64,
 ) -> Result<bool, String> {
     application
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::Cloud, |connection| {
             connection
                 .query_row(
-                    "SELECT provider IS NOT NULL AND paused = 0 AND EXISTS (
+                    "SELECT provider IS NOT NULL AND paused = 0 AND state = 'idle'
+                         AND (NOT EXISTS (SELECT 1 FROM cloud_snapshot) OR EXISTS (
+                             SELECT 1 FROM cloud_journal WHERE expanded_at_ms IS NULL
+                         ) OR EXISTS (
+                             SELECT 1 FROM cloud_blob_state
+                             WHERE state IN ('queued', 'downloading')
+                                OR (state = 'available' AND remote_present = 0)
+                         ))
+                         AND NOT EXISTS (
                              SELECT 1 FROM cloud_journal
-                             WHERE expanded_at_ms IS NULL AND created_at_ms <= ?1
+                             WHERE expanded_at_ms IS NULL AND created_at_ms > ?1
                          )
                          FROM cloud_state WHERE singleton = 1",
-                    [now_ms.saturating_sub(minimum_age_ms)],
+                    [now_ms.saturating_sub(idle_age_ms)],
                     |row| row.get(0),
                 )
                 .map_err(Into::into)
         })
+        .map_err(|error| error.to_string())
+}
+
+pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Result<(), String> {
+    application
+        .library()
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state
+                     SET state = 'idle', phase = 'idle', message = ''
+                     WHERE singleton = 1 AND state = 'reconciling'",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE cloud_blob_state SET state = 'queued'
+                     WHERE state = 'downloading'",
+                    [],
+                )?;
+                Ok(())
+            },
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -354,42 +390,20 @@ fn cloud_receipt_or_current(
 }
 
 fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), String> {
-    let originals = application
-        .blobs()
-        .list_originals()
-        .into_iter()
-        .collect::<std::collections::HashMap<_, _>>();
     application
         .library()
         .database()
         .maintenance_write(
             picto_library::database::WorkPriority::Cloud,
             |transaction| {
-                let now = Utc::now().to_rfc3339();
-                let mut statement = transaction.prepare("SELECT content_hash FROM media_file")?;
-                let hashes = statement
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                drop(statement);
-                for hash in hashes {
-                    let Some(extension) = originals.get(&hash) else {
-                        continue;
-                    };
-                    transaction.execute(
-                        "INSERT INTO cloud_blob_state
-                             (file_hash, state, remote_extension, updated_at)
-                         VALUES (?1, 'available', ?2, ?3)
-                         ON CONFLICT(file_hash) DO UPDATE SET
-                             state = 'available',
-                             remote_extension = COALESCE(
-                                 cloud_blob_state.remote_extension,
-                                 excluded.remote_extension
-                             ),
-                             last_error = NULL,
-                             updated_at = excluded.updated_at",
-                        params![hash, extension, now],
-                    )?;
-                }
+                transaction.execute(
+                    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
+                     SELECT content_hash, 'queued', ?1 FROM media_file
+                     ON CONFLICT(file_hash) DO UPDATE SET
+                         state = 'queued', remote_present = 0, last_error = NULL,
+                         uploaded_at = NULL, updated_at = excluded.updated_at",
+                    [Utc::now().to_rfc3339()],
+                )?;
                 Ok(())
             },
         )
@@ -448,5 +462,43 @@ mod tests {
         assert!(!status.blocking);
         assert_eq!(status.pending_mutations, 1);
         assert!(!snapshot_due_library(&application, i64::MAX, 0).unwrap());
+    }
+
+    #[test]
+    fn snapshot_waits_until_the_newest_pending_mutation_is_idle() {
+        let temp = tempfile::tempdir().unwrap();
+        let application =
+            LibraryApplication::create(temp.path().join("CloudIdle.library")).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_state SET provider = 'dropbox', state = 'idle'
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO cloud_journal
+                             (revision, operation_kind, payload_json, created_at_ms)
+                         VALUES (1, 'first', '{}', 100), (2, 'latest', '{}', 200)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO cloud_snapshot
+                             (snapshot_id, frontier_json, database_sha256, artifact_sha256,
+                              size_bytes, verified, created_at)
+                         VALUES ('existing', '{}', 'db', 'artifact', 1, 1, 'now')",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert!(!snapshot_due_library(&application, 229, 30).unwrap());
+        assert!(snapshot_due_library(&application, 230, 30).unwrap());
     }
 }

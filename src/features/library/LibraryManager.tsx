@@ -281,8 +281,8 @@ export function LibraryManager() {
   );
 
   const syncPresentation = useMemo(
-    () => presentCloudSync(cloudStatus, cloudConfiguration?.provider ?? null),
-    [cloudConfiguration?.provider, cloudStatus],
+    () => presentCloudSync(cloudStatus),
+    [cloudStatus],
   );
 
   useEffect(() => {

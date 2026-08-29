@@ -27,6 +27,12 @@ pub trait CloudProvider: Send + Sync {
     fn exists(&self, path: &str) -> ProviderFuture<'_, bool>;
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>>;
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>>;
+    fn download_file(
+        &self,
+        path: &str,
+        destination: PathBuf,
+        checksum: &str,
+    ) -> ProviderFuture<'_, ()>;
     fn upload(
         &self,
         path: &str,
@@ -401,6 +407,33 @@ impl CloudProvider for DirectoryProvider {
         Box::pin(async move {
             std::fs::read(resolved?)
                 .map_err(|error| format!("Failed to download cloud object {path}: {error}"))
+        })
+    }
+
+    fn download_file(
+        &self,
+        path: &str,
+        destination: PathBuf,
+        checksum: &str,
+    ) -> ProviderFuture<'_, ()> {
+        let source = self.resolve(path);
+        let checksum = checksum.to_string();
+        Box::pin(async move {
+            let source = source?;
+            tokio::task::spawn_blocking(move || {
+                if file_checksum(&source)? != checksum {
+                    return Err(
+                        "Cloud original checksum does not match its content hash".to_string()
+                    );
+                }
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                std::fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .await
+            .map_err(|error| format!("Cloud download worker failed: {error}"))?
         })
     }
 

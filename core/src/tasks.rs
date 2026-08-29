@@ -76,7 +76,7 @@ pub fn snapshot_library(
                        + (SELECT COUNT(*) FROM cloud_blob_state
                           WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
                      (SELECT COUNT(*) FROM cloud_state
-                      WHERE singleton = 1 AND phase IN ('reconciling', 'syncing'))
+                      WHERE singleton = 1 AND state = 'reconciling')
                        + (SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'downloading'),
                      (SELECT COUNT(*) FROM cloud_quarantine WHERE resolved_at IS NULL)
                        + (SELECT COUNT(*) FROM cloud_blob_state WHERE last_error IS NOT NULL)

@@ -15,10 +15,7 @@ export interface CloudSyncPresentation {
   workKey: string | null;
 }
 
-export function presentCloudSync(
-  status: CloudSyncStatus | null,
-  provider: string | null = null,
-): CloudSyncPresentation {
+export function presentCloudSync(status: CloudSyncStatus | null): CloudSyncPresentation {
   if (!status) {
     return {
       active: false,
@@ -33,7 +30,7 @@ export function presentCloudSync(
 
   const pending = Math.max(0, status.pending_mutations) + Math.max(0, status.pending_blobs);
   const hasExactProgress = status.total_units !== null && status.total_units > 0;
-  const active = status.state === 'reconciling' || pending > 0;
+  const active = status.state === 'reconciling';
   const completed = hasExactProgress ? Math.max(0, status.completed_units) : 0;
   const total = hasExactProgress ? Math.max(completed, status.total_units ?? 0) : null;
   const remaining = total !== null ? Math.max(0, total - completed) : active ? pending : null;
@@ -51,15 +48,10 @@ export function presentCloudSync(
   if (active) {
     return { active: true, label: 'Syncing', tone: 'positive', completed, total, remaining, workKey };
   }
-  const destination = provider === 'google_drive'
-    ? 'Google Drive'
-    : provider === 'dropbox'
-      ? 'Dropbox'
-      : 'sync folder';
   return {
     active: false,
-    label: `Handed to ${destination}`,
-    tone: 'positive',
+    label: 'Idle',
+    tone: 'neutral',
     completed,
     total,
     remaining: null,

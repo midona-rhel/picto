@@ -17,12 +17,12 @@ const status = (overrides: Partial<CloudSyncStatus> = {}): CloudSyncStatus => ({
 });
 
 describe('library cloud sync presentation', () => {
-  it('treats pending blobs as active sync work', () => {
+  it('keeps queued work idle until reconciliation actually starts', () => {
     expect(presentCloudSync(status({ pending_blobs: 7 }))).toMatchObject({
-      active: true,
-      label: 'Syncing',
-      remaining: 7,
-      workKey: 'pending',
+      active: false,
+      label: 'Idle',
+      remaining: null,
+      workKey: null,
     });
   });
 
@@ -35,14 +35,10 @@ describe('library cloud sync presentation', () => {
     }))).toMatchObject({ completed: 40, total: 100, remaining: 60, workKey: 'phase:applying:100' });
   });
 
-  it('describes completed work as handed to the desktop provider', () => {
-    expect(presentCloudSync(status(), 'google_drive')).toMatchObject({
+  it('describes completed work as idle', () => {
+    expect(presentCloudSync(status())).toMatchObject({
       active: false,
-      label: 'Handed to Google Drive',
-    });
-    expect(presentCloudSync(status(), 'dropbox')).toMatchObject({
-      active: false,
-      label: 'Handed to Dropbox',
+      label: 'Idle',
     });
   });
 
