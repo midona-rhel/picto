@@ -729,6 +729,10 @@ fn configure_credential(site_id: &str) -> Result<&'static str, String> {
             .map(|_| "keychain")
             .ok_or_else(|| format!("no stored direct-site credential exists for '{site_id}'"));
     }
+    // Anonymous means anonymous: swap in an empty in-memory keyring so the
+    // runtime's ambient credential lookups can never reach the OS keychain
+    // (and never prompt) during an unauthenticated certification.
+    keyring::set_default_credential_builder(Box::new(SharedMemoryCredentialBuilder::default()));
     Ok("anonymous")
 }
 
