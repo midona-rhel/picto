@@ -120,8 +120,12 @@ async function inspectAccountApiPage(webContents) {
         acceptedConsent: Boolean(consent),
         hasChallenge,
         hasLoginForm: Boolean(document.querySelector('input[name="user"], input[name="username"], input[type="password"]')),
-        authenticated: labels.some((label) => label === 'logout' || label.endsWith(' logout'))
-          || /account home/i.test(text),
+        authenticated: labels.some((label) => {
+          const collapsed = label.replace(/ /g, '');
+          return collapsed === 'logout' || collapsed.endsWith('logout');
+        })
+          || /account home/i.test(text)
+          || (/[?&]page=account\b/i.test(href) && /[?&]s=home\b/i.test(href)),
         onOptions: /account options/i.test(text) || /[?&]s=options(?:&|$)/i.test(href),
         apiKey,
         userId,
@@ -135,6 +139,7 @@ async function hasAuthenticatedDomSignal(webContents) {
     (() => {
       const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
       const hasLoginForm = Boolean(document.querySelector('input[type="password"], input[name*="password" i]'));
+      if (hasLoginForm) return false;
       const controls = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [role="menuitem"]'));
       const authPattern = /\b(?:log ?out|sign ?out|my account|account home|account settings|profile|dashboard)\b/i;
       return controls.some((element) => {
