@@ -184,7 +184,7 @@ fn normalize_metadata_text(raw: &str) -> Option<String> {
     // Formatting tags only, so bracketed prose like "[18+]" survives.
     let tags = BRACKET_TAGS.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)\[/?(?:b|i|u|s|code|quote|section|spoiler|url|color|sup|sub|size|center|left|right|justify|tn|table|thead|tbody|tr|td|th|hr)(?:=[^\]]*)?\]",
+            r"(?i)\[/?(?:b|i|u|s|code|quote|section|spoiler|url|color|sup|sub|size|center|left|right|justify|tn|table|thead|tbody|tr|td|th|hr)(?:[=,][^\]]*)?\]",
         )
         .expect("valid bracketed markup regex")
     });
@@ -1907,6 +1907,20 @@ mod tests {
         }));
 
         assert_eq!(parsed.description.as_deref(), Some("Hello world."));
+    }
+
+    #[test]
+    fn description_strips_dtext_section_tags_with_comma_arguments() {
+        let parsed = parse_metadata(&json!({
+            "category": "e621",
+            "id": 6664662,
+            "description": "[section,expanded=⮚ わんちゃん ⮘ by 青狐じっと on Pixiv] 遊び相手が欲しいわんちゃん[/section]"
+        }));
+
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("遊び相手が欲しいわんちゃん")
+        );
     }
 
     #[test]
