@@ -33,26 +33,24 @@ native addons, and downloaded sidecars must not imply otherwise.
 - Release commits must contain no personal absolute paths, private-key markers, or reference-source
   references. Run the source audit before publishing history.
 
-## Outstanding release blockers
+## Publication gates
 
-- Cloud Sync and Tutorials are separately owned release gates and are intentionally not modified by
-  release-finalization work.
+- Cloud Sync and Tutorials retain separately owned packaged-build and restart-recovery gates.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
 - Code signing and notarization are not part of the `0.6.0-alpha` gate.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
-  x64, and Linux x64. A normal push to `main` runs verification only. Windows and Linux still need
-  one green clean-run result after the current branch is published.
+  x64, and Linux x64. A normal push to `main` runs verification only. The Windows and Linux package
+  results are publication gates and necessarily run after the release candidate is uploaded.
 - Gallery-dl and OF-Scraper source revisions and Python dependency graphs are frozen. The universal
   OnlyFans lock resolves for macOS ARM64, Windows x64, and Linux x64 on Python 3.12.
-- TypeScript, the production build, and all 596 frontend tests pass. The suite still emits 242 React
-  scheduling warnings, led by Settings, shared selects, Duplicate Review, and AI Tagging; remove the
-  warning noise without suppressing React diagnostics before treating the gate as clean.
+- TypeScript, the production build, all 876 frontend tests, 266 Rust unit tests, 11 Rust integration
+  tests, command parity, and source/artifact audits pass. React scheduling warnings are clean.
 - `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
   and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.
-- The large dirty integration surface must be separated into reviewed commits before publishing or
-  tagging; generated build output must remain untracked.
+- The release candidate is separated into reviewed commits and the worktree is clean; generated
+  build output remains untracked.
 - The public branch and tags have been rewritten to remove audited personal absolute paths,
   reference-product names, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.

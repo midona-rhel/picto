@@ -2,15 +2,8 @@
 
 This directory contains executable work only. Git history retains completed and superseded work.
 
-## Release verification
-
-These PBIs contain no new product implementation. They close when the current release candidate
-passes its automated and packaged application smokes.
-
-1. [PBI-603-release-finalization-and-integration-gate.md](PBI-603-release-finalization-and-integration-gate.md)
-   - run the clean packaged release gate after feature closure
-2. [PBI-606-backend-replacement.md](PBI-606-backend-replacement.md)
-   - close the replacement only after the packaged fresh-library smoke passes
+There are no active alpha PBIs. Platform packaging and smoke results are release-workflow gates,
+not unfinished product implementation.
 
 ## Backlog policy
 
