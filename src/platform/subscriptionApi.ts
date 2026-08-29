@@ -221,7 +221,7 @@ export async function getSubscriptionOverview() {
 }
 
 /** Sites the backend supports but the UI does not offer. */
-const REMOVED_SITE_IDS = new Set(['webtoons']);
+const REMOVED_SITE_IDS = new Set(['tumblr', 'webtoons']);
 
 export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
   return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) =>
