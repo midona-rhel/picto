@@ -177,7 +177,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  right: 31px;
   z-index: var(--layer-overlay);
   min-height: 32px;
   max-height: 240px;
@@ -195,12 +195,12 @@
   display: flex;
   align-items: center;
   min-height: 32px;
-  padding: 0 2px 0 10px;
-  gap: 2px;
+  padding: 0;
+  gap: 0;
 }
 
-.urlRow:first-child {
-  padding-right: 35px;
+.urlRow + .urlRow {
+  border-top: 1px solid color-mix(in srgb, var(--inspector-separator, var(--color-border-secondary)) 55%, transparent);
 }
 
 .urlRow:hover { background: var(--inspector-field-surface, var(--color-surface-hover)); }
@@ -211,7 +211,9 @@
   min-width: 0;
   border: 0;
   outline: 0;
-  padding: 0;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
   background: none;
   color: var(--inspector-text-primary, var(--color-text-primary));
   font: var(--font-weight-regular) 13px/18px var(--inspector-font-family, var(--font-family-ui));
@@ -262,8 +264,11 @@
   align-items: center;
   gap: 4px;
   height: 32px;
+  width: 100%;
+  box-sizing: border-box;
   padding: 0 10px;
   border: 0;
+  border-top: 1px solid var(--inspector-separator, var(--color-border-secondary));
   background: none;
   color: var(--inspector-text-tertiary, var(--color-text-tertiary));
   font: var(--font-weight-regular) var(--font-size-sm)/1 var(--inspector-font-family, var(--font-family-ui));
