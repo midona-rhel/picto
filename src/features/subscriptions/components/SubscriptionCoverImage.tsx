@@ -92,6 +92,7 @@ export function subscriptionCoverGeometry(
 
 export function SubscriptionCoverImage({
   fileHash,
+  thumbnailLibraryPath,
   crop,
   fallbackDimensions,
   className,
@@ -104,6 +105,7 @@ export function SubscriptionCoverImage({
   progressive = false,
 }: {
   fileHash: string;
+  thumbnailLibraryPath?: string | null;
   crop: SubscriptionCoverCrop;
   fallbackDimensions?: SubscriptionCoverDimensions;
   className?: string;
@@ -118,12 +120,13 @@ export function SubscriptionCoverImage({
   const [dimensions, setDimensions] = useState(fallbackDimensions ?? { width: 1, height: 1 });
   const [useThumbnail, setUseThumbnail] = useState(preferThumbnail);
   const [originalReady, setOriginalReady] = useState(false);
+  const thumbnailUrl = mediaThumbnailUrl(fileHash, thumbnailLibraryPath);
 
   useEffect(() => {
     setUseThumbnail(preferThumbnail);
     setOriginalReady(false);
     setDimensions(fallbackDimensions ?? { width: 1, height: 1 });
-  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail]);
+  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail, thumbnailLibraryPath]);
 
   const geometry = subscriptionCoverGeometry(dimensions, crop);
   const imageStyle = {
@@ -143,7 +146,7 @@ export function SubscriptionCoverImage({
   const original = (
     <ThumbnailImage
       src={useThumbnail
-        ? mediaThumbnailUrl(fileHash)
+        ? thumbnailUrl
         : mediaFileUrl(fileHash, 'application/octet-stream')}
       fallback="empty"
       alt={alt}
@@ -176,7 +179,7 @@ export function SubscriptionCoverImage({
   return (
     <>
       <ThumbnailImage
-        src={mediaThumbnailUrl(fileHash)}
+        src={thumbnailUrl}
         fallback="empty"
         alt=""
         draggable={draggable}

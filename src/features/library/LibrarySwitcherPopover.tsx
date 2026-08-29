@@ -60,6 +60,7 @@ export function LibrarySwitcherPopover({
                 imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
                 imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
                 imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
+                libraryPath: path,
               };
             }),
         );

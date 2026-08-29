@@ -11,6 +11,7 @@ export interface LibraryAppearance {
   imageFocusX?: number | null;
   imageFocusY?: number | null;
   imageZoomPercent?: number | null;
+  libraryPath?: string | null;
 }
 
 export function LibraryAvatar({
@@ -27,7 +28,7 @@ export function LibraryAvatar({
   const [imageFailed, setImageFailed] = useState(false);
   const imageHash = appearance.imageHash ?? null;
 
-  useEffect(() => setImageFailed(false), [imageHash]);
+  useEffect(() => setImageFailed(false), [appearance.libraryPath, imageHash]);
 
   return (
     <span
@@ -38,6 +39,7 @@ export function LibraryAvatar({
         <SubscriptionCoverImage
           className={styles.image}
           fileHash={imageHash}
+          thumbnailLibraryPath={appearance.libraryPath}
           crop={{
             focusX: appearance.imageFocusX ?? 500,
             focusY: appearance.imageFocusY ?? 500,

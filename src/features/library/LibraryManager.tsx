@@ -253,6 +253,7 @@ export function LibraryManager() {
       imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
       imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
       imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
+      libraryPath: path,
       cloudLibraryId: config.libraryMeta?.[path]?.cloudLibraryId ?? null,
     }));
   }, [config]);

@@ -26,6 +26,18 @@ describe('LibraryAvatar', () => {
     expect(image.style.top).not.toBe('50%');
   });
 
+  it('resolves an inactive library cover from that library', () => {
+    render(<LibraryAvatar appearance={{
+      imageHash: 'abc123',
+      libraryPath: '/Pictures/Archive.library',
+    }} size={26} />);
+
+    expect(screen.getByRole('img', { hidden: true })).toHaveAttribute(
+      'src',
+      'media://localhost/thumb/abc123.jpg?library=%2FPictures%2FArchive.library',
+    );
+  });
+
   it('uses a lighter full-size default library glyph', () => {
     const { container } = render(<LibraryAvatar appearance={{}} size={26} />);
     const svg = container.querySelector('svg');

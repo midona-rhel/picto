@@ -33,6 +33,7 @@ export function LibrarySwitcherButton() {
           imageFocusX: m?.imageFocusX ?? null,
           imageFocusY: m?.imageFocusY ?? null,
           imageZoomPercent: m?.imageZoomPercent ?? null,
+          libraryPath: config.currentPath ?? null,
         });
       })
       .catch(() => {});

@@ -194,6 +194,7 @@ const mediaProtocol = createMediaProtocolService({
   invoke,
   isDev,
   getCurrentLibraryRoot,
+  getKnownLibraryRoots: () => getCachedConfig().libraryHistory ?? [],
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,

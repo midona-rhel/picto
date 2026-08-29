@@ -25,6 +25,16 @@ describe('media protocol helpers', () => {
     expect(parseMediaUrl('media://host/thumb/abc.png')).toBeNull();
   });
 
+  it('parses a library-specific thumbnail URL', () => {
+    const hash = 'a'.repeat(64);
+    expect(parseMediaUrl(`media://host/thumb/${hash}.jpg?library=${encodeURIComponent('/Pictures/Archive.library')}`)).toEqual({
+      kind: 'thumb',
+      hash,
+      ext: 'jpg',
+      libraryRoot: '/Pictures/Archive.library',
+    });
+  });
+
   it('parses byte ranges', () => {
     expect(parseRange('bytes=0-99', 1000)).toEqual({ start: 0, end: 99 });
     expect(parseRange('bytes=100-', 1000)).toEqual({ start: 100, end: 999 });
@@ -160,6 +170,37 @@ describe('media protocol helpers', () => {
       expect(commands).toEqual(['media.resolve_paths']);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serves an allow-listed inactive library thumbnail without switching libraries', async () => {
+    const activeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-active-library-'));
+    const inactiveRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-inactive-library-'));
+    const hash = '9'.repeat(64);
+    let handler;
+    try {
+      const thumbnailPath = path.join(inactiveRoot, 'blobs', 't', '99', '99', `${hash}.jpg`);
+      await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
+      await fs.writeFile(thumbnailPath, 'inactive cover');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async () => null,
+        isDev: true,
+        getCurrentLibraryRoot: () => activeRoot,
+        getKnownLibraryRoots: () => [inactiveRoot],
+      });
+      await service.registerMediaProtocol();
+
+      const allowed = await handler(new Request(`media://localhost/thumb/${hash}.jpg?library=${encodeURIComponent(inactiveRoot)}`));
+      const denied = await handler(new Request(`media://localhost/thumb/${hash}.jpg?library=${encodeURIComponent('/unknown.library')}`));
+
+      expect(allowed.status).toBe(200);
+      expect(await allowed.text()).toBe('inactive cover');
+      expect(denied.status).toBe(403);
+    } finally {
+      await fs.rm(activeRoot, { recursive: true, force: true });
+      await fs.rm(inactiveRoot, { recursive: true, force: true });
     }
   });
 
