@@ -1,6 +1,16 @@
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
 
+function errorMessage(error) {
+  return error?.message ?? String(error);
+}
+
+export function isMissingUpdateMetadataError(error) {
+  const message = errorMessage(error);
+  return /\b404\b/.test(message)
+    && /Cannot find latest(?:-[\w]+)?\.ya?ml\b/i.test(message);
+}
+
 /**
  * Auto-update service using electron-updater with GitHub releases.
  *
@@ -12,7 +22,7 @@ const { autoUpdater } = pkg;
  * The updater checks GitHub releases for a `latest-{platform}.yml` file
  * that electron-builder generates automatically during `--publish`.
  */
-export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAllWindows }) {
+export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAllWindows, updater = autoUpdater }) {
   // Smoke launches are intentionally offline and must exercise app startup, not update delivery.
   if (isDev || isSmoke) {
     return {
@@ -23,16 +33,30 @@ export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAl
     };
   }
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.allowPrerelease = true;
+  updater.logger = null;
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.allowPrerelease = true;
+
+  let lastReportedError = null;
+  let lastReportedAt = 0;
+  const reportUpdateError = (error) => {
+    if (isMissingUpdateMetadataError(error)) return;
+    const message = errorMessage(error);
+    const now = Date.now();
+    if (message === lastReportedError && now - lastReportedAt < 1000) return;
+    lastReportedError = message;
+    lastReportedAt = now;
+    console.error('[auto-updater] Error:', message);
+    sendToAllWindows('updater:status', { status: 'error', error: message });
+  };
 
   // Forward all updater events to renderer windows
-  autoUpdater.on('checking-for-update', () => {
+  updater.on('checking-for-update', () => {
     sendToAllWindows('updater:status', { status: 'checking' });
   });
 
-  autoUpdater.on('update-available', (info) => {
+  updater.on('update-available', (info) => {
     sendToAllWindows('updater:status', {
       status: 'available',
       version: info.version,
@@ -41,14 +65,14 @@ export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAl
     });
   });
 
-  autoUpdater.on('update-not-available', (info) => {
+  updater.on('update-not-available', (info) => {
     sendToAllWindows('updater:status', {
       status: 'up-to-date',
       version: info.version,
     });
   });
 
-  autoUpdater.on('download-progress', (progress) => {
+  updater.on('download-progress', (progress) => {
     sendToAllWindows('updater:status', {
       status: 'downloading',
       percent: progress.percent,
@@ -58,27 +82,19 @@ export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAl
     });
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
+  updater.on('update-downloaded', (info) => {
     sendToAllWindows('updater:status', {
       status: 'ready',
       version: info.version,
     });
   });
 
-  autoUpdater.on('error', (err) => {
-    console.error('[auto-updater] Error:', err?.message ?? err);
-    sendToAllWindows('updater:status', {
-      status: 'error',
-      error: err?.message ?? String(err),
-    });
-  });
+  updater.on('error', reportUpdateError);
 
   // Periodic check every 4 hours (startup check is handled by checkAndUpdateOnStartup)
   const PERIODIC_CHECK_MS = 4 * 60 * 60 * 1000;
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[auto-updater] Periodic check failed:', err?.message ?? err);
-    });
+    updater.checkForUpdates().catch(reportUpdateError);
   }, PERIODIC_CHECK_MS);
 
   /**
@@ -89,7 +105,7 @@ export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAl
   async function checkAndUpdateOnStartup(timeoutMs = 3000) {
     try {
       const result = await Promise.race([
-        autoUpdater.checkForUpdates(),
+        updater.checkForUpdates(),
         new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
 
@@ -102,21 +118,21 @@ export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAl
 
       // autoDownload=true means download already started — wait for it
       await new Promise((resolve, reject) => {
-        autoUpdater.once('update-downloaded', resolve);
-        autoUpdater.once('error', reject);
+        updater.once('update-downloaded', resolve);
+        updater.once('error', reject);
       });
 
       console.info('[auto-updater] Update downloaded, installing and restarting...');
-      autoUpdater.quitAndInstall();
+      updater.quitAndInstall();
     } catch (err) {
-      console.warn('[auto-updater] Startup update failed, proceeding:', err?.message ?? err);
+      reportUpdateError(err);
     }
   }
 
   return {
-    checkForUpdates: () => autoUpdater.checkForUpdates(),
-    downloadUpdate: () => autoUpdater.downloadUpdate(),
-    quitAndInstall: () => autoUpdater.quitAndInstall(),
+    checkForUpdates: () => updater.checkForUpdates(),
+    downloadUpdate: () => updater.downloadUpdate(),
+    quitAndInstall: () => updater.quitAndInstall(),
     checkAndUpdateOnStartup,
   };
 }
