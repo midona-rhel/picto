@@ -56,7 +56,7 @@ function tagRecord(name: string): CanonicalTagRecord {
   return {
     tag_id: 0,
     namespace_id: 0,
-    namespace: separator < 0 ? '' : name.slice(0, separator),
+    namespace: separator < 0 ? 'general' : name.slice(0, separator),
     subname: separator < 0 ? name : name.slice(separator + 1),
     active_count: 0,
     assignment_count: 0,

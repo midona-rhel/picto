@@ -211,17 +211,18 @@ describe('TagManagerScreen', () => {
     }));
   });
 
-  it('keeps ungrouped tags in All without exposing a misleading General group', async () => {
+  it('presents ungrouped tags as the canonical General group', async () => {
     mocks.getNamespaceSummary.mockResolvedValue([
       { namespace_id: 0, name: '', tag_count: 2 },
       { namespace_id: 2, name: 'creator', tag_count: 1 },
     ]);
     await renderScreen();
 
-    expect(screen.queryByRole('button', { name: 'general 2' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'General 2' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'All 3' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'General 2' }));
     await waitFor(() => expect(mocks.getPaginated).toHaveBeenCalledWith({
-      namespace: null,
+      namespace: '',
       search: null,
       cursor: null,
       limit: 500,

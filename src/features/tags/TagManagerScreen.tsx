@@ -3,7 +3,6 @@ import { atom, useAtom, useAtomValue } from 'jotai';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconEdit,
-  IconFolderQuestion,
   IconGitMerge,
   IconBookmark,
   IconBookmarks,
@@ -719,7 +718,7 @@ export function TagManagerScreen() {
             onClick={() => handleNamespaceChange('')}
             type="button"
           >
-            <span className={styles.groupIdentity}><IconFolderQuestion size={16} /><span>Uncategorized</span></span>
+            <span className={styles.groupIdentity}><IconBookmark size={16} /><span>General</span></span>
             <span className={styles.namespaceCount}>{namespaces.find((item) => item.name === '')?.tag_count ?? 0}</span>
           </button>
           <button
