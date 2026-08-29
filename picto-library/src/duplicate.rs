@@ -6,8 +6,8 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::model::{
     DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, DuplicateOccurrence, DuplicatePair,
-    DuplicateQualityDecision, DuplicateResolutionChoice, DuplicateStatus, FileId, Lifecycle,
-    MediaId, PendingBlobCleanup, RootId,
+    DuplicateQualityDecision, DuplicateResolutionChoice, DuplicateStatus, FileId, MediaId,
+    PendingBlobCleanup, RootId,
 };
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
@@ -245,8 +245,8 @@ pub(crate) fn count_visible_candidates(
     let mut count = 0_u64;
     for pair in pairs {
         let (left, right) = pair?;
-        if file_has_active_occurrence(connection, snapshot, left)?
-            && file_has_active_occurrence(connection, snapshot, right)?
+        if file_has_occurrence(connection, snapshot, left)?
+            && file_has_occurrence(connection, snapshot, right)?
         {
             count += 1;
         }
@@ -254,22 +254,17 @@ pub(crate) fn count_visible_candidates(
     Ok(count)
 }
 
-fn file_has_active_occurrence(
+fn file_has_occurrence(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
     file_id: FileId,
 ) -> Result<bool> {
-    let active = snapshot.lifecycle(Lifecycle::Active);
     let mut statement =
         connection.prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?;
     let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
     for media_id in rows {
         let media_id = media_id?;
-        if snapshot
-            .media_owner
-            .get(media_id)
-            .is_some_and(|root_id| active.contains(root_id.0))
-        {
+        if snapshot.media_owner.get(media_id).is_some() {
             return Ok(true);
         }
     }
@@ -297,7 +292,6 @@ fn candidate_side(
             })
         },
     )?;
-    let active = snapshot.lifecycle(Lifecycle::Active);
     let mut statement = connection
         .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1 ORDER BY media_id")?;
     let mut occurrences = Vec::new();
@@ -307,9 +301,6 @@ fn candidate_side(
         let Some(root_id) = snapshot.media_owner.get(media_id.0).copied() else {
             continue;
         };
-        if !active.contains(root_id.0) {
-            continue;
-        }
         occurrences.push(DuplicateOccurrence {
             media_item_id: media_id,
             root_item_id: root_id,

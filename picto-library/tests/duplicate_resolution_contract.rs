@@ -208,6 +208,82 @@ fn keep_both_changes_only_pair_state_and_is_session_undoable() {
 }
 
 #[test]
+fn duplicate_candidates_include_inbox_and_trash_occurrences() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let color = LabColor {
+        l: 50.0,
+        a: 0.0,
+        b: 0.0,
+        weight: 1.0,
+    };
+    let mut inbox = imported(
+        "inbox-duplicate",
+        "inbox-duplicate",
+        "image/png",
+        100,
+        Some(100),
+        Some(100),
+        None,
+        color.clone(),
+    );
+    inbox.lifecycle = Lifecycle::Inbox;
+    let (inbox_root, _) = library.ingest(&inbox).unwrap();
+    let (active_root, _) = library
+        .ingest(&imported(
+            "active-duplicate",
+            "active-duplicate",
+            "image/jpeg",
+            90,
+            Some(100),
+            Some(100),
+            None,
+            color,
+        ))
+        .unwrap();
+    let mut trash = imported(
+        "trash-duplicate",
+        "trash-duplicate",
+        "image/webp",
+        80,
+        Some(100),
+        Some(100),
+        None,
+        LabColor {
+            l: 50.0,
+            a: 0.0,
+            b: 0.0,
+            weight: 1.0,
+        },
+    );
+    trash.lifecycle = Lifecycle::Trash;
+    let (trash_root, _) = library.ingest(&trash).unwrap();
+
+    library
+        .record_duplicate_pair(
+            file_id(&library, inbox_root),
+            file_id(&library, active_root),
+            1,
+            1_700_000_000_100,
+        )
+        .unwrap();
+    library
+        .record_duplicate_pair(
+            file_id(&library, trash_root),
+            file_id(&library, active_root),
+            1,
+            1_700_000_000_101,
+        )
+        .unwrap();
+
+    let candidates = library.duplicate_candidates(10).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert!(candidates.iter().all(|candidate| {
+        candidate.left.occurrences.len() == 1 && candidate.right.occurrences.len() == 1
+    }));
+}
+
+#[test]
 fn rescanning_replaces_detected_pairs_without_reopening_keep_both_decisions() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
