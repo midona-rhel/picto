@@ -399,6 +399,62 @@ class OnlyFansBridgeTests(unittest.TestCase):
                     }
                 )
 
+    def test_drm_protected_media_defers_the_post_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            state = root / "state"
+            data = state / ".data" / "creator-1"
+            output = root / "downloads"
+            data.mkdir(parents=True)
+            output.mkdir()
+            database = sqlite3.connect(data / "user_data.db")
+            database.executescript(
+                """
+                CREATE TABLE posts (
+                    post_id TEXT, text TEXT, created_at TEXT, model_id TEXT,
+                    is_deleted INTEGER, archived INTEGER, pinned INTEGER,
+                    stream INTEGER
+                );
+                CREATE TABLE medias (
+                    id INTEGER, media_id TEXT, post_id TEXT, link TEXT,
+                    directory TEXT, filename TEXT, media_type TEXT, api_type TEXT,
+                    downloaded INTEGER, unlocked INTEGER, created_at TEXT,
+                    posted_at TEXT, model_id TEXT
+                );
+                INSERT INTO posts VALUES (
+                    'post-1', '', '2026-08-24T12:00:00Z', 'creator-1', 0, 0, 0, 0
+                );
+                INSERT INTO medias VALUES (
+                    1, 'media-1', 'post-1',
+                    'https://cdn/stream/dash/manifest.mpd', '', '', 'video',
+                    'Timeline', 0, 1, '2026-08-24T12:00:00Z',
+                    '2026-08-24T12:00:00Z', 'creator-1'
+                );
+                """
+            )
+            database.close()
+
+            events = []
+            original = onlyfans_bridge.emit
+            onlyfans_bridge.emit = lambda event, **values: events.append(
+                (event, values)
+            )
+            try:
+                onlyfans_bridge.output_items(
+                    {
+                        "state_dir": str(state),
+                        "output_dir": str(output),
+                        "creator": "alice",
+                        "post_limit": 100,
+                    }
+                )
+            finally:
+                onlyfans_bridge.emit = original
+
+            traversed = [v for e, v in events if e == "post_traversed"]
+            self.assertEqual(len(traversed), 1)
+            self.assertFalse(traversed[0]["accessible"])
+
     def test_current_source_window_excludes_stale_database_posts(self) -> None:
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row

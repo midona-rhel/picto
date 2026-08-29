@@ -1035,6 +1035,7 @@ def output_items(
     posts: dict[str, sqlite3.Row] = {}
     deferred: dict[str, str] = {}
     missing_accessible: list[str] = []
+    drm_blocked: set[str] = set()
     databases = creator_databases(Path(str(request["state_dir"])))
     if not databases:
         raise RuntimeError("OF-Scraper produced no creator database; verify the OnlyFans login and creator name")
@@ -1050,12 +1051,28 @@ def output_items(
                 if bool(row["downloaded"]):
                     rows.append(row)
                 elif bool(row["unlocked"]):
-                    missing_accessible.append(f"{row['post_id']}:{row['media_id']}")
+                    link = str(row["link"] or "")
+                    if ".mpd" in link or "/dash/" in link:
+                        # DRM-protected media cannot download without a
+                        # configured CDM helper. The post defers instead of
+                        # failing the whole run.
+                        drm_blocked.add(str(row["post_id"]))
+                    else:
+                        missing_accessible.append(
+                            f"{row['post_id']}:{row['media_id']} ({link[:120]})"
+                        )
                 else:
                     deferred[str(row["post_id"])] = (
                         "OnlyFans post is not currently accessible"
                     )
         connection.close()
+
+    downloaded_posts = {str(row["post_id"]) for row in rows}
+    for post_id in drm_blocked:
+        if post_id not in downloaded_posts:
+            deferred[post_id] = (
+                "OnlyFans media is DRM-protected and requires a configured CDM helper"
+            )
 
     if missing_accessible:
         sample = ", ".join(missing_accessible[:3])
