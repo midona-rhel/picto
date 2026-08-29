@@ -212,7 +212,6 @@ export function registerIpcHandlers({
   regenerateThumbnail,
   windowManager,
   libraryService,
-  updaterService,
   siteIconService,
   startNativeDrag,
   copyFiles,
@@ -666,22 +665,6 @@ export function registerIpcHandlers({
   handle('picto:tutorial:reset', async () => libraryService.resetTutorialLibrary());
   handle('picto:tutorial:finish', async () => libraryService.finishTutorialLibrary());
   handle('picto:tutorial:status', async () => libraryService.getTutorialSession());
-
-  // Auto-updater
-  handle('picto:updater:check', async () => {
-    try {
-      const result = await updaterService.checkForUpdates();
-      return result?.updateInfo ?? null;
-    } catch (err) {
-      return { error: err?.message ?? String(err) };
-    }
-  });
-  handle('picto:updater:download', async () => {
-    await updaterService.downloadUpdate();
-  });
-  handle('picto:updater:install', () => {
-    updaterService.quitAndInstall();
-  });
 
   // Shell operations — reveal in Finder/Explorer, open with default app
   handle('picto:shell:showInFolder', async (_event, { path }) => {

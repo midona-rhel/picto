@@ -19,7 +19,6 @@ import { installConsoleForwarding, setMainWindow } from './services/logForwarder
 import { createMenuManager } from './windows/menu.mjs';
 import { createLibraryHostService } from './services/libraryHostService.mjs';
 import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
-import { createAutoUpdaterService } from './services/autoUpdater.mjs';
 import { createFlashThumbnailService } from './services/flashThumbnailService.mjs';
 import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
 import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
@@ -231,13 +230,6 @@ const windowManager = createWindowManager({
   },
 });
 
-const updaterService = createAutoUpdaterService({
-  app,
-  isDev,
-  isSmoke: isAutomation,
-  sendToAllWindows: (...args) => windowManager.sendToAllWindows(...args),
-});
-
 let buildAppMenu = () => {};
 
 const libraryHost = createLibraryHostService({
@@ -316,7 +308,6 @@ registerIpcHandlers({
   regenerateThumbnail: mediaProtocol.regenerateThumbnail,
   windowManager,
   libraryService: libraryHost,
-  updaterService,
   siteIconService,
   startNativeDrag,
   copyFiles,
@@ -388,11 +379,6 @@ async function bootstrapApplication() {
     setCurrentLibraryRoot(null);
     console.info('[main] no initial library selected; starting without an open library');
   }
-
-  // Check for updates before showing the window — if an update is found
-  // within 3 seconds, download + install it (app restarts automatically).
-  // If no update or timeout, proceed to show the app.
-  await updaterService.checkAndUpdateOnStartup(3000);
 
   buildAppMenu();
   console.info('[main] app menu built');

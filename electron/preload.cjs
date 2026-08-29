@@ -94,13 +94,6 @@ const monitor = {
   gpu: () => ipcRenderer.invoke('picto:monitor:gpu'),
 };
 
-const updater = {
-  check: () => ipcRenderer.invoke('picto:updater:check'),
-  download: () => ipcRenderer.invoke('picto:updater:download'),
-  install: () => ipcRenderer.invoke('picto:updater:install'),
-  onStatus: (handler) => on('updater:status', handler),
-};
-
 const webview = {
   startNativeDrag: (hashes, iconDataUrl) => ipcRenderer.send('ondragstart', { hashes, iconDataUrl }),
   onDragDropEvent: (handler) => {
@@ -160,5 +153,4 @@ contextBridge.exposeInMainWorld('picto', {
   siteIcons,
   library,
   tutorial,
-  updater,
 });
