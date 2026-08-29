@@ -79,8 +79,16 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         }
         extractor.insert("deviantart".into(), serde_json::Value::Object(deviantart));
     }
+    if opts.site_id == "twitter" {
+        // gallery-dl already defaults retweets off; pin it so an upstream
+        // default change can never reintroduce reposted content.
+        extractor.insert("twitter".into(), serde_json::json!({"retweets": false}));
+    }
     if opts.site_id == "tumblr" {
         let mut tumblr = serde_json::Map::new();
+        // gallery-dl includes reblogs by default; subscriptions follow the
+        // blog's own posts only.
+        tumblr.insert("reblogs".into(), serde_json::Value::Bool(false));
         tumblr.insert(
             "offset".into(),
             serde_json::json!(opts.range_start.saturating_sub(1)),
@@ -190,6 +198,31 @@ fn apply_credential_auth(
 #[cfg(test)]
 mod tests {
     use super::{build_config, GalleryDlAuthConfig, RunOptions};
+
+    #[test]
+    fn subscriptions_never_include_reposted_content() {
+        for (site, key) in [("tumblr", "reblogs"), ("twitter", "retweets")] {
+            let mut opts = RunOptions {
+                subscription_id: Some(1),
+                query_id: Some(1),
+                site_id: site.to_string(),
+                url: format!("https://{site}.example/feed"),
+                post_limit: Some(10),
+                range_start: 1,
+                source_cursor: None,
+                abort_threshold: None,
+                auth: None,
+                archive_path: std::path::PathBuf::new(),
+                archive_prefix: None,
+                pacing_state_dir: std::path::PathBuf::new(),
+                cancel: Default::default(),
+            };
+            opts.site_id = site.to_string();
+            let config = build_config(&opts, std::path::Path::new("/tmp"));
+            let value = config["extractor"][site][key].as_bool();
+            assert_eq!(value, Some(false), "{site} must exclude {key}");
+        }
+    }
 
     #[test]
     fn build_config_paces_requests_and_keeps_booru_tags_with_credentials() {
@@ -436,7 +469,10 @@ mod tests {
         let tumblr = &config["extractor"]["tumblr"];
         assert_eq!(tumblr["offset"].as_u64(), Some(4));
         assert_eq!(tumblr["picto-post-limit"].as_u64(), Some(2));
-        assert!(tumblr.get("reblogs").is_none());
+        assert_eq!(
+            tumblr.get("reblogs").and_then(|value| value.as_bool()),
+            Some(false)
+        );
         assert!(tumblr.get("inline").is_none());
         assert!(tumblr.get("external").is_none());
         assert!(tumblr.get("original").is_none());
