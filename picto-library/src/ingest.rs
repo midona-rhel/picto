@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use roaring::RoaringBitmap;
 use rusqlite::{params, OptionalExtension, Transaction};
 use uuid::Uuid;
 
@@ -22,6 +23,7 @@ pub(crate) struct IngestResult {
     pub resources: Vec<String>,
     pub bitmap_keys: Vec<BitmapKey>,
     pub folder_ids: Vec<FolderId>,
+    pub affected_roots: RoaringBitmap,
 }
 
 pub(crate) fn insert_one(
@@ -34,7 +36,8 @@ pub(crate) fn insert_one(
 ) -> Result<IngestResult> {
     if reuse_identity {
         if let Some(existing) = existing_import(transaction, &snapshot, input, reuse_exact_root)? {
-            refresh_existing_file(transaction, existing.media_id, input)?;
+            let affected_roots =
+                refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
             let mut bitmap_keys = Vec::new();
             let mut added_tags = 0u64;
             for name in &input.tags {
@@ -90,6 +93,7 @@ pub(crate) fn insert_one(
                 resources: vec!["roots".into(), "tags".into()],
                 bitmap_keys,
                 folder_ids: Vec::new(),
+                affected_roots,
             });
         }
     }
@@ -347,6 +351,16 @@ pub(crate) fn insert_one(
     {
         Arc::make_mut(&mut snapshot.notes_present).insert(root_id.0);
     }
+    if !reuse_exact_root && reuse_identity {
+        bitmap_keys.extend(inherit_standalone_tags(
+            transaction,
+            &mut snapshot,
+            root_id,
+            &input.facts.content_hash,
+        )?);
+    }
+
+    let affected_roots = RoaringBitmap::from_iter([root_id.0]);
 
     fts::mark_one(transaction, root_id, input.imported_at_ms)?;
     snapshot.revision = revision;
@@ -363,6 +377,7 @@ pub(crate) fn insert_one(
         ],
         bitmap_keys,
         folder_ids: input.folders.clone(),
+        affected_roots,
     })
 }
 
@@ -409,9 +424,10 @@ fn enqueue_file_work(
 
 fn refresh_existing_file(
     transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
     media_id: MediaId,
     input: &PreparedImport,
-) -> Result<()> {
+) -> Result<RoaringBitmap> {
     let (file_id, has_palette, has_perceptual_hash) = transaction.query_row(
         "SELECT file.file_id, file.palette_json != '[]', file.perceptual_hash IS NOT NULL
          FROM media_item media
@@ -430,6 +446,66 @@ fn refresh_existing_file(
         "UPDATE media_file SET file_path = ?2 WHERE file_id = ?1 AND file_path IS NOT ?2",
         params![file_id, input.file_path],
     )?;
+    let mut affected_roots = RoaringBitmap::new();
+    let (current_name, current_note) = transaction.query_row(
+        "SELECT media_name, media_notes FROM media_item WHERE media_id = ?1",
+        [media_id.0],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )?;
+    let incoming_note = input
+        .notes
+        .as_deref()
+        .filter(|note| !note.trim().is_empty());
+    let replace_name = should_replace_name(&current_name, &input.media_name);
+    let replace_note = current_note
+        .as_deref()
+        .is_none_or(|note| note.trim().is_empty())
+        && incoming_note.is_some();
+    if replace_name || replace_note {
+        transaction.execute(
+            "UPDATE media_item
+             SET media_name = CASE WHEN ?2 THEN ?3 ELSE media_name END,
+                 media_notes = CASE WHEN ?4 THEN ?5 ELSE media_notes END
+             WHERE media_id = ?1",
+            params![
+                media_id.0,
+                replace_name,
+                input.media_name,
+                replace_note,
+                incoming_note
+            ],
+        )?;
+    }
+
+    let owner = snapshot
+        .media_owner
+        .get(media_id.0)
+        .copied()
+        .unwrap_or(RootId(media_id.0));
+    affected_roots.insert(owner.0);
+    if owner.0 == media_id.0
+        && snapshot
+            .root_kinds
+            .get(&RootKind::Media)
+            .is_some_and(|roots| roots.contains(owner.0))
+    {
+        if replace_name {
+            transaction.execute(
+                "UPDATE library_root SET name = ?2 WHERE root_id = ?1",
+                params![owner.0, input.media_name],
+            )?;
+        }
+        if replace_note {
+            transaction.execute(
+                "UPDATE library_root SET notes = ?2 WHERE root_id = ?1",
+                params![owner.0, incoming_note],
+            )?;
+            Arc::make_mut(&mut snapshot.notes_present).insert(owner.0);
+        }
+        if replace_name || replace_note {
+            fts::mark_one(transaction, owner, input.imported_at_ms)?;
+        }
+    }
     enqueue_file_work(
         transaction,
         file_id,
@@ -455,7 +531,7 @@ fn refresh_existing_file(
             input.imported_at_ms,
         )?;
     }
-    Ok(())
+    Ok(affected_roots)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -504,8 +580,9 @@ fn existing_import(
                 "SELECT media.media_id
                  FROM media_item media
                  JOIN media_file file ON file.file_id = media.file_id
+                 LEFT JOIN library_root root ON root.root_id = media.media_id
                  WHERE file.content_hash = ?1
-                 ORDER BY media.media_id
+                 ORDER BY root.root_id IS NULL, media.media_id
                  LIMIT 1",
                 [&input.facts.content_hash],
                 |row| row.get::<_, u32>(0),
@@ -523,6 +600,89 @@ fn existing_import(
             .copied()
             .unwrap_or(RootId(media_id)),
     }))
+}
+
+fn should_replace_name(existing: &str, incoming: &str) -> bool {
+    is_weak_name(existing) && !is_weak_name(incoming)
+}
+
+fn inherit_standalone_tags(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    target: RootId,
+    content_hash: &str,
+) -> Result<Vec<BitmapKey>> {
+    let mut statement = transaction.prepare_cached(
+        "SELECT DISTINCT media.media_id
+         FROM media_item media
+         JOIN media_file file ON file.file_id = media.file_id
+         JOIN library_item item ON item.local_id = media.media_id AND item.item_kind = 1
+         JOIN library_root root ON root.root_id = media.media_id
+         WHERE file.content_hash = ?1 AND media.media_id != ?2",
+    )?;
+    let donors = statement
+        .query_map(params![content_hash, target.0], |row| row.get::<_, u32>(0))?
+        .collect::<std::result::Result<RoaringBitmap, rusqlite::Error>>()?;
+    if donors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let inherited = snapshot
+        .tags
+        .iter()
+        .filter_map(|(tag_id, roots)| (!roots.is_disjoint(&donors)).then_some(*tag_id))
+        .collect::<Vec<_>>();
+    let mut changed = Vec::new();
+    let mut added = 0u64;
+    for tag_id in inherited {
+        if Arc::make_mut(&mut snapshot.tags)
+            .entry(tag_id)
+            .or_default()
+            .insert(target.0)
+        {
+            added += 1;
+            changed.push(BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            });
+        }
+    }
+    if added != 0 {
+        let counts = Arc::make_mut(&mut snapshot.tag_count);
+        counts.insert(
+            target.0,
+            counts.value(target.0).unwrap_or(0).saturating_add(added),
+        );
+    }
+    Ok(changed)
+}
+
+fn is_weak_name(name: &str) -> bool {
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+    let stem = basename.rsplit_once('.').map_or(basename, |(stem, _)| stem);
+    let compact = stem
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    if compact.is_empty() || compact.chars().all(|character| character.is_ascii_digit()) {
+        return true;
+    }
+    if compact.len() >= 12
+        && compact
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return true;
+    }
+    let alphabetic = compact
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .count();
+    let digits = compact.len().saturating_sub(alphabetic);
+    let has_word = stem
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .any(|part| part.len() >= 3);
+    !has_word || (digits >= 4 && alphabetic <= 4)
 }
 
 pub(crate) fn persist_touched(

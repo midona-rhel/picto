@@ -1210,6 +1210,7 @@ impl Library {
                 let mut resources = BTreeSet::new();
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
+                let mut affected = RoaringBitmap::new();
                 for input in inputs {
                     let output = ingest::insert_one(
                         transaction,
@@ -1224,6 +1225,7 @@ impl Library {
                     resources.extend(output.resources);
                     bitmap_keys.extend(output.bitmap_keys);
                     folder_ids.extend(output.folder_ids);
+                    affected |= &output.affected_roots;
                 }
                 ingest::persist_touched(
                     transaction,
@@ -1231,9 +1233,8 @@ impl Library {
                     &next,
                     bitmap_keys,
                     folder_ids,
-                    root_ids.iter().copied(),
+                    affected.iter().map(RootId),
                 )?;
-                let affected = root_ids.iter().map(|root| root.0).collect();
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
                 insert_cloud_journal(
                     transaction,
@@ -1247,8 +1248,11 @@ impl Library {
                         .max()
                         .unwrap_or_else(now_ms),
                 )?;
-                let receipt =
-                    PublicationCoordinator::receipt(revision, resources, root_ids.iter().copied());
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    resources,
+                    affected.iter().map(RootId),
+                );
                 let outputs = root_ids
                     .into_iter()
                     .map(|root_id| (root_id, receipt.clone()))
@@ -1311,6 +1315,7 @@ impl Library {
                 let mut resources = BTreeSet::new();
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
+                let mut ingest_affected = RoaringBitmap::new();
                 for (index, member) in input.members.iter().enumerate() {
                     let output = ingest::insert_one(
                         transaction,
@@ -1331,9 +1336,10 @@ impl Library {
                     resources.extend(output.resources);
                     bitmap_keys.extend(output.bitmap_keys);
                     folder_ids.extend(output.folder_ids);
+                    ingest_affected |= &output.affected_roots;
                 }
                 let preserve_singleton_collection = !reuse_identity && created_root_ids.len() == 1;
-                let (published_root, affected) =
+                let (published_root, mut affected) =
                     if created_root_ids.len() >= 2 || preserve_singleton_collection {
                         let output = crate::group::organize(
                             transaction,
@@ -1367,13 +1373,14 @@ impl Library {
                                 .collect::<RoaringBitmap>(),
                         )
                     };
+                affected |= &ingest_affected;
                 ingest::persist_touched(
                     transaction,
                     revision,
                     &next,
                     bitmap_keys,
                     folder_ids,
-                    root_ids.iter().copied(),
+                    affected.iter().map(RootId),
                 )?;
                 crate::smart::settle_affected(transaction, &mut next, &affected)?;
                 resources.extend(["tags".to_owned(), "folders".to_owned()]);

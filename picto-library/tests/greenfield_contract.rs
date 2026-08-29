@@ -1705,7 +1705,8 @@ fn prepared_collection_import_never_publishes_standalone_members() {
 fn exact_hash_ingest_reuses_the_owner_and_transfers_only_tags() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let original = imported("exact-original", Lifecycle::Active, &["state:original"]);
+    let mut original = imported("exact-original", Lifecycle::Active, &["state:original"]);
+    original.media_name = "938475938475.png".into();
     let (root_id, _) = library.ingest(&original).unwrap();
     library
         .database()
@@ -1726,7 +1727,8 @@ fn exact_hash_ingest_reuses_the_owner_and_transfers_only_tags() {
     let mut repeated = imported("exact-repeat", Lifecycle::Inbox, &["state:incoming"]);
     repeated.facts.content_hash = original.facts.content_hash.clone();
     repeated.rating = Rating::Five;
-    repeated.notes = Some("must not replace root metadata".into());
+    repeated.media_name = "A quiet landscape.png".into();
+    repeated.notes = Some("A useful source note".into());
     let (reused_root_id, _) = library.ingest(&repeated).unwrap();
 
     assert_eq!(reused_root_id, root_id);
@@ -1748,6 +1750,14 @@ fn exact_hash_ingest_reuses_the_owner_and_transfers_only_tags() {
     let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
     assert!(snapshot.tags[&incoming_tag].contains(root_id.0));
     assert!(snapshot.ratings[&Rating::Unrated].contains(root_id.0));
+    let details = library.details(root_id).unwrap();
+    assert_eq!(details.root.name, "A quiet landscape.png");
+    assert_eq!(details.root.notes.as_deref(), Some("A useful source note"));
+    assert_eq!(details.media[0].media_name, "A quiet landscape.png");
+    assert_eq!(
+        details.media[0].media_notes.as_deref(),
+        Some("A useful source note")
+    );
     library
         .database()
         .read(
@@ -1848,8 +1858,11 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
     );
     let snapshot = library.projections().snapshot();
     let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
+    let original_tag = snapshot.tag_ids_by_name["state:original"];
     assert!(!snapshot.tags[&incoming_tag].contains(existing_root.0));
     assert!(snapshot.tags[&incoming_tag].contains(collection.0));
+    assert!(snapshot.tags[&original_tag].contains(existing_root.0));
+    assert!(snapshot.tags[&original_tag].contains(collection.0));
     library
         .database()
         .read(
@@ -1877,6 +1890,98 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
             },
         )
         .unwrap();
+}
+
+#[test]
+fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut first_member = imported(
+        "collection-isolation-first",
+        Lifecycle::Inbox,
+        &["collection:first"],
+    );
+    first_member.facts.content_hash = "shared-collection-only-hash".into();
+    let (first_collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                first_member,
+                imported("collection-isolation-first-support", Lifecycle::Inbox, &[]),
+            ],
+            cover_index: 0,
+            name: Some("First collection".into()),
+            modified_at_ms: 1_700_000_004_000,
+        })
+        .unwrap();
+
+    let mut second_member = imported(
+        "collection-isolation-second",
+        Lifecycle::Inbox,
+        &["collection:second"],
+    );
+    second_member.facts.content_hash = "shared-collection-only-hash".into();
+    let (second_collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                second_member,
+                imported("collection-isolation-second-support", Lifecycle::Inbox, &[]),
+            ],
+            cover_index: 0,
+            name: Some("Second collection".into()),
+            modified_at_ms: 1_700_000_005_000,
+        })
+        .unwrap();
+
+    let snapshot = library.projections().snapshot();
+    let first_tag = snapshot.tag_ids_by_name["collection:first"];
+    let second_tag = snapshot.tag_ids_by_name["collection:second"];
+    assert!(snapshot.tags[&first_tag].contains(first_collection.0));
+    assert!(!snapshot.tags[&first_tag].contains(second_collection.0));
+    assert!(snapshot.tags[&second_tag].contains(second_collection.0));
+    assert!(!snapshot.tags[&second_tag].contains(first_collection.0));
+}
+
+#[test]
+fn exact_hash_standalone_import_collapses_into_collection_and_donates_its_tags() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let member = imported(
+        "collection-owner-member",
+        Lifecycle::Inbox,
+        &["collection:own"],
+    );
+    let shared_hash = member.facts.content_hash.clone();
+    let (collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                member,
+                imported("collection-owner-support", Lifecycle::Inbox, &[]),
+            ],
+            cover_index: 0,
+            name: Some("Owner collection".into()),
+            modified_at_ms: 1_700_000_006_000,
+        })
+        .unwrap();
+
+    let mut standalone = imported(
+        "standalone-donor",
+        Lifecycle::Inbox,
+        &["standalone:donated"],
+    );
+    standalone.facts.content_hash = shared_hash;
+    let (retained, _) = library.ingest(&standalone).unwrap();
+
+    assert_eq!(retained, collection);
+    assert_eq!(
+        library
+            .query(&query(ItemScope::Inbox), &PageRequest::default())
+            .unwrap()
+            .total,
+        1
+    );
+    let snapshot = library.projections().snapshot();
+    let donated = snapshot.tag_ids_by_name["standalone:donated"];
+    assert!(snapshot.tags[&donated].contains(collection.0));
 }
 
 #[test]
