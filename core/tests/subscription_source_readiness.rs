@@ -390,7 +390,12 @@ fn read_evidence(
                 });
             }
             let tag_namespaces = connection
-                .prepare("SELECT DISTINCT namespace FROM tag ORDER BY namespace")?
+                .prepare(
+                    "SELECT DISTINCT ns.display_name
+                     FROM tag_definition def
+                     JOIN tag_namespace ns USING (namespace_id)
+                     ORDER BY ns.display_name",
+                )?
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Evidence {
