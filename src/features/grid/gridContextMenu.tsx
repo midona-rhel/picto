@@ -591,21 +591,22 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const entries: MenuEntry[] = [];
 
-  if (ctx.onNewFolder) {
+  if (ctx.onNewFolder && ctx.scopeKind !== 'smart_folder') {
     entries.push(item('New Folder', {
       icon: <IconFolderPlus size={15} />,
       shortcut: kbd('file.newFolder'),
       action: ctx.onNewFolder,
     }));
   }
-  if (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder') {
+  if (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder' && ctx.scopeKind !== 'smart_folder') {
     entries.push(item('New Smart Folder', {
       icon: <IconFilterPlus size={15} />,
       shortcut: kbd('file.newSmartFolder'),
       action: ctx.onNewSmartFolder,
     }));
   }
-  if (ctx.onNewFolder || (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder')) entries.push(sep());
+  if ((ctx.onNewFolder && ctx.scopeKind !== 'smart_folder')
+    || (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder' && ctx.scopeKind !== 'smart_folder')) entries.push(sep());
 
   if (ctx.onImportFiles) entries.push(item('Import Files...', {
     icon: <IconFileImport size={15} />,

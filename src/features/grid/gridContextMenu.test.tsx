@@ -172,6 +172,24 @@ describe('buildTileContextMenu', () => {
     expect(entries.some((entry) => 'label' in entry && entry.label === 'New Smart Folder')).toBe(false);
   });
 
+  it('keeps creation commands out of smart-folder result grids', () => {
+    const entries = buildEmptyContextMenu({
+      selectionCount: 0,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'smart_folder',
+      statusFilter: null,
+      loadedCount: 0,
+      onNewFolder: vi.fn(),
+      onNewSmartFolder: vi.fn(),
+    });
+
+    const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
+    expect(labels).not.toContain('New Folder');
+    expect(labels).not.toContain('New Smart Folder');
+  });
+
   it('offers persisted content sorting on empty space inside a folder', () => {
     const onSortContents = vi.fn();
     const entries = buildEmptyContextMenu({
