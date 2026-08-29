@@ -271,8 +271,17 @@ impl GalleryDlSourceRunner {
 }
 
 fn effective_batch_size(query: &ClaimedQueryRun, override_size: Option<u32>) -> u32 {
-    let _ = query;
-    override_size.unwrap_or(1)
+    override_size.unwrap_or_else(|| {
+        let configured = if query.initial_run_complete {
+            query.periodic_post_limit.or(query.initial_post_limit)
+        } else {
+            query.initial_post_limit.or(query.periodic_post_limit)
+        };
+        configured
+            .filter(|value| *value > 0)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(crate::subscriptions::DEFAULT_SOURCE_POST_BATCH_SIZE)
+    })
 }
 
 fn map_runner_error(error: String) -> RunnerFailure {
@@ -406,10 +415,12 @@ async fn queue_download(
 ) -> Result<(), RunnerFailure> {
     if let Some(mut previous) = pending.take() {
         if previous.post.post_key != next.post.post_key {
-            set_post_complete(&mut previous, true);
-        } else {
-            set_post_complete(&mut previous, false);
+            return Err(RunnerFailure::terminal(
+                RunnerFailureKind::InvalidOutput,
+                "source advanced before completing the current post",
+            ));
         }
+        set_post_complete(&mut previous, false);
         send_download(output, previous).await?;
     }
     *pending = Some(next);
@@ -893,55 +904,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_transition_completes_the_previous_post() {
-        let directory = tempfile::tempdir().unwrap();
-        let first_path = directory.path().join("first.png");
-        let second_path = directory.path().join("second.png");
-        ImageBuffer::from_pixel(1, 1, Rgba([1_u8, 2, 3, 255]))
-            .save_with_format(&first_path, ImageFormat::Png)
-            .unwrap();
-        std::fs::copy(&first_path, &second_path).unwrap();
-        let mut first = normalize_downloads(
-            "subscribestar",
-            first_path,
-            ParsedMetadata {
-                post_id: Some("post-1".into()),
-                item_key: Some("media-1".into()),
-                ..ParsedMetadata::default()
-            },
-        )
-        .await
-        .unwrap()
-        .remove(0);
-        let mut second = normalize_downloads(
-            "subscribestar",
-            second_path,
-            ParsedMetadata {
-                post_id: Some("post-2".into()),
-                item_key: Some("media-2".into()),
-                ..ParsedMetadata::default()
-            },
-        )
-        .await
-        .unwrap()
-        .remove(0);
-        first.post_complete = false;
-        second.post_complete = false;
-        let (output, mut input) = mpsc::channel(2);
-        let mut pending = None;
-
-        queue_download(&output, &mut pending, first).await.unwrap();
-        queue_download(&output, &mut pending, second).await.unwrap();
-
-        let SourceEvent::MediaDownloaded(completed) = input.recv().await.unwrap() else {
-            panic!("expected completed media event");
-        };
-        assert_eq!(completed.post.post_key, "post-1");
-        assert!(completed.post_complete);
-        assert_eq!(pending.as_ref().unwrap().post.post_key, "post-2");
-    }
-
-    #[tokio::test]
     async fn subscription_zip_imports_every_accepted_entry() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("soundtrack.zip");
@@ -1175,13 +1137,16 @@ mod tests {
     }
 
     #[test]
-    fn every_source_fetches_one_post_before_settlement() {
+    fn every_source_uses_the_subscription_batch_limit() {
         let mut query = claimed_query();
         query.site_id = "twitter".into();
-        assert_eq!(effective_batch_size(&query, None), 1);
+        assert_eq!(
+            effective_batch_size(&query, None),
+            crate::subscriptions::DEFAULT_SOURCE_POST_BATCH_SIZE
+        );
 
         query.initial_post_limit = Some(3);
-        assert_eq!(effective_batch_size(&query, None), 1);
+        assert_eq!(effective_batch_size(&query, None), 3);
         assert_eq!(effective_batch_size(&query, Some(1)), 1);
     }
 

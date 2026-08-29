@@ -40,8 +40,31 @@ source identity keeps repeated work idempotent.
 ## Provider Requirements
 
 - Gallery providers pause extraction at each post boundary until Picto acknowledges settlement.
+- Provider processes may retain their native multi-post session. Picto's acknowledgement gate, not
+  a global one-post adapter override, enforces sequential settlement.
 - Gallery imports treat the entire gallery as the one current post.
 - Query providers continue past posts without usable media until the added-post budget is reached or
   source history ends.
 - A provider-specific downloader may retain its own cache, but that cache cannot redefine Picto's
   ordering, counters, or completion boundary.
+
+## Adapter Isolation
+
+The persisted runner and post acknowledgement protocol are shared infrastructure. Extractor
+monkey-patches are not shared infrastructure and are installed only for the named site:
+
+| Site | Site-specific behavior |
+|---|---|
+| Rule34.xxx | Categorized API tag enrichment |
+| Idol Complex and Sankaku | Their shared Sankaku keyset cursor API |
+| DeviantArt | Whole-deviation expansion and cursor |
+| Fur Affinity, Hentai Foundry, Newgrounds | Early post window before detail-page requests |
+| Tumblr | Native post cursor |
+| pixivFANBOX | FANBOX transport and pagination compatibility |
+| Patreon | Lazy attachment handling and Patreon pagination |
+| SubscribeStar | SubscribeStar post pagination |
+| OnlyFans | Dedicated downloader with a one-post process window |
+
+All other supported gallery-dl sites run through their native extractor without one of these
+site-specific patches. Common bridge code may normalize events, enforce the accepted-post cap, and
+wait for Rust acknowledgement, but it must not alter one site's extractor behavior for another.

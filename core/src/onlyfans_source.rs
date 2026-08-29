@@ -92,7 +92,7 @@ impl OnlyFansSourceRunner {
             state_dir,
             output_dir,
             creator: query.query_text.clone(),
-            post_limit: query_limit(query),
+            post_limit: query_limit(),
             before: query
                 .resume_cursor
                 .clone()
@@ -279,8 +279,7 @@ fn query_state_dir(root: &Path, subscription_id: i64, query_id: i64) -> PathBuf 
         .join(format!("query-{query_id}"))
 }
 
-fn query_limit(query: &ClaimedQueryRun) -> i64 {
-    let _ = query;
+fn query_limit() -> i64 {
     1
 }
 
@@ -440,6 +439,11 @@ fn classify_bridge_error(kind: &str, message: String) -> RunnerFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onlyfans_uses_its_own_single_post_process_window() {
+        assert_eq!(query_limit(), 1);
+    }
 
     #[test]
     fn bridge_item_normalizes_creator_as_a_tag() {

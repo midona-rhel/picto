@@ -392,6 +392,7 @@ async fn run_stream<R: SourceRunner>(
                 Some(event) => handle_source_event(
                     application,
                     query,
+                    &runner_cancel,
                     &destination,
                     event,
                     atomic_gallery,
@@ -409,6 +410,7 @@ async fn run_stream<R: SourceRunner>(
         handle_source_event(
             application,
             query,
+            &runner_cancel,
             &destination,
             event,
             atomic_gallery,
@@ -489,6 +491,7 @@ async fn run_stream<R: SourceRunner>(
 async fn handle_source_event(
     application: &LibraryApplication,
     query: &ClaimedQueryRun,
+    cancel: &CancellationToken,
     destination: &crate::subscription_catalog::SubscriptionDestinationPolicy,
     event: SourceEvent,
     atomic_gallery: bool,
@@ -499,6 +502,9 @@ async fn handle_source_event(
 ) -> Result<(), String> {
     let durable_change = match event {
         SourceEvent::PostComplete(acknowledge) => {
+            wait_for_query_ingest(application, query, cancel)
+                .await
+                .map_err(|failure| failure.message)?;
             let _ = acknowledge.send(());
             false
         }
@@ -847,12 +853,13 @@ mod tests {
     use picto_library::{ImmutableMediaFacts, Lifecycle, Rating, SourceIdentity};
     use sha2::{Digest, Sha256};
 
-    struct OneItemRunner {
+    struct OneItemRunner<'a> {
+        application: &'a LibraryApplication,
         item: DownloadedItem,
         cleanup_paths: Vec<PathBuf>,
     }
 
-    impl SourceRunner for OneItemRunner {
+    impl SourceRunner for OneItemRunner<'_> {
         fn run<'a>(
             &'a self,
             _query: &'a ClaimedQueryRun,
@@ -874,6 +881,21 @@ mod tests {
                     .await
                     .unwrap();
                 acknowledged.await.unwrap();
+                let state = self
+                    .application
+                    .library()
+                    .auxiliary_read(
+                        picto_library::database::WorkPriority::VisibleRead,
+                        |connection| {
+                            Ok(connection.query_row(
+                                "SELECT state FROM source_item WHERE item_key = 'media-1'",
+                                [],
+                                |row| row.get::<_, String>(0),
+                            )?)
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(state, "ingested", "post was acknowledged before ingest");
                 Ok(RunnerSuccess {
                     resume_cursor: Some(String::new()),
                     cleanup_paths: self.cleanup_paths.clone(),
@@ -1002,6 +1024,7 @@ mod tests {
             }],
         };
         let runner = OneItemRunner {
+            application: &application,
             item: DownloadedItem {
                 post,
                 input: PreparedImport {

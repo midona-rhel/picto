@@ -561,20 +561,26 @@ class _AcceptedPostGate:
             for extension in (accepted_extensions or ())
         }
         self.traversed: set[str] = set()
+        self.reserved: set[str] = set()
         self.accepted: set[str] = set()
         self.current: str | None = None
         self.current_has_media = False
 
-    def begin(self, metadata: dict[str, Any]) -> tuple[bool, str]:
+    def begin(self, metadata: dict[str, Any], path: str | None = None) -> tuple[bool, str]:
         identity = _post_identity(metadata)
         if identity in self.traversed:
             return False, identity
-        if self.limit and len(self.accepted) >= self.limit:
+        path = str(path or "")
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        supported = not self.accepted_extensions or extension in self.accepted_extensions
+        if supported and self.limit and len(self.reserved) >= self.limit:
             from gallery_dl import exception
 
             self.current = None
             raise exception.StopExtraction()
         self.traversed.add(identity)
+        if supported:
+            self.reserved.add(identity)
         self.current = identity
         self.current_has_media = False
         return True, identity
@@ -705,7 +711,7 @@ class PictoDownloadJob:
 
     def _on_post(self, pathfmt):
         metadata = _event_metadata(pathfmt)
-        first_visit, _ = self._post_gate.begin(metadata)
+        first_visit, _ = self._post_gate.begin(metadata, pathfmt.path)
         if first_visit:
             _emit("post_traversed", metadata=metadata)
 
@@ -713,8 +719,8 @@ class PictoDownloadJob:
         if not self._post_gate.has_current():
             return
         _emit("post_complete")
-        # Rust acknowledges only after every file from this post has been
-        # persisted and its canonical ingest work has been durably queued.
+        # Rust acknowledges only after every file from this post has reached
+        # canonical library state.
         if not sys.stdin.readline():
             from gallery_dl import exception
 
