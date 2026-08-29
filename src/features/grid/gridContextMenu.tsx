@@ -108,6 +108,7 @@ export interface GridMenuContext {
   onImportFolder?: () => void;
   onPasteImport?: () => void;
   onSortContents?: (field: ContentSortField) => void;
+  sortFields?: readonly ContentSortField[];
   grayscale?: boolean;
   onToggleGrayscale?: () => void;
 }
@@ -374,6 +375,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── View options ──
   if (!viewerSurface) {
+    if (ctx.onSortContents) {
+      entries.push(contentSortSubmenu(ctx.onSortContents, ctx.sortFields));
+      entries.push(sep());
+    }
     const viewEntries = buildContextMenuViewEntries();
     for (const entry of viewEntries) entries.push(entry);
     entries.push(item('Grayscale', {
@@ -593,14 +598,14 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
       action: ctx.onNewFolder,
     }));
   }
-  if (ctx.onNewSmartFolder) {
+  if (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder') {
     entries.push(item('New Smart Folder', {
       icon: <IconFilterPlus size={15} />,
       shortcut: kbd('file.newSmartFolder'),
       action: ctx.onNewSmartFolder,
     }));
   }
-  if (ctx.onNewFolder || ctx.onNewSmartFolder) entries.push(sep());
+  if (ctx.onNewFolder || (ctx.onNewSmartFolder && ctx.scopeKind !== 'folder')) entries.push(sep());
 
   if (ctx.onImportFiles) entries.push(item('Import Files...', {
     icon: <IconFileImport size={15} />,

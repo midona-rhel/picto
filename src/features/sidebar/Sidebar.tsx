@@ -28,6 +28,7 @@ import {
   sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
   smartFolderNodesAtom, sidebarLoadingAtom,
   pendingSidebarRenameNodeIdAtom,
+  pendingSidebarRevealNodeIdAtom,
 } from '../../state/sidebar';
 import { displayedSurfaceNodeIdAtom, sidebarPreferencesAtom } from '../../state/navigation';
 import { navigateToNode } from '../../state/navigationHistory';
@@ -230,6 +231,8 @@ export function Sidebar() {
   const loading = useAtomValue(sidebarLoadingAtom);
   const pendingRenameNodeId = useAtomValue(pendingSidebarRenameNodeIdAtom);
   const setPendingRenameNodeId = useSetAtom(pendingSidebarRenameNodeIdAtom);
+  const pendingRevealNodeId = useAtomValue(pendingSidebarRevealNodeIdAtom);
+  const setPendingRevealNodeId = useSetAtom(pendingSidebarRevealNodeIdAtom);
   const activeNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const sidebarPreferences = useAtomValue(sidebarPreferencesAtom);
   const setSidebarPreferences = useSetAtom(sidebarPreferencesAtom);
@@ -440,6 +443,23 @@ export function Sidebar() {
   // Pending rename: when a new folder is created, we queue its ID here
   // and start inline rename once the node appears in the tree.
   useEffect(() => { void sidebarController.ensureLoaded(); }, []);
+
+  useEffect(() => {
+    if (!pendingRevealNodeId) return;
+    const tree = pendingRevealNodeId.startsWith('folder:') ? folderNodes : smartFolderNodes;
+    const nodeById = new Map(tree.map((node) => [node.id, node]));
+    const node = nodeById.get(pendingRevealNodeId);
+    if (!node) return;
+
+    const sectionId = pendingRevealNodeId.startsWith('folder:') ? 'folders' : 'smart_folders';
+    if (collapsed.has(sectionId)) toggleCollapse(sectionId);
+    let parentId = node.parent_id;
+    while (parentId && nodeById.has(parentId)) {
+      if (collapsed.has(parentId)) toggleCollapse(parentId);
+      parentId = nodeById.get(parentId)?.parent_id ?? null;
+    }
+    setPendingRevealNodeId(null);
+  }, [collapsed, folderNodes, pendingRevealNodeId, setPendingRevealNodeId, smartFolderNodes, toggleCollapse]);
 
   // Trigger pending rename when folder nodes update
   useEffect(() => {

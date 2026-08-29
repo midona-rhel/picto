@@ -448,6 +448,33 @@ export function GroupSurface({
     }
   }, [groupId, members.length, onClose, refresh]);
 
+  const saveOrder = useCallback(async (orderedItemIds: number[]) => {
+    try {
+      await reorderGroup({ collection_id: groupId, media_ids: orderedItemIds });
+      await announceUndoableMutation('collections.reorder');
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [groupId, refresh]);
+
+  const sortCollectionContents = useCallback((field: 'name' | 'size') => {
+    const ordered = [...members].sort((left, right) => {
+      if (field === 'name') {
+        const compared = (left.name ?? '').localeCompare(right.name ?? '', undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
+        return compared || left.root_id - right.root_id;
+      }
+      const leftSize = BigInt(left.total_size_bytes);
+      const rightSize = BigInt(right.total_size_bytes);
+      if (leftSize !== rightSize) return leftSize > rightSize ? -1 : 1;
+      return left.root_id - right.root_id;
+    });
+    void saveOrder(ordered.map((item) => item.root_id));
+  }, [members, saveOrder]);
+
   const openMemberMenu = useCallback((
     item: CanonicalEntityGridItem,
     position: { x: number; y: number },
@@ -476,6 +503,10 @@ export function GroupSurface({
       scopeKind: null,
       statusFilter: null,
       loadedCount: members.length,
+      onSortContents: selectionEnabled ? (field) => {
+        if (field === 'name' || field === 'size') sortCollectionContents(field);
+      } : undefined,
+      sortFields: ['name', 'size'],
       onOpen: single ? () => setViewerIndex(openIndex) : undefined,
       onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
       onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
@@ -555,7 +586,7 @@ export function GroupSurface({
     if (trashIndex >= 0) entries.splice(trashIndex, 0, { separator: true }, removeEntry);
     else entries.push({ separator: true }, removeEntry);
     contextMenu.openAt(position, entries);
-  }, [contextMenu, details?.tag_ids, detachMembers, groupId, members, onClose, selectedItemIds, selectedItems, setAiPortal, setExportModal, setFolderPortal, setTagPortal]);
+  }, [contextMenu, details?.tag_ids, detachMembers, groupId, members, onClose, selectedItemIds, selectedItems, setAiPortal, setExportModal, setFolderPortal, setTagPortal, sortCollectionContents]);
 
   const confirmUngroup = useCallback(() => {
     setConfirmModal({
@@ -573,33 +604,6 @@ export function GroupSurface({
       },
     });
   }, [groupId, onClose, setConfirmModal]);
-
-  const saveOrder = useCallback(async (orderedItemIds: number[]) => {
-    try {
-      await reorderGroup({ collection_id: groupId, media_ids: orderedItemIds });
-      await announceUndoableMutation('collections.reorder');
-      await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }, [groupId, refresh]);
-
-  const sortCollectionContents = useCallback((field: 'name' | 'size') => {
-    const ordered = [...members].sort((left, right) => {
-      if (field === 'name') {
-        const compared = (left.name ?? '').localeCompare(right.name ?? '', undefined, {
-          numeric: true,
-          sensitivity: 'base',
-        });
-        return compared || left.root_id - right.root_id;
-      }
-      const leftSize = BigInt(left.total_size_bytes);
-      const rightSize = BigInt(right.total_size_bytes);
-      if (leftSize !== rightSize) return leftSize > rightSize ? -1 : 1;
-      return left.root_id - right.root_id;
-    });
-    void saveOrder(ordered.map((item) => item.root_id));
-  }, [members, saveOrder]);
 
   const openEmptyMenu = useCallback((position: { x: number; y: number }) => {
     contextMenu.openAt(position, [

@@ -12,6 +12,7 @@ import type {
   SmartFolderCommandPayload,
 } from '../shared/types/canonical';
 import { activeNodeIdAtom } from '../state/navigation';
+import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 import { gridController } from './gridController';
@@ -65,7 +66,9 @@ export const smartFoldersController = {
   async create(folder: SmartFolderCommandPayload): Promise<string> {
     const result = await createSmartFolder(folder);
     await announceUndoableMutation('smart_folders.create');
-    return `smart:${result.smart_folder_id}`;
+    const nodeId = `smart:${result.smart_folder_id}`;
+    store.set(pendingSidebarRevealNodeIdAtom, nodeId);
+    return nodeId;
   },
 
   async update(id: number, folder: SmartFolderCommandPayload): Promise<void> {

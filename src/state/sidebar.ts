@@ -30,6 +30,8 @@ export const sidebarEpochAtom = atom(0);
 export const sidebarLoadingAtom = atom(false);
 /** Lets non-sidebar commands hand a newly created node to the tree's rename owner. */
 export const pendingSidebarRenameNodeIdAtom = atom<string | null>(null);
+/** Newly created tree node that must be made visible even when its ancestors are collapsed. */
+export const pendingSidebarRevealNodeIdAtom = atom<string | null>(null);
 
 // ── Derived: node kind filters ───────────────────────────────────
 

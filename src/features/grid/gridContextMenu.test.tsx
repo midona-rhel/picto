@@ -157,6 +157,21 @@ describe('buildTileContextMenu', () => {
     }
   });
 
+  it('does not offer smart-folder creation inside a regular folder', () => {
+    const entries = buildEmptyContextMenu({
+      selectionCount: 0,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'folder',
+      statusFilter: null,
+      loadedCount: 0,
+      onNewSmartFolder: vi.fn(),
+    });
+
+    expect(entries.some((entry) => 'label' in entry && entry.label === 'New Smart Folder')).toBe(false);
+  });
+
   it('offers persisted content sorting on empty space inside a folder', () => {
     const onSortContents = vi.fn();
     const entries = buildEmptyContextMenu({
@@ -175,6 +190,45 @@ describe('buildTileContextMenu', () => {
     expect(size).toBeDefined();
     size!.action();
     expect(onSortContents).toHaveBeenCalledWith('size');
+  });
+
+  it('keeps folder content sorting available when media is selected', () => {
+    const onSortContents = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'hash',
+      singleKind: 'media',
+      scopeKind: 'folder',
+      statusFilter: null,
+      loadedCount: 1,
+      onSortContents,
+    });
+    const imported = submenuChildren(entries, 'Sort by').find(
+      (entry): entry is MenuItem => 'label' in entry && entry.label === 'Import Date',
+    );
+
+    expect(imported).toBeDefined();
+    imported!.action();
+    expect(onSortContents).toHaveBeenCalledWith('imported_at');
+  });
+
+  it('does not expose folder sorting on viewer surfaces', () => {
+    const labels = buildTileContextMenu({
+      surface: 'viewer',
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'hash',
+      singleKind: 'media',
+      scopeKind: 'folder',
+      statusFilter: null,
+      loadedCount: 1,
+      onSortContents: vi.fn(),
+    }).flatMap((entry) => ('label' in entry ? [entry.label] : []));
+
+    expect(labels).not.toContain('Sort by');
   });
 
   it('omits Paste Import when the clipboard has no importable payload', () => {

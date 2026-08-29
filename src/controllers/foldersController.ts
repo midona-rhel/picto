@@ -23,7 +23,7 @@ import {
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import { activeNodeIdAtom } from '../state/navigation';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
-import { sidebarNodesAtom } from '../state/sidebar';
+import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
@@ -74,7 +74,9 @@ export const foldersController = {
   async create(name: string, parentId?: number | null): Promise<string> {
     const result = await createFolder({ name, parent_id: parentId ?? null });
     await announceUndoableMutation('folders.create');
-    return folderNodeId(result.folder_id);
+    const nodeId = folderNodeId(result.folder_id);
+    store.set(pendingSidebarRevealNodeIdAtom, nodeId);
+    return nodeId;
   },
 
   async rename(folderId: number, newName: string): Promise<void> {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { activeNodeIdAtom } from '../state/navigation';
+import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
 
 const mocks = vi.hoisted(() => ({
   fetchTree: vi.fn().mockResolvedValue(undefined),
@@ -35,6 +36,7 @@ describe('smart folder refresh', () => {
     mocks.createSmartFolder.mockReset();
     mocks.announceUndoableMutation.mockClear();
     getDefaultStore().set(activeNodeIdAtom, 'system:active');
+    getDefaultStore().set(pendingSidebarRevealNodeIdAtom, null);
   });
 
   it('creates a non-filtering hierarchy group with an empty predicate', async () => {
@@ -48,6 +50,7 @@ describe('smart folder refresh', () => {
       view: expect.objectContaining({ filter: { kind: 'all', value: [] } }),
     }));
     expect(mocks.announceUndoableMutation).toHaveBeenCalledWith('smart_folders.create');
+    expect(getDefaultStore().get(pendingSidebarRevealNodeIdAtom)).toBe('smart:12');
   });
 
   it('refreshes counts without navigating to an inactive smart folder', async () => {

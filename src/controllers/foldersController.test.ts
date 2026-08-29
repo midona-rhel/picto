@@ -1,8 +1,10 @@
 import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom } from '../state/navigation';
+import { pendingSidebarRevealNodeIdAtom } from '../state/sidebar';
 
-const { deleteFoldersMock, sortFolderItemsMock } = vi.hoisted(() => ({
+const { createFolderMock, deleteFoldersMock, sortFolderItemsMock } = vi.hoisted(() => ({
+  createFolderMock: vi.fn(),
   deleteFoldersMock: vi.fn(),
   sortFolderItemsMock: vi.fn(),
 }));
@@ -10,7 +12,7 @@ const { deleteFoldersMock, sortFolderItemsMock } = vi.hoisted(() => ({
 vi.mock('../platform/folderApi', () => ({
   addMedia: vi.fn(),
   clearFolderWatchConfig: vi.fn(),
-  createFolder: vi.fn(),
+  createFolder: createFolderMock,
   deleteFolders: deleteFoldersMock,
   getFolderCoverHashes: vi.fn(),
   moveFolder: vi.fn(),
@@ -41,8 +43,19 @@ function deletionReceipt(deleted: number[], fallback: number | null) {
 describe('foldersController deletion settlement', () => {
   beforeEach(() => {
     deleteFoldersMock.mockReset();
+    createFolderMock.mockReset();
     sortFolderItemsMock.mockReset();
     store.set(activeNodeIdAtom, 'system:active');
+    store.set(pendingSidebarRevealNodeIdAtom, null);
+  });
+
+  it('requests that a newly created folder is revealed in the sidebar', async () => {
+    createFolderMock.mockResolvedValue({ folder_id: 42 });
+
+    await expect(foldersController.create('Child', 7)).resolves.toBe('folder:42');
+
+    expect(createFolderMock).toHaveBeenCalledWith({ name: 'Child', parent_id: 7 });
+    expect(store.get(pendingSidebarRevealNodeIdAtom)).toBe('folder:42');
   });
 
   it('sorts folder contents by the requested field', async () => {

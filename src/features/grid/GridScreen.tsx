@@ -867,7 +867,9 @@ export function GridScreen({
       querySelectionActive,
       singleSelected: selectionCount === 1,
       singleHash: null,
-      scopeKind: null,
+      scopeKind: gridScope.kind === 'folder'
+        ? 'folder'
+        : gridScope.kind === 'smart_folder' ? 'smart_folder' : 'system',
       statusFilter: null,
       loadedCount: items.length,
       onNewFolder: () => {
@@ -1372,6 +1374,9 @@ export function GridScreen({
             statusFilter,
             loadedCount: items.length,
             grayscale,
+            onSortContents: !viewerSession && !quickLookSession && gridScope.kind === 'folder'
+              ? (field) => { void foldersController.sortContents(gridScope.folder_id, field); }
+              : undefined,
             onToggleGrayscale: () => store.set(gridGrayscaleAtom, !store.get(gridGrayscaleAtom)),
             onOpen: singleItem ? () => openGridItem(singleItem, items) : undefined,
             onOpenNewWindow: singleItem
