@@ -183,9 +183,17 @@ Stop cancels at the attempt level, not just the run level:
 - A stale Python process that keeps emitting events for a cancelled attempt is fenced by the
   protocol correlation identifiers; its events are dropped.
 - Cancellation acknowledgement is bounded: if the Python worker does not ACK within 10 seconds,
-  the service process (or pool member) is terminated (SIGKILL), the open attempt settles as
-  `cancelled` through the recovery path, and the lease releases. Stop can therefore never hang on
-  a stuck extractor; the same bound applies during restart recovery.
+  the leased worker process is terminated (SIGKILL), the open attempt settles as `cancelled`
+  through the recovery path, and the lease releases. Stop can therefore never hang on a stuck
+  extractor; the same bound applies during restart recovery.
+- The `ingesting` wait is bounded too: canonical ingest is one local SQLite transaction; if it
+  has not committed within 30 seconds, Stop treats it as the crash case — the process-level
+  recovery path applies and settlement happens exactly once via the provenance check.
+- Forced termination never takes down unrelated work: an execution holds an exclusive lease on
+  the worker process serving it (one process per active execution, or an exclusively assigned
+  pool member). If the shared control service itself must be killed, that is a declared
+  collateral event — every open attempt across executions settles through the same recovery
+  path, and the event is logged as such.
 
 ### Crash-Safe Ingest Boundary
 
@@ -240,7 +248,9 @@ CREATE TABLE source_run (
     status TEXT NOT NULL CHECK (status IN
         ('pending','running','succeeded','budget_exhausted','failed','cancelled')),
     created_at TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    -- Gallery runs carry no subscription; subscription runs always do.
+    CHECK ((requested_by = 'gallery') = (subscription_id IS NULL))
 ) STRICT;
 CREATE UNIQUE INDEX idx_source_run_active_subscription ON source_run(subscription_id)
     WHERE subscription_id IS NOT NULL AND status IN ('pending','running');
@@ -261,6 +271,30 @@ CREATE TABLE source_run_query (
 ) STRICT;
 CREATE UNIQUE INDEX idx_source_run_one_running_query ON source_run_query(run_id)
     WHERE status = 'running';
+-- UNIQUE(run_id, query_id) does not constrain NULL query_id rows: one gallery
+-- execution per run is enforced separately.
+CREATE UNIQUE INDEX idx_one_gallery_execution_per_run ON source_run_query(run_id)
+    WHERE owner_kind = 'gallery';
+
+-- Ownership coherence: a query-owned row must belong to its run's
+-- subscription; a gallery-owned row must live on a gallery run. INSERT and
+-- UPDATE are both covered.
+CREATE TRIGGER run_query_owner_coherence_insert
+BEFORE INSERT ON source_run_query
+WHEN (NEW.owner_kind = 'query' AND (
+          (SELECT r.requested_by FROM source_run r WHERE r.run_id = NEW.run_id) = 'gallery'
+          OR (SELECT r.subscription_id FROM source_run r WHERE r.run_id = NEW.run_id)
+             IS NOT (SELECT q.subscription_id FROM subscription_query q WHERE q.query_id = NEW.query_id)))
+  OR (NEW.owner_kind = 'gallery' AND
+          (SELECT r.requested_by FROM source_run r WHERE r.run_id = NEW.run_id) != 'gallery')
+BEGIN SELECT RAISE(ABORT, 'execution owner does not match its run'); END;
+
+-- Rows are born pending; every later transition goes through the UPDATE
+-- triggers. Terminal or running rows cannot be inserted directly.
+CREATE TRIGGER run_query_born_pending
+BEFORE INSERT ON source_run_query
+WHEN NEW.status != 'pending'
+BEGIN SELECT RAISE(ABORT, 'run queries are inserted pending'); END;
 
 -- A gallery-owned execution may not start before its gallery_job exists.
 CREATE TRIGGER gallery_execution_requires_job
@@ -318,17 +352,25 @@ CREATE TABLE gallery_job (
 ) STRICT;
 
 -- Enforced invariants (not comments): terminal attempts carry reasons, Added
--- carries roots, gallery imports carry exactly one collection root.
+-- carries roots, gallery imports carry exactly one collection root. Attempts
+-- are born `discovered`, so every terminal transition passes the UPDATE
+-- triggers — terminal rows cannot be inserted directly.
+CREATE TRIGGER attempt_born_discovered
+BEFORE INSERT ON source_post_attempt
+WHEN NEW.state != 'discovered'
+BEGIN SELECT RAISE(ABORT, 'attempts are inserted discovered'); END;
+
 CREATE TRIGGER attempt_terminal_reason_required
 BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state IN ('skipped','failed','cancelled') AND NEW.terminal_reason IS NULL
 BEGIN SELECT RAISE(ABORT, 'terminal attempt requires a reason'); END;
 
-CREATE TRIGGER attempt_added_requires_roots
+CREATE TRIGGER attempt_added_requires_live_roots
 BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state = 'added' AND NOT EXISTS
-    (SELECT 1 FROM source_attempt_root r WHERE r.attempt_id = NEW.attempt_id)
-BEGIN SELECT RAISE(ABORT, 'added attempt requires result roots'); END;
+    (SELECT 1 FROM source_attempt_root r
+     WHERE r.attempt_id = NEW.attempt_id AND r.root_id IS NOT NULL)
+BEGIN SELECT RAISE(ABORT, 'added attempt requires live result roots'); END;
 
 CREATE TRIGGER attempt_settled_timestamp
 BEFORE UPDATE OF state ON source_post_attempt
@@ -339,10 +381,11 @@ CREATE TRIGGER gallery_added_requires_one_collection_root
 BEFORE UPDATE OF state ON source_post_attempt
 WHEN NEW.state = 'added'
     AND EXISTS (SELECT 1 FROM gallery_job g WHERE g.run_query_id = NEW.run_query_id)
-    AND (SELECT count(*) FROM source_attempt_root r
-         JOIN library_item item ON item.local_id = r.root_id
-         WHERE r.attempt_id = NEW.attempt_id AND item.item_kind = 2) != 1
-BEGIN SELECT RAISE(ABORT, 'gallery import requires exactly one collection root'); END;
+    AND ((SELECT count(*) FROM source_attempt_root r WHERE r.attempt_id = NEW.attempt_id) != 1
+         OR (SELECT count(*) FROM source_attempt_root r
+             JOIN library_item item ON item.local_id = r.root_id
+             WHERE r.attempt_id = NEW.attempt_id AND item.item_kind = 2) != 1)
+BEGIN SELECT RAISE(ABORT, 'gallery import requires exactly one collection root and nothing else'); END;
 ```
 
 Query cursors are per stream partition: `subscription_query_cursor(query_id, cursor_scope,
@@ -350,10 +393,27 @@ cursor_value, updated_at, PRIMARY KEY(query_id, cursor_scope))`. Single-stream p
 scope (`'feed'`). Settlement updates only the current scope, atomically with the attempt outcome.
 Run state, counters, phase, downloaded counts, and warnings live in the attempt tables for both
 owners; `gallery_job` holds identity and presentation only and **references its execution**
-(`gallery_job.run_query_id`), matching one cascade graph: dismissing a gallery job is an explicit
-transaction that deletes the job row and then its `source_run` (whose `source_run_query` rows
-cascade). Nothing cascades from job deletion implicitly; the RESTRICT FK makes an orphaned
-gallery `source_run` impossible.
+(`gallery_job.run_query_id`), matching one cascade graph. Deletion is trigger-complete, so an
+orphaned gallery execution is structurally impossible rather than asserted:
+
+```sql
+-- An active gallery job cannot be deleted; Stop it first.
+CREATE TRIGGER gallery_job_delete_requires_terminal
+BEFORE DELETE ON gallery_job
+WHEN EXISTS (SELECT 1 FROM source_run_query rq
+             WHERE rq.run_query_id = OLD.run_query_id
+               AND rq.status IN ('pending','running'))
+BEGIN SELECT RAISE(ABORT, 'stop the gallery job before dismissing it'); END;
+
+-- Dismissing the job removes its whole execution (run cascades run_query).
+CREATE TRIGGER gallery_job_dismissal_cleans_execution
+AFTER DELETE ON gallery_job
+BEGIN
+    DELETE FROM source_run
+    WHERE run_id = (SELECT rq.run_id FROM source_run_query rq
+                    WHERE rq.run_query_id = OLD.run_query_id);
+END;
+```
 
 Do not use a gallery-dl archive database as a second history authority. Picto's source identities,
 provenance, and post outcomes already provide the required idempotency.
