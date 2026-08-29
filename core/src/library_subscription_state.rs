@@ -676,9 +676,21 @@ pub fn fail_query(
     retryable: bool,
     now: &str,
 ) -> Result<MutationReceipt, String> {
-    let retry_at = (retryable && query.attempt_count < MAX_ATTEMPTS)
-        .then(|| next_retry_at(now, query.attempt_count))
-        .transpose()?;
+    // A site that states when its limit resets gets parked until then
+    // instead of burning generic backoff retries against a closed window.
+    let stated_reset = (kind == "rate_limited")
+        .then(|| rate_limit_reset_at(message, now))
+        .flatten();
+    let retry_at = if retryable {
+        match stated_reset {
+            Some(reset) => Some(reset),
+            None => (query.attempt_count < MAX_ATTEMPTS)
+                .then(|| next_retry_at(now, query.attempt_count))
+                .transpose()?,
+        }
+    } else {
+        None
+    };
     write_transition(application, |transaction| {
         let (status, finished): (&str, Option<&str>) = if retry_at.is_some() {
             ("pending", None)
@@ -943,6 +955,34 @@ fn validate_post(post: &NormalizedPost) -> Result<(), String> {
         return Err("source post contains invalid or duplicate items".into());
     }
     Ok(())
+}
+
+/// Parse a provider-stated local reset time ("Rate limit will reset at
+/// 20:04:22") into the next matching instant, with a safety margin.
+fn rate_limit_reset_at(message: &str, now: &str) -> Option<String> {
+    static RESET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let captures = RESET
+        .get_or_init(|| {
+            regex::Regex::new(r"reset at (\d{1,2}):(\d{2}):(\d{2})").expect("valid reset regex")
+        })
+        .captures(message)?;
+    let time = chrono::NaiveTime::from_hms_opt(
+        captures[1].parse().ok()?,
+        captures[2].parse().ok()?,
+        captures[3].parse().ok()?,
+    )?;
+    let now_local = DateTime::parse_from_rfc3339(now)
+        .ok()?
+        .with_timezone(&chrono::Local);
+    let mut candidate = now_local.date_naive().and_time(time);
+    if candidate <= now_local.naive_local() {
+        candidate += Duration::days(1);
+    }
+    let candidate = candidate
+        .and_local_timezone(chrono::Local)
+        .earliest()?
+        + Duration::minutes(2);
+    Some(candidate.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
 fn next_retry_at(now: &str, attempt_count: i64) -> Result<String, String> {

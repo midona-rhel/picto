@@ -9,6 +9,7 @@ import json
 import multiprocessing
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -92,6 +93,15 @@ def write_runtime(request: dict[str, object]) -> Path:
             "file_format": "{media_id}.{ext}",
         },
         "performance_options": {"download_sems": 1},
+        # Owned media can be served as DRM DASH streams: decrypt through the
+        # remote CDRM helper (the proven interactive setup) and give
+        # OF-Scraper the bundled ffmpeg for segment merging.
+        "cdm_options": {
+            "private-key": None,
+            "client-id": None,
+            "key-mode-default": "cdrm",
+        },
+        "binary_options": {"ffmpeg": shutil.which("ffmpeg") or ""},
         "advanced_options": {
             "skip_unavailable_content": True,
             "incremental_downloads": True,
