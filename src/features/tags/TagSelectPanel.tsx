@@ -482,7 +482,7 @@ export function TagSelectPanel() {
             className={`${styles.sidebarItem} ${sidebarMode === 'starred' ? styles.sidebarItemActive : ''}`}
             onClick={() => { setSidebarMode('starred'); setActiveNamespace(null); }}
           >
-            <IconStar className={styles.sidebarStar} size={10} fill="currentColor" />
+            <IconStar className={styles.sidebarStar} size={10} />
             <span className={styles.sidebarName}>Starred</span>
             <span className={styles.sidebarBadge}>{tagPreferences.starredTags.length}</span>
           </div>

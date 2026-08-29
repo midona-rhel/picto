@@ -79,7 +79,7 @@
   flex: 0 0 10px;
   margin-right: 6px;
   margin-left: 6px;
-  color: #ff9f0a;
+  color: var(--color-text-primary);
 }
 
 .sidebarItem:hover .sidebarIcon,
