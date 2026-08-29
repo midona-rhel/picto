@@ -380,6 +380,10 @@ async fn run_stream<R: SourceRunner>(
                     )));
                 }
                 if !state::query_is_running(application, query.run_query_id)? {
+                    tracing::warn!(
+                        run_query_id = query.run_query_id,
+                        "source query row left the running state mid-run"
+                    );
                     runner_cancel.cancel();
                     return Ok(Err(RunnerFailure::retryable(
                         RunnerFailureKind::Interrupted,
@@ -865,6 +869,11 @@ fn settle_runner_failure(
     now: &str,
 ) -> Result<(), String> {
     if failure.kind == RunnerFailureKind::Interrupted {
+        tracing::warn!(
+            run_query_id = query.run_query_id,
+            message = %failure.message,
+            "source query interrupted; returning to pending"
+        );
         return state::interrupt_query(application, query, now).map(|_| ());
     }
     let authentication_failed = failure.kind == RunnerFailureKind::Authentication;

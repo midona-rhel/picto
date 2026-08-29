@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use picto_core::blob_store::{mime_to_extension, BlobStore};
@@ -716,6 +715,16 @@ fn write_report(
 }
 
 fn configure_credential(site_id: &str) -> Result<&'static str, String> {
+    if std::env::var("PICTO_LIVE_SUBSCRIPTION_ALLOW_KEYCHAIN")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        // Certification must never read, write, or prompt the OS keychain
+        // unless the operator explicitly opted in: the process-local
+        // ephemeral store takes over before the first credential access.
+        std::env::set_var("PICTO_EPHEMERAL_CREDENTIALS", "1");
+    }
     if let Some(path) = std::env::var_os("PICTO_LIVE_SUBSCRIPTION_CREDENTIAL_FILE") {
         install_fixture_credential(Path::new(&path), site_id)?;
         return Ok("fixture");
@@ -729,10 +738,6 @@ fn configure_credential(site_id: &str) -> Result<&'static str, String> {
             .map(|_| "keychain")
             .ok_or_else(|| format!("no stored direct-site credential exists for '{site_id}'"));
     }
-    // Anonymous means anonymous: swap in an empty in-memory keyring so the
-    // runtime's ambient credential lookups can never reach the OS keychain
-    // (and never prompt) during an unauthenticated certification.
-    keyring::set_default_credential_builder(Box::new(SharedMemoryCredentialBuilder::default()));
     Ok("anonymous")
 }
 
@@ -749,74 +754,7 @@ fn install_fixture_credential(path: &Path, site_id: &str) -> Result<(), String> 
         .credentials
         .get(site_id)
         .ok_or_else(|| format!("verifier credential file has no entry for '{site_id}'"))?;
-    keyring::set_default_credential_builder(Box::new(SharedMemoryCredentialBuilder::default()));
     picto_core::credential_store::set_credential(credential)
-}
-
-type SharedSecrets = Arc<Mutex<BTreeMap<(String, String), Vec<u8>>>>;
-
-#[derive(Default)]
-struct SharedMemoryCredentialBuilder {
-    secrets: SharedSecrets,
-}
-
-impl keyring::credential::CredentialBuilderApi for SharedMemoryCredentialBuilder {
-    fn build(
-        &self,
-        _target: Option<&str>,
-        service: &str,
-        user: &str,
-    ) -> keyring::Result<Box<keyring::credential::Credential>> {
-        Ok(Box::new(SharedMemoryCredential {
-            key: (service.to_string(), user.to_string()),
-            secrets: Arc::clone(&self.secrets),
-        }))
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn persistence(&self) -> keyring::credential::CredentialPersistence {
-        keyring::credential::CredentialPersistence::ProcessOnly
-    }
-}
-
-struct SharedMemoryCredential {
-    key: (String, String),
-    secrets: SharedSecrets,
-}
-
-impl keyring::credential::CredentialApi for SharedMemoryCredential {
-    fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
-        self.secrets
-            .lock()
-            .expect("credential fixture lock poisoned")
-            .insert(self.key.clone(), secret.to_vec());
-        Ok(())
-    }
-
-    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
-        self.secrets
-            .lock()
-            .expect("credential fixture lock poisoned")
-            .get(&self.key)
-            .cloned()
-            .ok_or(keyring::Error::NoEntry)
-    }
-
-    fn delete_credential(&self) -> keyring::Result<()> {
-        self.secrets
-            .lock()
-            .expect("credential fixture lock poisoned")
-            .remove(&self.key)
-            .map(|_| ())
-            .ok_or(keyring::Error::NoEntry)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn required_env(name: &str) -> Result<String, String> {

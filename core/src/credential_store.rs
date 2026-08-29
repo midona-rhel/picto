@@ -57,9 +57,31 @@ pub struct SiteCredential {
     pub oauth_token: Option<String>,
 }
 
+/// Process-local ephemeral credential store, enabled by setting
+/// `PICTO_EPHEMERAL_CREDENTIALS=1` before the first credential access.
+/// Certification and other automated runs use it so they can never read,
+/// write, or prompt the OS keychain.
+fn ephemeral_store() -> Option<&'static std::sync::Mutex<HashMap<String, String>>> {
+    static STORE: std::sync::OnceLock<Option<std::sync::Mutex<HashMap<String, String>>>> =
+        std::sync::OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            (std::env::var("PICTO_EPHEMERAL_CREDENTIALS").ok().as_deref() == Some("1"))
+                .then(|| std::sync::Mutex::new(HashMap::new()))
+        })
+        .as_ref()
+}
+
 pub fn set_credential(cred: &SiteCredential) -> Result<(), String> {
     let json = serde_json::to_string(cred)
         .map_err(|error| format!("Credential serialization error: {error}"))?;
+    if let Some(store) = ephemeral_store() {
+        store
+            .lock()
+            .map_err(|_| "ephemeral credential store poisoned".to_string())?
+            .insert(cred.site_category.clone(), json);
+        return Ok(());
+    }
     set_platform_credential(&cred.site_category, &json)
 }
 
@@ -109,6 +131,19 @@ fn set_platform_credential(site_category: &str, json: &str) -> Result<(), String
 }
 
 pub fn get_credential(site_category: &str) -> Result<Option<SiteCredential>, String> {
+    if let Some(store) = ephemeral_store() {
+        let json = store
+            .lock()
+            .map_err(|_| "ephemeral credential store poisoned".to_string())?
+            .get(site_category)
+            .cloned();
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        return serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|error| format!("Credential deserialization error: {error}"));
+    }
     let Some(json) = get_platform_credential(site_category)? else {
         return Ok(None);
     };
@@ -142,6 +177,13 @@ fn get_platform_credential(site_category: &str) -> Result<Option<String>, String
 }
 
 pub fn delete_credential(site_category: &str) -> Result<(), String> {
+    if let Some(store) = ephemeral_store() {
+        store
+            .lock()
+            .map_err(|_| "ephemeral credential store poisoned".to_string())?
+            .remove(site_category);
+        return Ok(());
+    }
     delete_platform_credential(site_category)
 }
 
