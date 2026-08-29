@@ -595,6 +595,13 @@ fn require_sanitized_text(post_key: &str, text: &str) -> Result<(), String> {
             "source post {post_key} persisted unsanitized BBCode/DText markup: {text:?}"
         ));
     }
+    let labeled_link =
+        regex::Regex::new(r#""[^"\n]*":\[?(?:https?://|/)"#).expect("valid labeled link regex");
+    if labeled_link.is_match(text) {
+        return Err(format!(
+            "source post {post_key} persisted an unstripped labeled link: {text:?}"
+        ));
+    }
     Ok(())
 }
 

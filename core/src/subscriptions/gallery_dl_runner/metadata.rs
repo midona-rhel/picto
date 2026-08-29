@@ -202,11 +202,13 @@ fn normalize_metadata_text(raw: &str) -> Option<String> {
     let plain = TAG_SEARCH
         .get_or_init(|| regex::Regex::new(r"\{\{([^}]+)\}\}").expect("valid tag search regex"))
         .replace_all(&plain, "$1");
-    // DText: "label":url keeps the label. The target must look like a link so
-    // ordinary quoted prose followed by a colon is untouched.
+    // DText: "label":url and "label":[url] keep the label. The target must
+    // look like a link so ordinary quoted prose followed by a colon is
+    // untouched.
     let plain = LABELED_URL
         .get_or_init(|| {
-            regex::Regex::new(r#""([^"\n]+)":(?:https?://|/)\S+"#).expect("valid labeled url regex")
+            regex::Regex::new(r#""([^"\n]+)":(?:\[(?:https?://|/)[^\]]*\]|(?:https?://|/)\S+)"#)
+                .expect("valid labeled url regex")
         })
         .replace_all(&plain, "$1");
     // DText: h1. .. h6. section headers at line starts.
@@ -1283,6 +1285,22 @@ mod tests {
             Some(
                 "Commission info Open for sheets and ych. See my terms before asking. updated row"
             )
+        );
+    }
+
+    #[test]
+    fn labeled_links_with_bracketed_targets_keep_their_labels() {
+        let parsed = parse_metadata(&json!({
+            "category": "danbooru",
+            "id": 9,
+            "artist_commentary": {
+                "original_description": "Princess Zelda \"#TheLegendOfZelda\":[https://x.com/hashtag/TheLegendOfZelda] \"#PrincessZelda\":[https://x.com/hashtag/PrincessZelda]"
+            }
+        }));
+
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Princess Zelda #TheLegendOfZelda #PrincessZelda")
         );
     }
 
