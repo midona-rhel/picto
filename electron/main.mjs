@@ -331,7 +331,9 @@ function wireNativeEvents() {
 }
 
 async function resolveInitialLibrary(config) {
-  if (process.env.PICTO_LIBRARY_ROOT) {
+  // Test library overrides must never leak into an ordinary development
+  // restart and replace the user's active library.
+  if (isAutomation && process.env.PICTO_LIBRARY_ROOT) {
     return process.env.PICTO_LIBRARY_ROOT;
   }
   if (config.lastLibrary && await libraryHost.isValidLibrary(config.lastLibrary)) {
@@ -367,7 +369,7 @@ async function bootstrapApplication() {
   }
 
   if (libraryToOpen) {
-    const rememberInitialLibrary = !process.env.PICTO_LIBRARY_ROOT;
+    const rememberInitialLibrary = !(isAutomation && process.env.PICTO_LIBRARY_ROOT);
     console.info('[main] initializing library', { libraryToOpen });
     const opening = libraryHost.initializeInitialLibrary(libraryToOpen, {
       remember: rememberInitialLibrary,
