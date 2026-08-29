@@ -140,6 +140,7 @@
     ],
     "mac": {
       "icon": "build/Picto.icon",
+      "timestamp": "none",
       "target": [
         {
           "target": "dmg",

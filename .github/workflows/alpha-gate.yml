@@ -141,7 +141,9 @@ jobs:
         run: npm run alpha:package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          MAC_CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          MAC_CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          PICTO_REQUIRE_MAC_SIGNING: ${{ runner.os == 'macOS' && 'true' || 'false' }}
 
       - name: Run alpha smoke (Linux)
         if: runner.os == 'Linux'
