@@ -186,12 +186,45 @@ async fn execute_run(
     }
     let runner = SubscriptionSourceRouter::open(application.root());
     let worker = SubscriptionWorker::new(application, runner);
-    worker.tick(&Utc::now().to_rfc3339()).await?;
+    // Batched-window providers settle one source window per tick and return
+    // the query to pending until the run's post budget or cursor is
+    // exhausted, exactly like the production scheduler loop. Drive ticks
+    // until the run itself is terminal.
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(
+            std::env::var("PICTO_LIVE_SUBSCRIPTION_TIMEOUT_SECONDS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(7_200),
+        );
     loop {
-        let report = picto_core::library_ingest_runtime::run_batch(application, 64)?;
-        if report.ingested == 0 && report.failed == 0 {
+        worker.tick(&Utc::now().to_rfc3339()).await?;
+        loop {
+            let report = picto_core::library_ingest_runtime::run_batch(application, 64)?;
+            if report.ingested == 0 && report.failed == 0 {
+                break;
+            }
+        }
+        let status: String = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                Ok(connection.query_row(
+                    "SELECT status FROM subscription_run WHERE run_id = ?1",
+                    [created.run_id],
+                    |row| row.get(0),
+                )?)
+            })
+            .map_err(|error| error.to_string())?;
+        if !matches!(status.as_str(), "pending" | "running") {
             break;
         }
+        if std::time::Instant::now() > deadline {
+            return Err(format!(
+                "run {} still {status} at the certification timeout",
+                created.run_id
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     Ok(RunEvidence {
         run_id: created.run_id,
