@@ -129,13 +129,22 @@ Rules:
 - A successfully ingested post with one or more non-fatal media failures is `Added` plus warning
   records. Warnings must not prevent `posts_added` incrementing and must not cause the post limit
   to overrun. Problems retain the post link and concise reason.
+- Media failure semantics are exhaustive: partial success is `Added` plus warnings; a post with no
+  media descriptors is `Skipped(NoUsableMedia)`; a post whose media are all unavailable after
+  bounded retries is `Skipped(AllMediaUnavailable)` plus problems; exhausted transient retries on
+  required work or a canonical ingest failure is `Failed`.
 - A failed post/run is reserved for a condition that prevented a valid terminal outcome.
 - The next post cannot be requested before the current post reaches a terminal state.
 - The configured post limit counts `added` only. Skips never consume it.
 - Runs must still terminate: at provider exhaustion, or at a known previously settled frontier.
-  For providers that cannot expose a finite frontier, apply a safety bound on consecutive
-  non-added traversal and report that condition as the run's terminal reason rather than
-  traversing forever.
+  For providers that cannot expose a finite frontier, apply a safety bound defined as N
+  consecutive terminally settled posts with zero `Added` outcomes in the current run (default
+  N = 10 × the configured post limit, persisted per run-query as a counter that resets on every
+  `Added`). Hitting the bound settles the run-query with terminal reason `safety_bound` — it is
+  not success, must never fire on a freshly reset query still walking known canonical duplicates
+  toward genuinely new posts (the counter counts settled traversal, so a reset run re-settling
+  duplicates advances the frontier legitimately and terminates at the bound only after that many
+  consecutive non-adds), and must not advance the cursor past any unprocessed post.
 
 ### Crash-Safe Ingest Boundary
 
@@ -503,7 +512,9 @@ Rules:
 
 ### 4. Replace The Python Protocol
 
-- Keep one Python process per running query.
+- One reusable gallery-dl service process driven by the Rust worker (or a strictly bounded pool if
+  gallery-dl isolation proves necessary — never a process per query), all requests through the one
+  shared per-domain limiter.
 - Import vendored gallery-dl APIs directly.
 - Implement `NEXT_POST`, `DOWNLOAD_CURRENT_POST`, and `ACK_POST` pull semantics.
 - Remove CLI-style whole-query execution and archive-based settlement.
