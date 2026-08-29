@@ -2412,6 +2412,139 @@ fn large_prepared_collection_publishes_as_one_coherent_root() {
 }
 
 #[test]
+fn text_search_matches_prefixes_and_substrings() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    library
+        .ingest_batch(&[
+            imported("OldNewgroundsDump", Lifecycle::Active, &[]),
+            imported("sunset-photo", Lifecycle::Active, &[]),
+            imported("axb", Lifecycle::Active, &[]),
+            imported("a_b", Lifecycle::Active, &[]),
+            imported("fooXYZbar", Lifecycle::Active, &[]),
+            imported("foo%bar", Lifecycle::Active, &[]),
+            imported("ÄRTHUR", Lifecycle::Active, &[]),
+        ])
+        .unwrap();
+    assert!(library.settle_fts(64).unwrap().is_some());
+    let total = |field: picto_library::predicate::TextField, query: &str| {
+        library
+            .query(
+                &RootQuery {
+                    scope: ItemScope::All,
+                    view: ViewQuerySpec {
+                        filter: FilterExpr::Clause(FilterClause::Text {
+                            field,
+                            query: query.into(),
+                        }),
+                        sort: ItemSort::default(),
+                    },
+                },
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total
+    };
+    let global = picto_library::predicate::TextField::Global;
+
+    assert_eq!(total(global, "oldnew"), 1, "prefix is a substring");
+    assert_eq!(total(global, "ol"), 1, "one- and two-character prefixes");
+    assert_eq!(total(global, "ne"), 1, "short mid-word substring");
+    assert_eq!(total(global, "newground"), 1, "mid-word substring");
+    assert_eq!(total(global, "NEWGROUNDS"), 1, "case-insensitive substring");
+    assert_eq!(total(global, "ärth"), 1, "Unicode lowercase normalization");
+    assert_eq!(total(global, "unset"), 1, "substring of a hyphenated name");
+    assert_eq!(
+        total(global, "sunset-photo"),
+        1,
+        "literal whitespace and punctuation"
+    );
+    assert_eq!(
+        total(global, "photo sunset"),
+        0,
+        "contains is not token reordering"
+    );
+    assert_eq!(total(global, "a_b"), 1, "underscore stays literal");
+    assert_eq!(total(global, "foo%bar"), 1, "percent stays literal");
+    assert_eq!(total(global, "zzzz"), 0);
+    assert_eq!(
+        total(global, "sun\"set ((("),
+        0,
+        "operator characters stay literal"
+    );
+    assert_eq!(total(global, "..."), 0, "punctuation is searched literally");
+    assert_eq!(
+        total(picto_library::predicate::TextField::Name, "ewgroundsdum"),
+        1,
+        "column-scoped substring"
+    );
+    assert_eq!(
+        total(picto_library::predicate::TextField::Notes, "ewgroundsdum"),
+        0,
+        "column scope excludes other columns"
+    );
+}
+
+#[test]
+fn text_search_stays_fresh_across_repeated_queries_and_mutations() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    library
+        .ingest_batch(&[
+            imported("dragon-castle", Lifecycle::Active, &[]),
+            imported("sunset-photo", Lifecycle::Active, &[]),
+        ])
+        .unwrap();
+    assert!(library.settle_fts(64).unwrap().is_some());
+    let query = RootQuery {
+        scope: ItemScope::All,
+        view: ViewQuerySpec {
+            filter: FilterExpr::Clause(FilterClause::Text {
+                // Name-scoped: the fixture's source url and source text also
+                // mention the key, and those survive a rename.
+                field: picto_library::predicate::TextField::Name,
+                query: "dragon".into(),
+            }),
+            sort: ItemSort::default(),
+        },
+    };
+
+    let first = library.query(&query, &PageRequest::default()).unwrap();
+    assert_eq!(first.total, 1);
+    let repeated = library.query(&query, &PageRequest::default()).unwrap();
+    assert_eq!(repeated.items, first.items, "repeated query is identical");
+
+    let dragon = first.items[0].root_id;
+    library.rename_root(dragon, "phoenix-castle", 42).unwrap();
+    assert!(library.settle_fts(64).unwrap().is_some());
+    assert_eq!(
+        library.query(&query, &PageRequest::default()).unwrap().total,
+        0,
+        "a rename away from the term drops the match"
+    );
+
+    let sunset = library
+        .query(
+            &RootQuery {
+                scope: ItemScope::All,
+                view: ViewQuerySpec::default(),
+            },
+            &PageRequest::default(),
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| item.root_id != dragon)
+        .unwrap()
+        .root_id;
+    library.rename_root(sunset, "dragon-sea", 43).unwrap();
+    assert!(library.settle_fts(64).unwrap().is_some());
+    let after = library.query(&query, &PageRequest::default()).unwrap();
+    assert_eq!(after.total, 1, "a rename into the term appears");
+    assert_eq!(after.items[0].root_id, sunset);
+}
+
+#[test]
 fn fts_settlement_interleaves_dirty_categories() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

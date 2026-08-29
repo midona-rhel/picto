@@ -135,7 +135,7 @@ pub(crate) fn detach_many(
         .filter(|_| selected.contains(collection.cover_media_id.0));
 
     if removes_collection {
-        transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [collection_id.0])?;
+        crate::fts::remove_root(transaction, collection_id.0)?;
         transaction.execute(
             "DELETE FROM library_root WHERE root_id = ?1",
             [collection_id.0],
@@ -501,7 +501,7 @@ pub(crate) fn ungroup(
     }
     drop(statement);
 
-    transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [collection_id.0])?;
+    crate::fts::remove_root(transaction, collection_id.0)?;
     transaction.execute(
         "DELETE FROM library_root WHERE root_id = ?1",
         [collection_id.0],
@@ -781,7 +781,7 @@ pub(crate) fn organize(
             )?;
         }
         if root.root_id != collection_id {
-            transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root.root_id.0])?;
+            crate::fts::remove_root(transaction, root.root_id.0)?;
             transaction.execute(
                 "DELETE FROM library_root WHERE root_id = ?1",
                 [root.root_id.0],

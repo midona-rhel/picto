@@ -4,22 +4,58 @@ use rusqlite::{params, Connection, Transaction};
 use crate::predicate::TextField;
 use crate::{Result, RootId};
 
-pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<RoaringBitmap> {
-    let column = match field {
-        TextField::Global => "root_fts",
-        TextField::Name => "name",
-        TextField::Notes => "notes",
-        TextField::SourceUrl => "urls",
+fn field_column(field: TextField) -> Option<&'static str> {
+    match field {
+        TextField::Global => None,
+        TextField::Name => Some("name"),
+        TextField::Notes => Some("notes"),
+        TextField::SourceUrl => Some("urls"),
+    }
+}
+
+fn substring_match(
+    connection: &Connection,
+    column: Option<&str>,
+    value: &str,
+) -> Result<RoaringBitmap> {
+    // LIKE selects trigram candidates. instr() removes false positives when
+    // the literal value contains LIKE wildcard characters.
+    let pattern = format!("%{value}%");
+    let sql = match column {
+        Some(column) => format!(
+            "SELECT rowid FROM root_fts
+             WHERE {column} LIKE ?1 AND instr({column}, ?2) > 0"
+        ),
+        None => ["name", "notes", "urls", "source_text"]
+            .into_iter()
+            .map(|column| {
+                format!(
+                    "SELECT rowid FROM root_fts
+                     WHERE {column} LIKE ?1 AND instr({column}, ?2) > 0"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION "),
     };
-    let expression = if column == "root_fts" {
-        query.to_owned()
-    } else {
-        format!("{column}:({query})")
-    };
-    let mut statement = connection
-        .prepare_cached("SELECT CAST(root_id AS INTEGER) FROM root_fts WHERE root_fts MATCH ?1")?;
-    let rows = statement.query_map([expression], |row| row.get::<_, u32>(0))?;
+    let mut statement = connection.prepare_cached(&sql)?;
+    let rows = statement.query_map([&pattern, value], |row| row.get::<_, u32>(0))?;
     Ok(rows.collect::<std::result::Result<RoaringBitmap, _>>()?)
+}
+
+/// Matches the complete trimmed query as a literal substring. Text is lowered
+/// before indexing and querying so the trigram path has consistent Unicode
+/// case behavior independent of SQLite's ASCII-only NOCASE rules.
+pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<RoaringBitmap> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Ok(RoaringBitmap::new());
+    }
+    substring_match(connection, field_column(field), &query)
+}
+
+pub fn remove_root(transaction: &Transaction<'_>, root_id: u32) -> Result<()> {
+    transaction.execute("DELETE FROM root_fts WHERE rowid = ?1", [root_id])?;
+    Ok(())
 }
 
 pub fn mark_dirty(
@@ -79,12 +115,18 @@ pub fn settle_batch(transaction: &Transaction<'_>, limit: usize) -> Result<Roari
                 ))
             },
         );
-        transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root_id])?;
+        remove_root(transaction, *root_id)?;
         if let Ok((id, name, notes, urls, source_text)) = content {
             transaction.execute(
-                "INSERT INTO root_fts(root_id, name, notes, urls, source_text)
+                "INSERT INTO root_fts(rowid, name, notes, urls, source_text)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, name, notes, urls, source_text],
+                params![
+                    id,
+                    name.to_lowercase(),
+                    notes.to_lowercase(),
+                    urls.to_lowercase(),
+                    source_text.to_lowercase(),
+                ],
             )?;
         }
         transaction.execute("DELETE FROM fts_dirty WHERE root_id = ?1", [root_id])?;

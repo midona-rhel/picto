@@ -25,7 +25,7 @@ import {
 
 const store = getDefaultStore();
 const PAGE_SIZE = 500;
-const SEARCH_DEBOUNCE_MS = 100;
+const SEARCH_DEBOUNCE_MS = 250;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
 
 export interface PreparedGridNavigation {

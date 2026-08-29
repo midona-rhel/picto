@@ -452,13 +452,16 @@ CREATE TABLE fts_dirty (
     PRIMARY KEY(root_id, category)
 ) WITHOUT ROWID, STRICT;
 
+-- rowid = root_id. Separate columns preserve field-scoped contains semantics;
+-- values are normalized to lowercase before insertion.
 CREATE VIRTUAL TABLE root_fts USING fts5(
-    root_id UNINDEXED,
     name,
     notes,
     urls,
     source_text,
-    tokenize = 'unicode61'
+    tokenize = 'trigram',
+    detail = 'none',
+    columnsize = 0
 );
 
 CREATE TABLE cloud_journal (

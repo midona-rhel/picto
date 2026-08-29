@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-media-notes";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
 

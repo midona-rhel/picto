@@ -1,6 +1,9 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use roaring::RoaringBitmap;
 use rusqlite::{params_from_iter, types::Value, Connection};
 use serde::{Deserialize, Serialize};
@@ -12,7 +15,7 @@ use crate::model::{
     RootDetails, RootId, RootKind, RootRecord, SmartFolderId,
 };
 use crate::ordering::OrderOwnerKind;
-use crate::predicate::{self, ItemSort, SortDirection, SortField, ViewQuerySpec};
+use crate::predicate::{self, FilterExpr, ItemSort, SortDirection, SortField, ViewQuerySpec};
 use crate::projection::ProjectionSnapshot;
 use crate::{LibraryError, Result};
 
@@ -307,6 +310,76 @@ enum Cursor {
     Vector { index: usize },
 }
 
+/// Bounded text-match cache owned by one open library. Reads are lock-free;
+/// revision is part of the key, so old RCU readers and new publications cannot
+/// observe each other's results.
+pub struct MatchCache {
+    entries: ArcSwap<Vec<MatchCacheEntry>>,
+    writes: Mutex<()>,
+}
+
+#[derive(Clone)]
+struct MatchCacheEntry {
+    revision: u64,
+    scope: ItemScope,
+    filter: FilterExpr,
+    matches: Arc<RoaringBitmap>,
+}
+
+const MATCH_CACHE_LIMIT: usize = 8;
+
+impl Default for MatchCache {
+    fn default() -> Self {
+        Self {
+            entries: ArcSwap::from_pointee(Vec::new()),
+            writes: Mutex::new(()),
+        }
+    }
+}
+
+impl MatchCache {
+    fn get(
+        &self,
+        revision: u64,
+        scope: &ItemScope,
+        filter: &FilterExpr,
+    ) -> Option<Arc<RoaringBitmap>> {
+        let entries = self.entries.load();
+        entries
+            .iter()
+            .find(|entry| {
+                entry.revision == revision && entry.scope == *scope && entry.filter == *filter
+            })
+            .map(|entry| entry.matches.clone())
+    }
+
+    fn insert(
+        &self,
+        revision: u64,
+        scope: &ItemScope,
+        filter: &FilterExpr,
+        matches: Arc<RoaringBitmap>,
+    ) {
+        let _write = self.writes.lock();
+        let mut entries = self.entries.load_full().as_ref().clone();
+        if entries.iter().any(|entry| {
+            entry.revision == revision && entry.scope == *scope && entry.filter == *filter
+        }) {
+            return;
+        }
+        if entries.len() == MATCH_CACHE_LIMIT {
+            entries.remove(0);
+        }
+        entries.push(MatchCacheEntry {
+            revision,
+            scope: scope.clone(),
+            filter: filter.clone(),
+            matches,
+        });
+        self.entries.store(Arc::new(entries));
+    }
+}
+
 pub fn matching_roots(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
@@ -323,24 +396,82 @@ pub fn page(
     query: &RootQuery,
     request: &PageRequest,
 ) -> Result<RootPage> {
+    page_inner(connection, snapshot, query, request, None)
+}
+
+pub(crate) fn page_cached(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    request: &PageRequest,
+    cache: &MatchCache,
+) -> Result<RootPage> {
+    page_inner(connection, snapshot, query, request, Some(cache))
+}
+
+fn page_inner(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    request: &PageRequest,
+    cache: Option<&MatchCache>,
+) -> Result<RootPage> {
     let limit = request.limit.clamp(1, 1000);
-    let matches = matching_roots(connection, snapshot, query)?;
+    let cacheable = predicate::contains_text(&query.view.filter);
+    let matches = if cacheable {
+        cache
+            .and_then(|cache| cache.get(snapshot.revision, &query.scope, &query.view.filter))
+            .map(Ok)
+            .unwrap_or_else(|| {
+                let matches = Arc::new(matching_roots(connection, snapshot, query)?);
+                if let Some(cache) = cache {
+                    cache.insert(
+                        snapshot.revision,
+                        &query.scope,
+                        &query.view.filter,
+                        matches.clone(),
+                    );
+                }
+                Ok::<_, crate::LibraryError>(matches)
+            })?
+    } else {
+        Arc::new(matching_roots(connection, snapshot, query)?)
+    };
+    if matches.is_empty() {
+        return Ok(RootPage {
+            items: Vec::new(),
+            next_cursor: None,
+            total: 0,
+            media_count: 0,
+            total_size_bytes: 0,
+            revision: snapshot.revision,
+        });
+    }
     let cursor = request
         .cursor
         .as_deref()
         .map(serde_json::from_str)
         .transpose()?;
+    let sparse = matches.len() <= SPARSE_SCAN_MAXIMUM;
     let (ids, next_cursor) = match query.scope {
         ItemScope::RecentlyViewed => page_recent_order(connection, &matches, limit, cursor)?,
         _ => match query.view.sort.field {
             SortField::FolderOrder => page_folder_order(snapshot, query, &matches, limit, cursor)?,
             SortField::Rating => page_rating(snapshot, &matches, &query.view.sort, limit, cursor)?,
             SortField::Random => page_random(&matches, &query.view.sort, limit, cursor)?,
-            SortField::Name => scan_text(connection, &matches, &query.view.sort, limit, cursor)?,
+            SortField::Name => scan_text(
+                connection,
+                &matches,
+                sparse,
+                &query.view.sort,
+                limit,
+                cursor,
+            )?,
             SortField::ImportedAt => scan_integer(
                 connection,
                 "root.imported_at_ms",
                 &matches,
+                sparse,
                 &query.view.sort,
                 limit,
                 cursor,
@@ -349,6 +480,7 @@ pub fn page(
                 connection,
                 "COALESCE(root.captured_at_ms, -1)",
                 &matches,
+                sparse,
                 &query.view.sort,
                 limit,
                 cursor,
@@ -357,6 +489,7 @@ pub fn page(
                 connection,
                 "root.total_size_bytes",
                 &matches,
+                sparse,
                 &query.view.sort,
                 limit,
                 cursor,
@@ -497,10 +630,77 @@ fn media_match_roots(
     Ok(roots)
 }
 
+/// Below this many matches, fetch sort keys for just the matching roots and
+/// order them in memory instead of scanning the table in sort order. A scan
+/// reads roughly `total / matches` rows per emitted item, which for a sparse
+/// match set dwarfs the point lookups this path performs. The branch choice is
+/// stable across the pages of one query because the match count is.
+const SPARSE_SCAN_MAXIMUM: u64 = 2048;
+
+fn sparse_scan_integer(
+    connection: &Connection,
+    expression: &str,
+    matches: &RoaringBitmap,
+    sort: &ItemSort,
+    limit: usize,
+    cursor: Option<(i64, u32)>,
+) -> Result<(Vec<RootId>, Option<String>)> {
+    let ids = matches.iter().collect::<Vec<_>>();
+    let mut entries = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT root.root_id, {expression} AS sort_value
+             FROM library_root root
+             WHERE root.root_id IN ({placeholders})"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk), |row| {
+            Ok((row.get::<_, i64>(1)?, row.get::<_, u32>(0)?))
+        })?;
+        for row in rows {
+            entries.push(row?);
+        }
+    }
+    entries.sort_unstable();
+    if sort.direction == SortDirection::Descending {
+        entries.reverse();
+    }
+    let mut output = Vec::with_capacity(limit);
+    let mut last = None;
+    for (value, root_id) in entries {
+        if let Some(cursor) = cursor {
+            let after = match sort.direction {
+                SortDirection::Ascending => (value, root_id) > cursor,
+                SortDirection::Descending => (value, root_id) < cursor,
+            };
+            if !after {
+                continue;
+            }
+        }
+        if output.len() == limit {
+            break;
+        }
+        output.push(RootId(root_id));
+        last = Some((value, root_id));
+    }
+    let next = (output.len() == limit)
+        .then(|| {
+            last.map(|(value, root_id)| serde_json::to_string(&Cursor::Integer { value, root_id }))
+        })
+        .flatten()
+        .transpose()?;
+    Ok((output, next))
+}
+
 fn scan_integer(
     connection: &Connection,
     expression: &str,
     matches: &RoaringBitmap,
+    sparse: bool,
     sort: &ItemSort,
     limit: usize,
     cursor: Option<Cursor>,
@@ -515,6 +715,9 @@ fn scan_integer(
             ))
         }
     };
+    if sparse {
+        return sparse_scan_integer(connection, expression, matches, sort, limit, scan_cursor);
+    }
     let mut output = Vec::with_capacity(limit);
     loop {
         let (where_sql, mut values) = integer_cursor_sql(expression, direction, scan_cursor);
@@ -555,9 +758,79 @@ fn scan_integer(
     }
 }
 
+/// Mirrors SQLite's NOCASE collation, which folds only ASCII upper case
+/// before a byte-wise comparison.
+fn nocase_key(value: &str) -> Vec<u8> {
+    value
+        .bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect()
+}
+
+fn sparse_scan_text(
+    connection: &Connection,
+    matches: &RoaringBitmap,
+    sort: &ItemSort,
+    limit: usize,
+    cursor: Option<(String, u32)>,
+) -> Result<(Vec<RootId>, Option<String>)> {
+    let ids = matches.iter().collect::<Vec<_>>();
+    let mut entries = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(500) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT root.root_id, root.name
+             FROM library_root root
+             WHERE root.root_id IN ({placeholders})"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk), |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (root_id, name) = row?;
+            entries.push((nocase_key(&name), root_id, name));
+        }
+    }
+    entries.sort_unstable_by(|left, right| (&left.0, left.1).cmp(&(&right.0, right.1)));
+    if sort.direction == SortDirection::Descending {
+        entries.reverse();
+    }
+    let cursor = cursor.map(|(value, root_id)| (nocase_key(&value), root_id));
+    let mut output = Vec::with_capacity(limit);
+    let mut last = None;
+    for (key, root_id, name) in entries {
+        if let Some((cursor_key, cursor_root)) = &cursor {
+            let after = match sort.direction {
+                SortDirection::Ascending => (&key, root_id) > (cursor_key, *cursor_root),
+                SortDirection::Descending => (&key, root_id) < (cursor_key, *cursor_root),
+            };
+            if !after {
+                continue;
+            }
+        }
+        if output.len() == limit {
+            break;
+        }
+        output.push(RootId(root_id));
+        last = Some((name, root_id));
+    }
+    let next = (output.len() == limit)
+        .then(|| {
+            last.map(|(value, root_id)| serde_json::to_string(&Cursor::Text { value, root_id }))
+        })
+        .flatten()
+        .transpose()?;
+    Ok((output, next))
+}
+
 fn scan_text(
     connection: &Connection,
     matches: &RoaringBitmap,
+    sparse: bool,
     sort: &ItemSort,
     limit: usize,
     cursor: Option<Cursor>,
@@ -572,6 +845,9 @@ fn scan_text(
             ))
         }
     };
+    if sparse {
+        return sparse_scan_text(connection, matches, sort, limit, scan_cursor);
+    }
     let mut output = Vec::with_capacity(limit);
     loop {
         let (where_sql, mut values) = if let Some((value, root_id)) = &scan_cursor {
@@ -949,4 +1225,161 @@ fn random_key(seed: &str, root_id: u32) -> u64 {
     hash.update(seed.as_bytes());
     hash.update(root_id.to_le_bytes());
     u64::from_le_bytes(hash.finalize()[..8].try_into().expect("eight bytes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NAMES: &[&str] = &[
+        "Alpha", "alpha", "ALPHA", "beta-1", "Beta-2", "Gamma", "gamma", "Art", "art", "zeta",
+    ];
+
+    fn scan_fixture() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE library_root (
+                     root_id INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     imported_at_ms INTEGER NOT NULL,
+                     captured_at_ms INTEGER,
+                     total_size_bytes INTEGER NOT NULL
+                 )",
+            )
+            .unwrap();
+        for root_id in 1u32..=30 {
+            connection
+                .execute(
+                    "INSERT INTO library_root VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        root_id,
+                        NAMES[root_id as usize % NAMES.len()],
+                        100 + (root_id % 7) as i64,
+                        (root_id % 3 != 0).then_some(500 - root_id as i64),
+                        ((root_id * 37) % 11) as i64,
+                    ],
+                )
+                .unwrap();
+        }
+        connection
+    }
+
+    fn sort(direction: SortDirection) -> ItemSort {
+        ItemSort {
+            field: SortField::ImportedAt,
+            direction,
+            random_seed: None,
+        }
+    }
+
+    fn walk(
+        mut fetch: impl FnMut(Option<Cursor>) -> (Vec<RootId>, Option<String>),
+    ) -> Vec<(Vec<RootId>, Option<String>)> {
+        let mut pages = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let decoded = cursor
+                .as_deref()
+                .map(|value| serde_json::from_str(value).unwrap());
+            let (ids, next) = fetch(decoded);
+            let done = next.is_none();
+            pages.push((ids, next.clone()));
+            cursor = next;
+            if done {
+                return pages;
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_integer_paging_matches_the_ordered_scan() {
+        let connection = scan_fixture();
+        let matches = [1u32, 4, 5, 9, 12, 13, 17, 18, 21, 26, 30]
+            .into_iter()
+            .collect::<RoaringBitmap>();
+        for expression in [
+            "root.imported_at_ms",
+            "COALESCE(root.captured_at_ms, -1)",
+            "root.total_size_bytes",
+        ] {
+            for direction in [SortDirection::Ascending, SortDirection::Descending] {
+                for limit in [1usize, 3, 4, 11, 20] {
+                    let run = |sparse: bool| {
+                        walk(|cursor| {
+                            scan_integer(
+                                &connection,
+                                expression,
+                                &matches,
+                                sparse,
+                                &sort(direction),
+                                limit,
+                                cursor,
+                            )
+                            .unwrap()
+                        })
+                    };
+                    assert_eq!(
+                        run(true),
+                        run(false),
+                        "expression {expression}, direction {direction:?}, limit {limit}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_text_paging_matches_the_ordered_scan() {
+        let connection = scan_fixture();
+        let matches = [2u32, 3, 7, 8, 11, 14, 19, 22, 23, 28]
+            .into_iter()
+            .collect::<RoaringBitmap>();
+        for direction in [SortDirection::Ascending, SortDirection::Descending] {
+            for limit in [1usize, 3, 4, 10, 20] {
+                let run = |sparse: bool| {
+                    walk(|cursor| {
+                        scan_text(
+                            &connection,
+                            &matches,
+                            sparse,
+                            &sort(direction),
+                            limit,
+                            cursor,
+                        )
+                        .unwrap()
+                    })
+                };
+                assert_eq!(
+                    run(true),
+                    run(false),
+                    "direction {direction:?}, limit {limit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_paging_handles_empty_and_full_match_sets() {
+        let connection = scan_fixture();
+        let empty = RoaringBitmap::new();
+        let all = (1u32..=30).collect::<RoaringBitmap>();
+        for matches in [&empty, &all] {
+            let run = |sparse: bool| {
+                walk(|cursor| {
+                    scan_integer(
+                        &connection,
+                        "root.imported_at_ms",
+                        matches,
+                        sparse,
+                        &sort(SortDirection::Ascending),
+                        7,
+                        cursor,
+                    )
+                    .unwrap()
+                })
+            };
+            assert_eq!(run(true), run(false));
+        }
+    }
 }

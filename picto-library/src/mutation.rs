@@ -43,6 +43,7 @@ pub struct Library {
     projections: Arc<ProjectionStore>,
     publication: Arc<PublicationCoordinator>,
     history: Arc<SessionHistory>,
+    match_cache: Arc<crate::query::MatchCache>,
 }
 
 impl Library {
@@ -77,6 +78,7 @@ impl Library {
             projections,
             publication: Arc::new(PublicationCoordinator::default()),
             history: Arc::new(SessionHistory::default()),
+            match_cache: Arc::new(crate::query::MatchCache::default()),
         })
     }
 
@@ -343,10 +345,13 @@ impl Library {
     }
 
     pub fn query(&self, query: &RootQuery, page: &PageRequest) -> Result<RootPage> {
+        let match_cache = self.match_cache.clone();
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::query::page(connection, &snapshot, query, page),
+            |connection, snapshot| {
+                crate::query::page_cached(connection, &snapshot, query, page, &match_cache)
+            },
         )
     }
 
@@ -4645,7 +4650,7 @@ impl Library {
                     rusqlite::params![revision as i64, deleted_at_ms],
                 )?;
                 transaction.execute(
-                    "DELETE FROM root_fts WHERE CAST(root_id AS INTEGER) IN
+                    "DELETE FROM root_fts WHERE rowid IN
                          (SELECT local_id FROM temp.delete_root)",
                     [],
                 )?;
@@ -6345,7 +6350,7 @@ fn restore_structure(
         if snapshot.collection_orders.contains_key(&RootId(root_id)) {
             ordering::delete(transaction, OrderOwnerKind::Collection, root_id)?;
         }
-        transaction.execute("DELETE FROM root_fts WHERE root_id = ?1", [root_id])?;
+        crate::fts::remove_root(transaction, root_id)?;
         transaction.execute("DELETE FROM library_root WHERE root_id = ?1", [root_id])?;
         transaction.execute(
             "DELETE FROM library_item WHERE local_id = ?1 AND item_kind = 2",
