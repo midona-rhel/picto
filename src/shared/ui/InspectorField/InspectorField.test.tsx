@@ -60,6 +60,13 @@ describe('InspectorField', () => {
     fireEvent.click(screen.getByRole('button', { name: `Open ${urls[0]}` }));
     expect(openExternalUrl).toHaveBeenLastCalledWith(urls[0]);
 
+    const count = screen.getByRole('button', { name: 'Show all 2 source URLs' });
+    fireEvent.click(count);
+    expect(count).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: `Open ${urls[1]}` })).toBeInTheDocument();
+    expect(openExternalUrl).toHaveBeenCalledTimes(1);
+    fireEvent.click(count);
+
     const wrapper = view.container.firstElementChild!;
     fireEvent.mouseEnter(wrapper);
     expect(view.container.querySelector('[data-inspector-field-backdrop]')).not.toBeInTheDocument();

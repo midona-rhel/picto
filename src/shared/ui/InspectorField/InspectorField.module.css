@@ -158,10 +158,30 @@
   cursor: pointer;
 }
 
+.sourceControlOpen {
+  border-color: var(--inspector-field-focus, var(--color-border-focus));
+  background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+}
+
 .sourceControlOpen .sourceAction {
   position: relative;
   z-index: calc(var(--layer-overlay) + 1);
+  border-left: 0;
+  outline: 0;
   background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  box-shadow: none;
+  opacity: 1;
+}
+
+.sourceControlOpen .sourceAction::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 3px;
+  background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  content: '';
+  pointer-events: none;
 }
 
 .sourceAction:disabled { cursor: default; }
@@ -177,18 +197,22 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 31px;
+  right: 30px;
   z-index: var(--layer-overlay);
   min-height: 32px;
   max-height: 240px;
   overflow-y: auto;
-  scrollbar-gutter: stable both-edges;
+  scrollbar-width: none;
   padding: 0;
   border: 1px solid var(--inspector-field-focus, var(--color-border-focus));
   border-radius: 6px;
   border-top-right-radius: 0;
   background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+}
+
+.urlDropdown::-webkit-scrollbar {
+  display: none;
 }
 
 .urlRow {
@@ -222,6 +246,7 @@
 
 .urlText {
   display: flex;
+  align-items: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -230,6 +255,7 @@
 
 .urlLabel {
   display: flex;
+  align-items: center;
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -252,9 +278,29 @@
 }
 
 .urlCount {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
   flex: 0 0 auto;
-  margin-left: 6px;
+  margin: 0;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
   opacity: 0.5;
+  cursor: pointer;
+}
+
+.urlCount:hover,
+.urlCount:focus-visible {
+  background: var(--inspector-field-surface, var(--color-surface-hover));
+  opacity: 1;
+  outline: none;
+}
+
+.urlDropdown .urlLabel {
+  transform: translateY(-1px);
 }
 
 .urlEditInput::placeholder { color: var(--inspector-text-tertiary, var(--color-text-tertiary)); }

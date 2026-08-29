@@ -245,10 +245,21 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
             : primaryUrl
               ? <UrlLabel url={primaryUrl} />
               : <span className={styles.fieldPlaceholder}>http://</span>}
-          {urls.length > 1 && <span className={styles.urlCount}>+{urls.length - 1}</span>}
         </button>
+        {urls.length > 1 && !unavailable && (
+          <button
+            className={styles.urlCount}
+            onClick={toggleOpen}
+            type="button"
+            disabled={!canEdit}
+            aria-expanded={open}
+            aria-label={`Show all ${urls.length} source URLs`}
+          >
+            +{urls.length - 1}
+          </button>
+        )}
         {!unavailable && (
-          <button className={styles.sourceAction} onClick={toggleOpen} type="button" disabled={!canEdit} aria-label="Manage source URLs">
+          <button className={styles.sourceAction} onClick={toggleOpen} type="button" disabled={!canEdit} aria-expanded={open} aria-label="Manage source URLs">
             <IconLink size={14} stroke={1.5} />
           </button>
         )}
