@@ -528,9 +528,22 @@ pub(crate) async fn normalize_downloads(
         return Ok(normalized);
     }
 
+    // Standalone audio attachments (voice notes, podcast episodes) are not
+    // library media. Audio stays acceptable only inside ZIP albums above,
+    // where it is part of a collection the post explicitly bundles.
     Ok(normalize_media_download(site_id, file_path, metadata)
         .await?
         .into_iter()
+        .filter(|item| {
+            if item.input.facts.mime.starts_with("audio/") {
+                tracing::info!(
+                    mime_type = item.input.facts.mime,
+                    "Ignoring standalone audio subscription attachment"
+                );
+                return false;
+            }
+            true
+        })
         .collect())
 }
 
@@ -1021,6 +1034,27 @@ mod tests {
         assert_eq!(normalized.len(), 1);
         assert_eq!(normalized[0].input.facts.mime, "audio/mpeg");
         assert!(normalized[0].force_collection);
+    }
+
+    #[tokio::test]
+    async fn standalone_audio_attachments_are_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("voice-note.mp3");
+        std::fs::write(&path, b"audio").unwrap();
+
+        let normalized = normalize_downloads(
+            "onlyfans",
+            path,
+            ParsedMetadata {
+                post_id: Some("123".into()),
+                item_key: Some("onlyfans:123:voice".into()),
+                ..ParsedMetadata::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(normalized.is_empty());
     }
 
     #[tokio::test]

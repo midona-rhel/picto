@@ -167,9 +167,12 @@ Retain or replace with direct schema-1 equivalents:
 - `source_item`: stable provider media identity and metadata only. No `state` column, and no
   duplicated canonical media ownership — `source_provenance` already owns the source-to-media
   association.
-- `source_post_attempt`: the sole persisted post state for a run/query. Stores `created_root_id`
-  only for `Added`. An exact duplicate is `SkippedExactDuplicate` and may reference the matched
-  provenance without pretending it created a root.
+- `source_post_attempt`: the sole persisted post state for its execution owner. Created roots are
+  recorded as attempt-to-root result rows, not a singular column: disabling "Group multi-media
+  posts" legitimately creates multiple standalone roots from one post. `Added` requires one or
+  more live result roots; only gallery imports require exactly one collection root. An exact
+  duplicate is `SkippedExactDuplicate` and may reference the matched provenance without pretending
+  it created a root.
 - `source_file_attempt`: staged path, bytes, and download outcome for current-post progress.
 - `subscription_issue`: user-visible warnings/problems.
 - `gallery_job`: gallery-import identity and presentation metadata only, with a foreign key to its
@@ -177,14 +180,78 @@ Retain or replace with direct schema-1 equivalents:
 
 ### Concrete Schema Requirements
 
-Specify exact columns, keys, constraints, and indexes for `source_run`, `source_run_query`,
-`source_post_attempt`, `source_file_attempt`, and `gallery_job` before implementation — "as
-needed" is not a schema. At minimum SQLite must enforce:
+This is the durable model. The implementing agent refines names, not semantics.
 
-- One non-terminal post attempt per query (partial unique index over non-terminal states).
-- Explicit terminal reason codes persisted on `Skipped` and `Failed` outcomes.
-- The cursor associated with the terminal post boundary persisted with the attempt outcome.
-- `Added` impossible without a live `created_root_id` (CHECK plus FK).
+```sql
+CREATE TABLE source_run (
+    run_id INTEGER PRIMARY KEY,
+    subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    requested_by TEXT NOT NULL CHECK (requested_by IN ('manual','manual-query','schedule','gallery')),
+    status TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','cancelled')),
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+) STRICT;
+
+CREATE TABLE source_run_query (
+    run_query_id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES source_run(run_id) ON DELETE CASCADE,
+    query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    gallery_job_id INTEGER REFERENCES gallery_job(gallery_job_id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','cancelled')),
+    terminal_reason TEXT,          -- e.g. 'budget_met','exhausted','frontier','safety_bound',...
+    available_at TEXT NOT NULL,
+    CHECK ((query_id IS NULL) != (gallery_job_id IS NULL))   -- exactly one execution owner
+) STRICT;
+
+CREATE TABLE source_post_attempt (
+    attempt_id INTEGER PRIMARY KEY,
+    run_query_id INTEGER NOT NULL REFERENCES source_run_query(run_query_id) ON DELETE CASCADE,
+    source_post_id INTEGER NOT NULL REFERENCES source_post(source_post_id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN
+        ('discovered','downloading','downloaded','ingesting','added','skipped','failed')),
+    terminal_reason TEXT,          -- required for skipped/failed via trigger or app invariant
+    cursor_scope TEXT,             -- provider stream partition this post belongs to
+    boundary_cursor TEXT,          -- cursor value committed with the terminal outcome
+    started_at TEXT NOT NULL,
+    settled_at TEXT
+) STRICT;
+-- one non-terminal attempt per execution owner:
+CREATE UNIQUE INDEX idx_attempt_open ON source_post_attempt(run_query_id)
+    WHERE state NOT IN ('added','skipped','failed');
+
+CREATE TABLE source_attempt_root (   -- attempt-to-root results; >=1 row required for 'added'
+    attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
+    root_id INTEGER NOT NULL REFERENCES library_root(root_id) ON DELETE RESTRICT,
+    PRIMARY KEY(attempt_id, root_id)
+) WITHOUT ROWID, STRICT;
+
+CREATE TABLE source_file_attempt (
+    file_attempt_id INTEGER PRIMARY KEY,
+    attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
+    item_key TEXT NOT NULL,
+    staged_path TEXT,
+    bytes_total INTEGER,
+    bytes_staged INTEGER NOT NULL DEFAULT 0,
+    outcome TEXT CHECK (outcome IN ('staged','skipped','failed')),
+    error TEXT,
+    UNIQUE(attempt_id, item_key)
+) STRICT;
+
+CREATE TABLE gallery_job (
+    gallery_job_id INTEGER PRIMARY KEY,
+    service TEXT NOT NULL,
+    url TEXT NOT NULL,
+    expected_media_total INTEGER,
+    created_at TEXT NOT NULL,
+    dismissed_at TEXT
+) STRICT;
+```
+
+Query cursors are per stream partition: `subscription_query_cursor(query_id, cursor_scope,
+cursor_value, updated_at, PRIMARY KEY(query_id, cursor_scope))`. Single-stream providers use one
+scope (`'feed'`). Settlement updates only the current scope, atomically with the attempt outcome.
+Run state, counters, phase, downloaded counts, and warnings live in the attempt tables for both
+owners; `gallery_job` holds identity and presentation only.
 
 Do not use a gallery-dl archive database as a second history authority. Picto's source identities,
 provenance, and post outcomes already provide the required idempotency.
