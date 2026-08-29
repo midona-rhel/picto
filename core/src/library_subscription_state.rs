@@ -1012,10 +1012,7 @@ fn rate_limit_reset_at(message: &str, now: &str) -> Option<String> {
     if candidate <= now_local.naive_local() {
         candidate += Duration::days(1);
     }
-    let candidate = candidate
-        .and_local_timezone(chrono::Local)
-        .earliest()?
-        + Duration::minutes(2);
+    let candidate = candidate.and_local_timezone(chrono::Local).earliest()? + Duration::minutes(2);
     Some(candidate.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
@@ -1204,9 +1201,11 @@ mod tests {
         // While the first query is running, its sibling on a different domain
         // must not be claimable — one exclusive execution per subscription.
         let mut sibling_schedule = DomainSchedule::new();
-        assert!(claim_next_query(&application, &mut sibling_schedule, "2026-08-29T00:00:02Z")
-            .unwrap()
-            .is_none());
+        assert!(
+            claim_next_query(&application, &mut sibling_schedule, "2026-08-29T00:00:02Z")
+                .unwrap()
+                .is_none()
+        );
 
         complete_query(&application, &first, None, "2026-08-29T00:00:03Z").unwrap();
         let second = claim_next_query(&application, &mut sibling_schedule, "2026-08-29T00:00:04Z")
@@ -1282,9 +1281,11 @@ mod tests {
         // and the query must NOT settle as succeeded while ingestion is
         // pending — the claim waits.
         let mut waiting_schedule = DomainSchedule::new();
-        assert!(claim_next_query(&application, &mut waiting_schedule, "2026-08-29T00:00:05Z")
-            .unwrap()
-            .is_none());
+        assert!(
+            claim_next_query(&application, &mut waiting_schedule, "2026-08-29T00:00:05Z")
+                .unwrap()
+                .is_none()
+        );
         let status: String = application
             .library()
             .auxiliary_read(WorkPriority::VisibleRead, |connection| {
@@ -1297,7 +1298,10 @@ mod tests {
                     .map_err(Into::into)
             })
             .unwrap();
-        assert_eq!(status, "pending", "reserved budget must not settle the query");
+        assert_eq!(
+            status, "pending",
+            "reserved budget must not settle the query"
+        );
 
         // One post skips (its item resolves without a root): the reservation
         // is released and exactly one slot becomes claimable again.

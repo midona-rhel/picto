@@ -497,12 +497,12 @@ describe('gridController pagination', () => {
     expect(reconciled[reconciled.length - 1]?.root_id).toBe(502);
   });
 
-  it('settles search after 100 ms of inactivity', async () => {
+  it('settles search after 250 ms of inactivity', async () => {
     vi.useFakeTimers();
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
     gridController.setSearchText('alice');
-    await vi.advanceTimersByTimeAsync(99);
+    await vi.advanceTimersByTimeAsync(249);
     expect(queryItemsMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
@@ -521,13 +521,13 @@ describe('gridController pagination', () => {
       .mockResolvedValueOnce(page([item(2)], 1));
 
     gridController.setSearchText('alice');
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     expect(queryItemsMock).toHaveBeenCalledOnce();
 
     gridController.setSearchText('bob');
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     gridController.setSearchText('carol');
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     expect(queryItemsMock).toHaveBeenCalledOnce();
 
     resolveFirst?.(page([item(1)], 1));
@@ -544,9 +544,9 @@ describe('gridController pagination', () => {
       .mockResolvedValueOnce(page([item(3)], 1));
 
     gridController.setSearchText('old');
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     gridController.setSearchText('new');
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     resolveFirst?.(page([item(2)], 1));
 
     await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));

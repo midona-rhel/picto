@@ -184,7 +184,7 @@ describe('Inspector presentation branches', () => {
   });
 
   it('keeps identity fields compact on hover and reveals source rows through the manage action', () => {
-    renderInspector({
+    const view = renderInspector({
       target: { kind: 'item', itemId: 1 },
       data: {
         ...entity,
@@ -218,6 +218,7 @@ describe('Inspector presentation branches', () => {
 
     fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Manage source URLs' }));
     expect(source).toHaveTextContent('archive.example/item');
+    view.unmount();
   });
 
   it('uses the shared inspector action primitive for Add Tags', () => {
@@ -301,11 +302,12 @@ describe('Inspector presentation branches', () => {
       ...entity,
       media: [{ ...entity.media[0], facts: { ...entity.media[0].facts, content_hash: 'font-1', mime: 'font/ttf' } }],
     };
-    renderInspector({ target: { kind: 'item', itemId: 1 }, data: fontEntity });
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: fontEntity });
 
     expect(document.querySelector('img[src*="font-1"]')).not.toBeInTheDocument();
     expect(document.querySelector('[data-font-thumbnail]')).toBeInTheDocument();
     expect(document.querySelector('[data-broken-thumbnail]')).not.toBeInTheDocument();
+    view.unmount();
   });
 
   it('waits 250ms before showing aggregate loaders and swaps the summary atomically', async () => {
@@ -429,7 +431,7 @@ describe('Inspector presentation branches', () => {
     await screen.findByText('Existing note');
     const notes = document.querySelector('[data-inspector-anchor="notes"]')!;
     const notesField = within(notes as HTMLElement).getByRole('textbox', { name: 'Notes' });
-    notesField.focus();
+    act(() => { notesField.focus(); });
     notesField.textContent = 'Replacement note';
     fireEvent.input(notesField);
     fireEvent.keyDown(notesField, { key: 'Enter' });
