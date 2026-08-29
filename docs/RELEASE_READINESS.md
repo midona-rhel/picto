@@ -39,13 +39,15 @@ native addons, and downloaded sidecars must not imply otherwise.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Code signing and notarization are not part of the `0.6.0-alpha` gate.
+- Public Apple Developer ID signing and notarization are not part of the `0.6.0-alpha` gate. The
+  macOS alpha packages are signed with the project's private self-signed certificate so packaged
+  binaries have one stable identity.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
   x64, and Linux x64. A normal push to `main` runs verification only. The Windows and Linux package
   results are publication gates and necessarily run after the release candidate is uploaded.
 - Gallery-dl and OF-Scraper source revisions and Python dependency graphs are frozen. The universal
   OnlyFans lock resolves for macOS ARM64, Windows x64, and Linux x64 on Python 3.12.
-- TypeScript, the production build, all 876 frontend tests, 266 Rust unit tests, 11 Rust integration
+- TypeScript, the production build, all 883 frontend tests, 271 Rust unit tests, 11 Rust integration
   tests, command parity, and source/artifact audits pass. React scheduling warnings are clean.
 - `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
   and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.

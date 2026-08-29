@@ -17,8 +17,8 @@ surfaces covered by the final smoke. No deferred or unimplemented PBI blocks thi
 5. Before 1.0, there are no migrations. A library must match the current schema or fail untouched.
 6. Every mutation settles SQLite and projections before emitting one revision/resource invalidation.
 7. PBIs close only after focused tests and an application-level smoke; completed PBIs are deleted.
-8. The pre-release macOS alpha is ad-hoc signed and intentionally not notarized. Packaging must not
-   require Xcode-only asset tooling; public signing and notarization are separate release work.
+8. The pre-release macOS alpha uses Picto's private self-signed certificate and is intentionally not
+   notarized. Public Apple Developer ID signing and notarization are separate release work.
 
 ## Phase 1: Backend Replacement
 
