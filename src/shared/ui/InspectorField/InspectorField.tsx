@@ -232,7 +232,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
       ref={wrapRef}
       className={styles.fieldWrap}
     >
-      <div className={`${styles.sourceControl} ${unavailable ? styles.fieldDisabled : ''}`}>
+      <div className={`${styles.sourceControl} ${open ? styles.sourceControlOpen : ''} ${unavailable ? styles.fieldDisabled : ''}`}>
         <button
           className={styles.sourceValue}
           onClick={() => { if (primaryUrl) void shellController.openExternalUrl(primaryUrl); else handleAdd(); }}
