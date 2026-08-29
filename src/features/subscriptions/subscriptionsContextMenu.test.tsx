@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
-import { buildSubscriptionMenu } from './subscriptionsContextMenu';
+import { buildMultiCardMenu, buildSubscriptionMenu } from './subscriptionsContextMenu';
 
 const subscription = {
   id: '7',
@@ -55,5 +55,27 @@ describe('subscription context menu', () => {
     const [pausedEntry] = resetEntry(true, vi.fn(), { ...subscription, paused: true });
 
     expect(pausedEntry.disabled).toBe(true);
+  });
+
+  it('applies a schedule to every selected subscription', () => {
+    const onSetScheduleSelected = vi.fn();
+    const entries = buildMultiCardMenu({
+      subscriptionIds: ['1', '2'],
+      schedules: ['daily', 'weekly'],
+      anyRunning: false,
+      onRunSelected: vi.fn(),
+      onPauseSelected: vi.fn(),
+      onSetScheduleSelected,
+      onDeleteSelected: vi.fn(),
+    });
+    const schedule = entries.find(
+      (entry) => 'submenu' in entry && entry.submenu && entry.label === 'Schedule',
+    );
+    if (!schedule || !('children' in schedule)) throw new Error('Schedule submenu is missing');
+    const monthly = schedule.children.find(
+      (entry): entry is MenuItem => 'action' in entry && entry.label === 'Monthly',
+    );
+    monthly?.action?.();
+    expect(onSetScheduleSelected).toHaveBeenCalledWith('monthly');
   });
 });

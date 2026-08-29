@@ -13,6 +13,7 @@ import { ActionButton } from './ActionButton';
 import { StatusBadge } from './StatusBadge';
 import { ProgressBar } from '../../../shared/ui/ProgressBar/ProgressBar';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import styles from '../SubscriptionsScreen.module.css';
 
 interface CardModel {
@@ -123,6 +124,7 @@ export function SubscriptionsGrid({
   onOpenAccounts,
   onSubscriptionMenu,
   onMultiMenu,
+  onDeleteSelected,
 }: {
   subscriptions: SubscriptionInfo[];
   galleryJobs: SubscriptionInfo[];
@@ -138,6 +140,7 @@ export function SubscriptionsGrid({
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
   onMultiMenu: (position: { x: number; y: number }, subscriptionIds: string[]) => void;
+  onDeleteSelected: (subscriptionIds: string[]) => void;
 }) {
   const running = new Set(runningSubscriptionIds);
   const hasAttention = (id: string) =>
@@ -173,9 +176,16 @@ export function SubscriptionsGrid({
   const liveSelected = new Set([...selected].filter((key) => validKeys.has(key)));
 
   useShortcutScope((event) => {
-    if (event.key !== 'Escape' || selected.size === 0) return;
-    setSelected(new Set());
-    return true;
+    if (event.key === 'Escape' && liveSelected.size > 0) {
+      setSelected(new Set());
+      return true;
+    }
+    if (liveSelected.size > 0 && matchesShortcutDef(event, getShortcut('file.delete')!)) {
+      event.preventDefault();
+      onDeleteSelected([...liveSelected].map((key) => key.slice('sub:'.length)));
+      return true;
+    }
+    return undefined;
   }, { priority: 20 });
 
   const handleCardClick = (index: number, card: CardModel, e: React.MouseEvent) => {

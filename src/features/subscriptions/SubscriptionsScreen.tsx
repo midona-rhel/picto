@@ -253,6 +253,21 @@ export function SubscriptionsScreen() {
     openExternalUrl: (url: string) => void subscriptionsController.openExternalUrl(url),
   };
 
+  const deleteSubscriptions = useCallback((subscriptionIds: string[]) => {
+    const total = subscriptionIds.length;
+    confirm(
+      {
+        title: `Delete ${total} Subscription${total === 1 ? '' : 's'}`,
+        message: 'Downloaded files stay in your library. The selected subscriptions and their queries are removed.',
+        confirmLabel: 'Delete',
+        danger: true,
+      },
+      () => void act('multi:delete', async () => {
+        for (const id of subscriptionIds) await subscriptionsController.delete(id);
+      }),
+    );
+  }, [act, confirm]);
+
   /** Right-click menu for one subscription card or detail overflow button. */
   const openSubscriptionMenu = useCallback(
     (position: { x: number; y: number }, subscription: SubscriptionInfo) => {
@@ -282,36 +297,31 @@ export function SubscriptionsScreen() {
       const anyRunning = subscriptionIds.some(
         (id) => snapshot.runningSubscriptionIds.includes(id) || progressBySubscriptionId.has(id),
       );
+      const selectedSubscriptions = subscriptionIds
+        .map((id) => snapshot.subscriptions.find((subscription) => subscription.id === id))
+        .filter((subscription): subscription is SubscriptionInfo => subscription != null);
       contextMenu.openAt(position, buildMultiCardMenu({
         subscriptionIds,
+        schedules: selectedSubscriptions.map((subscription) => subscription.schedule),
         anyRunning,
         onRunSelected: () => {
           markSubscriptionRunTriggered();
           void act('multi:run', async () => {
-            for (const sid of subscriptionIds) await subscriptionsController.run(sid).catch(() => {});
+            for (const id of subscriptionIds) await subscriptionsController.run(id);
           });
         },
         onPauseSelected: (paused) =>
           void act('multi:pause', async () => {
-            for (const sid of subscriptionIds) await subscriptionsController.pause(sid, paused).catch(() => {});
+            for (const id of subscriptionIds) await subscriptionsController.pause(id, paused);
           }),
-        onDeleteSelected: () => {
-          const total = subscriptionIds.length;
-          confirm(
-            {
-              title: `Delete ${total} Item${total === 1 ? '' : 's'}`,
-              message: 'Downloaded files stay in your library. The selected subscriptions and their queries are removed.',
-              confirmLabel: 'Delete',
-              danger: true,
-            },
-            () => void act('multi:delete', async () => {
-              for (const sid of subscriptionIds) await subscriptionsController.delete(sid);
-            }),
-          );
-        },
+        onSetScheduleSelected: (schedule) =>
+          void act('multi:schedule', async () => {
+            for (const id of subscriptionIds) await subscriptionsController.setSchedule(id, schedule);
+          }),
+        onDeleteSelected: () => deleteSubscriptions(subscriptionIds),
       }));
     },
-    [contextMenu, snapshot, progressBySubscriptionId, act, confirm],
+    [contextMenu, snapshot, progressBySubscriptionId, act, deleteSubscriptions],
   );
 
   const commitRename = useCallback(
@@ -343,6 +353,7 @@ export function SubscriptionsScreen() {
               if (subscription) openSubscriptionMenu(position, subscription);
             }}
             onMultiMenu={openMultiCardMenu}
+            onDeleteSelected={deleteSubscriptions}
           />
         ) : selectedSubscription && snapshot ? (
           <SubscriptionDetail

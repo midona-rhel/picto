@@ -82,14 +82,17 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
 
 export interface MultiCardMenuContext {
   subscriptionIds: string[];
+  schedules: string[];
   anyRunning: boolean;
   onRunSelected: () => void;
   onPauseSelected: (paused: boolean) => void;
+  onSetScheduleSelected: (schedule: string) => void;
   onDeleteSelected: () => void;
 }
 
 export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
   const total = ctx.subscriptionIds.length;
+  const currentSchedule = new Set(ctx.schedules).size === 1 ? ctx.schedules[0] : null;
   return [
     {
       label: `Run ${total} Now`,
@@ -99,6 +102,17 @@ export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
     },
     { label: `Pause ${total}`, icon: <IconPlayerPause size={14} />, action: () => ctx.onPauseSelected(true) },
     { label: `Resume ${total}`, icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseSelected(false) },
+    {
+      submenu: true,
+      label: 'Schedule',
+      icon: <IconClock size={14} />,
+      children: SCHEDULES.map((entry): MenuEntry => ({
+        label: entry.label,
+        icon: currentSchedule === entry.value ? <IconCheck size={14} /> : undefined,
+        action: () => ctx.onSetScheduleSelected(entry.value),
+        disabled: currentSchedule === entry.value,
+      })),
+    },
     sep(),
     { label: `Delete ${total}…`, icon: <IconTrash size={14} />, action: ctx.onDeleteSelected, danger: true },
   ];
