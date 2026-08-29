@@ -111,11 +111,6 @@ export function SubscriptionsScreen() {
     }
   }, [setDetail, setSnapshot]);
 
-  // Startup owns the retained workspace; entering the route only revalidates it.
-  useEffect(() => {
-    void refreshSubscriptionsWorkspace();
-  }, []);
-
   // Detail follows the selected subscription
   useEffect(() => {
     if (selectedSubscription) void refreshDetail(selectedSubscription);

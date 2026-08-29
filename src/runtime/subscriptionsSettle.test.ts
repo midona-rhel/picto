@@ -64,6 +64,7 @@ const store = getDefaultStore();
 
 describe('subscription settlement', () => {
   afterEach(() => {
+    vi.useRealTimers();
     callbacks.clear();
     register.mockClear();
     loadWorkspaceSnapshot.mockClear();
@@ -106,9 +107,23 @@ describe('subscription settlement', () => {
   });
 
   it('refreshes persisted workspace state for subscription invalidation', async () => {
+    vi.useFakeTimers();
     const stop = startSubscriptionsSettle();
     callbacks.get('subscriptions')?.();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(loadWorkspaceSnapshot).toHaveBeenCalledOnce();
+    stop();
+  });
+
+  it('coalesces a burst of subscription invalidations into one workspace read', async () => {
+    vi.useFakeTimers();
+    const stop = startSubscriptionsSettle();
+
+    callbacks.get('subscriptions')?.();
+    callbacks.get('subscriptions')?.();
+    callbacks.get('subscriptions')?.();
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(loadWorkspaceSnapshot).toHaveBeenCalledOnce();
     stop();
@@ -224,10 +239,15 @@ describe('subscription settlement', () => {
       runningSubscriptionIds: ['7'],
       runningProgress: [progress],
     } as never);
-    refreshRuntimeState.mockResolvedValue({
-      runningSubscriptionIds: ['7'],
-      runningProgress: [progress],
-    });
+    refreshRuntimeState
+      .mockResolvedValueOnce({
+        runningSubscriptionIds: ['7'],
+        runningProgress: [{ ...progress, phase: 'downloading', status_text: 'running' }],
+      })
+      .mockResolvedValueOnce({
+        runningSubscriptionIds: ['7'],
+        runningProgress: [{ ...progress, phase: 'settling', status_text: 'query completed' }],
+      });
     getRunActivity
       .mockResolvedValueOnce(runActivity('running', 'running'))
       .mockResolvedValueOnce(runActivity('running', 'succeeded'));
@@ -241,6 +261,33 @@ describe('subscription settlement', () => {
       title: 'Query completed',
       message: 'Active feed · artist-name · 12 posts added to library',
     }));
+  });
+
+  it('does not reread run activity while reported run state is unchanged', async () => {
+    const subscription = { id: '7', name: 'Active feed' };
+    const progress = {
+      subscription_id: '7',
+      subscription_name: 'Active feed',
+      run_id: 44,
+      phase: 'downloading',
+      status_text: 'running',
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [subscription],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [progress],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({
+      runningSubscriptionIds: ['7'],
+      runningProgress: [progress],
+    });
+    getRunActivity.mockResolvedValue(runActivity('running', 'running'));
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(getRunActivity).toHaveBeenCalledOnce());
+    await refreshSubscriptionsRuntimeState();
+
+    expect(getRunActivity).toHaveBeenCalledOnce();
   });
 
   it('notifies when a persisted subscription run completes', async () => {

@@ -16,6 +16,8 @@ const store = getDefaultStore();
 
 const PROGRESS_POLL_MS = 1500;
 const POLL_GRACE_MS = 5000;
+const WORKSPACE_INVALIDATION_DEBOUNCE_MS = 250;
+const RUN_ACTIVITY_REFRESH_MS = 10_000;
 
 let workspaceRefreshPromise: Promise<void> | null = null;
 let workspaceRefreshQueued = false;
@@ -23,6 +25,8 @@ let runtimeRefreshPromise: Promise<void> | null = null;
 let runGraceUntil = 0;
 let syncPolling: (() => void) | null = null;
 const observedQueryStatuses = new Map<number, Map<number, string>>();
+const observedRunProgress = new Map<number, { fingerprint: string; checkedAt: number }>();
+const runActivityReads = new Map<number, Promise<Awaited<ReturnType<typeof subscriptionsController.getRunActivity>>>>();
 const notifiedRunIds = new Set<number>();
 const settlingGalleryIds = new Set<string>();
 
@@ -51,6 +55,8 @@ export function resetSubscriptionsSettleForTests(): void {
   runGraceUntil = 0;
   syncPolling = null;
   observedQueryStatuses.clear();
+  observedRunProgress.clear();
+  runActivityReads.clear();
   notifiedRunIds.clear();
   settlingGalleryIds.clear();
 }
@@ -63,13 +69,41 @@ function completionSummary(postsAdded: number): string {
   return `${postsAdded} post${postsAdded === 1 ? '' : 's'} added to library`;
 }
 
+function runProgressFingerprint(entry: SubscriptionProgressEvent): string {
+  return [
+    entry.query_id ?? '',
+    entry.phase ?? '',
+    entry.finished_status ?? '',
+    entry.failure_kind ?? '',
+  ].join('\u0000');
+}
+
+function getRunActivityCoalesced(runId: number) {
+  const pending = runActivityReads.get(runId);
+  if (pending) return pending;
+  const read = subscriptionsController.getRunActivity(runId).finally(() => {
+    if (runActivityReads.get(runId) === read) runActivityReads.delete(runId);
+  });
+  runActivityReads.set(runId, read);
+  return read;
+}
+
 async function observeQueryCompletions(
   progress: SubscriptionProgressEvent[],
   ignoredSubscriptionIds = new Set<string>(),
 ): Promise<void> {
   await Promise.all(progress.flatMap((entry) => {
     if (entry.run_id == null || ignoredSubscriptionIds.has(entry.subscription_id)) return [];
-    return [subscriptionsController.getRunActivity(entry.run_id).then((activity) => {
+    const runId = entry.run_id;
+    const fingerprint = runProgressFingerprint(entry);
+    const previousObservation = observedRunProgress.get(runId);
+    const checkedAt = Date.now();
+    if (previousObservation?.fingerprint === fingerprint
+      && checkedAt - previousObservation.checkedAt < RUN_ACTIVITY_REFRESH_MS) return [];
+    // Record before starting the read so overlapping workspace/runtime refreshes
+    // cannot fan out into duplicate activity requests for the same run state.
+    observedRunProgress.set(runId, { fingerprint, checkedAt });
+    return [getRunActivityCoalesced(runId).then((activity) => {
       const previous = observedQueryStatuses.get(entry.run_id!);
       const current = new Map(activity.queries.map((query) => [query.query_id, query.status]));
       observedQueryStatuses.set(entry.run_id!, current);
@@ -82,7 +116,8 @@ async function observeQueryCompletions(
         });
       }
     }).catch(() => {
-      // A later progress poll retries this read.
+      // Retry unchanged progress after a transient read failure.
+      if (observedRunProgress.get(runId)?.checkedAt === checkedAt) observedRunProgress.delete(runId);
     })];
   }));
 }
@@ -98,8 +133,9 @@ async function observeSubscriptionCompletions(
       || ignoredSubscriptionIds.has(entry.subscription_id)
       || activeRunIds.has(entry.run_id)
       || notifiedRunIds.has(entry.run_id)) return [];
-    return [subscriptionsController.getRunActivity(entry.run_id).then((activity) => {
+    return [getRunActivityCoalesced(entry.run_id).then((activity) => {
       observedQueryStatuses.delete(entry.run_id!);
+      observedRunProgress.delete(entry.run_id!);
       if (!isSuccessfulTerminal(activity.summary.status)) return;
       notifiedRunIds.add(entry.run_id!);
       const completedQueries = activity.queries.filter((query) => isSuccessfulTerminal(query.status)).length;
@@ -266,6 +302,7 @@ export function markSubscriptionRunTriggered(): void {
 export function startSubscriptionsSettle(): () => void {
   let cancelled = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let workspaceInvalidationTimer: ReturnType<typeof setTimeout> | null = null;
 
   const updatePolling = () => {
     if (cancelled) return;
@@ -285,8 +322,13 @@ export function startSubscriptionsSettle(): () => void {
   const unsubscribeSnapshot = store.sub(subscriptionsWorkspaceSnapshotAtom, updatePolling);
   const unregisterSubscriptions = libraryInvalidation.register('subscriptions', () => {
     if (cancelled) return;
-    void refreshSubscriptionsWorkspace();
-    trigger(authRefreshCallbacks);
+    if (workspaceInvalidationTimer !== null) clearTimeout(workspaceInvalidationTimer);
+    workspaceInvalidationTimer = setTimeout(() => {
+      workspaceInvalidationTimer = null;
+      if (cancelled) return;
+      void refreshSubscriptionsWorkspace();
+      trigger(authRefreshCallbacks);
+    }, WORKSPACE_INVALIDATION_DEBOUNCE_MS);
   });
   const unregisterTasks = libraryInvalidation.register('tasks', () => {
     if (cancelled) return;
@@ -302,5 +344,6 @@ export function startSubscriptionsSettle(): () => void {
     unregisterTasks();
     if (syncPolling === updatePolling) syncPolling = null;
     if (pollTimer !== null) clearInterval(pollTimer);
+    if (workspaceInvalidationTimer !== null) clearTimeout(workspaceInvalidationTimer);
   };
 }
