@@ -155,7 +155,7 @@ export function describeFailure(kind: string | null, message: string | null): st
     case 'not_found': return 'User/query not found — check the handle';
     case 'unauthorized': return 'Login rejected — check the account in Accounts';
     case 'expired': return 'Session expired — log in again in Accounts';
-    case 'rate_limited': return 'Rate limited by the site — try again later';
+    case 'rate_limited': return 'Rate limited by the site — resumes automatically when the limit resets';
     case 'network': return 'Network error — check your connection';
     case 'environment': return 'Local setup problem — check the logs';
     case 'stale': return 'Interrupted by app shutdown';
