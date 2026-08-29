@@ -231,7 +231,7 @@
   width: 10px;
   height: 10px;
   flex-shrink: 0;
-  color: #ff9f0a;
+  color: var(--color-text-primary);
 }
 
 .tagRow:has(.tagStar) .tagName {

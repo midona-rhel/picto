@@ -568,7 +568,7 @@ export function TagSelectPanel() {
                             </div>
                           ) : null}
                           {tagPreferences.starredTags.includes(fullTag) ? (
-                            <IconStar aria-hidden="true" className={styles.tagStar} size={10} fill="currentColor" />
+                            <IconStar aria-hidden="true" className={styles.tagStar} size={10} />
                           ) : (
                             <IconBookmark
                               aria-hidden="true"
