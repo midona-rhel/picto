@@ -167,9 +167,9 @@ function appendOutput(current, chunk) {
   return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
 }
 
-function launch(executable, env) {
+function launch(executable, env, args = []) {
   return new Promise((resolve) => {
-    const child = spawn(executable, [], { cwd: path.dirname(executable), env, windowsHide: true });
+    const child = spawn(executable, args, { cwd: path.dirname(executable), env, windowsHide: true });
     const parser = createSmokeReportParser();
     let stdout = '';
     let stderr = '';
@@ -280,7 +280,8 @@ async function main() {
       PICTO_LIBRARY_ROOT: library,
     };
     delete env.ELECTRON_RUN_AS_NODE;
-    runs.push({ name: 'packaged-launch', ...await launch(executable, env) });
+    const launchArgs = platform === 'linux' ? ['--no-sandbox'] : [];
+    runs.push({ name: 'packaged-launch', ...await launch(executable, env, launchArgs) });
   } catch (error) {
     setupError = error instanceof Error ? error.message : String(error);
   } finally {
