@@ -36,10 +36,14 @@ pub(crate) fn insert_one(
 ) -> Result<IngestResult> {
     if reuse_identity {
         if let Some(existing) = existing_import(transaction, &snapshot, input, reuse_exact_root)? {
-            let affected_roots =
+            let mut affected_roots =
                 refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
+            let tag_roots = if existing.exact_hash_match {
+                exact_hash_owners(transaction, &snapshot, &input.facts.content_hash)?
+            } else {
+                RoaringBitmap::from_iter([existing.root_id.0])
+            };
             let mut bitmap_keys = Vec::new();
-            let mut added_tags = 0u64;
             for name in &input.tags {
                 let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(name).copied() {
                     tag_id
@@ -48,27 +52,27 @@ pub(crate) fn insert_one(
                     Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name.clone(), tag_id);
                     tag_id
                 };
-                if Arc::make_mut(&mut snapshot.tags)
-                    .entry(tag_id)
-                    .or_default()
-                    .insert(existing.root_id.0)
-                {
-                    added_tags += 1;
+                let added_roots = {
+                    let roots = Arc::make_mut(&mut snapshot.tags).entry(tag_id).or_default();
+                    tag_roots
+                        .iter()
+                        .filter(|root_id| roots.insert(*root_id))
+                        .collect::<RoaringBitmap>()
+                };
+                if !added_roots.is_empty() {
                     bitmap_keys.push(BitmapKey {
                         domain: BitmapDomain::Tag,
                         key_id: tag_id.0,
                     });
+                    let counts = Arc::make_mut(&mut snapshot.tag_count);
+                    for root_id in added_roots {
+                        counts.insert(
+                            root_id,
+                            counts.value(root_id).unwrap_or(0).saturating_add(1),
+                        );
+                        affected_roots.insert(root_id);
+                    }
                 }
-            }
-            if added_tags != 0 {
-                let counts = Arc::make_mut(&mut snapshot.tag_count);
-                counts.insert(
-                    existing.root_id.0,
-                    counts
-                        .value(existing.root_id.0)
-                        .unwrap_or(0)
-                        .saturating_add(added_tags),
-                );
             }
             if let Some(source) = &input.source_identity {
                 transaction
@@ -573,6 +577,7 @@ fn refresh_existing_file(
 struct ExistingImport {
     media_id: MediaId,
     root_id: RootId,
+    exact_hash_match: bool,
 }
 
 fn existing_import(
@@ -625,6 +630,7 @@ fn existing_import(
     } else {
         None
     };
+    let exact_hash_match = exact_media.is_some();
     let media_id = stable_media.or(source_media).or(exact_media);
     Ok(media_id.map(|media_id| ExistingImport {
         media_id: MediaId(media_id),
@@ -633,7 +639,36 @@ fn existing_import(
             .get(media_id)
             .copied()
             .unwrap_or(RootId(media_id)),
+        exact_hash_match,
     }))
+}
+
+fn exact_hash_owners(
+    transaction: &Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    content_hash: &str,
+) -> Result<RoaringBitmap> {
+    let mut statement = transaction.prepare_cached(
+        "SELECT media.media_id
+         FROM media_item media
+         JOIN media_file file ON file.file_id = media.file_id
+         WHERE file.content_hash = ?1",
+    )?;
+    let media_ids = statement
+        .query_map([content_hash], |row| row.get::<_, u32>(0))?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    media_ids
+        .into_iter()
+        .map(|media_id| {
+            snapshot
+                .media_owner
+                .get(media_id)
+                .map(|owner| owner.0)
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!("media {media_id} has no owning root"))
+                })
+        })
+        .collect()
 }
 
 fn should_replace_name(existing: &str, incoming: &str) -> bool {

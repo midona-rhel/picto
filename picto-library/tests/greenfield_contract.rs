@@ -2226,6 +2226,99 @@ fn exact_hash_standalone_import_collapses_into_collection_and_donates_its_tags()
 }
 
 #[test]
+fn exact_hash_standalone_tags_fan_out_to_every_owner_across_lifecycles() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let shared_hash = "shared-owner-fan-out-hash";
+    let standalone_inputs = [
+        ("fan-out-active", Lifecycle::Active),
+        ("fan-out-inbox", Lifecycle::Inbox),
+        ("fan-out-trash", Lifecycle::Trash),
+    ]
+    .map(|(key, lifecycle)| {
+        let mut input = imported(key, lifecycle, &[]);
+        input.facts.content_hash = shared_hash.into();
+        input
+    });
+    let standalone_roots = library
+        .ingest_conversion_batch(&standalone_inputs)
+        .unwrap()
+        .into_iter()
+        .map(|(root_id, _)| root_id)
+        .collect::<Vec<_>>();
+
+    let mut collection_member = imported(
+        "fan-out-collection-member",
+        Lifecycle::Inbox,
+        &["collection:local"],
+    );
+    collection_member.facts.content_hash = shared_hash.into();
+    let (collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                collection_member,
+                imported("fan-out-collection-support", Lifecycle::Inbox, &[]),
+            ],
+            cover_index: 0,
+            name: Some("Fan-out collection".into()),
+            modified_at_ms: 1_700_000_007_000,
+        })
+        .unwrap();
+    let (unrelated, _) = library
+        .ingest(&imported("fan-out-unrelated", Lifecycle::Active, &[]))
+        .unwrap();
+
+    let visible_roots_before = library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            },
+        )
+        .unwrap();
+    let mut incoming = imported(
+        "fan-out-incoming-standalone",
+        Lifecycle::Inbox,
+        &["standalone:incoming"],
+    );
+    incoming.facts.content_hash = shared_hash.into();
+    let (retained, _) = library.ingest(&incoming).unwrap();
+
+    assert_eq!(retained, standalone_roots[0]);
+    assert_eq!(
+        library
+            .database()
+            .read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(
+                        connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                    )
+                },
+            )
+            .unwrap(),
+        visible_roots_before
+    );
+    let snapshot = library.projections().snapshot();
+    let incoming_tag = snapshot.tag_ids_by_name["standalone:incoming"];
+    for owner in standalone_roots.iter().copied().chain([collection]) {
+        assert!(snapshot.tags[&incoming_tag].contains(owner.0));
+    }
+    assert!(!snapshot.tags[&incoming_tag].contains(unrelated.0));
+    let collection_tag = snapshot.tag_ids_by_name["collection:local"];
+    for standalone in standalone_roots {
+        assert!(!snapshot.tags[&collection_tag].contains(standalone.0));
+    }
+}
+
+#[test]
 fn large_prepared_collection_publishes_as_one_coherent_root() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
