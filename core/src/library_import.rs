@@ -33,6 +33,8 @@ pub struct ManualImportInput {
     #[serde(default)]
     pub include_folders_without_media: bool,
     #[serde(default)]
+    pub watch_source_folder: bool,
+    #[serde(default)]
     pub delete_after_ingest: bool,
     #[serde(default)]
     pub group_files: bool,
@@ -73,6 +75,16 @@ pub async fn enqueue_manual_import(
 ) -> Result<ImportEnqueueReport, String> {
     if input.paths.is_empty() {
         return Err("At least one import path is required".into());
+    }
+    if input.watch_source_folder {
+        if !input.preserve_structure {
+            return Err(
+                "Watching an imported folder requires preserving its folder structure".into(),
+            );
+        }
+        if input.paths.len() != 1 {
+            return Err("Watching an imported folder requires exactly one source folder".into());
+        }
     }
     let candidates = collect_manual_candidates(application.root(), input)?;
     let invocation = uuid::Uuid::new_v4().to_string();
@@ -190,7 +202,43 @@ pub async fn enqueue_manual_import(
         };
         enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
     }
+    if input.watch_source_folder {
+        attach_source_folder_watch(application, input, &mut folders)?;
+    }
     Ok(report)
+}
+
+fn attach_source_folder_watch(
+    application: &LibraryApplication,
+    input: &ManualImportInput,
+    folders: &mut BTreeMap<(Option<u32>, String), FolderId>,
+) -> Result<(), String> {
+    let source = fs::canonicalize(&input.paths[0]).map_err(|error| {
+        format!(
+            "Failed to resolve watched import folder '{}': {error}",
+            input.paths[0]
+        )
+    })?;
+    if !source.is_dir() {
+        return Err("Only a folder import can be watched".into());
+    }
+    let root_name = source
+        .file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| "The watched import folder must have a name".to_owned())?;
+    let folder_id = ensure_relative_folder(
+        application,
+        input.parent_folder_id,
+        Some(&root_name),
+        folders,
+    )?
+    .ok_or_else(|| "Could not create a destination for the watched folder".to_owned())?;
+    application.set_folder_watch(&picto_library::FolderWatchInput {
+        folder_id,
+        path: source.to_string_lossy().into_owned(),
+        include_subfolders: input.include_subfolders,
+    })?;
+    Ok(())
 }
 
 pub async fn scan_watched_folders(
@@ -270,6 +318,7 @@ pub async fn scan_watched_folders(
         include_subfolders: true,
         expand_archives: false,
         include_folders_without_media: false,
+        watch_source_folder: false,
         delete_after_ingest: false,
         group_files: false,
     };
@@ -695,6 +744,7 @@ mod tests {
             include_subfolders: true,
             expand_archives: true,
             include_folders_without_media: false,
+            watch_source_folder: false,
             delete_after_ingest: false,
             group_files,
         }
@@ -788,6 +838,37 @@ mod tests {
             .find(|folder| folder.name == "Downloads")
             .expect("the successful file should create its preserved folder");
         assert_eq!(imported.folder_ids, vec![folder.folder_id]);
+    }
+
+    #[tokio::test]
+    async fn folder_import_can_watch_its_preserved_root_for_future_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("Photos");
+        fs::create_dir(&source).unwrap();
+        png(&source.join("first.png"), [10, 20, 30]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
+        folder_input.preserve_structure = true;
+        folder_input.watch_source_folder = true;
+        folder_input.include_subfolders = false;
+
+        enqueue_manual_import(&application, &folder_input)
+            .await
+            .unwrap();
+
+        let folder = application
+            .navigation()
+            .unwrap()
+            .folders
+            .into_iter()
+            .find(|folder| folder.name == "Photos")
+            .expect("the imported root folder should exist");
+        assert!(folder.watch_enabled);
+        assert_eq!(
+            folder.watch_path.as_deref(),
+            Some(source.to_string_lossy().as_ref())
+        );
+        assert!(!folder.watch_subfolders);
     }
 
     #[tokio::test]

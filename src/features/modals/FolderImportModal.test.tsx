@@ -21,6 +21,7 @@ describe('FolderImportModal', () => {
       includeSubfolders: true,
       expandArchives: true,
       includeFoldersWithoutMedia: false,
+      watchSourceFolder: false,
     });
   });
 
@@ -38,5 +39,28 @@ describe('FolderImportModal', () => {
     expect(screen.getByText('Include subfolders')).toBeInTheDocument();
     expect(screen.getByText('Extract ZIP archives')).toBeInTheDocument();
     expect(screen.getByText('Include folders without media')).toBeInTheDocument();
+    expect(screen.getByText('Watch this folder')).toBeInTheDocument();
+  });
+
+  it('keeps structure when watching the imported folder', () => {
+    const onImport = vi.fn();
+    render(<MantineProvider>
+        <FolderImportModal
+          open
+          path="/tmp/Photos"
+          onClose={vi.fn()}
+          onImport={onImport}
+        />
+      </MantineProvider>);
+
+    const switches = screen.getAllByRole('switch');
+    fireEvent.click(switches[0]);
+    fireEvent.click(switches[4]);
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+    expect(onImport).toHaveBeenCalledWith(expect.objectContaining({
+      preserveStructure: true,
+      watchSourceFolder: true,
+    }));
   });
 });

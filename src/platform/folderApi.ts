@@ -140,6 +140,7 @@ export function addMedia(paths: string[], params: {
   include_subfolders?: boolean;
   expand_archives?: boolean;
   include_folders_without_media?: boolean;
+  watch_source_folder?: boolean;
   delete_after_ingest?: boolean;
   group_files?: boolean;
 }): Promise<ImportEnqueueReport> {
@@ -153,6 +154,7 @@ export function addMedia(paths: string[], params: {
     include_subfolders: params.include_subfolders ?? true,
     expand_archives: params.expand_archives ?? true,
     include_folders_without_media: params.include_folders_without_media ?? false,
+    watch_source_folder: params.watch_source_folder ?? false,
     delete_after_ingest: params.delete_after_ingest ?? false,
     group_files: params.group_files ?? false,
   });

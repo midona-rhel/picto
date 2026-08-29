@@ -36,6 +36,7 @@ export interface MediaImportParams {
   include_subfolders?: boolean;
   expand_archives?: boolean;
   include_folders_without_media?: boolean;
+  watch_source_folder?: boolean;
   delete_after_ingest?: boolean;
   group_files?: boolean;
 }

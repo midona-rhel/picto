@@ -7,6 +7,7 @@ export interface FolderImportOptions {
   includeSubfolders: boolean;
   expandArchives: boolean;
   includeFoldersWithoutMedia: boolean;
+  watchSourceFolder: boolean;
 }
 
 export function FolderImportModal({
@@ -25,6 +26,7 @@ export function FolderImportModal({
     includeSubfolders: true,
     expandArchives: true,
     includeFoldersWithoutMedia: false,
+    watchSourceFolder: false,
   });
 
   useEffect(() => {
@@ -34,11 +36,18 @@ export function FolderImportModal({
       includeSubfolders: true,
       expandArchives: true,
       includeFoldersWithoutMedia: false,
+      watchSourceFolder: false,
     });
   }, [open, path]);
 
   const toggle = (key: keyof FolderImportOptions) => {
-    setOptions((current) => ({ ...current, [key]: !current[key] }));
+    setOptions((current) => {
+      const enabled = !current[key];
+      if (key === 'watchSourceFolder' && enabled) {
+        return { ...current, preserveStructure: true, watchSourceFolder: true };
+      }
+      return { ...current, [key]: enabled };
+    });
   };
 
   const folderName = path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder';
@@ -84,6 +93,16 @@ export function FolderImportModal({
             disabled={!options.preserveStructure}
           />
         </div>
+        <div className={modalStyles.rowSpread}>
+          <span className={modalStyles.fieldLabel}>Watch this folder</span>
+          <ToggleSwitch
+            on={options.watchSourceFolder}
+            onChange={() => toggle('watchSourceFolder')}
+          />
+        </div>
+        <p className={modalStyles.helpText}>
+          Automatically import new media added to this folder. Watching uses the same subfolder setting above.
+        </p>
         <p className={modalStyles.helpText}>
           Folders whose subtree contains no supported media are skipped by default.
         </p>
