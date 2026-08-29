@@ -121,7 +121,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_required_for_full_access: true,
+        // gallery-dl configures the site's content filters on anonymous
+        // sessions itself; a full anonymous certification passes.
+        auth_required_for_full_access: false,
         auth_strictly_required: false,
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
