@@ -126,7 +126,9 @@ async function inspectAccountApiPage(webContents) {
         })
           || /account home/i.test(text)
           || (/[?&]page=account\b/i.test(href) && /[?&]s=home\b/i.test(href)),
-        onOptions: /account options/i.test(text) || /[?&]s=options(?:&|$)/i.test(href),
+        // URL only: the account home page also prints "Account Options"
+        // as a menu heading, which must not read as being on that page.
+        onOptions: /[?&]s=options(?:&|$)/i.test(href),
         apiKey,
         userId,
       };
