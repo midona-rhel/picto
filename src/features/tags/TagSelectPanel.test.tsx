@@ -24,7 +24,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 }));
 vi.mock('../../controllers/tagsController', () => ({ tagsController: mocks }));
 vi.mock('./tagPreferences', () => ({
-  useTagPreferences: () => ({ showTagGroups: true, starredTags: [] }),
+  useTagPreferences: () => ({ showTagGroups: true, starredTags: [], tagGroupColors: {} }),
   setTagStarred: vi.fn(),
   replaceStarredTag: vi.fn(),
 }));
@@ -33,13 +33,14 @@ describe('TagSelectPanel assignment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getPaginated.mockResolvedValue({
-      items: [
-        { tag_id: 1, namespace: 'creator', subtag: 'alice', file_count: 4 },
-        { tag_id: 2, namespace: 'creator', subtag: 'bob', file_count: 2 },
+      tags: [
+        { tag_id: 1, namespace_id: 1, namespace: 'creator', subname: 'alice', active_count: 4, assignment_count: 4 },
+        { tag_id: 2, namespace_id: 1, namespace: 'creator', subname: 'bob', active_count: 2, assignment_count: 2 },
       ],
       next_cursor: null,
+      revision: 1,
     });
-    mocks.getNamespaceSummary.mockResolvedValue([{ namespace: 'creator', count: 2 }]);
+    mocks.getNamespaceSummary.mockResolvedValue([{ namespace_id: 1, name: 'creator', tag_count: 2 }]);
   });
 
   it('focuses search from the full visible header row', async () => {
@@ -50,11 +51,29 @@ describe('TagSelectPanel assignment', () => {
       render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
       await Promise.resolve();
     });
-    const search = screen.getByPlaceholderText('Search tags...');
+    const search = screen.getByPlaceholderText('Search...');
 
     fireEvent.mouseDown(search.parentElement!);
 
     expect(search).toHaveFocus();
+  });
+
+  it('preserves the established geometry with and without the group rail', async () => {
+    const store = createStore();
+    store.set(tagSelectPortalAtom, { open: true, selectedTags: [] });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+
+    const panel = document.querySelector<HTMLElement>('[data-overlay-shell]')!;
+    expect(panel.style.width).toBe('540px');
+    expect(panel.style.height).toBe('480px');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }));
+    expect(panel.style.width).toBe('340px');
+    expect(panel.style.height).toBe('480px');
   });
 
   it('updates multi-tag assignment on each click without an Apply step', async () => {
@@ -80,6 +99,24 @@ describe('TagSelectPanel assignment', () => {
     expect(onApplyTags).toHaveBeenLastCalledWith(['creator:bob']);
   });
 
+  it('creates and assigns a missing tag directly from search', async () => {
+    const store = createStore();
+    const onApplyTags = vi.fn();
+    store.set(tagSelectPortalAtom, { open: true, selectedTags: [], onApplyTags });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'creator:carol' } });
+    const createLabel = await screen.findByText('creator:carol');
+    expect(createLabel.closest('[data-tag-index]')).toHaveTextContent('Create "creator:carol"');
+    fireEvent.click(createLabel);
+
+    expect(onApplyTags).toHaveBeenLastCalledWith(['creator:carol']);
+  });
+
   it('updates filters and matching mode immediately', async () => {
     const store = createStore();
     const onApplyTagFilter = vi.fn();
@@ -98,14 +135,20 @@ describe('TagSelectPanel assignment', () => {
 
     fireEvent.click(await screen.findByText('bob'));
     expect(onApplyTagFilter).toHaveBeenLastCalledWith(
-      ['creator:alice', 'creator:bob'],
+      [
+        { tag_id: 1, name: 'creator:alice' },
+        { tag_id: 2, name: 'creator:bob' },
+      ],
       [],
       'any',
     );
     expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
     expect(onApplyTagFilter).toHaveBeenLastCalledWith(
-      ['creator:alice', 'creator:bob'],
+      [
+        { tag_id: 1, name: 'creator:alice' },
+        { tag_id: 2, name: 'creator:bob' },
+      ],
       [],
       'all',
     );

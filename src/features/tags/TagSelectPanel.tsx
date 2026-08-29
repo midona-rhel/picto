@@ -1,7 +1,7 @@
 /**
- * TagSelectPanel — floating glass panel for tag selection.
+ * TagSelectPanel — floating panel for tag selection.
  *
- * 540×480 with namespace sidebar (200px) + content area (340px).
+ * 540×480 with the group rail, 340×480 without it.
  * Virtual scrolling for large tag sets. Cursor-based pagination on scroll.
  * Header = search input + pin button (no title bar).
  */
@@ -15,7 +15,9 @@ import {
   IconLayoutGrid,
   IconLayoutList,
   IconLayoutSidebar,
+  IconPlus,
   IconSearch,
+  IconStar,
   IconX,
 } from '@tabler/icons-react';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
@@ -229,6 +231,16 @@ export function TagSelectPanel() {
     return tags;
   }, [tags, sidebarMode, entityTagKeys, tagPreferences.starredTags]);
 
+  const createTag = useMemo(() => {
+    const trimmed = query.trim();
+    if (!trimmed || onApplyTagFilter || sidebarMode === 'selected' || sidebarMode === 'starred') return null;
+    const name = sidebarMode === 'namespace' && activeNamespace && !trimmed.includes(':')
+      ? `${activeNamespace}:${trimmed}`
+      : trimmed;
+    const alreadyExists = tags.some((tag) => formatTag(tag).toLocaleLowerCase() === name.toLocaleLowerCase());
+    return alreadyExists ? null : tagRecord(name);
+  }, [activeNamespace, onApplyTagFilter, query, sidebarMode, tags]);
+
   // Namespace groups for sidebar
   const nsGroups = useMemo(() => {
     return namespaces
@@ -237,11 +249,11 @@ export function TagSelectPanel() {
   }, [namespaces]);
 
   const columnCount = layout === 'grid' ? 2 : 1;
-  const navigableTags = displayTags;
+  const navigableTags = createTag ? [createTag, ...displayTags] : displayTags;
   const displayPages = useMemo(() => Array.from(
-    { length: Math.ceil(displayTags.length / PAGE_SIZE) },
-    (_, index) => displayTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
-  ), [displayTags]);
+    { length: Math.ceil(navigableTags.length / PAGE_SIZE) },
+    (_, index) => navigableTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
+  ), [navigableTags]);
 
   // Load more on scroll near bottom
   useEffect(() => {
@@ -296,11 +308,17 @@ export function TagSelectPanel() {
     if (onApplyTags) {
       onApplyTags([...nextSelected]);
     } else if (target) {
-      void (removing
+      const mutation = removing
         ? entityMutations.removeTargetTags(target, [name])
-        : entityMutations.addTargetTags(target, [name]));
+        : entityMutations.addTargetTags(target, [name]);
+      void mutation.then(() => {
+        if (tag.tag_id > 0 || removing) return;
+        const namespace = sidebarMode === 'namespace' ? activeNamespace : null;
+        loadTags(query, namespace);
+        void tagsController.getNamespaceSummary().then((groups) => setNamespaces(groups ?? []));
+      });
     }
-  }, [excluded, matchMode, onApplyTagFilter, onApplyTags, selectedChoices, selectedTags, target]);
+  }, [activeNamespace, excluded, loadTags, matchMode, onApplyTagFilter, onApplyTags, query, selectedChoices, selectedTags, sidebarMode, target]);
 
   const toggleExcludedTag = useCallback((tag: CanonicalTagRecord) => {
     if (!onApplyTagFilter || tag.tag_id <= 0) return;
@@ -359,6 +377,7 @@ export function TagSelectPanel() {
       open={open}
       onClose={closePortal}
       width={showSidebar ? 540 : 340}
+      height={480}
       pinned={pinned}
       anchorPosition={anchorPosition}
       anchorPlacement={portalState.anchorPlacement}
@@ -377,19 +396,13 @@ export function TagSelectPanel() {
             <input
               ref={searchRef}
               className={shellStyles.searchInput}
-              placeholder="Search tags..."
+              placeholder="Search..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
             />
           </div>
           {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
-          <KbdTooltip label="Tag picker settings"><button
-            className={`${shellStyles.pinBtn} ${settingsOpen ? shellStyles.pinBtnActive : ''}`}
-            onClick={() => setSettingsOpen((current) => !current)}
-            type="button"
-            aria-label="Tag picker settings"
-          ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>
           <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}><button
             className={shellStyles.pinBtn}
             onClick={() => setShowSidebar((v) => !v)}
@@ -398,20 +411,23 @@ export function TagSelectPanel() {
           >
             <IconLayoutSidebar size={14} />
           </button></KbdTooltip>
+          <KbdTooltip label="Tag picker settings"><button
+            className={`${shellStyles.pinBtn} ${settingsOpen ? shellStyles.pinBtnActive : ''}`}
+            onClick={() => setSettingsOpen((current) => !current)}
+            type="button"
+            aria-label="Tag picker settings"
+          ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>
         </>
       }
       footer={
         <>
-          <span className={shellStyles.kbdHint}>
-            <span className={shellStyles.kbd}>Click</span> Select
-            {onApplyTagFilter ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
-          </span>
+          {showSidebar ? <span className={shellStyles.kbdHint}>Switch <span className={shellStyles.kbd}>Tab</span></span> : null}
           <span className={shellStyles.kbdHint}>
             Move <span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
             {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}
             Select <span className={shellStyles.kbd}>↵</span>
           </span>
-          <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
+          <span className={shellStyles.kbdHint}>Close <span className={shellStyles.kbd}>Esc</span></span>
         </>
       }
     >
@@ -419,46 +435,49 @@ export function TagSelectPanel() {
         {/* Sidebar — always mounted, fades with collapse */}
         <div className={`${styles.sidebar} ${!showSidebar ? styles.sidebarHidden : ''}`}>
           <div
-            className={`${styles.sidebarItem} ${sidebarMode === 'selected' ? styles.sidebarItemActive : ''}`}
-            onClick={() => { setSidebarMode('selected'); setActiveNamespace(null); }}
-          >
-            <span className={styles.sidebarName}>Selected</span>
-            <span className={styles.sidebarBadge}>{entityTagKeys.size}</span>
-          </div>
-          <div
             className={`${styles.sidebarItem} ${sidebarMode === 'all' ? styles.sidebarItemActive : ''}`}
             onClick={() => { setSidebarMode('all'); setActiveNamespace(null); }}
           >
+            <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
             <span className={styles.sidebarName}>All</span>
             <span className={styles.sidebarBadge}>
               {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
             </span>
           </div>
-          <div
-            className={`${styles.sidebarItem} ${sidebarMode === 'starred' ? styles.sidebarItemActive : ''}`}
-            onClick={() => { setSidebarMode('starred'); setActiveNamespace(null); }}
-          >
-            <span className={styles.sidebarName}>Starred</span>
-            <span className={styles.sidebarBadge}>{tagPreferences.starredTags.length}</span>
-          </div>
-          {tagPreferences.showTagGroups && nsGroups.length > 0 && <div className={styles.sidebarSep} />}
           {tagPreferences.showTagGroups && nsGroups.map((ns) => (
             <div
               key={ns.namespace_id}
               className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.name ? styles.sidebarItemActive : ''}`}
               onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.name); }}
             >
-              <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.name) }} />
+              <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.name, tagPreferences.tagGroupColors) }} />
               <span className={styles.sidebarName}>{ns.name || 'general'}</span>
               <span className={styles.sidebarBadge}>{ns.tag_count.toLocaleString()}</span>
             </div>
           ))}
+          <div className={styles.sidebarSep} />
+          <div
+            className={`${styles.sidebarItem} ${sidebarMode === 'selected' ? styles.sidebarItemActive : ''}`}
+            onClick={() => { setSidebarMode('selected'); setActiveNamespace(null); }}
+          >
+            <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
+            <span className={styles.sidebarName}>Selected</span>
+            <span className={styles.sidebarBadge}>{entityTagKeys.size}</span>
+          </div>
+          <div
+            className={`${styles.sidebarItem} ${sidebarMode === 'starred' ? styles.sidebarItemActive : ''}`}
+            onClick={() => { setSidebarMode('starred'); setActiveNamespace(null); }}
+          >
+            <IconStar className={styles.sidebarStar} size={10} fill="currentColor" />
+            <span className={styles.sidebarName}>Starred</span>
+            <span className={styles.sidebarBadge}>{tagPreferences.starredTags.length}</span>
+          </div>
         </div>
 
         {/* Content */}
         <div className={`${styles.content} ${!showSidebar ? styles.contentExpanded : ''}`}>
           <div ref={listRef} className={styles.tagListScroller}>
-            {displayTags.length === 0 ? (
+            {navigableTags.length === 0 ? (
               <div className={styles.emptyState}>
                 {sidebarMode === 'selected' ? 'No tags on this entity' : 'No tags found'}
               </div>
@@ -478,16 +497,22 @@ export function TagSelectPanel() {
                       const isExcluded = excluded.has(fullTag);
                       const showChecked = selectedTags.has(fullTag);
                       const isFocused = itemIndex === focusIdx;
+                      const isCreate = tag.tag_id === 0 && createTag != null && fullTag === formatTag(createTag);
                       return (
                         <div
                           key={fullTag}
                           data-tag-index={itemIndex}
                           className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
                           style={{
-                            '--tag-color': tagGroupColor(tag.namespace),
+                            '--tag-color': tagGroupColor(tag.namespace, tagPreferences.tagGroupColors),
                           } as React.CSSProperties}
                           onClick={() => toggleTag(tag)}
                           onContextMenu={(event) => {
+                        if (isCreate) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          return;
+                        }
                         if (onApplyTagFilter) {
                           event.preventDefault();
                           event.stopPropagation();
@@ -518,18 +543,26 @@ export function TagSelectPanel() {
                               {isExcluded ? <IconX size={10} /> : showChecked ? <IconCheck size={10} /> : null}
                             </div>
                           ) : null}
-                          <IconBookmark
-                            aria-hidden="true"
-                            className={styles.tagBookmark}
-                            size={13}
-                            stroke={showChecked && !onApplyTagFilter ? 2 : 1.6}
-                            fill="currentColor"
-                            fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}
-                          />
+                          {isCreate ? (
+                            <IconPlus aria-hidden="true" className={styles.createTagIcon} size={10} />
+                          ) : tagPreferences.starredTags.includes(fullTag) ? (
+                            <IconStar aria-hidden="true" className={styles.tagStar} size={10} fill="currentColor" />
+                          ) : (
+                            <IconBookmark
+                              aria-hidden="true"
+                              className={styles.tagBookmark}
+                              size={10}
+                              stroke={showChecked && !onApplyTagFilter ? 2 : 1.6}
+                              fill="currentColor"
+                              fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}
+                            />
+                          )}
                           <span className={styles.tagName}>
-                            {query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)}
+                            {isCreate ? <>Create &quot;<strong>{fullTag}</strong>&quot;</> : (
+                              query.trim() ? highlightMatch(tag.subname || fullTag, query.trim()) : (tag.subname || fullTag)
+                            )}
                           </span>
-                          {showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
+                          {!isCreate && showCounts ? <span className={styles.tagBadge}>({tag.active_count.toLocaleString()})</span> : null}
                         </div>
                       );
                     })}

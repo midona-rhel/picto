@@ -16,6 +16,31 @@ import {
   IconWatchFolder,
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import type { MenuEntry } from '../../shared/ui/ContextMenu';
+import type { ContentSortField } from '../../platform/folderApi';
+
+const CONTENT_SORT_OPTIONS: ReadonlyArray<{ field: ContentSortField; label: string }> = [
+  { field: 'name', label: 'Name' },
+  { field: 'imported_at', label: 'Import Date' },
+  { field: 'created_at', label: 'Date Created' },
+  { field: 'modified_at', label: 'Date Modified' },
+  { field: 'size', label: 'Size' },
+  { field: 'notes', label: 'Notes' },
+];
+
+export function contentSortSubmenu(
+  onSort: (field: ContentSortField) => void,
+  fields: readonly ContentSortField[] = CONTENT_SORT_OPTIONS.map(({ field }) => field),
+): MenuEntry {
+  const included = new Set(fields);
+  return {
+    submenu: true,
+    label: 'Sort by',
+    icon: <IconSort size={14} />,
+    children: CONTENT_SORT_OPTIONS
+      .filter(({ field }) => included.has(field))
+      .map(({ field, label }) => ({ label, action: () => onSort(field) })),
+  };
+}
 
 interface FolderContextMenuOptions {
   inQuickAccess: boolean;
@@ -31,7 +56,7 @@ interface FolderContextMenuOptions {
   onAttachWatch: () => void;
   onRemoveWatch?: () => void;
   onSortTree: (descending: boolean, recursive: boolean) => void;
-  onSortContents: () => void;
+  onSortContents: (field: ContentSortField) => void;
   iconPickerEntry?: MenuEntry;
   colorPickerEntry?: MenuEntry;
   onExport: () => void;
@@ -45,7 +70,7 @@ interface BulkFolderContextMenuOptions {
   onDuplicate: () => void;
   onMove: () => void;
   onSetAutoTags: () => void;
-  onSortContents: () => void;
+  onSortContents: (field: ContentSortField) => void;
   onDelete: () => void;
 }
 
@@ -84,7 +109,7 @@ export function buildFolderContextMenu(options: FolderContextMenuOptions): MenuE
         { label: 'This Level and Descendants Z-A', action: () => options.onSortTree(true, true) },
       ],
     },
-    { label: 'Sort Contents by Name', icon: <IconSort size={14} />, action: options.onSortContents },
+    contentSortSubmenu(options.onSortContents),
     ...(options.iconPickerEntry || options.colorPickerEntry ? [
       { separator: true } satisfies MenuEntry,
       ...(options.iconPickerEntry ? [{
@@ -112,7 +137,7 @@ export function buildBulkFolderContextMenu(options: BulkFolderContextMenuOptions
     { label: `Duplicate ${options.count} Folders`, icon: <IconCopy size={14} />, action: options.onDuplicate },
     { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: options.onMove },
     { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
-    { label: 'Sort Contents by Name', icon: <IconSort size={14} />, action: options.onSortContents },
+    contentSortSubmenu(options.onSortContents),
     { separator: true },
     {
       label: `Delete ${options.count} Folders`,

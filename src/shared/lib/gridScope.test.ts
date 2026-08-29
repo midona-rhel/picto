@@ -8,6 +8,10 @@ describe('gridScope helpers', () => {
     expect(nodeIdToGridScope('system:recent_viewed')).toEqual({ kind: 'recently_viewed' });
     expect(nodeIdToGridScope('folder:12')).toEqual({ kind: 'folder', folder_id: 12 });
     expect(nodeIdToGridScope('smart:7')).toEqual({ kind: 'smart_folder', smart_folder_id: 7 });
+    expect(nodeIdToGridScope('media-matches:123')).toEqual({
+      kind: 'media_matches',
+      item_id: 123,
+    });
   });
 
   it('keeps non-grid manager nodes out of grid scope mapping', () => {
@@ -23,5 +27,6 @@ describe('gridScope helpers', () => {
     expect(scopeToGridNodeId({ kind: 'recently_viewed' })).toBe('system:recent_viewed');
     expect(scopeToGridNodeId({ kind: 'folder', folder_id: 5 })).toBe('folder:5');
     expect(scopeToGridNodeId({ kind: 'smart_folder', smart_folder_id: 8 })).toBe('smart:8');
+    expect(scopeToGridNodeId({ kind: 'media_matches', item_id: 123 })).toBe('media-matches:123');
   });
 });

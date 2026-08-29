@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test/render';
 import { SmartFolderModal } from './SmartFolderModal';
 
+vi.mock('../../platform/tagApi', () => ({
+  getTagsById: vi.fn().mockResolvedValue([
+    { tag_id: 31, namespace: 'creator', subname: 'huffslove' },
+  ]),
+  getTagsPaginated: vi.fn().mockResolvedValue({
+    tags: [{ tag_id: 31, namespace: 'creator', subname: 'huffslove' }],
+    next_cursor: null,
+    revision: 1,
+  }),
+}));
+
 describe('SmartFolderModal', () => {
   it('uses the flat rule editor and the shared compact icon picker', async () => {
     renderWithProviders(
@@ -36,7 +47,19 @@ describe('SmartFolderModal', () => {
       icon: null,
       color: null,
       notes: 'Useful images',
-      predicate: { groups: [{ match_mode: 'all' as const, negate: false, rules: [{ field: 'tags', op: 'include_any', values: ['artist:test'] }] }] },
+      view: {
+        filter: {
+          kind: 'all' as const,
+          value: [{
+            kind: 'all' as const,
+            value: [{
+              kind: 'clause' as const,
+              value: { clause: 'tags' as const, tag_ids: [31], mode: 'any' as const },
+            }],
+          }],
+        },
+        sort: { field: 'imported_at' as const, direction: 'descending' as const, random_seed: null },
+      },
     };
 
     const { unmount } = renderWithProviders(
@@ -68,6 +91,9 @@ describe('SmartFolderModal', () => {
 
     await screen.findByRole('dialog', { name: 'Edit Rules' });
     expect(screen.getByText('Match')).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tags').parentElement?.textContent).toContain('huffslove');
+    });
     expect(screen.queryByDisplayValue('Reference')).not.toBeInTheDocument();
   });
 });

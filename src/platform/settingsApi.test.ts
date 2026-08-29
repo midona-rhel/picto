@@ -48,6 +48,7 @@ describe('settings API', () => {
     expect(snapshot.value.subscriptionInboxItemLimit).toBe(1000);
     expect(snapshot.value.showTagGroups).toBe(true);
     expect(snapshot.value.starredTags).toEqual([]);
+    expect(snapshot.value.tagGroupColors).toEqual({});
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
   });
 
@@ -61,6 +62,12 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { starredTags: ['creator:alice', 2] }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('starredTags');
+  });
+
+  it('validates tag group color preferences', async () => {
+    invoke.mockResolvedValue({ value: { tagGroupColors: { creator: 2 } }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).rejects.toThrow('tagGroupColors');
   });
 
   it('rejects unknown grid spacing values', async () => {

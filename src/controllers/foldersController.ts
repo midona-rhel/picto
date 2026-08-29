@@ -16,7 +16,8 @@ import {
   setFolderAutoTags,
   setFolderCover,
   setFolderWatchConfig,
-  sortFolderItemsByName,
+  sortFolderItems,
+  type ContentSortField,
   sortFolderTree,
 } from '../platform/folderApi';
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
@@ -132,8 +133,8 @@ export const foldersController = {
     await announceUndoableMutation(moves.length > 0 ? 'folders.reorder' : 'folders.move');
   },
 
-  async sortByName(folderId: number): Promise<void> {
-    await sortFolderItemsByName(folderId);
+  async sortContents(folderId: number, field: ContentSortField): Promise<void> {
+    await sortFolderItems(folderId, field);
     await announceUndoableMutation('folders.sort_items');
   },
 

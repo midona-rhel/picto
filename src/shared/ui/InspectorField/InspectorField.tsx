@@ -1,79 +1,36 @@
-/**
- * InspectorField — view-first field with glass popover overlay.
- *
- * Field row: [content ... | sep | ⋯] — never changes shape.
- * Hover: glass popover fades in on top showing full content.
- * Edit (click ⋯): same glass popover with auto-growing textarea.
- * Name and notes behave identically — both single-line by default,
- * both auto-grow in the popover.
- */
-
-import { createContext, useState, useRef, useEffect, useCallback, useContext, useId, type ReactNode } from 'react';
-import { IconDots, IconLink, IconPlus, IconX, IconExternalLink } from '@tabler/icons-react';
+import { createContext, useContext, useId, useState, useRef, useEffect, useCallback, useLayoutEffect, type ReactNode } from 'react';
+import { IconEdit, IconLink, IconPlus, IconTrash } from '@tabler/icons-react';
 import { shellController } from '../../../controllers/shellController';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './InspectorField.module.css';
 
 type HoverGroup = {
   activeId: string | null;
-  activate: (id: string) => void;
-  deactivate: (id: string, delay?: number) => void;
-  lock: (id: string) => void;
-  unlock: (id: string) => void;
+  setActiveId: (id: string | null) => void;
 };
 
 const InspectorFieldHoverContext = createContext<HoverGroup | null>(null);
 
 export function InspectorFieldGroup({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
-  const lockedId = useRef<string | null>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
-  const clearHide = useCallback(() => clearTimeout(hideTimer.current), []);
-
-  useEffect(() => clearHide, [clearHide]);
-
-  const value: HoverGroup = {
-    activeId,
-    activate: (id) => {
-      if (lockedId.current && lockedId.current !== id) return;
-      clearHide();
-      setActiveId(id);
-    },
-    deactivate: (id, delay = 140) => {
-      if (lockedId.current === id) return;
-      clearHide();
-      hideTimer.current = setTimeout(() => {
-        setActiveId((current) => current === id ? null : current);
-      }, delay);
-    },
-    lock: (id) => {
-      clearHide();
-      lockedId.current = id;
-      setActiveId(id);
-    },
-    unlock: (id) => {
-      if (lockedId.current !== id) return;
-      lockedId.current = null;
-      setActiveId((current) => current === id ? null : current);
-    },
-  };
-
-  return <InspectorFieldHoverContext.Provider value={value}>{children}</InspectorFieldHoverContext.Provider>;
+  return (
+    <InspectorFieldHoverContext.Provider value={{ activeId, setActiveId }}>
+      {children}
+    </InspectorFieldHoverContext.Provider>
+  );
 }
 
 function useFieldHover() {
-  const group = useContext(InspectorFieldHoverContext);
   const id = useId();
+  const group = useContext(InspectorFieldHoverContext);
   return {
     active: group?.activeId === id,
-    activate: () => group?.activate(id),
-    deactivate: (delay?: number) => group?.deactivate(id, delay),
-    lock: () => group?.lock(id),
-    unlock: () => group?.unlock(id),
+    activate: () => group?.setActiveId(id),
+    deactivate: () => {
+      if (group?.activeId === id) group.setActiveId(null);
+    },
   };
 }
-
-// ── InspectorField (name, notes, any text) ───────────────────────
 
 interface Props {
   value: string;
@@ -83,112 +40,109 @@ interface Props {
 }
 
 export function InspectorField({ value, placeholder = '', readOnly = false, onCommit }: Props) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
+  const [focused, setFocused] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const backingRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const canEdit = !readOnly && Boolean(onCommit);
   const hover = useFieldHover();
-  const [isMultiRow, setIsMultiRow] = useState(false);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const expanded = overflowing && focused;
 
-  useEffect(() => { setDraft(value); }, [value]);
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
+  const measureOverflow = useCallback(() => {
+    const measure = measureRef.current;
+    if (!measure) return;
+    setOverflowing(measure.scrollHeight > 32 || measure.scrollWidth > measure.clientWidth + 1);
+  }, []);
 
-  // Measure popover to toggle button style
+  useLayoutEffect(() => {
+    if (!focused && fieldRef.current?.textContent !== value) fieldRef.current!.textContent = value;
+    if (measureRef.current) measureRef.current.dataset.value = value || placeholder;
+    measureOverflow();
+  }, [focused, measureOverflow, placeholder, value]);
+
   useEffect(() => {
-    const el = popoverRef.current;
-    if (!el) { setIsMultiRow(false); return; }
-    const check = () => setIsMultiRow(el.scrollHeight > 40);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [value]);
+    const wrapper = fieldRef.current?.parentElement;
+    if (!wrapper || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [measureOverflow]);
 
   const commit = useCallback(() => {
-    setEditing(false);
-    hover.unlock();
-    const trimmed = draft.trim();
-    if (trimmed !== value && onCommit) onCommit(trimmed);
-  }, [draft, value, onCommit, hover]);
+    const trimmed = (fieldRef.current?.textContent ?? '').trim();
+    if (fieldRef.current) fieldRef.current.textContent = trimmed;
+    if (backingRef.current) backingRef.current.textContent = trimmed || placeholder;
+    if (measureRef.current) measureRef.current.dataset.value = trimmed || placeholder;
+    measureOverflow();
+    if (trimmed !== value) onCommit?.(trimmed);
+  }, [measureOverflow, onCommit, placeholder, value]);
 
   const cancel = useCallback(() => {
-    setDraft(value);
-    setEditing(false);
-    hover.unlock();
-  }, [value, hover]);
-
-  const canEdit = !readOnly && !!onCommit;
-  const showOverlay = (hover.active || editing) && (!!value || editing);
+    if (fieldRef.current) fieldRef.current.textContent = value;
+    if (backingRef.current) backingRef.current.textContent = value || placeholder;
+    if (measureRef.current) measureRef.current.dataset.value = value || placeholder;
+    measureOverflow();
+  }, [measureOverflow, placeholder, value]);
 
   return (
     <div
       className={styles.fieldWrap}
-      onMouseEnter={() => { if (!editing && value) hover.activate(); }}
-      onMouseLeave={() => { if (!editing) hover.deactivate(); }}
+      onMouseLeave={() => { if (!focused) hover.deactivate(); }}
     >
-      <div className={styles.fieldRow}>
-        <div className={styles.fieldContent}>
-          {value || <span className={styles.fieldPlaceholder}>{placeholder}</span>}
-        </div>
-        {canEdit && (
-          <>
-            <div className={styles.fieldSep} />
-            <button
-              className={styles.fieldActionBtn}
-              onClick={() => { hover.lock(); setEditing(true); setDraft(value); }}
-              type="button"
-            >
-              <IconDots size={14} stroke={1.5} />
-            </button>
-          </>
-        )}
-      </div>
-
-      {showOverlay && (
+      {expanded && (
         <div
-          ref={popoverRef}
-          data-inspector-field-popover=""
-          className={`${styles.popover} ${!isMultiRow ? styles.popoverSingleRow : ''}`}
+          ref={backingRef}
+          className={styles.fieldExpansionBackdrop}
+          data-inspector-field-backdrop=""
+          aria-hidden="true"
         >
-          <div className={styles.popoverBody}>
-            {editing ? (
-              <textarea
-                ref={inputRef}
-                className={styles.popoverInput}
-                value={draft}
-                rows={1}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') cancel();
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
-                }}
-                onBlur={commit}
-              />
-            ) : (
-              <div className={styles.popoverText}>{value}</div>
-            )}
-          </div>
-          {canEdit && (
-            <button
-              className={styles.popoverActionBtn}
-              onClick={() => { if (editing) commit(); else { hover.lock(); setEditing(true); setDraft(value); } }}
-              type="button"
-            >
-              <IconDots size={14} stroke={1.5} />
-            </button>
-          )}
+          {value || placeholder}
         </div>
       )}
+      <div
+        ref={fieldRef}
+        className={`${styles.fieldControl} ${expanded ? styles.fieldControlExpanded : ''} ${readOnly ? styles.fieldDisabled : ''}`}
+        contentEditable={canEdit ? 'plaintext-only' : false}
+        suppressContentEditableWarning
+        role="textbox"
+        aria-label={placeholder}
+        aria-readonly={!canEdit}
+        data-placeholder={placeholder}
+        data-inspector-field-popover={expanded ? '' : undefined}
+        data-inspector-field-expanded={expanded ? '' : undefined}
+        tabIndex={canEdit ? 0 : undefined}
+        onFocus={canEdit ? () => { hover.activate(); setFocused(true); } : undefined}
+        onInput={canEdit ? (event) => {
+          const nextValue = event.currentTarget.textContent ?? '';
+          if (backingRef.current) backingRef.current.textContent = nextValue || placeholder;
+          if (measureRef.current) measureRef.current.dataset.value = nextValue;
+          measureOverflow();
+        } : undefined}
+        onBlur={canEdit ? () => { commit(); setFocused(false); } : undefined}
+        onKeyDown={canEdit ? (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            cancel();
+            event.currentTarget.blur();
+          } else if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        } : undefined}
+      >
+        {value}
+      </div>
+      <div
+        ref={measureRef}
+        className={styles.fieldMeasure}
+        data-inspector-field-measure=""
+        data-value={value || placeholder}
+        aria-hidden="true"
+      />
     </div>
   );
 }
-
-// ── InspectorSourceField (URLs) ──────────────────────────────────
 
 interface SourceFieldProps {
   urls: string[];
@@ -197,164 +151,146 @@ interface SourceFieldProps {
   unavailable?: boolean;
 }
 
-function extractDomain(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+function splitUrl(url: string): { domain: string; remainder: string } {
+  try {
+    const parsed = new URL(url);
+    return {
+      domain: parsed.hostname.replace(/^www\./, ''),
+      remainder: `${parsed.pathname === '/' ? '' : parsed.pathname}${parsed.search}${parsed.hash}`,
+    };
+  } catch {
+    return { domain: url, remainder: '' };
+  }
+}
+
+function UrlLabel({ url }: { url: string }) {
+  const { domain, remainder } = splitUrl(url);
+  return (
+    <span className={styles.urlLabel}>
+      <span className={styles.urlDomain}>{domain}</span>
+      {remainder && <span className={styles.urlRemainder}>{remainder}</span>}
+    </span>
+  );
 }
 
 export function InspectorSourceField({ urls, onChange, readOnly = false, unavailable = false }: SourceFieldProps) {
-  const hover = useFieldHover();
   const [open, setOpen] = useState(false);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
-
-  const domainSummary = unavailable ? '—' : urls.length > 0 ? urls.map(extractDomain).join(', ') : '';
-  const canEdit = !unavailable && !readOnly && !!onChange;
-  const showPopover = !unavailable && hover.active && !open && urls.length > 0;
+  const primaryUrl = urls[0] ?? '';
+  const canEdit = !unavailable && !readOnly && Boolean(onChange);
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false); setEditIdx(null); setEditVal('');
-        hover.unlock();
+    const handler = (event: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
+        setOpen(false);
+        setEditIdx(null);
+        setEditVal('');
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [open, hover]);
+  }, [open]);
 
-  const handleSave = useCallback((index: number, val: string) => {
-    const trimmed = val.trim();
-    setEditIdx(null); setEditVal('');
+  const handleSave = useCallback((index: number, nextValue: string) => {
+    const trimmed = nextValue.trim();
+    setEditIdx(null);
+    setEditVal('');
     if (!onChange) return;
     if (index >= urls.length) {
-      // New entry — only persist if non-empty
       if (trimmed) onChange([...urls, trimmed]);
-    } else {
-      const next = [...urls];
-      if (trimmed) next[index] = trimmed; else next.splice(index, 1);
-      onChange(next);
+      return;
     }
-  }, [urls, onChange]);
+    const next = [...urls];
+    if (trimmed) next[index] = trimmed;
+    else next.splice(index, 1);
+    onChange(next);
+  }, [onChange, urls]);
 
   const handleAdd = useCallback(() => {
     if (!onChange) return;
-    // Don't persist yet — just open an empty edit row.
-    // The new URL is committed only when the user types and blurs/enters.
+    setOpen(true);
     setEditIdx(urls.length);
     setEditVal('');
-    if (!open) setOpen(true);
-  }, [urls, onChange, open]);
+  }, [onChange, urls.length]);
 
   const handleRemove = useCallback((index: number) => {
-    if (!onChange) return;
-    onChange(urls.filter((_, i) => i !== index));
+    onChange?.(urls.filter((_, itemIndex) => itemIndex !== index));
     if (editIdx === index) { setEditIdx(null); setEditVal(''); }
-  }, [urls, editIdx, onChange]);
+  }, [editIdx, onChange, urls]);
 
-  const handleBtnClick = () => {
+  const toggleOpen = () => {
     if (!canEdit) return;
-    if (open) {
-      setOpen(false);
-      hover.unlock();
-    } else {
-      hover.lock();
-      if (urls.length === 0) handleAdd(); else setOpen(true);
-    }
+    if (urls.length === 0) handleAdd();
+    else setOpen((current) => !current);
   };
 
   return (
-    <div ref={wrapRef} className={styles.fieldWrap}>
-      <div
-        className={styles.fieldRow}
-        onMouseEnter={() => { if (!unavailable && !open && urls.length > 0) hover.activate(); }}
-        onMouseLeave={() => hover.deactivate()}
-      >
-        <div className={styles.fieldContent} onClick={handleBtnClick}>
-          {domainSummary || <span className={styles.fieldPlaceholder}>Source</span>}
-        </div>
-        {!unavailable && <>
-          <div className={styles.fieldSep} />
-          <button className={styles.fieldActionBtn} onClick={handleBtnClick} type="button">
-            <IconLink size={14} stroke={1.5} />
-          </button>
-        </>}
-      </div>
-
-      {showPopover && (
-        <div
-          data-inspector-field-popover=""
-          className={styles.popover}
-          onMouseEnter={hover.activate}
-          onMouseLeave={() => hover.deactivate()}
+    <div
+      ref={wrapRef}
+      className={styles.fieldWrap}
+    >
+      <div className={`${styles.sourceControl} ${unavailable ? styles.fieldDisabled : ''}`}>
+        <button
+          className={styles.sourceValue}
+          onClick={() => { if (primaryUrl) void shellController.openExternalUrl(primaryUrl); else handleAdd(); }}
+          type="button"
+          disabled={unavailable || (!primaryUrl && !canEdit)}
+          aria-label={primaryUrl ? `Open ${primaryUrl}` : 'Add source URL'}
         >
-          <div className={styles.popoverBody}>
-            {urls.map((url, i) => (
-              <a
-                key={i}
-                className={styles.popoverLink}
-                href={url}
-                onClick={(e) => { e.preventDefault(); void shellController.openExternalUrl(url); }}
-              >
-                {url}
-              </a>
-            ))}
-          </div>
-          <button className={styles.popoverActionBtn} onClick={handleBtnClick} type="button">
+          {unavailable
+            ? '—'
+            : primaryUrl
+              ? <UrlLabel url={primaryUrl} />
+              : <span className={styles.fieldPlaceholder}>http://</span>}
+          {urls.length > 1 && <span className={styles.urlCount}>+{urls.length - 1}</span>}
+        </button>
+        {!unavailable && (
+          <button className={styles.sourceAction} onClick={toggleOpen} type="button" disabled={!canEdit} aria-label="Manage source URLs">
             <IconLink size={14} stroke={1.5} />
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {open && (
         <div className={styles.urlDropdown}>
-          {urls.map((url, idx) => (
-            <div key={idx} className={styles.urlRow}>
-              {editIdx === idx ? (
+          {urls.map((url, index) => (
+            <div key={`${url}-${index}`} className={styles.urlRow}>
+              {editIdx === index ? (
                 <input
                   className={styles.urlEditInput}
                   autoFocus
                   value={editVal}
-                  onChange={(e) => setEditVal(e.target.value)}
-                  onBlur={() => handleSave(idx, editVal)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.currentTarget.blur();
-                    if (e.key === 'Escape') { setEditIdx(null); setEditVal(''); }
+                  onChange={(event) => setEditVal(event.target.value)}
+                  onBlur={() => handleSave(index, editVal)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                    if (event.key === 'Escape') { setEditIdx(null); setEditVal(''); }
                   }}
                   placeholder="https://..."
                 />
               ) : (
-                <span
+                <button
                   className={styles.urlText}
-                  title={url}
-                  onClick={canEdit ? () => { setEditIdx(idx); setEditVal(url); } : undefined}
+                  onClick={() => { void shellController.openExternalUrl(url); }}
+                  type="button"
+                  aria-label={`Open ${url}`}
                 >
-                  {url ? extractDomain(url) : 'https://...'}
-                </span>
+                  <UrlLabel url={url} />
+                </button>
               )}
-              {url.trim() && editIdx !== idx && (
-                <KbdTooltip label="Open link">
-                  <button
-                    className={styles.urlActionBtn}
-                    onClick={() => { void shellController.openExternalUrl(url); }}
-                    type="button" aria-label="Open link"
-                  >
-                    <IconExternalLink size={13} stroke={1.5} />
-                  </button>
-                </KbdTooltip>
-              )}
-              {canEdit && (
-                <KbdTooltip label="Remove">
-                  <button
-                    className={styles.urlActionBtn}
-                    onClick={() => handleRemove(idx)}
-                    type="button" aria-label="Remove"
-                  >
-                    <IconX size={13} stroke={1.5} />
-                  </button>
-                </KbdTooltip>
-              )}
+              <KbdTooltip label="Edit URL">
+                <button className={styles.urlActionBtn} onClick={() => { setEditIdx(index); setEditVal(url); }} type="button" aria-label="Edit URL">
+                  <IconEdit size={13} stroke={1.5} />
+                </button>
+              </KbdTooltip>
+              <KbdTooltip label="Delete URL">
+                <button className={`${styles.urlActionBtn} ${styles.urlRemoveBtn}`} onClick={() => handleRemove(index)} type="button" aria-label="Delete URL">
+                  <IconTrash size={13} stroke={1.5} />
+                </button>
+              </KbdTooltip>
             </div>
           ))}
           {editIdx === urls.length && (
@@ -363,22 +299,20 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
                 className={styles.urlEditInput}
                 autoFocus
                 value={editVal}
-                onChange={(e) => setEditVal(e.target.value)}
+                onChange={(event) => setEditVal(event.target.value)}
                 onBlur={() => handleSave(urls.length, editVal)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                  if (e.key === 'Escape') { setEditIdx(null); setEditVal(''); }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                  if (event.key === 'Escape') { setEditIdx(null); setEditVal(''); }
                 }}
                 placeholder="https://..."
               />
             </div>
           )}
-          {canEdit && (
-            <button className={styles.addUrlBtn} onClick={handleAdd} type="button">
-              <IconPlus size={13} stroke={1.5} />
-              <span>Add URL</span>
-            </button>
-          )}
+          <button className={styles.addUrlBtn} onClick={handleAdd} type="button">
+            <IconPlus size={13} stroke={1.5} />
+            <span>Add URL</span>
+          </button>
         </div>
       )}
     </div>

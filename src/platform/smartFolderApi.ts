@@ -1,10 +1,10 @@
 import { invoke } from './ipc';
-import type { CreateSmartFolderInput } from '../shared/types/generated/application/CreateSmartFolderInput';
 import type { CreatedSmartFolder } from '../shared/types/generated/application/CreatedSmartFolder';
 import type { SmartFolderMutationReceipt } from '../shared/types/generated/application/SmartFolderMutationReceipt';
+import type { SmartFolderCommandPayload } from '../shared/types/canonical';
 
-export function createSmartFolder(input: CreateSmartFolderInput): Promise<CreatedSmartFolder> {
-  return invoke<CreatedSmartFolder>('smart_folders.create', input);
+export function createSmartFolder(input: SmartFolderCommandPayload): Promise<CreatedSmartFolder> {
+  return invoke<CreatedSmartFolder>('smart_folders.create', { ...input });
 }
 
 export function deleteSmartFolder(smartFolderId: number): Promise<SmartFolderMutationReceipt> {
@@ -15,7 +15,7 @@ export function deleteSmartFolder(smartFolderId: number): Promise<SmartFolderMut
 
 export function updateSmartFolder(
   smartFolderId: number,
-  value: CreateSmartFolderInput,
+  value: SmartFolderCommandPayload,
 ): Promise<SmartFolderMutationReceipt> {
   return invoke<SmartFolderMutationReceipt>('smart_folders.update', {
     smart_folder_id: smartFolderId,

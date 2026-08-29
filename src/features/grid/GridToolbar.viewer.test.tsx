@@ -68,6 +68,22 @@ describe('ViewerToolbar live zoom display', () => {
     expect(navigate.mock.calls).toEqual([[-1], [1]]);
   });
 
+  it('keeps the originating scope breadcrumb visible while editing a collection', () => {
+    const store = createStore();
+    const close = vi.fn();
+    store.set(viewerDisplayStateAtom, {
+      currentIndex: 0,
+      total: 1,
+      breadcrumb: { parent: 'All', current: 'Reference set' },
+    });
+    store.set(viewerDisplayControlsAtom, { close, backLabel: 'Back to grid' });
+
+    render(<Provider store={store}><ViewerToolbar /></Provider>);
+    expect(screen.getByLabelText('All / Reference set')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('exposes standard zoom levels and toggles actual/fit on right click', () => {
     const store = createStore();
     const fitToWindow = vi.fn();

@@ -8,6 +8,7 @@ import {
 } from './diagnosticsStore';
 import { invoke } from '../../platform/ipc';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   buildSupportReport,
   formatDiagnosticDisplayEntry,
@@ -159,10 +160,10 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <input className={styles.search} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter logs" />
-        <button className={styles.iconButton} onClick={() => { void copy(); }} aria-label="Copy visible logs" title="Copy visible logs"><IconCopy size={14} /></button>
-        <button className={styles.iconButton} onClick={() => { void saveSupportReport(); }} aria-label="Save support report" title="Save support report"><IconDownload size={14} /></button>
-        <button className={styles.iconButton} onClick={clearDiagnostics} aria-label="Clear logs" title="Clear logs"><IconTrash size={14} /></button>
-        <button className={styles.iconButton} onClick={onClose} aria-label="Close diagnostics" title="Close diagnostics"><IconX size={15} /></button>
+        <KbdTooltip label="Copy visible logs"><button className={styles.iconButton} onClick={() => { void copy(); }} aria-label="Copy visible logs"><IconCopy size={14} /></button></KbdTooltip>
+        <KbdTooltip label="Save support report"><button className={styles.iconButton} onClick={() => { void saveSupportReport(); }} aria-label="Save support report"><IconDownload size={14} /></button></KbdTooltip>
+        <KbdTooltip label="Clear logs"><button className={styles.iconButton} onClick={clearDiagnostics} aria-label="Clear logs"><IconTrash size={14} /></button></KbdTooltip>
+        <KbdTooltip label="Close diagnostics"><button className={styles.iconButton} onClick={onClose} aria-label="Close diagnostics"><IconX size={15} /></button></KbdTooltip>
       </header>
       <div className={styles.content}>
         <div

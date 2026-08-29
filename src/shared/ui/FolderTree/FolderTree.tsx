@@ -120,6 +120,7 @@ export function flattenVisibleIds(
 
 export function FolderTree({ nodes, selected, onToggle, search = '', checkable = true, memberOf, excluded, filterSelection = false, onExclude, onContextMenu }: FolderTreeProps) {
   const tree = useMemo(() => buildTree(nodes), [nodes]);
+  const namesById = useMemo(() => new Map(nodes.map((node) => [node.id, node.name])), [nodes]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Auto-expand all on mount / when tree changes
@@ -145,6 +146,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     const isSelected = selected.has(folderId);
     const isMember = memberOf?.has(folderId) ?? false;
     const isExcluded = excluded?.has(folderId) ?? false;
+    const parentName = node.parent_id?.startsWith('folder:') ? namesById.get(node.parent_id) : undefined;
 
     if (searchLower && !matchesSearch(treeNode, searchLower)) return [];
 
@@ -152,7 +154,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
       <div
         key={node.id}
         className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
-        style={{ paddingLeft: 6 + depth * 20 }}
+        style={{ paddingLeft: 4 + depth * 24 }}
         onClick={isMember ? undefined : (e) => onToggle(folderId, e)}
         onContextMenu={onExclude || onContextMenu ? (event) => {
           event.preventDefault();
@@ -161,16 +163,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
           else onContextMenu?.(folderId, event);
         } : undefined}
       >
-        {hasChildren ? (
-          <div
-            className={`${styles.expandBtn} ${isExpanded ? styles.expandBtnExpanded : ''}`}
-            onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
-          >
-            <IconChevronRight size={12} />
-          </div>
-        ) : (
-          <div className={styles.expandPlaceholder} />
-        )}
+        {depth > 0 && <span className={styles.guidelines} style={{ '--folder-depth': depth } as React.CSSProperties} />}
         {checkable && (
           <div className={styles.checkSlot}>
             {isMember ? (
@@ -178,18 +171,29 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
                 <IconCheck size={10} />
               </div>
             ) : (
-              <div className={`${checkStyles.checkBox} ${isExcluded ? checkStyles.checkBoxExcluded : isSelected ? (filterSelection ? checkStyles.checkBoxFilterChecked : checkStyles.checkBoxChecked) : ''}`}>
+              <div className={`${checkStyles.checkBox} ${isExcluded ? checkStyles.checkBoxExcluded : isSelected ? (filterSelection ? checkStyles.checkBoxFilterChecked : styles.checkSelected) : ''}`}>
                 {isExcluded ? <IconX size={10} /> : isSelected ? <IconCheck size={10} /> : null}
               </div>
             )}
           </div>
         )}
-        <IconFolder size={20} stroke={1.5} fill="currentColor" fillOpacity={0.16} className={styles.folderIcon} style={node.color ? { color: node.color } : undefined} />
+        <IconFolder size={20} stroke={1.5} className={styles.folderIcon} style={node.color ? { color: node.color } : undefined} />
         <span className={styles.name}>
           {searchLower ? highlightMatch(node.name, searchLower) : node.name}
         </span>
-        {isMember && <span className={styles.memberBadge}>Member</span>}
-        {node.count != null && <span className={styles.count}>{node.count.toLocaleString()}</span>}
+        <span className={styles.right}>
+          {isMember ? <span className={styles.memberBadge}>Member</span> : parentName ? <span className={styles.parentName}>{parentName}</span> : null}
+          {hasChildren ? (
+            <button
+              type="button"
+              aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+              className={`${styles.expandBtn} ${isExpanded ? styles.expandBtnExpanded : ''}`}
+              onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
+            >
+              <IconChevronRight size={12} />
+            </button>
+          ) : <span className={styles.expandPlaceholder} />}
+        </span>
       </div>,
     ];
 

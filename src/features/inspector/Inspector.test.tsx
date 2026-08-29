@@ -5,7 +5,7 @@ import { InspectorSkeleton } from './Inspector';
 
 const coreLabels = [
   'Items', 'Dimensions', 'Size', 'Type', 'Duration',
-  'Date added', 'Date created', 'Date modified',
+  'Date Imported', 'Date Created', 'Date Modified',
 ];
 
 beforeAll(() => {
@@ -29,9 +29,9 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
       showSource={!['folder', 'smart-folder', 'system'].includes(state)}
       rating={{ value: 0 }}
       coreProperties={coreLabels.map((label, index) => ({
-        label: label as 'Items' | 'Dimensions' | 'Size' | 'Type' | 'Duration' | 'Date added' | 'Date created' | 'Date modified',
+        label: label as 'Items' | 'Dimensions' | 'Size' | 'Type' | 'Duration' | 'Date Imported' | 'Date Created' | 'Date Modified',
         value: index === 0 && state !== 'multi' ? '1' : '—',
-        mono: label !== 'Type',
+        mono: true,
       }))}
       tags={[]}
       showTags={!['folder', 'smart-folder', 'system', 'loading', 'error'].includes(state)}
@@ -43,6 +43,11 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
 }
 
 describe('InspectorSkeleton', () => {
+  it('reserves palette geometry when a selection has no shared colors', () => {
+    renderState('multi');
+    expect(document.querySelector('[class*="palette"]')).toHaveStyle({ visibility: 'hidden' });
+  });
+
   for (const state of ['entity', 'multi', 'folder', 'smart-folder', 'system', 'loading', 'error'] as const) {
     it(`keeps identity and core anchors for ${state}`, () => {
       renderState(state);

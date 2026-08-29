@@ -49,7 +49,7 @@ import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { ToolbarFilterIcon } from '../../shared/ui/icons/toolbar-icons';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
-import type { BaseScope, SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
+import type { BaseScope, SidebarNodeDto, SmartFolderCommandPayload, ViewQuerySpec } from '../../shared/types/canonical';
 import type { EntityTarget } from '../../shared/types/canonical';
 import { filterSidebarTree } from './treeFilter';
 import * as entityMutations from '../../controllers/entityMutations';
@@ -69,7 +69,10 @@ import styles from './Sidebar.module.css';
 import { chooseAndImportFolder, filesController } from '../../controllers/filesController';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
+import { refreshSubscriptionsWorkspace } from '../../runtime/subscriptionsSettle';
+import { subscriptionsController } from '../../controllers/subscriptionsController';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
+import { contentSortSubmenu } from '../folders/folderContextMenu';
 
 const IC = 19;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
@@ -234,12 +237,29 @@ export function Sidebar() {
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const subscriptionsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
+  const subscriptions = subscriptionsSnapshot?.subscriptions ?? [];
   const subscriptionsRunning = (subscriptionsSnapshot?.runningSubscriptionIds.length ?? 0) > 0;
+  const subscriptionsGloballyPaused = subscriptions.length > 0
+    && subscriptions.every((subscription) => subscription.paused);
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const [treeFilter, setTreeFilter] = useState('');
   const contextMenu = useContextMenu();
   const [sidebarVisibilityMenuOpen, setSidebarVisibilityMenuOpen] = useState(false);
+  const [subscriptionsPauseBusy, setSubscriptionsPauseBusy] = useState(false);
+
+  const toggleAllSubscriptions = useCallback(() => {
+    if (subscriptionsPauseBusy) return;
+    const paused = !subscriptionsGloballyPaused;
+    setSubscriptionsPauseBusy(true);
+    void subscriptionsController.pauseAll(paused)
+      .then(refreshSubscriptionsWorkspace)
+      .catch((reason) => showErrorNotification({
+        title: paused ? 'Could not pause subscriptions' : 'Could not resume subscriptions',
+        message: reason instanceof Error ? reason.message : String(reason),
+      }))
+      .finally(() => setSubscriptionsPauseBusy(false));
+  }, [subscriptionsGloballyPaused, subscriptionsPauseBusy]);
 
   // ── Multi-select state ──
   const [sidebarSelection, setSidebarSelection] = useState<Set<string>>(new Set());
@@ -478,8 +498,7 @@ export function Sidebar() {
     icon?: string | null;
     color?: string | null;
     notes?: string | null;
-    predicate?: SmartFolderPredicate;
-    display_order?: number | null;
+    view?: ViewQuerySpec;
   }, editor: 'all' | 'details' | 'rules' = mode === 'create' ? 'all' : 'details') => {
     setSmartFolderModal({ open: true, mode, editor, initial });
   }, [setSmartFolderModal]);
@@ -632,7 +651,7 @@ export function Sidebar() {
         { label: 'This Level and Descendants A–Z', action: () => { void foldersController.sortTree(folderId, false, true); } },
         { label: 'This Level and Descendants Z–A', action: () => { void foldersController.sortTree(folderId, true, true); } },
       ] },
-      { label: 'Sort Contents by Name', icon: <IconSort size={14} />, action: () => { void foldersController.sortByName(folderId); } },
+      contentSortSubmenu((field) => { void foldersController.sortContents(folderId, field); }),
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren },
@@ -693,7 +712,7 @@ export function Sidebar() {
         action: () => openSmartFolderModal('create', {
           name: 'New Smart Folder',
           parent_id: sfIdNum,
-          predicate: { groups: [] },
+          view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } },
         }),
       },
       {
@@ -724,7 +743,6 @@ export function Sidebar() {
           const name = `${node.name} copy`;
           const duplicateId = await smartFoldersController.create({
             ...currentPayload,
-            smart_folder_id: 0,
             name,
           });
           folderRename.startRename(duplicateId, name);
@@ -743,8 +761,7 @@ export function Sidebar() {
         label: 'Sort Results by Name', icon: <IconSort size={14} />, action: () => {
           if (sfIdNum != null) void smartFoldersController.update(sfIdNum, {
             ...currentPayload,
-            sort_field: 'name',
-            sort_order: 'ascending',
+            view: { ...currentPayload.view, sort: { field: 'name', direction: 'ascending', random_seed: null } },
           });
         },
       } satisfies MenuEntry] : []),
@@ -962,7 +979,6 @@ export function Sidebar() {
             if (!node) return Promise.resolve();
             return smartFoldersController.create({
               ...buildSmartFolderPayloadFromNode(node),
-              smart_folder_id: 0,
               name: `${node.name} copy`,
             });
           }),
@@ -1001,10 +1017,9 @@ export function Sidebar() {
           });
         },
       });
-      entries.push({
-        label: 'Sort Contents by Name', icon: <IconSort size={14} />,
-        action: () => { void Promise.all(movingFolderIds.map((folderId) => foldersController.sortByName(folderId))); },
-      });
+      entries.push(contentSortSubmenu((field) => {
+        void Promise.all(movingFolderIds.map((folderId) => foldersController.sortContents(folderId, field)));
+      }));
     } else if (allSmart) {
       const movingIds = deduplicateParentChild(smartIds, smartFolderNodes);
       const availableIds = availableTreeMoveTargetIds(smartFolderNodes, movingIds);
@@ -1032,10 +1047,10 @@ export function Sidebar() {
             const node = smartFolderNodes.find((candidate) => candidate.id === id);
             const smartFolderId = parseSmartFolderIdNum(id);
             if (!node || smartFolderId == null) return Promise.resolve();
+            const payload = buildSmartFolderPayloadFromNode(node);
             return smartFoldersController.update(smartFolderId, {
-              ...buildSmartFolderPayloadFromNode(node),
-              sort_field: 'name',
-              sort_order: 'ascending',
+              ...payload,
+              view: { ...payload.view, sort: { field: 'name', direction: 'ascending', random_seed: null } },
             });
           }));
         },
@@ -1156,8 +1171,13 @@ export function Sidebar() {
               icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
               label={LABEL_OVERRIDES[node.id] ?? node.name}
               count={sidebarPreferences.showCounts ? node.count : undefined}
-              activityLabel={node.id === 'system:subscriptions' && subscriptionsRunning
-                ? 'Subscription running'
+              activity={node.id === 'system:subscriptions' && (subscriptionsRunning || subscriptionsGloballyPaused)
+                ? {
+                    state: subscriptionsGloballyPaused ? 'paused' : 'running',
+                    actionLabel: subscriptionsGloballyPaused ? 'Resume all subscriptions' : 'Pause all subscriptions',
+                    busy: subscriptionsPauseBusy,
+                    onClick: toggleAllSubscriptions,
+                  }
                 : undefined}
               active={activeNodeId === node.id}
               onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
@@ -1278,7 +1298,7 @@ export function Sidebar() {
             contextMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, [
               {
                 label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
-                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
+                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } }),
               },
               {
                 label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
@@ -1291,7 +1311,7 @@ export function Sidebar() {
             contextMenu.open(event, [
               {
                 label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
-                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
+                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } }),
               },
               {
                 label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
@@ -1490,16 +1510,12 @@ function parseSmartFolderIdNum(nodeId: string): number | null {
   return isNaN(n) ? null : n;
 }
 
-function parseSmartFolderPredicate(node: SidebarNodeDto): SmartFolderPredicate {
-  const predicate = (node.meta as Record<string, unknown> | null | undefined)?.predicate;
-  if (
-    predicate &&
-    typeof predicate === 'object' &&
-    Array.isArray((predicate as { groups?: unknown }).groups)
-  ) {
-    return predicate as SmartFolderPredicate;
+function smartFolderView(node: SidebarNodeDto): ViewQuerySpec {
+  const view = (node.meta as Record<string, unknown> | null | undefined)?.view;
+  if (view && typeof view === 'object' && 'filter' in view && 'sort' in view) {
+    return view as ViewQuerySpec;
   }
-  return { groups: [] };
+  return { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } };
 }
 
 function smartFolderInitialFromNode(node: SidebarNodeDto) {
@@ -1511,8 +1527,7 @@ function smartFolderInitialFromNode(node: SidebarNodeDto) {
     icon: node.icon ?? null,
     color: node.color ?? null,
     notes: typeof meta?.notes === 'string' ? meta.notes : null,
-    predicate: parseSmartFolderPredicate(node),
-    display_order: node.sort_order ?? null,
+    view: smartFolderView(node),
   };
 }
 
@@ -1527,16 +1542,12 @@ function buildSmartFolderPayloadFromNode(
       : fallback
   );
   return {
-    smart_folder_id: pick('smart_folder_id', initial.id ?? 0),
     name: pick('name', initial.name ?? node.name),
     parent_id: pick('parent_id', initial.parent_id ?? null),
     icon: pick('icon', initial.icon ?? null),
     color: pick('color', initial.color ?? null),
     notes: pick('notes', initial.notes ?? null),
-    predicate_json: pick('predicate_json', JSON.stringify(initial.predicate ?? { groups: [] })),
-    display_order: pick('display_order', initial.display_order ?? null),
-    created_at: pick('created_at', null),
-    updated_at: pick('updated_at', null),
+    view: pick('view', initial.view),
   };
 }
 

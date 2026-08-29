@@ -89,8 +89,10 @@ function fmtSize(bytes: number): string {
 
 function fmtDate(value: number | string | null | undefined): string | null {
   if (value == null || value === '') return null;
-  try { return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
-  catch { return String(value); }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const part = (next: number) => String(next).padStart(2, '0');
+  return `${date.getFullYear()}/${part(date.getMonth() + 1)}/${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`;
 }
 
 function fmtDuration(ms: number): string {
@@ -224,7 +226,7 @@ function Preview({
           }));
         })))}
       >
-        <div className={styles.previewFrame} style={{ background: backgrounds[0] ?? undefined }}>
+        <div className={styles.previewFrame}>
           <ThumbnailImage
             src={`media://localhost/thumb/${hash}.jpg`}
             alt=""
@@ -298,7 +300,7 @@ function StackedPreview({
     font: boolean;
     pose: StackPose;
     z: number;
-    opacity: number;
+    shade: number;
     entering: boolean;
     exiting: boolean;
   };
@@ -318,13 +320,13 @@ function StackedPreview({
       font: fontHashes.has(hash),
       pose,
       z: nextZ.current++,
-      opacity: previews.length <= 1 ? 1 : 0.3 + (index / (previews.length - 1)) * 0.7,
+      shade: previews.length <= 1 ? 0 : 0.7 * (1 - index / (previews.length - 1)),
       entering,
       exiting: false,
     };
   };
   const [displayed, setDisplayed] = useState<StackEntry[]>(() => (
-    previews.map((hash, index) => makeEntry(hash, index, false))
+    previews.map((hash, index) => makeEntry(hash, index, previews.length > 1 && index === previews.length - 1))
   ));
   const previewKey = previews.join('\u0000');
   const metadataKey = previews.map((hash, index) => (
@@ -335,15 +337,15 @@ function StackedPreview({
     setDisplayed((current) => {
       const byHash = new Map(current.map((entry) => [entry.hash, entry]));
       const next = previews.map((hash, index) => {
-        const opacity = previews.length <= 1 ? 1 : 0.3 + (index / (previews.length - 1)) * 0.7;
+        const shade = previews.length <= 1 ? 0 : 0.7 * (1 - index / (previews.length - 1));
         const existing = byHash.get(hash);
         if (!existing) return makeEntry(hash, index, true);
         return {
           ...existing,
           background: backgrounds[previewOffset + index] ?? null,
           font: fontHashes.has(hash),
-          opacity,
-          entering: false,
+          shade,
+          entering: existing.entering,
           exiting: false,
         };
       });
@@ -354,6 +356,14 @@ function StackedPreview({
       return [...next, ...exiting];
     });
   }, [previewKey, metadataKey]);
+
+  useEffect(() => {
+    if (!displayed.some((entry) => entry.entering)) return;
+    const timeout = window.setTimeout(() => {
+      setDisplayed((current) => current.map((entry) => entry.entering ? { ...entry, entering: false } : entry));
+    }, 270);
+    return () => window.clearTimeout(timeout);
+  }, [displayed]);
 
   useEffect(() => {
     if (!displayed.some((entry) => entry.exiting)) return;
@@ -388,12 +398,13 @@ function StackedPreview({
               className={`${styles.stackItem} ${motionClass} ${enterClass} ${entry.exiting ? styles.stackItemExit : ''}`}
               data-inspector-preview-hash={entry.hash}
               data-inspector-stack-position={entry.exiting ? 'exiting' : top ? 'top' : 'behind'}
+              data-inspector-stack-entering={entry.entering ? '' : undefined}
               style={{
-              zIndex: entry.exiting ? 0 : activeLayer.get(entry.hash),
-              opacity: entry.exiting ? 0 : entry.opacity,
+                zIndex: entry.exiting ? 0 : activeLayer.get(entry.hash),
+                opacity: entry.exiting ? 0 : 1,
               }}
             >
-              <div className={styles.previewFrame} style={{ background: entry.background ?? undefined }}>
+              <div className={styles.previewFrame}>
                 <ThumbnailImage
                   src={`media://localhost/thumb/${entry.hash}.jpg`}
                   alt=""
@@ -401,6 +412,7 @@ function StackedPreview({
                   draggable={false}
                   fallback={entry.font ? 'font' : 'broken'}
                 />
+                <div className={styles.stackShade} style={{ opacity: entry.shade }} />
                 <div className={styles.previewGlass} />
               </div>
             </div>
@@ -418,7 +430,11 @@ function useSelectionSummary() {
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
   const pinned = useAtomValue(inspectorPinnedAtom);
-  const [result, setResult] = useState<{ fingerprint: string; summary: SelectionSummary } | null>(null);
+  const [result, setResult] = useState<{
+    fingerprint: string;
+    summary: SelectionSummary;
+    tagRecords: CanonicalTagRecord[];
+  } | null>(null);
   const [loadingFingerprint, setLoadingFingerprint] = useState<string | null>(null);
   const [failedFingerprint, setFailedFingerprint] = useState<string | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
@@ -454,11 +470,16 @@ function useSelectionSummary() {
         selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
       });
     }, 250);
-    void entityMutations.getTargetSelectionSummary(target).then((s) => {
+    void entityMutations.getTargetSelectionSummary(target).then(async (s) => ({
+      summary: s,
+      tagRecords: s.shared_tags.length > 0
+        ? await tagsController.getById(s.shared_tags).catch(() => [])
+        : [],
+    })).then(({ summary: s, tagRecords }) => {
       if (!stale && !store.get(inspectorPinnedAtom)) {
         window.clearTimeout(timer);
         flushSync(() => {
-          setResult({ fingerprint: selectionFingerprint, summary: s });
+          setResult({ fingerprint: selectionFingerprint, summary: s, tagRecords });
           setLoadingFingerprint(null);
         });
         store.set(displayedInspectorTargetAtom, {
@@ -491,6 +512,7 @@ function useSelectionSummary() {
   return {
     target,
     summary,
+    tagRecords: result?.tagRecords ?? [],
     pending: needsSummary && summary == null,
     showLoading: loadingFingerprint === selectionFingerprint,
     failed: failedFingerprint === selectionFingerprint,
@@ -512,9 +534,9 @@ type CorePropertyLabel =
   | 'Size'
   | 'Type'
   | 'Duration'
-  | 'Date added'
-  | 'Date created'
-  | 'Date modified';
+  | 'Date Imported'
+  | 'Date Created'
+  | 'Date Modified';
 
 type CoreProperty = {
   label: CorePropertyLabel;
@@ -530,11 +552,11 @@ const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
   { label: 'Media', mono: true },
   { label: 'Dimensions', mono: true },
   { label: 'Size', mono: true },
-  { label: 'Type', mono: false },
+  { label: 'Type', mono: true },
   { label: 'Duration', mono: true },
-  { label: 'Date added', mono: true },
-  { label: 'Date created', mono: true },
-  { label: 'Date modified', mono: true },
+  { label: 'Date Imported', mono: true },
+  { label: 'Date Created', mono: true },
+  { label: 'Date Modified', mono: true },
 ];
 
 type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title' | 'loading' | 'showLoading'>>>;
@@ -646,14 +668,14 @@ export function InspectorSkeleton({
         </InspectorFieldGroup>
       )}
 
-      {showTags && (
-        <div data-inspector-section="tags">
-          <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} pending={summaryPending} showLoading={showSummaryLoading} />
-        </div>
-      )}
       {showFolders && (
         <div data-inspector-section="folders">
           <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} pending={summaryPending} showLoading={showSummaryLoading} />
+        </div>
+      )}
+      {showTags && (
+        <div data-inspector-section="tags">
+          <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} pending={summaryPending} showLoading={showSummaryLoading} />
         </div>
       )}
       <div data-inspector-section="properties">
@@ -744,12 +766,13 @@ export function Inspector() {
   const {
     target: selTarget,
     summary,
+    tagRecords: sharedTagRecords,
     pending: summaryPending,
     showLoading: showSummaryLoading,
     failed: summaryFailed,
   } = useSelectionSummary();
-  const singleTagRecords = useResolvedTags(entityData?.tag_ids ?? []);
-  const sharedTagRecords = useResolvedTags(summary?.shared_tags ?? []);
+  const fallbackSingleTagRecords = useResolvedTags(entityData?.resolved_tag_records ? [] : entityData?.tag_ids ?? []);
+  const singleTagRecords = entityData?.resolved_tag_records ?? fallbackSingleTagRecords;
 
   if (inspectorTarget.kind === 'none') return null;
 
@@ -790,9 +813,9 @@ export function Inspector() {
         Size: { value: fmtSize(d.root.total_size_bytes) },
         Type: { value: mimeTypes.length === 1 ? fmtExt(mimeTypes[0]) : 'Mixed', title: mimeTypes.join(', ') },
         Duration: { value: primary?.facts.duration_ms != null && primary.facts.duration_ms > 0 ? fmtDuration(primary.facts.duration_ms) : '—' },
-        'Date added': { value: fmtDate(d.root.imported_at_ms) ?? '—' },
-        'Date created': { value: fmtDate(d.root.captured_at_ms) ?? '—' },
-        'Date modified': { value: fmtDate(d.root.modified_at_ms) ?? '—' },
+        'Date Imported': { value: fmtDate(d.root.imported_at_ms) ?? '—' },
+        'Date Created': { value: fmtDate(d.root.captured_at_ms) ?? '—' },
+        'Date Modified': { value: fmtDate(d.root.modified_at_ms) ?? '—' },
       })}
       tags={tags}
       onRemoveTag={(raw) => { void entityMutations.removeItemTags(rootId, [raw]); }}
@@ -1124,7 +1147,6 @@ function buildSmartFolderPayload(
     smart_folder_id: sf.smartFolderId!, name: overrides.name ?? scopeVM.node.name,
     parent_id: sf.parentId ?? null, icon: scopeVM.node.icon ?? null,
     color: scopeVM.node.color ?? null, notes: overrides.notes !== undefined ? overrides.notes : sf.notes ?? null,
-    predicate_json: JSON.stringify(sf.predicate ?? { groups: [] }),
-    display_order: scopeVM.node.sort_order ?? null, created_at: null, updated_at: null,
+    view: sf.view as import('../../shared/types/canonical').ViewQuerySpec,
   };
 }

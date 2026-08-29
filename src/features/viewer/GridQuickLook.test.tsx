@@ -12,12 +12,15 @@ vi.mock('../groups/GroupQuickLook', () => ({
 }));
 
 vi.mock('./QuickLook', () => ({
-  QuickLookContent: () => <div data-testid="media-content" />,
+  QuickLookContent: ({ currentIndex }: { currentIndex: number }) => (
+    <div data-testid="media-content" data-item-index={currentIndex} />
+  ),
 }));
 
 const items = [
-  { item_id: 7, kind: 'collection', display_file_hash: 'group', display_mime_type: 'application/x-collection' },
-  { item_id: 8, kind: 'media', display_file_hash: 'media', display_mime_type: 'image/jpeg' },
+  { root_id: 7, kind: 'collection', content_hash: 'group', mime: 'application/x-collection' },
+  { root_id: 8, kind: 'media', content_hash: 'media', mime: 'image/jpeg' },
+  { root_id: 9, kind: 'media', content_hash: 'media-next', mime: 'image/png' },
 ] as never;
 
 describe('GridQuickLook', () => {
@@ -52,5 +55,31 @@ describe('GridQuickLook', () => {
     await act(async () => { resolveDecode?.(); });
     await waitFor(() => expect(screen.getByTestId('media-content')).toBeInTheDocument());
     expect(screen.queryByTestId('group-content')).not.toBeInTheDocument();
+  });
+
+  it('keeps the previous image mounted until the next image thumbnail is decoded', async () => {
+    let resolveDecode: (() => void) | null = null;
+    class ControlledImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      decode = () => new Promise<void>((resolve) => { resolveDecode = resolve; });
+      set src(_value: string) { this.onload?.(); }
+    }
+    vi.stubGlobal('Image', ControlledImage);
+
+    const props = {
+      items,
+      totalCount: 3,
+      onNavigate: vi.fn(),
+      onClose: vi.fn(),
+    };
+    const { rerender } = render(<GridQuickLook {...props} currentIndex={1} />);
+
+    expect(screen.getByTestId('media-content')).toHaveAttribute('data-item-index', '1');
+    rerender(<GridQuickLook {...props} currentIndex={2} />);
+    expect(screen.getByTestId('media-content')).toHaveAttribute('data-item-index', '1');
+
+    await act(async () => { resolveDecode?.(); });
+    await waitFor(() => expect(screen.getByTestId('media-content')).toHaveAttribute('data-item-index', '2'));
   });
 });

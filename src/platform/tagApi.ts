@@ -48,6 +48,10 @@ export function deleteUnusedTags(): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('tags.delete_unused', {});
 }
 
+export function createTagGroup(name: string): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('tags.group.create', { name });
+}
+
 export function renameTagGroup(namespaceId: number, name: string): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('tags.group.rename', { namespace_id: namespaceId, name });
 }

@@ -42,8 +42,7 @@ export interface SmartFolderModalState {
     icon?: string | null;
     color?: string | null;
     notes?: string | null;
-    predicate?: import('../shared/types/canonical').SmartFolderPredicate;
-    display_order?: number | null;
+    view?: import('../shared/types/canonical').ViewQuerySpec;
   };
 }
 
@@ -159,6 +158,9 @@ export interface GroupOrganizerModalState {
   target: EntityTarget | null;
   coverRootId: number | null;
   groups: GroupCandidate[];
+  notes: string;
+  notesMaximumBytes: number;
+  onBeforeSubmit?: () => void;
   onComplete?: (groupId: number) => void;
 }
 
@@ -167,4 +169,6 @@ export const groupOrganizerModalAtom = atom<GroupOrganizerModalState>({
   target: null,
   coverRootId: null,
   groups: [],
+  notes: '',
+  notesMaximumBytes: 65_536,
 });

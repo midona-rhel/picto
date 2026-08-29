@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import { GroupQuickLookContent } from '../groups/GroupQuickLook';
 import { detailRendererKind } from './document/detailRendererKind';
@@ -18,38 +18,55 @@ interface GridQuickLookProps {
 export function GridQuickLook(props: GridQuickLookProps) {
   const [displayedIndex, setDisplayedIndex] = useState(props.currentIndex);
   const [decodedThumbnailItemId, setDecodedThumbnailItemId] = useState<number | null>(null);
+  const [decodedThumbnailUrl, setDecodedThumbnailUrl] = useState<string | null>(null);
   const currentItem = props.items[displayedIndex] ?? null;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
 
   useEffect(() => {
     if (props.currentIndex === displayedIndex) return;
-    const displayedItem = props.items[displayedIndex] ?? null;
     const requestedItem = props.items[props.currentIndex] ?? null;
     if (!requestedItem) return;
 
-    const isGroupToImage = displayedItem?.kind === 'collection'
-      && requestedItem.kind !== 'collection'
+    const isRequestedImage = requestedItem.kind !== 'collection'
       && detailRendererKind(requestedItem.mime) === 'image';
-    if (!isGroupToImage) {
+    if (!isRequestedImage) {
       setDecodedThumbnailItemId(null);
+      setDecodedThumbnailUrl(null);
       setDisplayedIndex(props.currentIndex);
       return;
     }
 
     let cancelled = false;
     const image = new Image();
-    const commit = () => {
+    const commit = (url: string) => {
       if (cancelled) return;
       setDecodedThumbnailItemId(requestedItem.root_id);
+      setDecodedThumbnailUrl(url);
       setDisplayedIndex(props.currentIndex);
     };
+    const thumbnailUrl = mediaThumbnailUrl(requestedItem.content_hash);
     image.onload = () => {
-      if (typeof image.decode === 'function') image.decode().then(commit).catch(commit);
-      else commit();
+      if (typeof image.decode === 'function') {
+        image.decode().then(() => commit(thumbnailUrl)).catch(() => commit(thumbnailUrl));
+      } else {
+        commit(thumbnailUrl);
+      }
     };
-    image.onerror = commit;
-    image.src = mediaThumbnailUrl(requestedItem.content_hash);
+    image.onerror = () => {
+      const originalUrl = mediaFileUrl(requestedItem.content_hash, requestedItem.mime);
+      const original = new Image();
+      original.onload = () => {
+        if (typeof original.decode === 'function') {
+          original.decode().then(() => commit(originalUrl)).catch(() => commit(originalUrl));
+        } else {
+          commit(originalUrl);
+        }
+      };
+      original.onerror = () => commit(thumbnailUrl);
+      original.src = originalUrl;
+    };
+    image.src = thumbnailUrl;
     return () => { cancelled = true; };
   }, [displayedIndex, props.currentIndex, props.items]);
 
@@ -79,6 +96,9 @@ export function GridQuickLook(props: GridQuickLookProps) {
           {...props}
           currentIndex={displayedIndex}
           thumbnailReady={decodedThumbnailItemId === currentItem.root_id}
+          thumbnailUrlOverride={decodedThumbnailItemId === currentItem.root_id
+            ? decodedThumbnailUrl ?? undefined
+            : undefined}
           onReady={markMediaReady}
         />
       )}

@@ -51,6 +51,7 @@ import {
 } from '../../state/selection';
 import {
   displayedGridSnapshotAtom,
+  displayedScopeLabelAtom,
   displayedInspectorTargetAtom,
   displayedInspectorItemDetailsAtom,
   inspectorLoadingAtom,
@@ -193,6 +194,7 @@ export function GridScreen({
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
   const [renamingSubfolderId, setRenamingSubfolderId] = useState<string | null>(null);
   const [groupInitialMode, setGroupInitialMode] = useState<'reader' | 'editor'>('reader');
+  const collectionBreadcrumbParent = useAtomValue(displayedScopeLabelAtom) || 'Collections';
   const subfolderGridRef = useRef<SubfolderGridHandle>(null);
   const quickAccessIds = useQuickAccess();
 
@@ -233,6 +235,10 @@ export function GridScreen({
       const { type, paths } = event.payload;
       // Completely ignore all drag events while any app-originated drag is active
       if (isNativeDragPending() || isDragActiveCheck() || isInternalDragOrigin()) return;
+      if (gridScopeRef2.current.kind === 'media_matches') {
+        setFileDragOver(false);
+        return;
+      }
       if (viewerOpenRef.current) {
         setFileDragOver(false);
         return;
@@ -493,17 +499,26 @@ export function GridScreen({
 
   const organizeSelection = useCallback(async (target: EntityTarget, coverRootId: number) => {
     try {
-      const summary = await entityMutations.getTargetSelectionSummary(target);
+      const [summary, noteDraft] = await Promise.all([
+        entityMutations.getTargetSelectionSummary(target),
+        entityMutations.getTargetCollectionNoteDraft(target),
+      ]);
       const groups = summary.collection_candidates;
-      if (groups.length === 1) {
-        await organizeIntoGroup({
+      if (groups.length === 1 && noteDraft.source_count === 0) {
+        clearSelection();
+        const result = await organizeIntoGroup({
           target,
           cover_root_id: coverRootId,
           winning_collection_id: groups[0].collection_id,
           name: null,
+          notes: null,
+        });
+        dispatchSelection({
+          type: 'replace_items',
+          itemIds: new Set([result.collection_id]),
+          anchor: result.collection_id,
         });
         await announceUndoableMutation('collections.organize');
-        clearSelection();
         return;
       }
       setGroupOrganizerModal({
@@ -511,7 +526,14 @@ export function GridScreen({
         target,
         coverRootId,
         groups,
-        onComplete: () => clearSelection(),
+        notes: noteDraft.notes,
+        notesMaximumBytes: noteDraft.maximum_bytes,
+        onBeforeSubmit: clearSelection,
+        onComplete: (groupId) => dispatchSelection({
+          type: 'replace_items',
+          itemIds: new Set([groupId]),
+          anchor: groupId,
+        }),
       });
     } catch (reason) {
       showErrorNotification({
@@ -519,7 +541,7 @@ export function GridScreen({
         message: reason instanceof Error ? reason.message : String(reason),
       });
     }
-  }, [clearSelection, setGroupOrganizerModal]);
+  }, [clearSelection, dispatchSelection, setGroupOrganizerModal]);
 
   useShortcutScope((e) => {
     const defs = {
@@ -574,7 +596,8 @@ export function GridScreen({
       if (matchesShortcutDef(e, defs.pasteImport)
         && scope.kind !== 'trash'
         && scope.kind !== 'smart_folder'
-        && scope.kind !== 'recently_viewed') {
+        && scope.kind !== 'recently_viewed'
+        && scope.kind !== 'media_matches') {
         e.preventDefault();
         void pasteImport(scope).catch((reason) => showErrorNotification({
           title: 'Could not paste import',
@@ -830,7 +853,8 @@ export function GridScreen({
   const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
     const canImport = gridScope.kind !== 'trash'
       && gridScope.kind !== 'smart_folder'
-      && gridScope.kind !== 'recently_viewed';
+      && gridScope.kind !== 'recently_viewed'
+      && gridScope.kind !== 'media_matches';
     const clipboardImportAvailable = canImport ? await hasClipboardImport().catch(() => false) : false;
     const runImport = (operation: () => Promise<void>, title: string) => {
       void operation().catch((reason) => showErrorNotification({
@@ -858,7 +882,7 @@ export function GridScreen({
       onNewSmartFolder: () => setSmartFolderModal({
         open: true,
         mode: 'create',
-        initial: { name: 'New Smart Folder', predicate: { groups: [] } },
+        initial: { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } },
       }),
       onImportFiles: canImport
         ? () => runImport(() => chooseAndImportFiles(gridScope), 'Could not import files')
@@ -868,6 +892,9 @@ export function GridScreen({
         : undefined,
       onPasteImport: clipboardImportAvailable
         ? () => runImport(() => pasteImport(gridScope), 'Could not paste import')
+        : undefined,
+      onSortContents: gridScope.kind === 'folder'
+        ? (field) => { void foldersController.sortContents(gridScope.folder_id, field); }
         : undefined,
     });
     contextMenu.openAt(pos, entries);
@@ -908,6 +935,7 @@ export function GridScreen({
         : scopeKey === 'uncategorized' ? 'No uncategorized images'
         : scopeKey === 'untagged' ? 'No untagged images'
         : scopeKey === 'smart_folder' ? 'No matching images'
+        : scopeKey === 'media_matches' ? 'No items use this media'
         : scopeKey === 'folder' ? 'This folder is empty'
         : 'No images';
       const emptyDesc = hasSearch ? 'Try different search terms or clear filters'
@@ -915,9 +943,14 @@ export function GridScreen({
         : scopeKey === 'uncategorized' ? 'All your images are already assigned to folders'
         : scopeKey === 'untagged' ? 'All your images have been tagged'
         : scopeKey === 'smart_folder' ? 'Try adjusting the rules for this smart folder'
+        : scopeKey === 'media_matches' ? 'This media is no longer used by another library item'
         : scopeKey === 'folder' ? 'Drag and drop files here, or import them below'
         : 'Drag and drop files here, or click the button below to import';
-      const showImport = !hasSearch && scopeKey !== 'inbox' && scopeKey !== 'untagged' && scopeKey !== 'smart_folder';
+      const showImport = !hasSearch
+        && scopeKey !== 'inbox'
+        && scopeKey !== 'untagged'
+        && scopeKey !== 'smart_folder'
+        && scopeKey !== 'media_matches';
 
       return (
         <div
@@ -1032,8 +1065,8 @@ export function GridScreen({
               onSetAutoTags: () => {
                 void openFolderAutoTagsEditor(selectedFolderIds);
               },
-              onSortContents: () => {
-                void Promise.all(selectedFolderIds.map((id) => foldersController.sortByName(id)));
+              onSortContents: (field) => {
+                void Promise.all(selectedFolderIds.map((id) => foldersController.sortContents(id, field)));
               },
               onDelete: () => {
                 store.set(confirmModalAtom, {
@@ -1112,7 +1145,7 @@ export function GridScreen({
             onSortTree: (descending, recursive) => {
               void foldersController.sortTree(folderId, descending, recursive);
             },
-            onSortContents: () => { void foldersController.sortByName(folderId); },
+            onSortContents: (field) => { void foldersController.sortContents(folderId, field); },
             iconPickerEntry: {
               custom: true,
               key: 'folder-icon',
@@ -1332,6 +1365,7 @@ export function GridScreen({
             aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
             singleHash: singleItem?.content_hash ?? null,
+            singleItemId: singleItem?.root_id ?? null,
             singleKind: singleItem?.kind ?? null,
             containsGroup,
             scopeKind,
@@ -1366,6 +1400,7 @@ export function GridScreen({
             onCopyName: (name) => { filesController.copyText(name); },
             singleName: singleItem?.name ?? null,
             singleMime: singleItem?.mime ?? null,
+            onFindMediaMatches: (itemId) => navigateToNode(`media-matches:${itemId}`),
             onCopyLink: (link) => filesController.copyText(link),
             onRename: singleItem ? () => {
               const idx = items.findIndex((i) => i.root_id === singleItem.root_id);
@@ -1541,6 +1576,7 @@ export function GridScreen({
           key={`${viewerItem.root_id}:${groupInitialMode}`}
           groupId={viewerItem.root_id}
           initialMode={groupInitialMode}
+          breadcrumbParent={collectionBreadcrumbParent}
           rootCurrentIndex={viewerIndex}
           rootTotal={totalCount ?? items.length}
           onNavigateRoot={navigateRootDetail}

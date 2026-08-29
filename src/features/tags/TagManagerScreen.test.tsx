@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   merge: vi.fn(),
   delete: vi.fn(),
   deleteUnused: vi.fn(),
+  createGroup: vi.fn(),
   renameGroup: vi.fn(),
   deleteGroup: vi.fn(),
   registerInvalidation: vi.fn(),
@@ -50,7 +51,7 @@ const zeroTag: CanonicalTagRecord = {
   namespace: 'character',
   subname: 'unused',
   active_count: 0,
-  assignment_count: 0,
+  assignment_count: 2,
 };
 const nextTag: CanonicalTagRecord = {
   tag_id: 3,
@@ -83,9 +84,10 @@ beforeEach(() => {
   mocks.merge.mockResolvedValue(undefined);
   mocks.delete.mockResolvedValue(undefined);
   mocks.deleteUnused.mockResolvedValue(undefined);
+  mocks.createGroup.mockResolvedValue(undefined);
   mocks.renameGroup.mockResolvedValue(undefined);
   mocks.deleteGroup.mockResolvedValue(undefined);
-  mocks.getSettings.mockResolvedValue({ showTagGroups: true, starredTags: [] });
+  mocks.getSettings.mockResolvedValue({ showTagGroups: true, starredTags: [], tagGroupColors: {} });
   mocks.patchSettings.mockResolvedValue({ revision: 1, resources: ['settings'], item_ids: [] });
   mocks.registerInvalidation.mockImplementation((_resource: string, handler: () => void) => {
     invalidateTags = handler;
@@ -147,8 +149,9 @@ describe('TagManagerScreen', () => {
   it('browses zero-count tags and follows the opaque cursor', async () => {
     await renderScreen();
 
-    expect(await screen.findByText('character:unused')).toBeInTheDocument();
-    expect(await screen.findByText('creator:bob')).toBeInTheDocument();
+    expect(await screen.findByText('unused')).toBeInTheDocument();
+    expect(await screen.findByText('bob')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'unused (2)' })).toBeInTheDocument();
     expect(mocks.getPaginated).toHaveBeenCalledWith({
       namespace: null,
       search: null,
@@ -158,8 +161,8 @@ describe('TagManagerScreen', () => {
     expect(screen.queryByRole('button', { name: 'Load more tags' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Refresh tags' })).not.toBeInTheDocument();
     const groupRail = screen.getByRole('navigation', { name: 'Tag groups' });
-    expect(groupRail).toHaveTextContent('Groups (2)');
-    expect(within(groupRail).queryByRole('button', { name: /tag groups/i })).not.toBeInTheDocument();
+    expect(groupRail).toHaveTextContent('Groups(2)');
+    expect(within(groupRail).getByRole('button', { name: 'Create tag group' })).toBeInTheDocument();
   });
 
   it('resets the page and closes the editor when search or namespace changes', async () => {
@@ -198,7 +201,7 @@ describe('TagManagerScreen', () => {
     await renderScreen();
 
     expect(screen.queryByRole('button', { name: 'general 2' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'All tags 3' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All 3' })).toBeInTheDocument();
     await waitFor(() => expect(mocks.getPaginated).toHaveBeenCalledWith({
       namespace: null,
       search: null,
@@ -217,11 +220,11 @@ describe('TagManagerScreen', () => {
     });
     await renderScreen();
 
-    await screen.findByText('character:unused');
+    await screen.findByText('unused');
     await waitFor(() => expect(resolveStale).toBeTypeOf('function'));
     await user.type(screen.getByRole('textbox', { name: 'Search tags' }), 'bob');
     await settle();
-    await screen.findByText('creator:bob');
+    await screen.findByText('bob');
 
     await act(async () => {
       resolveStale?.({ tags: [staleTag], next_cursor: null, revision: 1 });
@@ -293,7 +296,7 @@ describe('TagManagerScreen', () => {
 
   it('uses the shared tag context menu for every tag row', async () => {
     await renderScreen();
-    const tag = await screen.findByRole('button', { name: /character:alice/ });
+    const tag = await screen.findByRole('button', { name: /^alice/ });
 
     fireEvent.contextMenu(tag, { clientX: 100, clientY: 100 });
 
@@ -312,7 +315,7 @@ describe('TagManagerScreen', () => {
 
   it('moves and ungroups tags through the canonical rename operation', async () => {
     await renderScreen();
-    const tag = await screen.findByRole('button', { name: /character:alice/ });
+    const tag = await screen.findByRole('button', { name: /^alice/ });
 
     fireEvent.contextMenu(tag, { clientX: 100, clientY: 100 });
     fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Move to Group…' }));
@@ -332,6 +335,7 @@ describe('TagManagerScreen', () => {
     fireEvent.contextMenu(group, { clientX: 100, clientY: 100 });
     expect(screen.getByRole('menuitem', { name: 'Show Tags in Group' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Rename Group…' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Default' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Delete Group' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Delete Tag$/ })).not.toBeInTheDocument();
 
@@ -343,6 +347,31 @@ describe('TagManagerScreen', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Rename' }));
 
     await waitFor(() => expect(mocks.renameGroup).toHaveBeenCalledWith(1, 'cast_members'));
+  });
+
+  it('creates an empty group from the groups header', async () => {
+    const user = setupUser();
+    await renderScreen();
+
+    await user.click(screen.getByRole('button', { name: 'Create tag group' }));
+    const dialog = screen.getByRole('dialog', { name: 'Create tag group' });
+    await user.type(within(dialog).getByRole('textbox', { name: 'Tag group name' }), 'Cast Members');
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(mocks.createGroup).toHaveBeenCalledWith('cast_members'));
+  });
+
+  it('styles a group through the shared folder color picker', async () => {
+    await renderScreen();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'character 2' }), {
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Red' }));
+
+    await waitFor(() => expect(mocks.patchSettings).toHaveBeenCalledWith({
+      tagGroupColors: { character: '#FA5252' },
+    }));
   });
 
   it('deletes a group without deleting its tags', async () => {
@@ -367,9 +396,10 @@ describe('TagManagerScreen', () => {
     const user = setupUser();
     await renderScreen();
 
-    await user.click(await screen.findByRole('button', { name: 'Delete unused tags 1' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete Unused 1' }));
     const dialog = screen.getByRole('dialog', { name: 'Delete unused tags' });
-    expect(dialog).toHaveTextContent('1 tag with no media assignments');
+    expect(dialog).toHaveTextContent('1 tag with no assignments anywhere in the library');
+    expect(dialog).toHaveTextContent('Tags used by Inbox or Trash items are kept');
     await user.click(within(dialog).getByRole('button', { name: 'Delete unused tags' }));
 
     await waitFor(() => expect(mocks.deleteUnused).toHaveBeenCalledTimes(1));

@@ -47,13 +47,15 @@ function fmtSize(bytes: number): string {
 }
 
 export function AiTaggingPanel({
+  initialStatus = null,
   settings,
   onSettingsChange,
 }: {
+  initialStatus?: AiRuntimeStatus | null;
   settings: AppSettings | null;
   onSettingsChange: (patch: Partial<AppSettings>) => void;
 }) {
-  const [status, setStatus] = useState<AiRuntimeStatus | null>(null);
+  const [status, setStatus] = useState<AiRuntimeStatus | null>(initialStatus);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
   const [optimizing, setOptimizing] = useState<Set<string>>(new Set());
@@ -100,8 +102,12 @@ export function AiTaggingPanel({
   }, [refresh]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (!initialStatus) refresh();
+  }, [initialStatus, refresh]);
+
+  useEffect(() => {
+    if (initialStatus) setStatus(initialStatus);
+  }, [initialStatus]);
 
   useEffect(() => {
     if (downloading.size === 0 && optimizing.size === 0) return;
@@ -115,8 +121,8 @@ export function AiTaggingPanel({
 
   if (!status || !settings) {
     return (
-      <div className={settingsStyles.panelContent}>
-        {error ? <div className={styles.error}>{error}</div> : <div className={settingsStyles.settingPlaceholder}>Loading…</div>}
+      <div className={settingsStyles.panelContent} aria-busy={!error || undefined}>
+        {error ? <div className={styles.error}>{error}</div> : null}
       </div>
     );
   }

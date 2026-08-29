@@ -222,6 +222,16 @@
   pointer-events: none;
 }
 
+.stackShade {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: var(--radius-md);
+  background: var(--inspector-surface, var(--color-rail-surface));
+  pointer-events: none;
+  transition: opacity 200ms var(--ease-default);
+}
+
 .stackItemBase {
   transform: rotate(0deg);
 }
@@ -368,7 +378,6 @@
   max-height: 200px;
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--color-bg-app);
 }
 
 .previewImage {
@@ -385,7 +394,8 @@
   position: absolute;
   inset: 0;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-contrast-20);
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.1), inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  z-index: 2;
   pointer-events: none;
 }
 

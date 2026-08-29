@@ -5,10 +5,11 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 export interface TagPreferences {
   showTagGroups: boolean;
   starredTags: string[];
+  tagGroupColors: Record<string, string>;
 }
 
 const listeners = new Set<() => void>();
-let snapshot: TagPreferences = { showTagGroups: true, starredTags: [] };
+let snapshot: TagPreferences = { showTagGroups: true, starredTags: [], tagGroupColors: {} };
 let loadPromise: Promise<void> | null = null;
 
 function emit(): void {
@@ -26,6 +27,7 @@ function ensureLoaded(): Promise<void> {
       .then((settings) => setSnapshot({
         showTagGroups: settings.showTagGroups,
         starredTags: settings.starredTags,
+        tagGroupColors: settings.tagGroupColors,
       }))
       .catch((reason: unknown) => {
         loadPromise = null;
@@ -80,4 +82,28 @@ export function replaceStarredTag(previousTag: string, nextTag: string): Promise
     .filter((item) => item !== previousTag)
     .concat(nextTag))].sort();
   return persist({ ...snapshot, starredTags }, { starredTags });
+}
+
+export function setTagGroupColor(namespace: string, color: string | null): Promise<void> {
+  const tagGroupColors = { ...snapshot.tagGroupColors };
+  if (color) tagGroupColors[namespace] = color;
+  else delete tagGroupColors[namespace];
+  return persist({ ...snapshot, tagGroupColors }, { tagGroupColors });
+}
+
+export function replaceTagGroupColor(previousNamespace: string, nextNamespace: string): Promise<void> {
+  if (!(previousNamespace in snapshot.tagGroupColors) || previousNamespace === nextNamespace) {
+    return Promise.resolve();
+  }
+  const tagGroupColors = { ...snapshot.tagGroupColors };
+  tagGroupColors[nextNamespace] = tagGroupColors[previousNamespace];
+  delete tagGroupColors[previousNamespace];
+  return persist({ ...snapshot, tagGroupColors }, { tagGroupColors });
+}
+
+export function removeTagGroupColor(namespace: string): Promise<void> {
+  if (!(namespace in snapshot.tagGroupColors)) return Promise.resolve();
+  const tagGroupColors = { ...snapshot.tagGroupColors };
+  delete tagGroupColors[namespace];
+  return persist({ ...snapshot, tagGroupColors }, { tagGroupColors });
 }

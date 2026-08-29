@@ -187,6 +187,8 @@ export function reorderFolderMembers(
   });
 }
 
-export function sortFolderItemsByName(folderId: number): Promise<FolderMutationReceipt> {
-  return invoke<FolderMutationReceipt>('folders.items.sort_name', { folder_id: folderId });
+export type ContentSortField = 'name' | 'imported_at' | 'created_at' | 'modified_at' | 'size' | 'notes';
+
+export function sortFolderItems(folderId: number, field: ContentSortField): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.items.sort', { folder_id: folderId, field });
 }

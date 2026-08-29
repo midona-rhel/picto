@@ -42,7 +42,7 @@ describe('inspector invalidation', () => {
   });
 
   it('reloads the displayed item after a library invalidation', () => {
-    store.set(displayedInspectorItemDetailsAtom, { item_id: 17 } as never);
+    store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
     const stop = startInspectorSettle();
 
     callbacks.get('library')?.();
@@ -52,7 +52,7 @@ describe('inspector invalidation', () => {
   });
 
   it('does not reload an item while its permanent deletion is settling', () => {
-    store.set(displayedInspectorItemDetailsAtom, { item_id: 17 } as never);
+    store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
     store.set(permanentDeletesInFlightAtom, 1);
     const stop = startInspectorSettle();
 
@@ -111,7 +111,7 @@ describe('inspector invalidation', () => {
       anchor: { kind: 'item', id: 17 },
     });
     store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 17 });
-    store.set(displayedInspectorItemDetailsAtom, { item_id: 17 } as never);
+    store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
     const stop = startInspectorSettle();
 
     store.set(gridSelectionAtom, emptyGridSelection());

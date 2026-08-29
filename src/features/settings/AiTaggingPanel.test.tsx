@@ -49,7 +49,7 @@ const settings = {
   subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
   subscriptionInboxItemLimit: 1000,
   subscriptionDefaultGroupPosts: true,
-  showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
+  showTagGroups: true, starredTags: [], tagGroupColors: {}, sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false, aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
@@ -91,6 +91,15 @@ beforeEach(() => {
 });
 
 describe('AiTaggingPanel', () => {
+  it('renders a preloaded runtime snapshot on the first frame', () => {
+    render(<AiTaggingPanel initialStatus={status(false)} settings={settings} onSettingsChange={vi.fn()} />);
+
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.getByText('WD14 SWN')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(mocks.status).not.toHaveBeenCalled();
+  });
+
   it('shows application-wide AI model storage', async () => {
     mocks.status.mockResolvedValue(status(true));
     await renderPanel();

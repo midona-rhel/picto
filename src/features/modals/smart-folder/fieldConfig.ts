@@ -92,6 +92,12 @@ export const FIELD_DEFS: FieldDef[] = [
     valueType: 'date',
   },
   {
+    key: 'date_modified',
+    label: 'Date Modified',
+    operators: DATE_OPERATORS,
+    valueType: 'date',
+  },
+  {
     key: 'name',
     label: 'Name',
     operators: [{ value: 'contains', label: 'contains' }],
@@ -183,8 +189,17 @@ export function isListField(fieldKey: string): boolean {
 
 /** Filesize unit options for the filesize value type. */
 export const FILESIZE_UNITS = [
-  { value: 'B', label: 'B' },
-  { value: 'KB', label: 'KB' },
-  { value: 'MB', label: 'MB' },
-  { value: 'GB', label: 'GB' },
+  { value: 'B', label: 'Bytes' },
+  { value: 'KB', label: 'Kilobytes' },
+  { value: 'MB', label: 'Megabytes' },
+  { value: 'GB', label: 'Gigabytes' },
+];
+
+export const RATING_OPTIONS = [
+  { value: '0', label: 'Unrated' },
+  { value: '1', label: '★☆☆☆☆' },
+  { value: '2', label: '★★☆☆☆' },
+  { value: '3', label: '★★★☆☆' },
+  { value: '4', label: '★★★★☆' },
+  { value: '5', label: '★★★★★' },
 ];

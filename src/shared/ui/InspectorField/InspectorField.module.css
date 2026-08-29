@@ -1,184 +1,166 @@
-/* InspectorField — legacy-matched field row with icon, separator, content, edit toggle. */
-
-/* ── Base field row ── */
-
 .fieldWrap {
   position: relative;
-  margin-bottom: 8px;
-}
-
-.fieldRow {
-  display: flex;
-  align-items: center;
-  min-height: var(--control-height-lg);
-  background: var(--inspector-field-surface, rgba(0, 0, 0, 0.20));
-  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
-  border-radius: var(--radius-md);
-  box-sizing: border-box;
   width: 100%;
+  height: 32px;
+  margin-bottom: 8px;
+  font-family: var(--inspector-font-family, var(--font-family-ui));
 }
 
-/* Separator between content and action button */
-.fieldSep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--inspector-separator, var(--color-border-secondary));
-  flex-shrink: 0;
-}
-
-/* Action button — right side of field (three-dot / link icon) */
-.fieldActionBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-height-lg);
-  min-width: var(--control-height-lg);
-  align-self: stretch;
-  flex-shrink: 0;
-  border-radius: 0 5px 5px 0;
-  border: none;
-  background: none;
+.fieldControl,
+.sourceControl {
+  width: 100%;
+  min-height: 32px;
+  max-height: 240px;
+  box-sizing: border-box;
+  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
+  border-radius: 6px;
+  background: var(--inspector-field-surface, rgba(0, 0, 0, 0.20));
   color: var(--inspector-text-primary, var(--color-text-primary));
-  opacity: 0.5;
-  cursor: pointer;
-  padding: 0;
-  transition: opacity 150ms var(--ease-default),
-              background 150ms var(--ease-default);
+  font: var(--font-weight-regular) 13px/20px var(--inspector-font-family, var(--font-family-ui));
+  transition: border-color 200ms var(--ease-default), background 200ms var(--ease-default);
 }
 
-.fieldActionBtn:hover {
-  opacity: 1;
-  background: var(--inspector-field-surface, var(--color-surface-hover));
-}
-
-/* Content area — view mode */
-.fieldContent {
-  flex: 1;
-  min-width: 0;
-  padding: 0 10px;
-  font-family: var(--inspector-font-family, var(--font-family));
-  font-size: var(--font-size-md);
-  line-height: 30px;
-  color: var(--inspector-text-primary, var(--color-text-primary));
+.fieldControl {
+  position: relative;
+  z-index: 1;
+  display: block;
+  height: 32px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 6px 10px;
+  text-align: left;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
   user-select: text;
-  cursor: default;
-}
-
-.fieldPlaceholder {
-  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
   cursor: text;
 }
 
-/* ── Hover / edit popover ── */
-
-@keyframes popoverFadeIn {
-  from { opacity: 0; transform: translateY(-2px); }
-  to   { opacity: 1; transform: translateY(0); }
+.fieldControl:empty::before {
+  content: attr(data-placeholder);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
+  pointer-events: none;
 }
 
-/* Overlays the field row — same top/left/right, extends downward */
-.popover {
+.fieldControl:focus,
+.sourceControl:focus-within {
+  outline: none;
+  border-color: var(--inspector-field-focus, var(--color-border-focus));
+  background: var(--inspector-field-surface-focus, var(--color-surface-hover));
+}
+
+.fieldControlExpanded {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  z-index: var(--layer-overlay);
-  min-height: 0;
-  max-height: 132px;
-  overflow-y: auto;
-  scrollbar-width: none;
-  background: var(--inspector-field-surface, var(--color-surface-hover));
-  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-panel);
-  font-family: var(--inspector-font-family, var(--font-family));
-  font-size: var(--font-size-md);
-  line-height: 1.5;
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  animation: popoverFadeIn 120ms ease-out;
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
-  user-select: text;
-  cursor: text;
-}
-
-.popover::-webkit-scrollbar {
-  display: none;
-}
-
-.popover:focus-within {
-  border-color: var(--inspector-field-focus, var(--color-border-focus));
-}
-
-.popoverBody {
-  padding: 5px 10px;
-  /* Leave room for the button column on the right */
-  margin-right: 33px;
-}
-
-/* Button flush against popover's outer top-right corner */
-.popoverActionBtn {
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  bottom: -1px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 33px;
-  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
-  border-radius: 0 6px 6px 0;
-  background: none;
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  opacity: 0.5;
-  cursor: pointer;
-  padding: 0;
-  transition: opacity 150ms var(--ease-default),
-              background 150ms var(--ease-default);
-}
-
-/* When popover grows beyond one row, detach from bottom, pin to top */
-.popover:not(.popoverSingleRow) .popoverActionBtn {
-  bottom: auto;
-  height: var(--control-height-lg);
-  border-radius: 0 6px 6px 6px;
-}
-
-.popoverActionBtn:hover {
-  opacity: 1;
-  background: var(--inspector-field-surface, var(--color-surface-hover));
-}
-
-.popoverText {
+  z-index: calc(var(--layer-overlay) + 1);
+  height: auto;
+  min-height: 32px;
+  max-height: 240px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.18);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  animation: fieldExpand 100ms var(--ease-default) both;
 }
 
-.popoverInput {
-  display: block;
-  width: 100%;
-  background: none;
-  border: none;
-  outline: none;
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  font-family: var(--inspector-font-family, var(--font-family));
-  font-size: var(--font-size-md);
-  line-height: 20px;
-  padding: 0;
-  margin: 0;
-  resize: none;
+.fieldExpansionBackdrop {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: var(--layer-overlay);
   box-sizing: border-box;
-  field-sizing: content;
+  min-height: 32px;
+  max-height: 240px;
+  overflow: hidden;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  color: transparent;
+  font: var(--font-weight-regular) 13px/20px var(--inspector-font-family, var(--font-family-ui));
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  white-space: pre-wrap;
 }
 
-.popoverInput::placeholder {
+.fieldMeasure {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+  visibility: hidden;
+  color: transparent;
+  font: var(--font-weight-regular) 13px/20px var(--inspector-font-family, var(--font-family-ui));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.fieldMeasure::before {
+  content: attr(data-value);
+}
+
+.fieldPlaceholder,
+.fieldDisabled {
   color: var(--inspector-text-tertiary, var(--color-text-tertiary));
 }
 
-/* ── Source URL management ── */
+.fieldDisabled {
+  pointer-events: none;
+  user-select: none;
+}
+
+.sourceControl {
+  display: flex;
+  overflow: hidden;
+  height: 32px;
+}
+
+.sourceValue {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: var(--inspector-text-primary, var(--color-text-primary));
+  font: var(--font-weight-regular) 13px/18px var(--inspector-font-family, var(--font-family-ui));
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceValue:not(:disabled) { cursor: pointer; }
+
+.sourceAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 31px;
+  flex: 0 0 31px;
+  border: 0;
+  border-left: 1px solid var(--inspector-separator, var(--color-border-secondary));
+  background: none;
+  color: inherit;
+  opacity: 0.5;
+}
+
+.sourceAction:not(:disabled) { cursor: pointer; }
+.sourceAction:not(:disabled):hover { opacity: 1; }
+
+@keyframes fieldExpand {
+  from { opacity: 0.92; }
+  to { opacity: 1; }
+}
 
 .urlDropdown {
   position: absolute;
@@ -186,61 +168,78 @@
   left: 0;
   right: 0;
   z-index: var(--layer-overlay);
-  background: var(--inspector-field-surface, var(--color-surface-hover));
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
-  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-panel);
-  min-width: 100%;
-  min-height: var(--control-height-lg);
+  min-height: 32px;
   max-height: 240px;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  padding: 4px 0;
-  animation: popoverFadeIn 120ms ease-out;
+  padding: 0;
+  border: 1px solid var(--inspector-field-focus, var(--color-border-focus));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
 }
 
 .urlRow {
   display: flex;
   align-items: center;
-  min-height: var(--control-height-md);
+  min-height: 32px;
   padding: 0 2px 0 10px;
   gap: 2px;
 }
 
-.urlRow:hover {
-  background: var(--inspector-field-surface, var(--color-surface-hover));
-}
+.urlRow:hover { background: var(--inspector-field-surface, var(--color-surface-hover)); }
 
-.urlText {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-size-md);
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  cursor: text;
-  line-height: var(--control-height-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+.urlText,
 .urlEditInput {
   flex: 1;
   min-width: 0;
-  background: none;
-  border: none;
-  outline: none;
-  font-family: var(--inspector-font-family, var(--font-family));
-  font-size: var(--font-size-md);
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  line-height: var(--control-height-md);
+  border: 0;
+  outline: 0;
   padding: 0;
+  background: none;
+  color: var(--inspector-text-primary, var(--color-text-primary));
+  font: var(--font-weight-regular) 13px/18px var(--inspector-font-family, var(--font-family-ui));
+  text-align: left;
 }
 
-.urlEditInput::placeholder {
-  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
+.urlText {
+  display: flex;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
+
+.urlLabel {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.urlDomain,
+.urlRemainder { white-space: nowrap; }
+
+.urlDomain {
+  flex: 0 0 auto;
+}
+
+.urlRemainder {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.5;
+}
+
+.urlCount {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  opacity: 0.5;
+}
+
+.urlEditInput::placeholder { color: var(--inspector-text-tertiary, var(--color-text-tertiary)); }
 
 .urlActionBtn {
   display: flex;
@@ -249,18 +248,16 @@
   width: var(--control-height-sm);
   height: var(--control-height-sm);
   flex-shrink: 0;
-  border: none;
+  border: 0;
+  padding: 0;
   background: none;
   color: var(--inspector-text-primary, var(--color-text-primary));
   opacity: 0.4;
   cursor: pointer;
-  padding: 0;
-  transition: opacity 150ms var(--ease-default);
 }
 
-.urlActionBtn:hover {
-  opacity: 1;
-}
+.urlActionBtn:hover { opacity: 1; }
+.urlRemoveBtn:hover { color: var(--color-negative); }
 
 .addUrlBtn {
   display: inline-flex;
@@ -268,33 +265,11 @@
   gap: 4px;
   height: var(--control-height-sm);
   padding: 0 10px;
-  border: none;
+  border: 0;
   background: none;
   color: var(--inspector-text-tertiary, var(--color-text-tertiary));
-  font-size: var(--font-size-sm);
-  font-family: var(--inspector-font-family, var(--font-family));
+  font: var(--font-weight-regular) var(--font-size-sm)/1 var(--inspector-font-family, var(--font-family-ui));
   cursor: pointer;
-  transition: color 150ms var(--ease-default);
 }
 
-.addUrlBtn:hover {
-  color: var(--inspector-text-primary, var(--color-text-primary));
-}
-
-/* Popover URL links */
-.popoverLink {
-  display: block;
-  padding: 2px 0;
-  color: var(--inspector-text-primary, var(--color-text-primary));
-  text-shadow: 0 0 12px var(--color-contrast-15);
-  cursor: pointer;
-  text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.popoverLink:hover {
-  text-decoration: underline;
-  text-shadow: 0 0 16px var(--color-contrast-25);
-}
+.addUrlBtn:hover { color: var(--inspector-text-primary, var(--color-text-primary)); }

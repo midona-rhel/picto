@@ -84,7 +84,7 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
           value={group.negate ? 'exclude' : 'include'}
           options={[{ value: 'include', label: 'included' }, { value: 'exclude', label: 'excluded' }]}
           onChange={handleNegateChange}
-          width={92}
+          width={112}
         />
       </div>
 

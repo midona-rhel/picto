@@ -36,6 +36,46 @@ describe('buildFolderContextMenu', () => {
     expect(labels).not.toContain('Select All');
   });
 
+  it('offers every supported folder-content sort field', () => {
+    const onSortContents = vi.fn();
+    const entries = buildFolderContextMenu({
+      inQuickAccess: false,
+      watchEnabled: false,
+      onOpen: vi.fn(),
+      onNewSubfolder: vi.fn(),
+      onToggleQuickAccess: vi.fn(),
+      onRename: vi.fn(),
+      onMove: vi.fn(),
+      onDuplicate: vi.fn(),
+      onSetAutoTags: vi.fn(),
+      onImport: vi.fn(),
+      onAttachWatch: vi.fn(),
+      onSortTree: vi.fn(),
+      onSortContents,
+      onExport: vi.fn(),
+      onDelete: vi.fn(),
+    });
+    const submenu = entries.find(
+      (entry) => 'submenu' in entry && entry.submenu && entry.label === 'Sort by',
+    );
+    if (!submenu || !('children' in submenu)) throw new Error('missing Sort by submenu');
+
+    expect(submenu.children.map((entry) => 'label' in entry ? entry.label : '')).toEqual([
+      'Name',
+      'Import Date',
+      'Date Created',
+      'Date Modified',
+      'Size',
+      'Notes',
+    ]);
+    const modified = submenu.children.find(
+      (entry) => 'label' in entry && entry.label === 'Date Modified',
+    );
+    if (!modified || !('action' in modified)) throw new Error('missing Date Modified action');
+    modified.action();
+    expect(onSortContents).toHaveBeenCalledWith('modified_at');
+  });
+
   it('uses bulk-safe actions for a multi-folder selection', () => {
     const noop = vi.fn();
     const entries = buildBulkFolderContextMenu({

@@ -38,7 +38,12 @@ export function tagGroupPresentation(namespace: string | null | undefined): Grou
   return GROUPS[(namespace ?? '').toLowerCase()] ?? DEFAULT_GROUP;
 }
 
-export function tagGroupColor(namespace: string | null | undefined): string {
+export function tagGroupColor(
+  namespace: string | null | undefined,
+  overrides?: Record<string, string>,
+): string {
+  const override = overrides?.[namespace ?? ''];
+  if (override) return override;
   const [red, green, blue] = tagGroupPresentation(namespace).color;
   return `rgb(${red}, ${green}, ${blue})`;
 }

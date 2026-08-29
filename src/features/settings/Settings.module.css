@@ -6,6 +6,7 @@
   --settings-shell-bg: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
   --settings-content-bg: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
   --settings-card-bg: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
+  position: relative;
   display: flex;
   gap: 12px;
   height: 100vh;
@@ -16,6 +17,23 @@
   background: var(--settings-shell-bg);
   color: var(--color-text-primary);
   font-family: var(--font-family-ui);
+}
+
+/* Match the main macOS window rim. Keeping this above the settings content
+   preserves the straight directional highlights without creating another
+   boxed outline around the inner settings panel. */
+:global(html[data-platform='mac']) .root::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
 /* ── Sidebar ── */

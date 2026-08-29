@@ -1,0 +1,19 @@
+.footerHints,
+.keyPair {
+  display: flex;
+  align-items: center;
+}
+
+.footerHints {
+  gap: 12px;
+  min-width: 0;
+}
+
+.keyPair {
+  gap: 2px;
+}
+
+.footerEnd {
+  margin-left: auto;
+  flex-shrink: 0;
+}

@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
-import type { NavigationSnapshot } from '../shared/types/generated/application/NavigationSnapshot';
-import type { SidebarCounts } from '../shared/types/generated/application/SidebarCounts';
+import type {
+  CanonicalNavigationSnapshot,
+  CanonicalSidebarCounts,
+} from '../shared/types/canonical';
 import { setSidebarTreeAtom, sidebarNodesAtom } from '../state/sidebar';
 
 const getNavigation = vi.hoisted(() => vi.fn());
@@ -14,15 +16,18 @@ import { buildSidebarNodes, sidebarController } from './sidebarController';
 
 const store = getDefaultStore();
 
-const navigation: NavigationSnapshot = {
+const navigation: CanonicalNavigationSnapshot = {
   folders: [{
     folder_id: 4,
+    stable_key: 'folder-4',
     name: 'Folder',
     parent_id: null,
     icon: 'folder',
     color: '#fff',
     notes: 'notes',
-    sort_rank: 10,
+    cover_root_id: null,
+    display_order: 10,
+    count: 8,
     watch_path: null,
     watch_enabled: false,
     watch_subfolders: false,
@@ -34,10 +39,12 @@ const navigation: NavigationSnapshot = {
     icon: null,
     color: null,
     notes: null,
-    predicate: { groups: [] },
-    sort_field: 'name',
-    sort_order: 'asc',
+    view: {
+      filter: { kind: 'all', value: [] },
+      sort: { field: 'name', direction: 'ascending', random_seed: null },
+    },
     display_order: 3,
+    count: 0,
   }, {
     smart_folder_id: 8,
     name: 'Rated',
@@ -45,15 +52,17 @@ const navigation: NavigationSnapshot = {
     icon: null,
     color: null,
     notes: null,
-    predicate: { groups: [{ match_mode: 'all', negate: false, rules: [{ field: 'rating', op: 'gte', value: '1', value2: null, values: null }] }] },
-    sort_field: 'name',
-    sort_order: 'asc',
+    view: {
+      filter: { kind: 'clause', value: { clause: 'ratings', ratings: ['one'] } },
+      sort: { field: 'name', direction: 'ascending', random_seed: null },
+    },
     display_order: 4,
+    count: 7,
   }],
   revision: 11,
 };
 
-const counts: SidebarCounts = {
+const counts: CanonicalSidebarCounts = {
   all: 9,
   inbox: 2,
   trash: 1,
@@ -61,8 +70,8 @@ const counts: SidebarCounts = {
   untagged: 4,
   uncategorized: 5,
   duplicates: 6,
-  folders: [{ id: 4, count: 8 }],
-  smart_folders: [{ id: 7, count: 0 }, { id: 8, count: 7 }],
+  folders: [{ folder_id: 4, count: 8 }],
+  smart_folders: [{ smart_folder_id: 7, count: 0 }, { smart_folder_id: 8, count: 7 }],
   revision: 11,
 };
 
@@ -71,8 +80,8 @@ describe('replacement sidebar reads', () => {
     getNavigation.mockReset();
     getSidebarCounts.mockReset();
     getNamespaceSummary.mockReset().mockResolvedValue([
-      { namespace: 'general', count: 5 },
-      { namespace: 'creator', count: 2 },
+      { namespace_id: 1, name: 'general', tag_count: 5 },
+      { namespace_id: 2, name: 'creator', tag_count: 2 },
     ]);
     store.set(setSidebarTreeAtom, { nodes: [], epoch: 0 });
   });

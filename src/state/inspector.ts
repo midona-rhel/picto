@@ -8,6 +8,8 @@
 
 import { atom } from 'jotai';
 import type {
+  CanonicalEntityDetails,
+  CanonicalTagRecord,
   CanonicalEntityGridItem,
   SidebarNodeDto,
 } from '../shared/types/canonical';
@@ -96,7 +98,12 @@ export const subfolderPreviewAtom = atom<{
   totalCount: number | null;
   totalSizeBytes: number | null;
 } | null>(null);
-export const displayedInspectorItemDetailsAtom = atom<import('../shared/types/canonical').CanonicalEntityDetails | null>(null);
+export type DisplayedInspectorItemDetails = CanonicalEntityDetails & {
+  /** Client-resolved labels committed with details so tag rows never populate a frame later. */
+  resolved_tag_records?: CanonicalTagRecord[];
+};
+
+export const displayedInspectorItemDetailsAtom = atom<DisplayedInspectorItemDetails | null>(null);
 export const inspectorLoadingAtom = atom(false);
 export const inspectorErrorAtom = atom<string | null>(null);
 
@@ -114,7 +121,7 @@ type ScopeInspectorSmartMeta = {
   smart_folder_id?: number;
   parent_id?: number | null;
   notes?: unknown;
-  predicate?: unknown;
+  view?: unknown;
 };
 
 function asString(value: unknown): string | null {
@@ -198,7 +205,7 @@ export const scopeInspectorViewModelAtom = atom((get) => {
                 ? (smartMeta.parent_id ?? null)
                 : null,
             notes: asString(smartMeta.notes),
-            predicate: smartMeta.predicate,
+            view: smartMeta.view,
           }
         : null,
   };

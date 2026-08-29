@@ -38,6 +38,7 @@ function scopeToKey(scope: BaseScope): string {
     case 'all': return 'system:active';
     case 'inbox': return 'system:inbox';
     case 'trash': return 'system:trash';
+    case 'media_matches': return 'system:active';
     case 'recently_viewed': return 'system:recent_viewed';
     case 'untagged': return 'system:untagged';
     case 'uncategorized': return 'system:uncategorized';

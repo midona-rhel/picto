@@ -10,10 +10,7 @@ import {
 } from '../platform/smartFolderApi';
 import type {
   SmartFolderCommandPayload,
-  SmartFolderPredicate as UiSmartFolderPredicate,
 } from '../shared/types/canonical';
-import type { CreateSmartFolderInput } from '../shared/types/generated/application/CreateSmartFolderInput';
-import type { SmartFolderPredicate } from '../shared/types/generated/application/SmartFolderPredicate';
 import { activeNodeIdAtom } from '../state/navigation';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
@@ -22,50 +19,19 @@ import { sidebarController } from './sidebarController';
 
 const store = getDefaultStore();
 
-function toInput(folder: SmartFolderCommandPayload): CreateSmartFolderInput {
-  const parsed = JSON.parse(folder.predicate_json) as UiSmartFolderPredicate;
-  const predicate: SmartFolderPredicate = {
-    groups: parsed.groups.map((group) => ({
-      match_mode: group.match_mode,
-      negate: group.negate ?? false,
-      rules: group.rules.map((rule) => ({
-        field: rule.field,
-        op: rule.op,
-        value: rule.value ?? null,
-        value2: rule.value2 ?? null,
-        values: rule.values ?? null,
-      })),
-    })),
-  };
-  return {
-    name: folder.name,
-    parent_id: folder.parent_id,
-    predicate,
-    icon: folder.icon,
-    color: folder.color,
-    notes: folder.notes,
-    sort_field: folder.sort_field ?? null,
-    sort_order: folder.sort_order ?? null,
-  };
-}
-
 export function emptySmartFolderPayload(
   overrides: Partial<SmartFolderCommandPayload> = {},
 ): SmartFolderCommandPayload {
-  const predicate: UiSmartFolderPredicate = { groups: [] };
   return {
-    smart_folder_id: overrides.smart_folder_id ?? 0,
     name: overrides.name ?? 'New Smart Folder',
     parent_id: overrides.parent_id ?? null,
     icon: overrides.icon ?? null,
     color: overrides.color ?? null,
     notes: overrides.notes ?? null,
-    predicate_json: overrides.predicate_json ?? JSON.stringify(predicate),
-    sort_field: overrides.sort_field ?? null,
-    sort_order: overrides.sort_order ?? null,
-    display_order: overrides.display_order ?? null,
-    created_at: overrides.created_at ?? null,
-    updated_at: overrides.updated_at ?? null,
+    view: overrides.view ?? {
+      filter: { kind: 'all', value: [] },
+      sort: { field: 'imported_at', direction: 'descending', random_seed: null },
+    },
   };
 }
 
@@ -97,14 +63,19 @@ export const smartFoldersController = {
   },
 
   async create(folder: SmartFolderCommandPayload): Promise<string> {
-    const result = await createSmartFolder(toInput(folder));
+    const result = await createSmartFolder(folder);
     await announceUndoableMutation('smart_folders.create');
     return `smart:${result.smart_folder_id}`;
   },
 
   async update(id: number, folder: SmartFolderCommandPayload): Promise<void> {
-    await updateSmartFolder(id, toInput(folder));
+    await updateSmartFolder(id, folder);
     await announceUndoableMutation('smart_folders.update');
+  },
+
+  async preview(id: number, folder: SmartFolderCommandPayload): Promise<void> {
+    await updateSmartFolder(id, folder);
+    await this.refresh(id);
   },
 
   async move(smartFolderId: number, parentId: number | null, siblingOrder: [number, number][]) {

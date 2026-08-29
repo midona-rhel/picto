@@ -18,6 +18,15 @@ vi.mock('../../controllers/entityMutations', () => ({
   updateTargetFolderMembership: vi.fn(),
 }));
 
+const tagMocks = vi.hoisted(() => ({
+  getById: vi.fn(),
+  getNamespaceSummary: vi.fn(),
+}));
+
+vi.mock('../../controllers/tagsController', () => ({
+  tagsController: tagMocks,
+}));
+
 import * as entityMutations from '../../controllers/entityMutations';
 import { currentGridQueryAtom, gridSessionAtom } from '../../state/grid';
 import {
@@ -32,52 +41,61 @@ import { Inspector } from './Inspector';
 
 const store = getDefaultStore();
 const itemDetails = {
-  item_id: 1,
-  kind: 'media',
-  lifecycle: 'active',
-  label: 'Previous item',
-  cover_media_item_id: null,
-  folder_ids: [],
-  aggregate_tags: [],
-  revision: 1,
-  media: [{
-    media_item_id: 1,
-    file_hash: 'file-1',
-    mime_type: 'image/jpeg',
-    dominant_color_hex: null,
-    dominant_colors: [],
-    size_bytes: 100,
-    pixel_width: 20,
-    pixel_height: 10,
-    duration_ms: null,
-    frame_count: null,
+  root: {
+    root_id: 1,
+    stable_key: 'root-1',
+    kind: 'media',
     name: 'Previous item',
     notes: null,
-    rating: null,
     source_urls: [],
-    captured_at: null,
-    imported_at: '2026-01-02',
-    position: 0,
-    tags: [],
+    cover_media_id: 1,
+    imported_at_ms: Date.parse('2026-01-02'),
+    captured_at_ms: null,
+    modified_at_ms: Date.parse('2026-01-02'),
+    media_count: 1,
+    total_size_bytes: 100,
+  },
+  lifecycle: 'active',
+  rating: 'unrated',
+  folder_ids: [],
+  tag_ids: [],
+  revision: 1,
+  media: [{
+    media_id: 1,
+    media_name: 'Previous item',
+    file_id: 1,
+    file_path: '/tmp/file-1.jpg',
+    facts: {
+      mime: 'image/jpeg',
+      size_bytes: 100,
+      width: 20,
+      height: 10,
+      duration_ms: null,
+      frame_count: null,
+      content_hash: 'file-1',
+      perceptual_hash: null,
+      palette: [],
+    },
   }],
 };
 
 const summary = {
   total_count: 2,
   selected_count: 2,
+  total_size_bytes: 300,
+  media_count: 2,
   sample_hashes: ['file-1', 'file-2'],
-  shared_tags: [],
-  shared_folders: [],
+  shared_tags: [] as number[],
+  shared_folders: [] as number[],
+  shared_rating: null,
+  minimum_rating: null,
+  maximum_rating: null,
   shared_notes: null,
   has_notes: false,
-  shared_source_urls: [],
+  shared_source_urls: null,
   has_source_urls: false,
-  stats: {
-    total_size_bytes: 300,
-    media_count: 2,
-    all_media_are_images: true,
-    rating_stats: { min: null, max: null, shared: null },
-  },
+  collection_candidates: [],
+  all_selected_roots_have_images: true,
   revision: 2,
 };
 
@@ -85,6 +103,10 @@ describe('Inspector selection transition', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(entityMutations.getTargetSelectionSummary).mockReset();
+    tagMocks.getById.mockReset();
+    tagMocks.getById.mockResolvedValue([]);
+    tagMocks.getNamespaceSummary.mockReset();
+    tagMocks.getNamespaceSummary.mockResolvedValue([]);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       active: true,
@@ -125,6 +147,9 @@ describe('Inspector selection transition', () => {
 
     expect(screen.queryByText('Previous item')).not.toBeInTheDocument();
     expect(screen.getByText('2 items selected')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-preview-hash="file-2"]')).toHaveAttribute('data-inspector-stack-entering');
+    expect(document.querySelector('[data-inspector-preview-hash="file-1"]')).toHaveStyle({ opacity: '1' });
+    expect(document.querySelector('[data-inspector-preview-hash="file-1"] [class*="stackShade"]')).toHaveStyle({ opacity: '0.7' });
     expect(document.querySelector('[data-inspector-core-property="Size"]')).toHaveTextContent('300 B');
     expect(document.querySelector('[data-inspector-summary-loading]')).not.toBeInTheDocument();
   });
@@ -147,5 +172,31 @@ describe('Inspector selection transition', () => {
     await act(async () => { resolveSummary?.(summary); });
     expect(screen.getByText('2 items selected')).toBeInTheDocument();
     expect(document.querySelector('[data-inspector-summary-loading]')).not.toBeInTheDocument();
+  });
+
+  it('keeps the previous inspector until shared tag labels are ready', async () => {
+    let resolveSummary: ((value: typeof summary) => void) | undefined;
+    let resolveTags: ((value: Array<Record<string, unknown>>) => void) | undefined;
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockReturnValue(new Promise((resolve) => {
+      resolveSummary = resolve;
+    }) as never);
+    tagMocks.getById.mockReturnValue(new Promise((resolve) => { resolveTags = resolve; }));
+    render(<MantineProvider><Inspector /></MantineProvider>);
+
+    await act(async () => { resolveSummary?.({ ...summary, shared_tags: [9] }); });
+    expect(screen.getByText('Previous item')).toBeInTheDocument();
+    expect(tagMocks.getById).toHaveBeenCalledWith([9]);
+
+    await act(async () => { resolveTags?.([{
+      tag_id: 9,
+      namespace_id: 1,
+      namespace: 'creator',
+      subname: 'alice',
+      active_count: 2,
+      assignment_count: 2,
+    }]); });
+
+    expect(screen.queryByText('Previous item')).not.toBeInTheDocument();
+    expect(screen.getByText('alice')).toBeInTheDocument();
   });
 });

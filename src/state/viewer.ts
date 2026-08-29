@@ -32,6 +32,10 @@ export interface ViewerDisplayState {
   currentIndex: number;
   total: number;
   zoomPercent?: number;
+  breadcrumb?: {
+    parent: string;
+    current: string;
+  };
 }
 
 export interface ViewerZoomControls {

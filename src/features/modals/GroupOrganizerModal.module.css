@@ -52,3 +52,20 @@
   color: var(--color-negative);
   font-size: var(--font-size-sm);
 }
+
+.counter,
+.counterError {
+  align-self: flex-end;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.counterError,
+.noteError {
+  color: var(--color-negative);
+}
+
+.noteError {
+  font-size: var(--font-size-sm);
+}

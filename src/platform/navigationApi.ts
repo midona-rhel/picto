@@ -1,11 +1,13 @@
 import { invoke } from './ipc';
-import type { NavigationSnapshot } from '../shared/types/generated/application/NavigationSnapshot';
-import type { SidebarCounts } from '../shared/types/generated/application/SidebarCounts';
+import type {
+  CanonicalNavigationSnapshot,
+  CanonicalSidebarCounts,
+} from '../shared/types/canonical';
 
-export function getNavigation(): Promise<NavigationSnapshot> {
-  return invoke<NavigationSnapshot>('navigation.get', {});
+export function getNavigation(): Promise<CanonicalNavigationSnapshot> {
+  return invoke<CanonicalNavigationSnapshot>('navigation.get', {});
 }
 
-export function getSidebarCounts(): Promise<SidebarCounts> {
-  return invoke<SidebarCounts>('sidebar.counts', {});
+export function getSidebarCounts(): Promise<CanonicalSidebarCounts> {
+  return invoke<CanonicalSidebarCounts>('sidebar.counts', {});
 }

@@ -1,0 +1,16 @@
+.editor { display: grid; grid-template-columns: 181px 13px; gap: 8px; width: 202px; margin: 6px auto 8px; }
+.saturation { position: relative; width: 181px; height: 174px; overflow: hidden; border-radius: 2px; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--filter-hue)); cursor: crosshair; touch-action: none; }
+.cursor { position: absolute; width: 9px; height: 9px; box-sizing: border-box; border: 1px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, .65); transform: translate(-50%, -50%); pointer-events: none; }
+.hue { width: 13px; height: 174px; margin: 0; appearance: none; writing-mode: vertical-lr; border-radius: 2px; background: linear-gradient(to bottom, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); cursor: pointer; }
+.hue::-webkit-slider-runnable-track { width: 13px; border: 0; background: transparent; }
+.hue::-webkit-slider-thumb { width: 13px; height: 3px; appearance: none; border: 0; border-top: 1px solid rgba(255,255,255,.9); border-bottom: 1px solid rgba(0,0,0,.6); background: transparent; }
+.presets { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(7, 20px); gap: 5px; }
+.preset { position: relative; width: 20px; height: 20px; box-sizing: border-box; padding: 0; border: 1px solid rgba(128,128,128,.3); border-radius: 5px; opacity: .8; cursor: pointer; }
+.preset:hover, .active { opacity: 1; }
+.active { border-color: var(--color-text-primary); }
+.none { overflow: hidden; background: #ccc; }
+.none::after { content: ''; position: absolute; left: -4px; top: 9px; width: 28px; height: 1px; background: #6a6a6a; transform: rotate(-45deg); }
+.hexField { grid-column: 1 / -1; position: relative; display: flex; align-items: center; }
+.hexField input { width: 100%; height: 32px; box-sizing: border-box; padding: 0 10px 0 32px; border: 1px solid var(--color-border-primary); border-radius: var(--radius-md); outline: none; background: var(--color-control-surface); color: var(--color-text-primary); font: var(--font-size-sm)/30px var(--font-family-mono); }
+.hexField input:focus { border-color: var(--color-primary); }
+.preview { position: absolute; z-index: 1; left: 9px; width: 14px; height: 14px; border: 1px solid var(--color-border-secondary); border-radius: 4px; pointer-events: none; }

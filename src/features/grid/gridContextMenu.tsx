@@ -30,6 +30,8 @@ import {
   type OpenWithOptions,
   type ReverseImageSearchEngine,
 } from '../../platform/shellApi';
+import type { ContentSortField } from '../../platform/folderApi';
+import { contentSortSubmenu } from '../folders/folderContextMenu';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -45,6 +47,7 @@ export interface GridMenuContext {
   aiTagEnabled?: boolean;
   singleSelected: boolean;
   singleHash: string | null;
+  singleItemId?: number | null;
   hasFolders?: boolean;
   isMixed?: boolean;
   isFoldersOnly?: boolean;
@@ -91,6 +94,7 @@ export interface GridMenuContext {
   containsGroup?: boolean;
   onCopyLink?: (link: string) => void;
   onNewFolderWithSelection?: () => void;
+  onFindMediaMatches?: (itemId: number) => void;
   onSearchByImage?: (engine: ReverseImageSearchEngine, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
@@ -103,6 +107,7 @@ export interface GridMenuContext {
   onImportFiles?: () => void;
   onImportFolder?: () => void;
   onPasteImport?: () => void;
+  onSortContents?: (field: ContentSortField) => void;
   grayscale?: boolean;
   onToggleGrayscale?: () => void;
 }
@@ -360,6 +365,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   if (canSetLibraryCover) {
     moreEntries.push(buildLibraryCoverContextEntry(singleHash!, ctx.onSetLibraryCover!));
   }
+  if (singleSelected && ctx.singleItemId != null && ctx.onFindMediaMatches) {
+    moreEntries.push(item('Find Items with This Media', {
+      icon: <IconSearch size={15} />,
+      action: () => ctx.onFindMediaMatches!(ctx.singleItemId!),
+    }));
+  }
 
   // ── View options ──
   if (!viewerSurface) {
@@ -510,7 +521,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Search by Image ──
+  // ── External media search ──
   if (singleSelected && singleHash && ctx.singleMime?.startsWith('image/') && ctx.onSearchByImage) {
     entries.push({
       submenu: true,
@@ -606,6 +617,11 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
     action: ctx.onPasteImport,
   }));
   if (ctx.onImportFiles || ctx.onImportFolder || ctx.onPasteImport) entries.push(sep());
+
+  if (ctx.onSortContents) {
+    entries.push(contentSortSubmenu(ctx.onSortContents));
+    entries.push(sep());
+  }
 
   const viewEntries = buildContextMenuViewEntries();
   for (const entry of viewEntries) entries.push(entry);

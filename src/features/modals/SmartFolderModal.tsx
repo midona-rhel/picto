@@ -19,8 +19,10 @@ import type {
   SmartFolderPredicate,
   SmartFolderPredicateGroup,
   SmartFolderPredicateRule,
+  ViewQuerySpec,
 } from '../../shared/types/canonical';
 import { RuleGroupEditor } from './smart-folder/RuleGroupEditor';
+import { compileSmartFolderPredicate, editorPredicateFromFilter } from './smart-folder/queryModel';
 import { getFieldDef, defaultOperator, defaultValue, isListField, FIELD_DEFS } from './smart-folder/fieldConfig';
 import styles from './SmartFolderModal.module.css';
 
@@ -96,6 +98,7 @@ function normalizeRule(rule: SmartFolderPredicateRule): SmartFolderPredicateRule
     value: list ? undefined : (rule.value ?? defaultValue(field)),
     value2: rule.value2 ?? undefined,
     values: list ? (Array.isArray(rule.values) ? rule.values : []) : undefined,
+    unit: field === 'file_size' ? (rule.unit ?? 'MB') : undefined,
   };
 }
 
@@ -112,27 +115,25 @@ function normalizePredicate(input: SmartFolderPredicate | undefined): SmartFolde
   };
 }
 
-function buildPayload(data: {
-  id?: number;
+async function buildPayload(data: {
   name: string;
   parent_id?: number | null;
   icon: string | null;
   color: string | null;
   notes: string | null;
   predicate: SmartFolderPredicate;
-  display_order?: number | null;
-}): SmartFolderCommandPayload {
+  sort: ViewQuerySpec['sort'];
+}): Promise<SmartFolderCommandPayload> {
   return {
-    smart_folder_id: data.id ?? 0,
     name: data.name,
     parent_id: data.parent_id ?? null,
     icon: data.icon,
     color: data.color,
     notes: data.notes,
-    predicate_json: JSON.stringify(data.predicate),
-    display_order: data.display_order ?? null,
-    created_at: null,
-    updated_at: null,
+    view: {
+      filter: await compileSmartFolderPredicate(data.predicate),
+      sort: data.sort,
+    },
   };
 }
 
@@ -149,8 +150,7 @@ export interface SmartFolderModalProps {
     icon?: string | null;
     color?: string | null;
     notes?: string | null;
-    predicate?: SmartFolderPredicate;
-    display_order?: number | null;
+    view?: ViewQuerySpec;
   };
   mode?: 'create' | 'edit';
   editor?: 'all' | 'details' | 'rules';
@@ -166,10 +166,13 @@ export function SmartFolderModal({
   const [color, setColor] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [predicate, setPredicate] = useState<SmartFolderPredicate>(emptyPredicate());
+  const [editorReady, setEditorReady] = useState(false);
 
   // Snapshot of original predicate for revert on cancel
-  const originalPredicateRef = useRef<string>('');
+  const originalViewRef = useRef<ViewQuerySpec | null>(null);
   const livePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const livePreviewVersionRef = useRef(0);
+  const livePreviewQueueRef = useRef<Promise<void>>(Promise.resolve());
   const showDetails = editor !== 'rules';
   const showRules = editor !== 'details';
   const title = mode === 'create'
@@ -182,64 +185,89 @@ export function SmartFolderModal({
     setIcon(initial?.icon ?? null);
     setColor(initial?.color ?? null);
     setNotes(initial?.notes ?? '');
-    const pred = normalizePredicate(initial?.predicate);
-    setPredicate(pred);
-    originalPredicateRef.current = JSON.stringify(initial?.predicate ?? { groups: [] });
+    const view = initial?.view ?? {
+      filter: { kind: 'all' as const, value: [] },
+      sort: { field: 'imported_at' as const, direction: 'descending' as const, random_seed: null },
+    };
+    originalViewRef.current = view;
+    setEditorReady(false);
+    let cancelled = false;
+    void editorPredicateFromFilter(view.filter)
+      .then((value) => {
+        if (!cancelled) {
+          setPredicate(normalizePredicate(value));
+          setEditorReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPredicate(emptyPredicate());
+      });
+    return () => { cancelled = true; };
   }, [open, initial]);
 
   // Live preview: debounce-save predicate changes in edit mode so grid updates
   useEffect(() => {
-    if (!open || mode !== 'edit' || !initial?.id || !showRules) return;
+    if (!open || mode !== 'edit' || !initial?.id || !showRules || !editorReady) return;
+    const version = ++livePreviewVersionRef.current;
     if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
     livePreviewTimerRef.current = setTimeout(() => {
-      const payload = buildPayload({
-        id: initial.id,
+      void buildPayload({
         name: name.trim() || initial.name || 'Smart Folder',
         parent_id: initial.parent_id ?? null,
         icon, color,
         notes: notes.trim() ? notes.trim() : null,
         predicate,
-        display_order: initial.display_order ?? null,
+        sort: initial.view?.sort ?? { field: 'imported_at', direction: 'descending', random_seed: null },
+      }).then((payload) => {
+        if (version !== livePreviewVersionRef.current) return;
+        livePreviewQueueRef.current = livePreviewQueueRef.current
+          .catch(() => undefined)
+          .then(async () => {
+            if (version === livePreviewVersionRef.current) {
+              await smartFoldersController.preview(initial.id!, payload);
+            }
+          });
       });
-      void smartFoldersController.update(initial.id!, payload);
-    }, 500);
+    }, 100);
     return () => { if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current); };
-  }, [predicate, open, mode, initial, name, icon, color, notes, showRules]);
+  }, [predicate, open, mode, initial, name, icon, color, notes, showRules, editorReady]);
 
   // Revert predicate on close without save (cancel)
   const handleClose = useCallback(() => {
-    if (mode === 'edit' && showRules && initial?.id && originalPredicateRef.current) {
-      // Revert to original
-      const origPred = normalizePredicate(JSON.parse(originalPredicateRef.current));
-      const revertPayload = buildPayload({
-        id: initial.id,
+    ++livePreviewVersionRef.current;
+    if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
+    if (mode === 'edit' && showRules && initial?.id && originalViewRef.current) {
+      const revertPayload: SmartFolderCommandPayload = {
         name: initial.name || '',
         parent_id: initial.parent_id ?? null,
         icon: initial.icon ?? null,
         color: initial.color ?? null,
         notes: initial.notes ?? null,
-        predicate: origPred,
-        display_order: initial.display_order ?? null,
-      });
-      void smartFoldersController.update(initial.id, revertPayload);
+        view: originalViewRef.current,
+      };
+      livePreviewQueueRef.current = livePreviewQueueRef.current
+        .catch(() => undefined)
+        .then(() => smartFoldersController.preview(initial.id!, revertPayload));
     }
     onClose();
   }, [mode, showRules, initial, onClose]);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     if (!name.trim()) return;
-    // Update the snapshot so handleClose won't revert
-    originalPredicateRef.current = JSON.stringify(predicate);
-    onSave(buildPayload({
-      id: initial?.id,
+    ++livePreviewVersionRef.current;
+    if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
+    const payload = await buildPayload({
       name: name.trim(),
       parent_id: initial?.parent_id ?? null,
       icon,
       color,
       notes: notes.trim() ? notes.trim() : null,
       predicate,
-      display_order: initial?.display_order ?? null,
-    }));
+      sort: initial?.view?.sort ?? { field: 'imported_at', direction: 'descending', random_seed: null },
+    });
+    await livePreviewQueueRef.current.catch(() => undefined);
+    originalViewRef.current = payload.view;
+    onSave(payload);
   }, [color, icon, initial, name, notes, onSave, predicate]);
 
   const handleGroupChange = useCallback((index: number, group: SmartFolderPredicateGroup) => {
@@ -271,7 +299,7 @@ export function SmartFolderModal({
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={handleSave}
-            disabled={!name.trim()}
+            disabled={!name.trim() || (showRules && !editorReady)}
             type="button"
           >
             {mode === 'create' ? 'Create' : 'Save Changes'}

@@ -23,6 +23,8 @@ describe('GroupOrganizerModal', () => {
         target={target}
         coverRootId={1}
         groups={[]}
+        initialNotes={'First note\n\nSecond note'}
+        maximumNoteBytes={65_536}
         onClose={onClose}
         onComplete={onComplete}
       />,
@@ -37,6 +39,7 @@ describe('GroupOrganizerModal', () => {
       target,
       cover_root_id: 1,
       name: 'Chapter one',
+      notes: 'First note\n\nSecond note',
       winning_collection_id: null,
     }));
     expect(onComplete).toHaveBeenCalledWith(9);
@@ -53,6 +56,8 @@ describe('GroupOrganizerModal', () => {
           { collection_id: 7, label: 'Left', member_count: 2 },
           { collection_id: 8, label: 'Right', member_count: 4 },
         ]}
+        initialNotes=""
+        maximumNoteBytes={65_536}
         onClose={vi.fn()}
       />,
     );
@@ -64,7 +69,25 @@ describe('GroupOrganizerModal', () => {
       target,
       cover_root_id: 1,
       name: null,
+      notes: null,
       winning_collection_id: 8,
     }));
+  });
+
+  it('requires oversized merged notes to be trimmed', async () => {
+    renderWithProviders(
+      <GroupOrganizerModal
+        open
+        target={target}
+        coverRootId={1}
+        groups={[]}
+        initialNotes="too long"
+        maximumNoteBytes={4}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Trim the collection notes before continuing.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create Group' })).toBeDisabled();
   });
 });

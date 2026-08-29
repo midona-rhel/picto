@@ -170,6 +170,13 @@ export function ViewerToolbar() {
             <ToolbarHistoryIcon direction="back" />
           </TitlebarControlButton>
         </KbdTooltip>
+        {state.breadcrumb ? (
+          <span className={styles.viewerBreadcrumb} aria-label={`${state.breadcrumb.parent} / ${state.breadcrumb.current}`}>
+            <button type="button" onClick={controls.close}>{state.breadcrumb.parent}</button>
+            <span className={styles.viewerBreadcrumbSeparator}>/</span>
+            <span className={styles.viewerBreadcrumbCurrent}>{state.breadcrumb.current}</span>
+          </span>
+        ) : null}
         {controls.navigate ? <TitlebarCounter current={state.currentIndex + 1} total={state.total} /> : null}
         </>
       )}

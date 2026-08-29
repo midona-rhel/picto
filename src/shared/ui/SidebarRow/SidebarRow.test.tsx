@@ -124,12 +124,14 @@ describe('SidebarRow', () => {
   it('replaces the count with an accessible subscription pause control', () => {
     const onClick = vi.fn();
     render(
-      <SidebarRow
-        label="Subscriptions"
-        count={12}
-        activity={{ state: 'running', actionLabel: 'Pause all subscriptions', onClick }}
-        onClick={vi.fn()}
-      />,
+      <MantineProvider>
+        <SidebarRow
+          label="Subscriptions"
+          count={12}
+          activity={{ state: 'running', actionLabel: 'Pause all subscriptions', onClick }}
+          onClick={vi.fn()}
+        />
+      </MantineProvider>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause all subscriptions' }));
@@ -139,11 +141,13 @@ describe('SidebarRow', () => {
 
   it('keeps the global paused state visible and exposes resume', () => {
     render(
-      <SidebarRow
-        label="Subscriptions"
-        activity={{ state: 'paused', actionLabel: 'Resume all subscriptions', onClick: vi.fn() }}
-        onClick={vi.fn()}
-      />,
+      <MantineProvider>
+        <SidebarRow
+          label="Subscriptions"
+          activity={{ state: 'paused', actionLabel: 'Resume all subscriptions', onClick: vi.fn() }}
+          onClick={vi.fn()}
+        />
+      </MantineProvider>,
     );
 
     expect(screen.getByRole('button', { name: 'Resume all subscriptions' })).toBeInTheDocument();

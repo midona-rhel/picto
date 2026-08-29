@@ -33,6 +33,7 @@ import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
 import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
 import { useRecentItems } from '../../shared/hooks/useRecentItems';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import styles from './FolderPickerPanel.module.css';
 
 type FolderView = 'all' | 'recent' | 'selected';
 
@@ -56,7 +57,6 @@ export function FolderPickerPanel() {
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [rootSelected, setRootSelected] = useState(false);
   const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
-  const [pinned, setPinned] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const lastClickedRef = useRef<number | null>(null);
@@ -246,8 +246,6 @@ export function FolderPickerPanel() {
       onClose={close}
       width={360}
       height={480}
-      pinned={pinned}
-      onPinnedChange={setPinned}
       anchorPosition={anchor}
       anchorPlacement={portalState.anchorPlacement}
       header={
@@ -257,7 +255,7 @@ export function FolderPickerPanel() {
             <input
               ref={searchRef}
               className={shellStyles.searchInput}
-              placeholder="Search folders..."
+              placeholder="Search..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -287,11 +285,12 @@ export function FolderPickerPanel() {
       }
       footer={
         <>
-          <span className={shellStyles.kbdHint}>
-            <span className={shellStyles.kbd}>Click</span> Select
-            {filterSelection ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
-          </span>
-          <div className={btnStyles.btnGroup}>
+          <div className={styles.footerHints}>
+            <span className={shellStyles.kbdHint}>Switch <span className={shellStyles.kbd}>Tab</span></span>
+            <span className={shellStyles.kbdHint}>Move <span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
+            <span className={shellStyles.kbdHint}>Select <span className={shellStyles.kbd}>↵</span></span>
+          </div>
+          <div className={`${btnStyles.btnGroup} ${styles.footerEnd}`}>
             {parentSelection && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
@@ -301,6 +300,7 @@ export function FolderPickerPanel() {
                 Move
               </button>
             )}
+            {!parentSelection && <span className={shellStyles.kbdHint}>Close <span className={shellStyles.kbd}>Esc</span></span>}
           </div>
         </>
       }

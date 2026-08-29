@@ -270,21 +270,22 @@ function StandardRow({
         {children ?? (label != null && <span className={styles.label}>{label}</span>)}
         {activity ? (
           <span className={styles.activitySlot}>
-            <button
-              type="button"
-              className={`${styles.activityButton} ${activity.state === 'paused' ? styles.activityPaused : ''}`}
-              aria-label={activity.actionLabel}
-              title={activity.actionLabel}
-              disabled={activity.busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                activity.onClick();
-              }}
-            >
-              <span className={styles.activityDot} aria-hidden="true" />
-              <IconPlayerPause className={styles.activityPauseIcon} size={14} stroke={1.8} aria-hidden="true" />
-              <IconPlayerPlay className={styles.activityPlayIcon} size={14} stroke={1.8} aria-hidden="true" />
-            </button>
+            <KbdTooltip label={activity.actionLabel} position="right">
+              <button
+                type="button"
+                className={`${styles.activityButton} ${activity.state === 'paused' ? styles.activityPaused : ''}`}
+                aria-label={activity.actionLabel}
+                disabled={activity.busy}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  activity.onClick();
+                }}
+              >
+                <span className={styles.activityDot} aria-hidden="true" />
+                <IconPlayerPause className={styles.activityPauseIcon} size={14} stroke={1.8} aria-hidden="true" />
+                <IconPlayerPlay className={styles.activityPlayIcon} size={14} stroke={1.8} aria-hidden="true" />
+              </button>
+            </KbdTooltip>
           </span>
         ) : hasVisibleCount && (
           <span className={styles.count}>

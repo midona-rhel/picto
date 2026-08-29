@@ -49,6 +49,41 @@
   -webkit-app-region: no-drag;
 }
 
+.viewerBreadcrumb {
+  min-width: 0;
+  max-width: min(420px, 42vw);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.viewerBreadcrumb button {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.viewerBreadcrumb button:hover { color: var(--color-text-primary); }
+.viewerBreadcrumbSeparator { flex: none; color: var(--color-text-tertiary); }
+.viewerBreadcrumbCurrent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .rightSection {
   display: flex;
   align-items: center;

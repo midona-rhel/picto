@@ -8,6 +8,7 @@ import type {
   MediaEntityPatch,
   MutationReceipt,
   OrganizeCollectionInput,
+  CollectionNoteDraft,
   OrganizeCollectionResult,
   QueryPage,
   ReorderCollectionInput,
@@ -60,6 +61,10 @@ export function deleteItems(target: EntityTarget): Promise<unknown> {
 
 export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return invoke<SelectionSummary>('items.selection_summary', { target });
+}
+
+export function getCollectionNoteDraft(target: EntityTarget): Promise<CollectionNoteDraft> {
+  return invoke<CollectionNoteDraft>('items.collection_note_draft', { target });
 }
 
 export function organizeIntoGroup(input: OrganizeCollectionInput): Promise<OrganizeCollectionResult> {

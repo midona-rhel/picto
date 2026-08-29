@@ -144,11 +144,53 @@ beforeEach(() => {
       subscriptions: 4,
       revision: 7,
     });
+    if (command === 'cloud.configuration.get') return Promise.resolve({
+      provider: null,
+      root_path: null,
+      retention: { daily: 30, weekly: 26, yearly: 5 },
+    });
+    if (command === 'cloud.status.get') return Promise.resolve({
+      state: 'disabled',
+      message: 'Not configured',
+      last_sync_at: null,
+      pending_mutations: 0,
+      pending_blobs: 0,
+      missing_blobs: 0,
+    });
+    if (command === 'ai.status') return Promise.resolve({
+      models: [],
+      storageBytes: 0,
+      configuredModelSlugs: [],
+      thresholds: {
+        general: 0.35, character: 0.35, copyright: 0.35,
+        artist: 0.35, species: 0.35, rating: 0.35,
+      },
+      cachedBackend: null,
+    });
     return Promise.reject(new Error(`Unexpected command: ${command}`));
   });
 });
 
 describe('Settings', () => {
+  it('preloads Cloud and AI Models before navigation without a loading-frame replacement', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith('cloud.configuration.get');
+      expect(mocks.invoke).toHaveBeenCalledWith('cloud.status.get');
+      expect(mocks.invoke).toHaveBeenCalledWith('ai.status');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cloud' }));
+    expect(screen.getByText('Library Sync')).toBeInTheDocument();
+    expect(screen.queryByText(/Loading cloud status/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'AI Models' }));
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+  });
+
   it('shows a canonical breakdown of the active library', async () => {
     const user = setupUser();
     await renderSettings();

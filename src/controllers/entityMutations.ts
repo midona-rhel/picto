@@ -10,6 +10,7 @@ import {
   applyEntityTags,
   deleteItems,
   getSelectionSummary,
+  getCollectionNoteDraft,
   patchMediaEntities,
   renameItem,
   renameItems,
@@ -18,7 +19,7 @@ import {
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
 import { loadInspectorData } from './inspectorController';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
-import type { EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
+import type { CollectionNoteDraft, EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
@@ -123,6 +124,10 @@ export async function updateTargetFolderMembership(
 
 export async function getTargetSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return getSelectionSummary(target);
+}
+
+export async function getTargetCollectionNoteDraft(target: EntityTarget): Promise<CollectionNoteDraft> {
+  return getCollectionNoteDraft(target);
 }
 
 export async function setItemRating(itemId: number, rating: number): Promise<void> {

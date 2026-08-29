@@ -1,6 +1,4 @@
-/* TagSelectPanel — tag selection portal with namespace sidebar.
- * Matches legacy: panel width animates, sidebar mounts/unmounts,
- * content area is always 340px pinned to right edge. */
+/* Tag selection portal with a fixed 340px list and optional 200px group rail. */
 
 .panelBody {
   flex: 1;
@@ -8,13 +6,11 @@
   position: relative;
 }
 
-/* ── Sidebar (absolute left, 200px, fades with collapse) ── */
+/* ── Sidebar ── */
 
 .sidebar {
   position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
+  inset: 0 auto 0 0;
   width: 200px;
   overflow: hidden;
   box-sizing: border-box;
@@ -39,10 +35,9 @@
   align-items: center;
   min-height: 24px;
   height: 24px;
-  padding: 0 8px;
-  gap: 6px;
+  padding: 0 8px 0 0;
   border-radius: 6px;
-  font-size: var(--font-size-md);
+  font-size: 13px;
   color: var(--color-text-primary);
   white-space: nowrap;
   transition: background-color 60ms ease;
@@ -58,13 +53,37 @@
 }
 
 .sidebarDot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+  margin-right: 6px;
+  margin-left: 6px;
   opacity: 0.6;
   transition: opacity 120ms ease;
 }
+
+.sidebarIcon {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  margin-right: 6px;
+  margin-left: 6px;
+  color: var(--color-text-secondary);
+  opacity: 0.55;
+}
+
+.sidebarStar {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  margin-right: 6px;
+  margin-left: 6px;
+  color: #ff9f0a;
+}
+
+.sidebarItem:hover .sidebarIcon,
+.sidebarItemActive .sidebarIcon { opacity: 1; }
 
 .sidebarItem:hover .sidebarDot,
 .sidebarItemActive .sidebarDot {
@@ -76,7 +95,9 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 130px;
+  max-width: calc(100% - 60px);
+  height: 18px;
+  line-height: 18px;
 }
 
 .sidebarBadge {
@@ -95,26 +116,23 @@
 
 .sidebarSep {
   height: 1px;
-  margin: 4px 10px;
-  background: var(--color-border-primary);
+  margin: 4px 0;
+  background: var(--color-border-secondary);
 }
 
-/* ── Content (absolute right, always 340px) ── */
+/* ── Content ── */
 
 .content {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0 0 0 auto;
   width: 340px;
   box-sizing: border-box;
-  border-left: 1px solid var(--color-border-secondary);
   display: flex;
   flex-direction: column;
+  border-left: 1px solid var(--color-border-secondary);
 }
 
 .contentExpanded {
-  /* Preserve the divider's 1px inset so collapsing the sidebar never shifts rows. */
   border-left-color: transparent;
 }
 
@@ -133,9 +151,9 @@
 .tagGrid {
   display: grid;
   grid-auto-flow: row;
-  grid-auto-rows: 26px;
+  grid-auto-rows: 25px;
   align-content: start;
-  column-gap: 4px;
+  column-gap: 0;
   box-sizing: border-box;
 }
 
@@ -144,12 +162,12 @@
 .tagRow {
   display: flex;
   align-items: center;
-  height: 26px;
+  height: 25px;
   padding: 0 6px;
   gap: 6px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: var(--font-size-md);
+  font-size: 13px;
   color: var(--color-text-primary);
   transition: background-color 60ms ease;
 }
@@ -165,8 +183,12 @@
 }
 
 .tagRowSelected {
-  background: var(--color-surface-active);
-  outline: 1px solid var(--color-contrast-25);
+  background: var(--color-selection-bg);
+  outline: 0;
+}
+
+.tagRowSelected.tagRowFocused {
+  outline: 1px solid var(--color-primary-50);
   outline-offset: -1px;
 }
 
@@ -181,13 +203,43 @@
 }
 
 .tagBookmark {
-  width: 13px;
-  height: 13px;
+  width: 10px;
+  height: 10px;
   flex-shrink: 0;
   color: var(--tag-color, var(--color-text-secondary));
   opacity: 0.72;
   filter: saturate(0.9);
   transition: opacity 120ms ease;
+}
+
+.createTagIcon {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  opacity: 0.65;
+}
+
+.tagStar {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  color: #ff9f0a;
+}
+
+.tagRow:has(.tagStar) .tagName {
+  color: #f8f0e1;
+}
+
+.tagRow:has(.createTagIcon) .tagName {
+  max-width: 100%;
+  opacity: 1;
+}
+
+.tagRow:has(.createTagIcon) .tagName strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-bold);
+  border-bottom: 1px solid var(--color-contrast-20);
 }
 
 .tagRow:hover .tagBookmark {
@@ -205,6 +257,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-primary);
+  opacity: 0.95;
 }
 
 .tagBadge {
@@ -214,7 +267,6 @@
   flex-shrink: 0;
   margin-left: auto;
   text-align: right;
-  min-width: 32px;
   opacity: 0.5;
 }
 
@@ -249,11 +301,11 @@
 .settingsPanel {
   position: absolute;
   z-index: 3;
-  top: 8px;
-  right: 8px;
+  top: 32px;
+  right: 32px;
   width: 240px;
   box-sizing: border-box;
-  padding: 12px;
+  padding: 16px;
   border-top: var(--glass-border-top);
   border-right: var(--glass-border-side);
   border-bottom: var(--glass-border-bottom);

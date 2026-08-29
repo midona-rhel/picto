@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
-import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
+import { GlassInput, GlassTextarea } from '../../shared/ui/GlassInput/GlassInput';
 import { organizeIntoGroup } from '../../platform/entityApi';
 import type { GroupCandidate } from '../../state/modals';
 import type { EntityTarget } from '../../shared/types/canonical';
@@ -12,7 +12,10 @@ interface GroupOrganizerModalProps {
   target: EntityTarget | null;
   coverRootId: number | null;
   groups: GroupCandidate[];
+  initialNotes: string;
+  maximumNoteBytes: number;
   onClose: () => void;
+  onBeforeSubmit?: () => void;
   onComplete?: (groupId: number) => void;
 }
 
@@ -21,11 +24,15 @@ export function GroupOrganizerModal({
   target,
   coverRootId,
   groups,
+  initialNotes,
+  maximumNoteBytes,
   onClose,
+  onBeforeSubmit,
   onComplete,
 }: GroupOrganizerModalProps) {
   const [name, setName] = useState('');
   const [winnerId, setWinnerId] = useState<number | null>(null);
+  const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choosingWinner = groups.length > 0;
@@ -34,13 +41,18 @@ export function GroupOrganizerModal({
     if (!open) return;
     setName('');
     setWinnerId(groups[0]?.collection_id ?? null);
+    setNotes(initialNotes);
     setSaving(false);
     setError(null);
-  }, [groups, open]);
+  }, [groups, initialNotes, open]);
+
+  const notesBytes = useMemo(() => new TextEncoder().encode(notes).length, [notes]);
+  const notesTooLong = notesBytes > maximumNoteBytes;
 
   const canSubmit = Boolean(
     target && coverRootId != null
     && !saving
+    && !notesTooLong
     && (choosingWinner ? winnerId != null : name.trim().length > 0),
   );
   const title = choosingWinner ? 'Choose the Group to Keep' : 'Create Group';
@@ -54,12 +66,14 @@ export function GroupOrganizerModal({
     if (!target || coverRootId == null || !canSubmit) return;
     setSaving(true);
     setError(null);
+    onBeforeSubmit?.();
     try {
       const result = await organizeIntoGroup({
         target,
         cover_root_id: coverRootId,
         winning_collection_id: winner?.collection_id ?? null,
         name: choosingWinner ? null : name.trim(),
+        notes: notes.trim() || null,
       });
       await announceUndoableMutation('collections.organize');
       onComplete?.(result.collection_id);
@@ -75,7 +89,7 @@ export function GroupOrganizerModal({
       open={open}
       onClose={onClose}
       title={title}
-      size="sm"
+      size="md"
       footer={(
         <>
           <button className={modalStyles.btn} onClick={onClose} disabled={saving} type="button">Cancel</button>
@@ -113,6 +127,21 @@ export function GroupOrganizerModal({
           />
         </label>
       )}
+      <label className={styles.field}>
+        <span>Collection notes</span>
+        <GlassTextarea
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+          placeholder="Optional notes for the collection"
+          rows={8}
+        />
+        <span className={notesTooLong ? styles.counterError : styles.counter}>
+          {notesBytes.toLocaleString()} / {maximumNoteBytes.toLocaleString()} bytes
+        </span>
+        {notesTooLong && (
+          <span className={styles.noteError}>Trim the collection notes before continuing.</span>
+        )}
+      </label>
       {error && <p className={styles.error}>{error}</p>}
     </GlassModal>
   );

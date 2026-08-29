@@ -80,6 +80,7 @@ export interface AppSettings {
   subscriptionInboxItemLimit: number;
   showTagGroups: boolean;
   starredTags: string[];
+  tagGroupColors: Record<string, string>;
   sidebarQuickAccess: string[];
   aiTaggerWd14Enabled: boolean;
   aiTaggerE621Enabled: boolean;
@@ -140,6 +141,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   subscriptionInboxItemLimit: 1000,
   showTagGroups: true,
   starredTags: [],
+  tagGroupColors: {},
   sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false,
   aiTaggerE621Enabled: false,
@@ -222,6 +224,18 @@ function stringArrayValue(value: unknown, key: string): string[] {
   return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
 }
 
+function stringMapValue(value: unknown, key: string): Record<string, string> {
+  const object = objectValue(value, `Settings field "${key}"`);
+  const result: Record<string, string> = {};
+  for (const [name, color] of Object.entries(object)) {
+    if (typeof color !== 'string') {
+      throw new Error(`Settings field "${key}" must contain only string values.`);
+    }
+    if (name.trim() && color) result[name] = color;
+  }
+  return result;
+}
+
 const NOTIFICATION_TONES = ['error', 'warning', 'info', 'success'] as const;
 
 function notificationTonesValue(value: unknown, key: string): NotificationTone[] {
@@ -281,6 +295,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     subscriptionInboxItemLimit: integerRangeValue(storedOrDefault(source, 'subscriptionInboxItemLimit', APP_SETTINGS_DEFAULTS.subscriptionInboxItemLimit), 'subscriptionInboxItemLimit', 1, 1_000_000),
     showTagGroups: booleanValue(storedOrDefault(source, 'showTagGroups', APP_SETTINGS_DEFAULTS.showTagGroups), 'showTagGroups'),
     starredTags: stringArrayValue(storedOrDefault(source, 'starredTags', APP_SETTINGS_DEFAULTS.starredTags), 'starredTags'),
+    tagGroupColors: stringMapValue(storedOrDefault(source, 'tagGroupColors', APP_SETTINGS_DEFAULTS.tagGroupColors), 'tagGroupColors'),
     sidebarQuickAccess: stringArrayValue(storedOrDefault(source, 'sidebarQuickAccess', APP_SETTINGS_DEFAULTS.sidebarQuickAccess), 'sidebarQuickAccess'),
     aiTaggerWd14Enabled: booleanValue(storedOrDefault(source, 'aiTaggerWd14Enabled', APP_SETTINGS_DEFAULTS.aiTaggerWd14Enabled), 'aiTaggerWd14Enabled'),
     aiTaggerE621Enabled: booleanValue(storedOrDefault(source, 'aiTaggerE621Enabled', APP_SETTINGS_DEFAULTS.aiTaggerE621Enabled), 'aiTaggerE621Enabled'),

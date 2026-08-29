@@ -164,12 +164,12 @@ describe('Inspector presentation branches', () => {
     for (const entry of cases) {
       const view = renderInspector(entry);
       assertStableAnchors(
-        entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created', 'Date modified'] : [],
+        entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date Imported', 'Date Created', 'Date Modified'] : [],
         entry.target.kind === 'multi' ? ['notes', 'source'] : undefined,
       );
       const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
       if (entry.data || entry.target.kind === 'multi') {
-        expect(sections.slice(0, 3)).toEqual(['tags', 'folders', 'properties']);
+        expect(sections.slice(0, 3)).toEqual(['folders', 'tags', 'properties']);
       } else {
         expect(sections).toEqual(['properties']);
       }
@@ -183,7 +183,7 @@ describe('Inspector presentation branches', () => {
     }
   });
 
-  it('shows only one identity-field hover popover at a time', () => {
+  it('keeps identity fields compact on hover and reveals source rows through the manage action', () => {
     renderInspector({
       target: { kind: 'item', itemId: 1 },
       data: {
@@ -191,7 +191,7 @@ describe('Inspector presentation branches', () => {
         root: {
           ...entity.root,
           notes: 'Inspector notes',
-          source_urls: ['https://example.com/source'],
+          source_urls: ['https://example.com/source', 'https://archive.example/item'],
         },
       },
     });
@@ -201,16 +201,23 @@ describe('Inspector presentation branches', () => {
     const source = document.querySelector('[data-inspector-anchor="source"] > div')!;
 
     fireEvent.mouseEnter(name);
-    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(0);
     expect(name).toHaveTextContent('Example');
+    expect(within(name as HTMLElement).getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+    expect(name.querySelector('textarea')).not.toBeInTheDocument();
 
     fireEvent.mouseEnter(notes);
-    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(0);
     expect(notes).toHaveTextContent('Inspector notes');
 
     fireEvent.mouseEnter(source.querySelector('[class]') ?? source);
-    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(0);
     expect(source).toHaveTextContent('example.com');
+    expect(source).toHaveTextContent('example.com/source');
+    expect(source).not.toHaveTextContent('archive.example/item');
+
+    fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Manage source URLs' }));
+    expect(source).toHaveTextContent('archive.example/item');
   });
 
   it('uses the shared inspector action primitive for Add Tags', () => {
@@ -234,13 +241,14 @@ describe('Inspector presentation branches', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Set rating to 4 stars' }));
     expect(entityMutations.setItemRating).toHaveBeenCalledTimes(1);
     expect(entityMutations.setItemRating).toHaveBeenCalledWith(1, 4);
+    expect(screen.getAllByText(/^2026\/01\/0[1-3] \d{2}:\d{2}$/)).toHaveLength(3);
     view.unmount();
   });
 
   it('renders the complete persisted dominant-color palette', () => {
     const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
 
-    expect(document.querySelector('[class*="previewFrame"]')).toHaveStyle({ background: '#123456' });
+    expect(document.querySelector('[class*="previewFrame"]')).not.toHaveAttribute('style');
     const swatches = [...document.querySelectorAll('[class*="swatchWrap"]')];
     expect(swatches).toHaveLength(2);
     expect(swatches[0].querySelector('[class*="swatch"]')).toHaveStyle({ backgroundColor: '#123456' });
@@ -352,7 +360,7 @@ describe('Inspector presentation branches', () => {
     vi.useRealTimers();
   });
 
-  it('stacks six recent previews from 30% to full opacity with the newest on top', async () => {
+  it('stacks six recent previews behind opaque inspector-colored depth veils with the newest on top', async () => {
     vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue({
       selected_count: 6,
       total_size_bytes: 600,
@@ -384,8 +392,10 @@ describe('Inspector presentation branches', () => {
       .toEqual(['file-1', 'file-2', 'file-3', 'file-4', 'file-5', 'file-6']);
     expect(previews.map((node) => node.getAttribute('data-inspector-stack-position')))
       .toEqual(['behind', 'behind', 'behind', 'behind', 'behind', 'top']);
-    expect((previews[0] as HTMLElement).style.opacity).toBe('0.3');
+    expect((previews[0] as HTMLElement).style.opacity).toBe('1');
     expect((previews[5] as HTMLElement).style.opacity).toBe('1');
+    expect((previews[0]!.querySelector('[class*="stackShade"]') as HTMLElement).style.opacity).toBe('0.7');
+    expect((previews[5]!.querySelector('[class*="stackShade"]') as HTMLElement).style.opacity).toBe('0');
     view.unmount();
   });
 
@@ -418,10 +428,11 @@ describe('Inspector presentation branches', () => {
 
     await screen.findByText('Existing note');
     const notes = document.querySelector('[data-inspector-anchor="notes"]')!;
-    fireEvent.click(within(notes as HTMLElement).getByRole('button'));
-    const textarea = notes.querySelector('textarea')!;
-    fireEvent.change(textarea, { target: { value: 'Replacement note' } });
-    fireEvent.keyDown(textarea, { key: 'Enter' });
+    const notesField = within(notes as HTMLElement).getByRole('textbox', { name: 'Notes' });
+    notesField.focus();
+    notesField.textContent = 'Replacement note';
+    fireEvent.input(notesField);
+    fireEvent.keyDown(notesField, { key: 'Enter' });
 
     let confirm = getDefaultStore().get(confirmModalAtom);
     expect(confirm).toMatchObject({
@@ -436,8 +447,8 @@ describe('Inspector presentation branches', () => {
 
     getDefaultStore().set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
     const source = document.querySelector('[data-inspector-anchor="source"]')!;
-    fireEvent.click(within(source as HTMLElement).getByRole('button'));
-    fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Manage source URLs' }));
+    fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Delete URL' }));
 
     confirm = getDefaultStore().get(confirmModalAtom);
     expect(confirm).toMatchObject({

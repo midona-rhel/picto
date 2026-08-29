@@ -29,11 +29,14 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { reverseImageSearch } from '../../platform/shellApi';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
+import { navigateToNode } from '../../state/navigationHistory';
+import { contentSortSubmenu } from '../folders/folderContextMenu';
 
 export interface GroupSurfaceProps {
   groupId: number;
   initialMode?: 'reader' | 'editor';
   presentation?: 'detail' | 'quicklook';
+  breadcrumbParent?: string;
   rootCurrentIndex: number;
   rootTotal: number;
   onNavigateRoot: (delta: number) => void;
@@ -252,6 +255,7 @@ export function GroupSurface({
   groupId,
   initialMode = 'reader',
   presentation = 'detail',
+  breadcrumbParent = 'Collections',
   rootCurrentIndex,
   rootTotal,
   onNavigateRoot,
@@ -313,7 +317,14 @@ export function GroupSurface({
 
   useEffect(() => {
     if (!details || viewerIndex !== null || presentation === 'quicklook') return;
-    setDisplayState({ currentIndex: rootCurrentIndex, total: rootTotal });
+    setDisplayState({
+      currentIndex: rootCurrentIndex,
+      total: rootTotal,
+      breadcrumb: mode === 'editor' ? {
+        parent: breadcrumbParent,
+        current: details.root.name || 'Untitled',
+      } : undefined,
+    });
     setDisplayControls(mode === 'reader' ? {
       close: onClose,
       navigate: onNavigateRoot,
@@ -326,7 +337,7 @@ export function GroupSurface({
       setDisplayState(null);
       setDisplayControls(null);
     };
-  }, [details, initialMode, mode, onClose, onNavigateRoot, presentation, rootCurrentIndex, rootTotal, setDisplayControls, setDisplayState, viewerIndex]);
+  }, [breadcrumbParent, details, initialMode, mode, onClose, onNavigateRoot, presentation, rootCurrentIndex, rootTotal, setDisplayControls, setDisplayState, viewerIndex]);
 
   const selectedItems = useMemo(
     () => members.filter((item) => selectedItemIds.has(item.root_id)),
@@ -457,6 +468,7 @@ export function GroupSurface({
       aiTagEnabled: selected.every((entry) => entry.mime.startsWith('image/')),
       singleSelected: single != null,
       singleHash: single?.content_hash ?? null,
+      singleItemId: single?.root_id ?? null,
       singleKind: single?.kind ?? null,
       singleName: single?.name ?? null,
       singleMime: single?.mime ?? null,
@@ -514,6 +526,10 @@ export function GroupSurface({
           message: reason instanceof Error ? reason.message : String(reason),
         }));
       },
+      onFindMediaMatches: (itemId) => {
+        onClose();
+        navigateToNode(`media-matches:${itemId}`);
+      },
       onRegenerateThumbnails: () => { void filesController.regenerateThumbnailsBatch(selected.map((entry) => entry.content_hash)); },
       onSetLibraryCover: single ? (hash) => {
         void openCurrentLibraryCoverPicker({
@@ -539,7 +555,7 @@ export function GroupSurface({
     if (trashIndex >= 0) entries.splice(trashIndex, 0, { separator: true }, removeEntry);
     else entries.push({ separator: true }, removeEntry);
     contextMenu.openAt(position, entries);
-  }, [contextMenu, details?.tag_ids, detachMembers, groupId, members, selectedItemIds, selectedItems, setAiPortal, setExportModal, setFolderPortal, setTagPortal]);
+  }, [contextMenu, details?.tag_ids, detachMembers, groupId, members, onClose, selectedItemIds, selectedItems, setAiPortal, setExportModal, setFolderPortal, setTagPortal]);
 
   const confirmUngroup = useCallback(() => {
     setConfirmModal({
@@ -558,16 +574,6 @@ export function GroupSurface({
     });
   }, [groupId, onClose, setConfirmModal]);
 
-  const openEmptyMenu = useCallback((position: { x: number; y: number }) => {
-    contextMenu.openAt(position, [
-      {
-        label: 'Ungroup...',
-        icon: <GroupRemoveIcon size={15} />,
-        action: confirmUngroup,
-      },
-    ]);
-  }, [confirmUngroup, contextMenu]);
-
   const saveOrder = useCallback(async (orderedItemIds: number[]) => {
     try {
       await reorderGroup({ collection_id: groupId, media_ids: orderedItemIds });
@@ -577,6 +583,37 @@ export function GroupSurface({
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   }, [groupId, refresh]);
+
+  const sortCollectionContents = useCallback((field: 'name' | 'size') => {
+    const ordered = [...members].sort((left, right) => {
+      if (field === 'name') {
+        const compared = (left.name ?? '').localeCompare(right.name ?? '', undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
+        return compared || left.root_id - right.root_id;
+      }
+      const leftSize = BigInt(left.total_size_bytes);
+      const rightSize = BigInt(right.total_size_bytes);
+      if (leftSize !== rightSize) return leftSize > rightSize ? -1 : 1;
+      return left.root_id - right.root_id;
+    });
+    void saveOrder(ordered.map((item) => item.root_id));
+  }, [members, saveOrder]);
+
+  const openEmptyMenu = useCallback((position: { x: number; y: number }) => {
+    contextMenu.openAt(position, [
+      contentSortSubmenu((field) => {
+        if (field === 'name' || field === 'size') sortCollectionContents(field);
+      }, ['name', 'size']),
+      { separator: true },
+      {
+        label: 'Ungroup...',
+        icon: <GroupRemoveIcon size={15} />,
+        action: confirmUngroup,
+      },
+    ]);
+  }, [confirmUngroup, contextMenu, sortCollectionContents]);
 
   if (error && !details) {
     return <div className={styles.surface}><div className={`${styles.status} ${styles.error}`}>{error}</div></div>;

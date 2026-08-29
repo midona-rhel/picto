@@ -109,13 +109,13 @@
 }
 
 .namespaceRail {
-  width: 240px;
-  flex: 0 0 240px;
+  width: 184px;
+  flex: 0 0 184px;
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
   box-sizing: border-box;
-  padding: 12px 0;
+  padding: 8px 0;
   background: var(--color-bg-app);
   border-right: 1px solid var(--color-border-secondary);
 }
@@ -124,22 +124,29 @@
   height: 26px;
   display: flex;
   align-items: center;
-  margin: 12px 12px 2px;
-  padding-left: 4px;
+  margin: 12px 8px 3px;
+  padding-left: 3px;
   justify-content: space-between;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
 
+.addGroupButton {
+  composes: iconBtn from '../../shared/styles/iconButton.module.css';
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+}
+
 .namespaceItem {
-  width: calc(100% - 24px);
+  width: calc(100% - 16px);
   height: 26px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin: 0 12px 1px;
-  padding: 0 6px 0 4px;
+  margin: 0 8px 1px;
+  padding: 0 6px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -151,18 +158,18 @@
 
 .namespaceItem:hover { background: var(--color-surface-hover); }
 .namespaceItemActive { background: var(--color-surface-active); }
-.namespaceCount { margin-left: auto; opacity: .5; font: var(--font-size-caption) var(--font-family-mono); }
+.namespaceCount { margin-left: auto; color: var(--color-text-tertiary); font: var(--font-size-caption) var(--font-family-ui); }
 .groupIdentity { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .groupIdentity svg { flex: 0 0 auto; }
 .groupName { overflow: hidden; color: var(--color-text-primary); text-overflow: ellipsis; white-space: nowrap; }
 
 .cleanupTagsButton {
-  width: calc(100% - 24px);
+  width: calc(100% - 16px);
   height: 26px;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 12px 0;
+  margin: 10px 8px 0;
   padding: 0 6px;
   border: 0;
   border-radius: 6px;
@@ -192,17 +199,15 @@
   background: var(--color-bg-app);
 }
 
-.canvasHeader {
-  min-height: 44px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+.viewLeaving {
+  opacity: 0;
+  transition: opacity 100ms var(--ease-default);
 }
 
-.canvasTitle { font-size: var(--font-size-xl); font-weight: var(--font-weight-regular); }
-.canvasCount { margin-left: 6px; opacity: .5; font: var(--font-size-caption) var(--font-family-mono); }
-.canvasQuery { color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
+.viewEntering {
+  animation: tagViewFadeIn 140ms var(--ease-default) both;
+}
+
 .muted { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 
 .tagCanvas {
@@ -211,7 +216,7 @@
   flex: 1;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  padding-bottom: 24px;
+  padding: 8px 0 24px;
 }
 
 .tagListInner {
@@ -223,11 +228,40 @@
 .tagVirtualRow {
   position: absolute;
   top: 0;
-  left: 16px;
-  right: 16px;
+  left: 12px;
+  right: 12px;
   height: 26px;
   display: grid;
   gap: 2px;
+}
+
+.tagVirtualRowEnd::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--color-border-secondary);
+}
+
+.tagSectionHeader {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px;
+  color: var(--color-text-primary);
+  font: var(--font-size-lg)/42px var(--font-family-ui);
+}
+
+.tagSectionCount {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
 }
 
 .tagCard {
@@ -253,7 +287,7 @@
   width: 5px;
   height: 5px;
   flex: 0 0 5px;
-  margin: 0 9px 0 6px;
+  margin: 0 9px 0 4px;
   border-radius: 50%;
   background: var(--color-text-secondary);
   opacity: .5;
@@ -282,7 +316,9 @@
 @keyframes tagSkeleton { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .tagListInner { animation: none; }
+  .tagListInner,
+  .viewEntering { animation: none; }
+  .viewLeaving { transition: none; }
 }
 
 .editor { display: flex; flex-direction: column; gap: 18px; }
@@ -317,7 +353,8 @@
 
 @media (max-width: 760px) {
   .namespaceRail { width: 142px; flex-basis: 142px; padding-inline: 6px; }
-  .tagVirtualRow { left: 10px; right: 10px; }
+  .tagVirtualRow,
+  .tagSectionHeader { left: 10px; right: 10px; }
 }
 
 @media (max-width: 520px) {

@@ -1,11 +1,14 @@
 /** Builds the renderer sidebar from replacement navigation and count reads. */
 
 import { getDefaultStore } from 'jotai';
-import type { NavigationSnapshot } from '../shared/types/generated/application/NavigationSnapshot';
-import type { SidebarCounts } from '../shared/types/generated/application/SidebarCounts';
 import { getNavigation, getSidebarCounts } from '../platform/navigationApi';
 import { getNamespaceSummary } from '../platform/tagApi';
-import type { SidebarNodeDto } from '../shared/types/canonical';
+import type {
+  CanonicalNavigationSnapshot,
+  CanonicalSidebarCounts,
+  FilterExpr,
+  SidebarNodeDto,
+} from '../shared/types/canonical';
 import { setSidebarTreeAtom, sidebarLoadingAtom } from '../state/sidebar';
 
 const store = getDefaultStore();
@@ -22,10 +25,6 @@ const SYSTEM_NODES: Array<{ id: string; name: string; sort_order: number }> = [
   { id: 'system:trash', name: 'Trash', sort_order: 8 },
 ];
 
-function countById(counts: Array<{ id: number; count: number }>): Map<number, number> {
-  return new Map(counts.map(({ id, count }) => [id, count]));
-}
-
 function finiteRevision(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} revision is invalid.`);
   return value;
@@ -36,7 +35,7 @@ function countValue(value: number, label: string): number {
   return value;
 }
 
-function systemNodes(counts: SidebarCounts, totalTagCount: number): SidebarNodeDto[] {
+function systemNodes(counts: CanonicalSidebarCounts, totalTagCount: number): SidebarNodeDto[] {
   const values: Record<string, number | null> = {
     'system:active': countValue(counts.all, 'All'),
     'system:inbox': countValue(counts.inbox, 'Inbox'),
@@ -60,8 +59,11 @@ function systemNodes(counts: SidebarCounts, totalTagCount: number): SidebarNodeD
   }));
 }
 
-function folderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): SidebarNodeDto[] {
-  const countsById = countById(counts.folders);
+function folderNodes(
+  navigation: CanonicalNavigationSnapshot,
+  counts: CanonicalSidebarCounts,
+): SidebarNodeDto[] {
+  const countsById = new Map(counts.folders.map((entry) => [entry.folder_id, entry.count]));
   return navigation.folders.map((folder) => ({
     id: `folder:${folder.folder_id}`,
     kind: 'folder',
@@ -69,7 +71,7 @@ function folderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): Sid
     name: folder.name,
     icon: folder.icon,
     color: folder.color,
-    sort_order: folder.sort_rank,
+    sort_order: folder.display_order,
     count: countValue(countsById.get(folder.folder_id) ?? 0, `Folder ${folder.folder_id}`),
     freshness: 'exact',
     selectable: true,
@@ -82,10 +84,19 @@ function folderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): Sid
   }));
 }
 
-function smartFolderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): SidebarNodeDto[] {
-  const countsById = countById(counts.smart_folders);
+function isEmptyFilter(filter: FilterExpr): boolean {
+  return filter.kind === 'all' && filter.value.length === 0;
+}
+
+function smartFolderNodes(
+  navigation: CanonicalNavigationSnapshot,
+  counts: CanonicalSidebarCounts,
+): SidebarNodeDto[] {
+  const countsById = new Map(
+    counts.smart_folders.map((entry) => [entry.smart_folder_id, entry.count]),
+  );
   return navigation.smart_folders.map((folder) => {
-    const isGroup = folder.predicate.groups.length === 0;
+    const isGroup = isEmptyFilter(folder.view.filter);
     return {
     id: `smart:${folder.smart_folder_id}`,
     kind: 'smart_folder',
@@ -101,17 +112,15 @@ function smartFolderNodes(navigation: NavigationSnapshot, counts: SidebarCounts)
       is_group: isGroup,
       parent_id: folder.parent_id,
       notes: folder.notes,
-      predicate: folder.predicate,
-      sort_field: folder.sort_field,
-      sort_order: folder.sort_order,
+      view: folder.view,
     },
     };
   });
 }
 
 export function buildSidebarNodes(
-  navigation: NavigationSnapshot,
-  counts: SidebarCounts,
+  navigation: CanonicalNavigationSnapshot,
+  counts: CanonicalSidebarCounts,
   totalTagCount = 0,
 ): SidebarNodeDto[] {
   return [

@@ -2,7 +2,10 @@ import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom } from '../state/navigation';
 
-const { deleteFoldersMock } = vi.hoisted(() => ({ deleteFoldersMock: vi.fn() }));
+const { deleteFoldersMock, sortFolderItemsMock } = vi.hoisted(() => ({
+  deleteFoldersMock: vi.fn(),
+  sortFolderItemsMock: vi.fn(),
+}));
 
 vi.mock('../platform/folderApi', () => ({
   addMedia: vi.fn(),
@@ -15,7 +18,7 @@ vi.mock('../platform/folderApi', () => ({
   reorderFolderChildren: vi.fn(),
   setFolderMetadata: vi.fn(),
   setFolderWatchConfig: vi.fn(),
-  sortFolderItemsByName: vi.fn(),
+  sortFolderItems: sortFolderItemsMock,
 }));
 
 import {
@@ -38,7 +41,16 @@ function deletionReceipt(deleted: number[], fallback: number | null) {
 describe('foldersController deletion settlement', () => {
   beforeEach(() => {
     deleteFoldersMock.mockReset();
+    sortFolderItemsMock.mockReset();
     store.set(activeNodeIdAtom, 'system:active');
+  });
+
+  it('sorts folder contents by the requested field', async () => {
+    sortFolderItemsMock.mockResolvedValue({ revision: 2, resources: [], item_ids: [] });
+
+    await foldersController.sortContents(12, 'modified_at');
+
+    expect(sortFolderItemsMock).toHaveBeenCalledWith(12, 'modified_at');
   });
 
   it('states recursive deletion and media preservation in confirmations', () => {

@@ -87,6 +87,31 @@ describe('useMediaImagePipeline', () => {
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'broken');
   });
 
+  it('retains the previous frame until a missing thumbnail falls back to the decoded original', async () => {
+    const { rerender } = render(<PipelineHarness {...input('first')} fallbackToFullResolution />);
+    act(() => { images[0].onload?.(); });
+
+    rerender(<PipelineHarness {...input('second')} fallbackToFullResolution />);
+    const missingThumbnail = images[1];
+    act(() => { missingThumbnail.onerror?.(); });
+    const original = images[2];
+
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'first');
+    expect(original.src).toBe('media://localhost/file/second-thumb.png');
+
+    let finishDecode: (() => void) | undefined;
+    original.decode = vi.fn(() => new Promise<void>((resolve) => { finishDecode = resolve; }));
+    act(() => { original.onload?.(); });
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'first');
+
+    await act(async () => { finishDecode?.(); });
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'second');
+    expect(screen.getByTestId('pipeline')).toHaveAttribute(
+      'data-thumb-url',
+      'media://localhost/file/second-thumb.png',
+    );
+  });
+
   it('can request full resolution immediately while retaining the thumbnail layer', () => {
     render(<PipelineHarness {...input('first')} fullResolutionDelayMs={0} />);
 

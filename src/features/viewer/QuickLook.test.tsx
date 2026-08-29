@@ -48,10 +48,11 @@ describe('QuickLook', () => {
       <div data-contained-grid>
         <QuickLook
           items={[{
-            entity_hash: 'hash',
-            mime_type: 'image/jpeg',
-            pixel_width: 100,
-            pixel_height: 100,
+            root_id: 1,
+            content_hash: 'hash',
+            mime: 'image/jpeg',
+            width: 100,
+            height: 100,
           } as never]}
           currentIndex={0}
           onNavigate={vi.fn()}
@@ -70,11 +71,11 @@ describe('QuickLook', () => {
     render(
       <QuickLook
         items={[{
-          item_id: 1,
-          display_file_hash: 'image-hash',
-          display_mime_type: 'image/jpeg',
-          pixel_width: 100,
-          pixel_height: 100,
+          root_id: 1,
+          content_hash: 'image-hash',
+          mime: 'image/jpeg',
+          width: 100,
+          height: 100,
         } as never]}
         currentIndex={0}
         onNavigate={vi.fn()}
@@ -90,14 +91,14 @@ describe('QuickLook', () => {
     render(
       <QuickLook
         items={[{
-          item_id: 1,
+          root_id: 1,
           kind: 'media',
           lifecycle: 'active',
           name: 'Image',
-          display_file_hash: 'image-hash',
-          display_mime_type: 'image/jpeg',
-          pixel_width: 100,
-          pixel_height: 100,
+          content_hash: 'image-hash',
+          mime: 'image/jpeg',
+          width: 100,
+          height: 100,
         } as never]}
         currentIndex={0}
         onNavigate={vi.fn()}
@@ -114,11 +115,11 @@ describe('QuickLook', () => {
     imagePipeline.thumbLoaded = false;
     const props = {
       items: [{
-        item_id: 1,
-        display_file_hash: 'image-hash',
-        display_mime_type: 'image/jpeg',
-        pixel_width: 100,
-        pixel_height: 100,
+        root_id: 1,
+        content_hash: 'image-hash',
+        mime: 'image/jpeg',
+        width: 100,
+        height: 100,
       } as never],
       currentIndex: 0,
       onNavigate: vi.fn(),
@@ -150,9 +151,9 @@ describe('QuickLook', () => {
     render(
       <QuickLook
         items={[{
-          item_id: 1,
-          display_file_hash: 'document-hash',
-          display_mime_type: mimeType,
+          root_id: 1,
+          content_hash: 'document-hash',
+          mime: mimeType,
           name: 'Document',
         } as never]}
         currentIndex={0}

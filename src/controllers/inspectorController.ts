@@ -9,6 +9,7 @@
 import { getDefaultStore } from 'jotai';
 import { invoke } from '../platform/ipc';
 import type { CanonicalEntityDetails } from '../shared/types/canonical';
+import { tagsController } from './tagsController';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -56,11 +57,18 @@ export async function loadInspectorData(itemId: number | null) {
     const result = await invoke<CanonicalEntityDetails>('items.details', { root_id: itemId });
     if (v !== loadVersion || !result) return;
     const displayHash = result.media[0]?.facts.content_hash;
-    if (displayHash) await preloadImage(`media://localhost/thumb/${displayHash}.jpg`);
+    const [resolvedTags] = await Promise.all([
+      result.tag_ids.length > 0
+        ? tagsController.getById(result.tag_ids).catch(() => [])
+        : Promise.resolve([]),
+      displayHash
+        ? preloadImage(`media://localhost/thumb/${displayHash}.jpg`)
+        : Promise.resolve(),
+    ]);
     if (v !== loadVersion) return;
     if (loadingTimer) clearTimeout(loadingTimer);
     loadingTimer = null;
-    store.set(displayedInspectorItemDetailsAtom, result);
+    store.set(displayedInspectorItemDetailsAtom, { ...result, resolved_tag_records: resolvedTags });
     store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: result.root.root_id });
     store.set(inspectorLoadingAtom, false);
     store.set(inspectorErrorAtom, null);

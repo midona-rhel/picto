@@ -1,5 +1,5 @@
 import { useAtomValue, useSetAtom } from 'jotai';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   IconBookmark, IconCalendar, IconClock, IconDeviceFloppy, IconDimensions,
   IconFile, IconFilterPlus, IconFolder, IconLink, IconLock, IconLockOpen, IconNotes,
@@ -13,6 +13,7 @@ import { folderNodesAtom } from '../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { ColorFilterEditor } from '../../shared/ui/ColorFilterEditor';
 import { IconChangeColor } from '../../shared/ui/icons/sidebar-menu-icons';
 import styles from './GridFilterMenu.module.css';
 
@@ -195,160 +196,6 @@ function useDeferredFilterCommit<T extends unknown[]>(onCommit: (...values: T) =
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(flush, 100);
   }, [flush]);
-}
-
-const FILTER_COLOR_PRESETS = [
-  '#111111', '#FFFFFF', '#9E9E9E', '#A48057', '#FC85B3', '#FF2727',
-  '#FFA34B', '#FFD534', '#47C595', '#51C4C4', '#2B76E7', '#6D50ED',
-] as const;
-
-interface HsvColor { hue: number; saturation: number; value: number }
-
-function hexToHsv(hex: string): HsvColor {
-  const normalized = /^#[0-9a-f]{6}$/i.test(hex) ? hex.slice(1) : '808080';
-  const red = parseInt(normalized.slice(0, 2), 16) / 255;
-  const green = parseInt(normalized.slice(2, 4), 16) / 255;
-  const blue = parseInt(normalized.slice(4, 6), 16) / 255;
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-  const hue = delta === 0 ? 0
-    : max === red ? 60 * (((green - blue) / delta) % 6)
-    : max === green ? 60 * ((blue - red) / delta + 2)
-    : 60 * ((red - green) / delta + 4);
-  return {
-    hue: hue < 0 ? hue + 360 : hue,
-    saturation: max === 0 ? 0 : delta / max,
-    value: max,
-  };
-}
-
-function hsvToHex({ hue, saturation, value }: HsvColor): string {
-  const chroma = value * saturation;
-  const segment = hue / 60;
-  const secondary = chroma * (1 - Math.abs((segment % 2) - 1));
-  const [red, green, blue] = segment < 1 ? [chroma, secondary, 0]
-    : segment < 2 ? [secondary, chroma, 0]
-    : segment < 3 ? [0, chroma, secondary]
-    : segment < 4 ? [0, secondary, chroma]
-    : segment < 5 ? [secondary, 0, chroma]
-    : [chroma, 0, secondary];
-  const match = value - chroma;
-  const byte = (component: number) => Math.round((component + match) * 255).toString(16).padStart(2, '0');
-  return `#${byte(red)}${byte(green)}${byte(blue)}`.toUpperCase();
-}
-
-function ColorFilterEditor({ value, onCommit }: {
-  value: string | null;
-  onCommit: (value: string | null) => void;
-}) {
-  const initial = value?.toUpperCase() ?? '#808080';
-  const [hex, setHex] = useState(initial);
-  const [hsv, setHsv] = useState(() => hexToHsv(initial));
-  const scheduleCommit = useDeferredFilterCommit(onCommit);
-
-  useEffect(() => {
-    const next = value?.toUpperCase() ?? '#808080';
-    setHex(next);
-    setHsv(hexToHsv(next));
-  }, [value]);
-
-  const applyHsv = (next: HsvColor) => {
-    const nextHex = hsvToHex(next);
-    setHsv(next);
-    setHex(nextHex);
-    scheduleCommit(nextHex);
-  };
-  const selectSaturationValue = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    applyHsv({
-      hue: hsv.hue,
-      saturation: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      value: 1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
-    });
-  };
-  const choosePreset = (next: string | null) => {
-    if (next == null) {
-      setHex('#808080');
-      setHsv(hexToHsv('#808080'));
-      onCommit(null);
-      return;
-    }
-    const normalized = next.toUpperCase();
-    setHex(normalized);
-    setHsv(hexToHsv(normalized));
-    onCommit(normalized);
-  };
-
-  return (
-    <div className={styles.colorEditor}>
-      <div
-        className={styles.saturationField}
-        style={{ '--filter-hue': `hsl(${hsv.hue} 100% 50%)` } as CSSProperties}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          selectSaturationValue(event);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) selectSaturationValue(event);
-        }}
-        onPointerUp={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-        }}
-        aria-label="Color saturation and brightness"
-      >
-        <span
-          className={styles.colorCursor}
-          style={{ left: `${hsv.saturation * 100}%`, top: `${(1 - hsv.value) * 100}%` }}
-        />
-      </div>
-      <input
-        className={styles.hueSlider}
-        type="range"
-        min="0"
-        max="359"
-        value={Math.round(hsv.hue)}
-        aria-label="Color hue"
-        onChange={(event) => applyHsv({ ...hsv, hue: Number(event.target.value) })}
-      />
-      <div className={styles.colorPresets}>
-        <button
-          type="button"
-          className={`${styles.colorPreset} ${styles.colorNone} ${value == null ? styles.colorPresetActive : ''}`}
-          aria-label="No color"
-          onClick={() => choosePreset(null)}
-        />
-        {FILTER_COLOR_PRESETS.map((preset) => (
-          <button
-            type="button"
-            key={preset}
-            className={`${styles.colorPreset} ${hex === preset ? styles.colorPresetActive : ''}`}
-            style={{ background: preset }}
-            aria-label={preset}
-            onClick={() => choosePreset(preset)}
-          />
-        ))}
-      </div>
-      <label className={styles.hexField}>
-        <span className={styles.hexPreview} style={{ background: /^#[0-9a-f]{6}$/i.test(hex) ? hex : 'transparent' }} />
-        <input
-          aria-label="Hex color"
-          value={hex}
-          maxLength={7}
-          onChange={(event) => {
-            const next = event.target.value.toUpperCase();
-            setHex(next);
-            if (/^#[0-9A-F]{6}$/.test(next)) {
-              setHsv(hexToHsv(next));
-              scheduleCommit(next);
-            }
-          }}
-        />
-      </label>
-    </div>
-  );
 }
 
 function NumericRangeEditor({

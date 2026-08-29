@@ -12,6 +12,33 @@ function submenuChildren(entries: MenuEntry[], label: string): MenuEntry[] {
 }
 
 describe('buildTileContextMenu', () => {
+  it('finds every root containing the selected exact media for any media type', () => {
+    const onFindMediaMatches = vi.fn();
+    for (const singleMime of ['image/png', 'video/mp4', 'application/pdf']) {
+      const entries = buildTileContextMenu({
+        selectionCount: 1,
+        querySelectionActive: false,
+        singleSelected: true,
+        singleHash: 'exact-hash',
+        singleItemId: 42,
+        singleKind: 'media',
+        singleMime,
+        scopeKind: 'system',
+        statusFilter: null,
+        loadedCount: 1,
+        onFindMediaMatches,
+      });
+      const entry = submenuChildren(entries, 'More').find(
+        (candidate): candidate is MenuItem => 'label' in candidate
+          && candidate.label === 'Find Items with This Media',
+      );
+      expect(entry).toBeDefined();
+      entry!.action();
+    }
+    expect(onFindMediaMatches).toHaveBeenCalledTimes(3);
+    expect(onFindMediaMatches).toHaveBeenLastCalledWith(42);
+  });
+
   it('offers every reverse-image provider for images and none for non-image media', () => {
     const onSearchByImage = vi.fn();
     const base = {
@@ -128,6 +155,26 @@ describe('buildTileContextMenu', () => {
       entry.action();
       expect(action).toHaveBeenCalledOnce();
     }
+  });
+
+  it('offers persisted content sorting on empty space inside a folder', () => {
+    const onSortContents = vi.fn();
+    const entries = buildEmptyContextMenu({
+      selectionCount: 0,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'folder',
+      statusFilter: null,
+      loadedCount: 0,
+      onSortContents,
+    });
+    const size = submenuChildren(entries, 'Sort by').find(
+      (entry): entry is MenuItem => 'label' in entry && entry.label === 'Size',
+    );
+    expect(size).toBeDefined();
+    size!.action();
+    expect(onSortContents).toHaveBeenCalledWith('size');
   });
 
   it('omits Paste Import when the clipboard has no importable payload', () => {

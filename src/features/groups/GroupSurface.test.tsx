@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   getTagsById: vi.fn(),
   openLibraryCoverPicker: vi.fn(() => Promise.resolve()),
   detailMediaRenderer: vi.fn(),
+  navigateToNode: vi.fn(),
 }));
 
 vi.mock('../../controllers/viewerController', () => ({
@@ -33,6 +34,9 @@ vi.mock('../../platform/entityApi', () => ({
 }));
 vi.mock('../../runtime/libraryInvalidation', () => ({
   libraryInvalidation: { register: vi.fn(() => () => {}) },
+}));
+vi.mock('../../state/navigationHistory', () => ({
+  navigateToNode: mocks.navigateToNode,
 }));
 vi.mock('../../controllers/filesController', () => ({
   filesController: {
@@ -193,6 +197,7 @@ function media(itemId: number, hash: string, mimeType: string, _position: number
   return {
     media_id: itemId,
     media_name: `Item ${itemId}`,
+    media_notes: null,
     file_id: itemId,
     file_path: `/media/${hash}`,
     facts: {
@@ -311,6 +316,19 @@ describe('GroupSurface', () => {
       media_item_id: 1,
       file_hash: 'one',
     }));
+  });
+
+  it('finds roots containing the exact collection member media', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByLabelText('Ordered set');
+
+    fireEvent.contextMenu(document.querySelector('[data-group-member="1"]')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Find Items with This Media' }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(mocks.navigateToNode).toHaveBeenCalledWith('media-matches:1');
   });
 
   it('shows member thumbnails before revealing decoded full images', async () => {
@@ -502,9 +520,13 @@ describe('GroupSurface', () => {
 
   it('returns directly to the grid when editing was opened from the grid', async () => {
     const onClose = vi.fn();
-    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    render(<GroupSurface groupId={7} initialMode="editor" breadcrumbParent="All" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
     await screen.findByTestId('grid-item-1');
     const controls = getDefaultStore().get(viewerDisplayControlsAtom);
+    expect(getDefaultStore().get(viewerDisplayStateAtom)?.breadcrumb).toEqual({
+      parent: 'All',
+      current: 'Ordered set',
+    });
     expect(controls?.backLabel).toBe('Back to grid');
     act(() => controls?.close());
     expect(onClose).toHaveBeenCalledOnce();
@@ -567,6 +589,20 @@ describe('GroupSurface', () => {
     await act(async () => { confirm.onConfirm(); });
     await waitFor(() => expect(mocks.ungroup).toHaveBeenCalledWith(7));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('sorts collection members by their member-owned name', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.contextMenu(screen.getByRole('main'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sort by' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Name' }));
+
+    await waitFor(() => expect(mocks.reorderGroup).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_ids: [1, 2, 3],
+    }));
+    expect(screen.queryByRole('button', { name: 'Import Date' })).not.toBeInTheDocument();
   });
 
   it('uses arrow keys to navigate the root detail sequence', async () => {

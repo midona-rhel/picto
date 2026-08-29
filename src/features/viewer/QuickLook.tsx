@@ -37,11 +37,13 @@ export interface QuickLookProps {
 
 interface QuickLookContentProps extends QuickLookProps {
   thumbnailReady?: boolean;
+  thumbnailUrlOverride?: string;
   onReady: () => void;
 }
 
 export function QuickLookContent({
-  items, currentIndex, metadataRootId, onNavigate, onClose, onLoadMore, onReady, thumbnailReady = false,
+  items, currentIndex, metadataRootId, onNavigate, onClose, onLoadMore, onReady,
+  thumbnailReady = false, thumbnailUrlOverride,
 }: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
@@ -84,9 +86,11 @@ export function QuickLookContent({
   const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
     thumbnailHash: currentItem?.content_hash ?? null,
+    thumbnailUrlOverride,
     mime: currentMime,
     isVideo: !isImage,
     neighborHashes,
+    fallbackToFullResolution: true,
   });
 
   useEffect(() => {

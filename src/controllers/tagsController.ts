@@ -1,4 +1,5 @@
 import {
+  createTagGroup,
   deleteTag,
   deleteUnusedTags,
   deleteTagGroup,
@@ -65,6 +66,12 @@ export const tagsController = {
   async renameGroup(namespaceId: number, name: string): Promise<unknown> {
     const result = await renameTagGroup(namespaceId, name);
     await announceUndoableMutation('tags.group.rename');
+    return result;
+  },
+
+  async createGroup(name: string): Promise<unknown> {
+    const result = await createTagGroup(name);
+    await announceUndoableMutation('tags.group.create');
     return result;
   },
 

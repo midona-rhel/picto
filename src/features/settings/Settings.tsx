@@ -42,6 +42,7 @@ import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { CompactNumberInput } from '../../shared/ui/CompactNumberInput/CompactNumberInput';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { AiTaggingPanel } from './AiTaggingPanel';
+import { aiTaggerStatus, type AiRuntimeStatus } from '../../platform/aiTaggerApi';
 import { appController } from '../../controllers/appController';
 import { settingsController, type AppSettings, type ViewPrefsDto, type ViewPrefsPatch } from '../../controllers/settingsController';
 import { previewTheme, themeNeedsNativeWindowRestart } from '../../runtime/themeRuntime';
@@ -336,6 +337,23 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[unit]}`;
 }
 
+interface CloudSnapshot {
+  configuration: CloudConfiguration;
+  status: CloudSyncStatus;
+  restorePoints: RestorePoint[];
+}
+
+async function loadCloudSnapshot(): Promise<CloudSnapshot> {
+  const [configuration, status] = await Promise.all([
+    invoke<CloudConfiguration>('cloud.configuration.get'),
+    invoke<CloudSyncStatus>('cloud.status.get'),
+  ]);
+  const restorePoints = configuration.provider
+    ? await invoke<RestorePoint[]>('cloud.restore.list')
+    : [];
+  return { configuration, status, restorePoints };
+}
+
 function LibraryPanel({ statistics }: { statistics: LibraryStatistics | null }) {
   if (!statistics) {
     return <div className={styles.panelContent} aria-busy="true" />;
@@ -384,31 +402,31 @@ function LibraryPanel({ statistics }: { statistics: LibraryStatistics | null }) 
   );
 }
 
-function CloudPanel() {
-  const [configuration, setConfiguration] = useState<CloudConfiguration | null>(null);
-  const [status, setStatus] = useState<CloudSyncStatus | null>(null);
-  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>([]);
+function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null }) {
+  const [configuration, setConfiguration] = useState<CloudConfiguration | null>(initialSnapshot?.configuration ?? null);
+  const [status, setStatus] = useState<CloudSyncStatus | null>(initialSnapshot?.status ?? null);
+  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>(initialSnapshot?.restorePoints ?? []);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [nextConfiguration, nextStatus] = await Promise.all([
-      invoke<CloudConfiguration>('cloud.configuration.get'),
-      invoke<CloudSyncStatus>('cloud.status.get'),
-    ]);
-    setConfiguration(nextConfiguration);
-    setStatus(nextStatus);
-    if (nextConfiguration.provider) {
-      setRestorePoints(await invoke<RestorePoint[]>('cloud.restore.list'));
-    } else {
-      setRestorePoints([]);
-    }
+    const snapshot = await loadCloudSnapshot();
+    setConfiguration(snapshot.configuration);
+    setStatus(snapshot.status);
+    setRestorePoints(snapshot.restorePoints);
   }, []);
 
   useEffect(() => {
-    void refresh().catch(() => {});
+    if (!initialSnapshot) return;
+    setConfiguration(initialSnapshot.configuration);
+    setStatus(initialSnapshot.status);
+    setRestorePoints(initialSnapshot.restorePoints);
+  }, [initialSnapshot]);
+
+  useEffect(() => {
+    if (!initialSnapshot) void refresh().catch(() => {});
     const timer = setInterval(() => void refresh().catch(() => {}), 2_000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [initialSnapshot, refresh]);
 
   const run = async (operation: () => Promise<unknown>, success?: string) => {
     if (busy) return;
@@ -428,7 +446,7 @@ function CloudPanel() {
   };
 
   if (!configuration || !status) {
-    return <div className={styles.panelContent}><div className={styles.settingPlaceholder}>Loading cloud status…</div></div>;
+    return <div className={styles.panelContent} aria-busy="true" />;
   }
 
   const configured = configuration.provider != null;
@@ -1020,6 +1038,8 @@ export function Settings() {
   const [pendingViewPrefs, setPendingViewPrefs] = useState<ViewPrefsDto | null>(null);
   const [resetViewOverridesPending, setResetViewOverridesPending] = useState(false);
   const [libraryStatistics, setLibraryStatistics] = useState<LibraryStatistics | null>(null);
+  const [cloudSnapshot, setCloudSnapshot] = useState<CloudSnapshot | null>(null);
+  const [aiRuntimeStatus, setAiRuntimeStatus] = useState<AiRuntimeStatus | null>(null);
   const savedSnapshotRef = useRef<{
     app: AppSettings | null;
     prefs: ViewPrefsDto | null;
@@ -1050,6 +1070,8 @@ export function Settings() {
       savedSnapshotRef.current.prefs = structuredClone(p);
     }).catch(() => {});
     void refreshLibraryStatistics().catch(() => {});
+    void loadCloudSnapshot().then(setCloudSnapshot).catch(() => {});
+    void aiTaggerStatus().then(setAiRuntimeStatus).catch(() => {});
   }, [refreshLibraryStatistics]);
 
   useEffect(() => {
@@ -1268,6 +1290,7 @@ export function Settings() {
             </div>
           ) : activePanel.id === 'aitagging' ? (
             <AiTaggingPanel
+              initialStatus={aiRuntimeStatus}
               settings={pendingAppSettings}
               onSettingsChange={(patch) => {
                 setPendingAppSettings((current) => current ? { ...current, ...patch } : current);
@@ -1275,7 +1298,7 @@ export function Settings() {
               }}
             />
           ) : activePanel.id === 'cloud' ? (
-            <CloudPanel />
+            <CloudPanel initialSnapshot={cloudSnapshot} />
           ) : activePanel.id === 'library' ? (
             <LibraryPanel statistics={libraryStatistics} />
           ) : null}

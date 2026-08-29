@@ -163,6 +163,7 @@ export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
 export const gridFilterToolbarOpenAtom = atom(false);
 
 export const gridScopeLabelAtom = atom((get) => {
+  if (get(gridSessionAtom).scope.kind === 'media_matches') return 'Items with This Media';
   const nodeId = get(displayedSurfaceNodeIdAtom);
   const labels: Record<string, string> = {
     'system:active': 'All',

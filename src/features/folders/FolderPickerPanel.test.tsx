@@ -116,4 +116,16 @@ describe('FolderPickerPanel row context actions', () => {
     expect(screen.getByText('Reference')).toBeInTheDocument();
     expect(screen.queryByText('Archive')).not.toBeInTheDocument();
   });
+
+  it('keeps the selector compact and scrolls its folder tree internally', () => {
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+
+    const panel = document.querySelector<HTMLElement>('[data-overlay-shell]');
+    expect(panel?.style.width).toBe('360px');
+    expect(panel?.style.height).toBe('480px');
+    expect(screen.getByPlaceholderText('Search...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pin/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Switch')).toBeInTheDocument();
+    expect(screen.getByText('Close')).toBeInTheDocument();
+  });
 });

@@ -45,7 +45,7 @@ describe('smart folder refresh', () => {
     expect(mocks.createSmartFolder).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Reference',
       parent_id: 4,
-      predicate: { groups: [] },
+      view: expect.objectContaining({ filter: { kind: 'all', value: [] } }),
     }));
     expect(mocks.announceUndoableMutation).toHaveBeenCalledWith('smart_folders.create');
   });

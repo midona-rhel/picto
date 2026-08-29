@@ -87,6 +87,7 @@ function details(itemId: number, hash: string, name: string): CanonicalEntityDet
     media: [{
       media_id: itemId,
       media_name: name,
+      media_notes: null,
       file_id: itemId,
       file_path: `/media/${hash}`,
       facts: {

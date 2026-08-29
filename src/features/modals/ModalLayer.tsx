@@ -91,7 +91,17 @@ export function ModalLayer() {
         target={groupOrganizer.target}
         coverRootId={groupOrganizer.coverRootId}
         groups={groupOrganizer.groups}
-        onClose={() => setGroupOrganizer({ open: false, target: null, coverRootId: null, groups: [] })}
+        initialNotes={groupOrganizer.notes}
+        maximumNoteBytes={groupOrganizer.notesMaximumBytes}
+        onClose={() => setGroupOrganizer({
+          open: false,
+          target: null,
+          coverRootId: null,
+          groups: [],
+          notes: '',
+          notesMaximumBytes: 65_536,
+        })}
+        onBeforeSubmit={groupOrganizer.onBeforeSubmit}
         onComplete={groupOrganizer.onComplete}
       />
 

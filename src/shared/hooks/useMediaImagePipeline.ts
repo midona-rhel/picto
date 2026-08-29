@@ -18,11 +18,15 @@ import { mediaThumbnailUrl, mediaFileUrl } from '../lib/mediaUrl';
 export interface MediaPipelineInput {
   hash: string | null;
   thumbnailHash: string | null;
+  /** An already-prepared preview source supplied by an outer viewer handoff. */
+  thumbnailUrlOverride?: string;
   mime: string;
   isVideo: boolean;
   neighborHashes?: string[];
   /** Delay before requesting full resolution; viewers may opt into immediate promotion. */
   fullResolutionDelayMs?: number;
+  /** Keep the previous frame until the original can replace a missing thumbnail. */
+  fallbackToFullResolution?: boolean;
 }
 
 export interface MediaPipelineOutput {
@@ -41,10 +45,12 @@ export interface MediaPipelineOutput {
 export function useMediaImagePipeline({
   hash,
   thumbnailHash,
+  thumbnailUrlOverride,
   mime,
   isVideo,
   neighborHashes = [],
   fullResolutionDelayMs = 100,
+  fallbackToFullResolution = false,
 }: MediaPipelineInput): MediaPipelineOutput {
   // What's currently shown to the user (lags behind `hash` until new thumb is ready)
   // Start empty so the first render takes the same thumbnail-first path as navigation.
@@ -82,26 +88,51 @@ export function useMediaImagePipeline({
       return;
     }
 
-    const newThumbUrl = mediaThumbnailUrl(requestedThumbnailHash);
+    const newThumbUrl = thumbnailUrlOverride ?? mediaThumbnailUrl(requestedThumbnailHash);
     let cancelled = false;
 
     const img = new Image();
-    const commitThumbnail = () => {
+    const commitThumbnail = (url = newThumbUrl) => {
       if (cancelled) return;
       setDisplayedHash(hash);
       setDisplayedThumbnailHash(requestedThumbnailHash);
-      setThumbUrl(newThumbUrl);
+      setThumbUrl(url);
       setThumbLoaded(true);
       setThumbSettled(true);
       setFullVisible(false);
       setFullUrl('');
     };
     img.onload = () => {
-      if (typeof img.decode === 'function') img.decode().then(commitThumbnail).catch(commitThumbnail);
+      if (typeof img.decode === 'function') {
+        img.decode().then(() => commitThumbnail()).catch(() => commitThumbnail());
+      }
       else commitThumbnail();
     };
     img.onerror = () => {
       if (cancelled) return;
+      if (fallbackToFullResolution) {
+        const fallbackUrl = mediaFileUrl(requestedThumbnailHash, mime);
+        const original = new Image();
+        original.onload = () => {
+          if (typeof original.decode === 'function') {
+            original.decode().then(() => commitThumbnail(fallbackUrl)).catch(() => commitThumbnail(fallbackUrl));
+          } else {
+            commitThumbnail(fallbackUrl);
+          }
+        };
+        original.onerror = () => {
+          if (cancelled) return;
+          setDisplayedHash(hash);
+          setDisplayedThumbnailHash(requestedThumbnailHash);
+          setThumbUrl(newThumbUrl);
+          setThumbLoaded(false);
+          setThumbSettled(true);
+          setFullVisible(false);
+          setFullUrl('');
+        };
+        original.src = fallbackUrl;
+        return;
+      }
       // Still swap even on error — show broken state rather than stuck on old image
       setDisplayedHash(hash);
       setDisplayedThumbnailHash(requestedThumbnailHash);
@@ -114,12 +145,12 @@ export function useMediaImagePipeline({
     img.src = newThumbUrl;
 
     return () => { cancelled = true; };
-  }, [hash, thumbnailHash, isVideo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hash, thumbnailHash, thumbnailUrlOverride, isVideo, fallbackToFullResolution, mime]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // First mount: show immediately (no previous image to hold)
   useEffect(() => {
     if (hash && !displayedHash) {
-      const url = mediaThumbnailUrl(thumbnailHash ?? hash);
+      const url = thumbnailUrlOverride ?? mediaThumbnailUrl(thumbnailHash ?? hash);
       setDisplayedHash(hash);
       setDisplayedThumbnailHash(thumbnailHash ?? hash);
       setThumbUrl(url);
