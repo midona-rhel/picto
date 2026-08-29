@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use picto_library::{ClaimedIngestJob, PreparedImport, PreparedIngestPayload, RootId};
 
 use crate::library_application::LibraryApplication;
+use crate::media_capabilities::ThumbnailBackend;
+use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CanonicalIngestRunReport {
@@ -52,6 +54,7 @@ pub fn run_batch(
                     .library()
                     .fail_ingest_job(job.ingest_job_id, &error, &now)
                     .map_err(|failure| failure.to_string())?;
+                mark_failed_sources(application, payload_inputs(&job.payload), &error, &now)?;
                 report.failed += 1;
             }
         }
@@ -75,10 +78,17 @@ pub fn run_batch(
                     .library()
                     .fail_ingest_job(job_id, &error.to_string(), &now)
                     .map_err(|failure| failure.to_string())?;
+                mark_failed_sources(
+                    application,
+                    &input.members,
+                    &error.to_string(),
+                    &now,
+                )?;
                 report.failed += 1;
             }
         }
     }
+    crate::library_subscription_state::settle_ingest_runs(application, &now)?;
     Ok(report)
 }
 
@@ -135,10 +145,61 @@ fn settle_items(
                 .library()
                 .fail_ingest_job(job_id, &error.to_string(), now)
                 .map_err(|failure| failure.to_string())?;
+            mark_failed_sources(application, std::slice::from_ref(&jobs[0].1), &error.to_string(), now)?;
             report.failed += 1;
             Ok(())
         }
     }
+}
+
+fn payload_inputs(payload: &PreparedIngestPayload) -> &[PreparedImport] {
+    match payload {
+        PreparedIngestPayload::Item(input) => std::slice::from_ref(input),
+        PreparedIngestPayload::Collection(input) => &input.members,
+    }
+}
+
+fn mark_failed_sources(
+    application: &LibraryApplication,
+    inputs: &[PreparedImport],
+    error: &str,
+    now: &str,
+) -> Result<(), String> {
+    let sources = inputs
+        .iter()
+        .filter_map(|input| input.source_identity.as_ref())
+        .filter_map(|source| {
+            let (site_id, post_key) = source.source_key.split_once(':')?;
+            Some((site_id, post_key, source.source_item_key.as_str()))
+        })
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Ok(());
+    }
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::CanonicalIngest,
+            ["subscriptions".to_owned(), "tasks".to_owned()],
+            [],
+            |transaction, _| {
+                let mut changed = 0;
+                for (site_id, post_key, item_key) in &sources {
+                    changed += transaction.execute(
+                        "UPDATE source_item
+                         SET state = 'failed', last_error = ?1, updated_at = ?2
+                         WHERE item_key = ?3 AND source_post_id = (
+                             SELECT source_post_id FROM source_post
+                             WHERE site_id = ?4 AND post_key = ?5
+                         ) AND state NOT IN ('ingested', 'deleted')",
+                        rusqlite::params![error, now, item_key, site_id, post_key],
+                    )?;
+                }
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|failure| failure.to_string())
 }
 
 fn reconcile_ingested_sources(
@@ -209,14 +270,53 @@ fn prepare_job(
     match &mut job.payload {
         PreparedIngestPayload::Item(input) => {
             prepare_import(application, input, job.delete_after_ingest, &mut cleanup)?;
+            ensure_visible_thumbnail(application, input)?;
         }
         PreparedIngestPayload::Collection(input) => {
             for member in &mut input.members {
                 prepare_import(application, member, job.delete_after_ingest, &mut cleanup)?;
             }
+            let cover = input.members.get(input.cover_index).ok_or_else(|| {
+                "Collection cover index is outside the prepared members".to_string()
+            })?;
+            ensure_visible_thumbnail(application, cover)?;
         }
     }
     Ok(cleanup)
+}
+
+fn ensure_visible_thumbnail(
+    application: &LibraryApplication,
+    input: &PreparedImport,
+) -> Result<(), String> {
+    if application
+        .blobs()
+        .find_thumbnail_path(&input.facts.content_hash)
+        .map_err(|error| format!("Thumbnail lookup failed: {error}"))?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let mut source = PreparedMediaSource::from_stored_metadata(
+        PathBuf::from(&input.file_path),
+        &input.facts.mime,
+        input
+            .facts
+            .duration_ms
+            .and_then(|value| i64::try_from(value).ok()),
+        input.facts.frame_count.map(i64::from),
+    );
+    if source.caps.thumbnail_backend != Some(ThumbnailBackend::Inline) {
+        return Ok(());
+    }
+    let (bytes, extension) = source
+        .render_inline_thumbnail_bytes(DEFAULT_THUMBNAIL_DIMENSIONS)
+        .map_err(|error| format!("Initial thumbnail generation failed: {error}"))?;
+    application
+        .blobs()
+        .write_thumbnail(&input.facts.content_hash, &bytes, &extension)
+        .map_err(|error| format!("Initial thumbnail write failed: {error}"))
 }
 
 fn prepare_import(
@@ -267,20 +367,20 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use picto_library::{ImmutableMediaFacts, Lifecycle, PreparedIngestJob, Rating};
+    use picto_library::{
+        ImmutableMediaFacts, Lifecycle, PreparedCollectionImport, PreparedIngestJob, Rating,
+        RootKind,
+    };
 
-    #[test]
-    fn worker_consumes_the_canonical_dto_and_defers_derivatives() {
-        let directory = tempfile::tempdir().unwrap();
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let source = directory.path().join("source.png");
-        let bytes = b"canonical-ingest-source";
-        fs::write(&source, bytes).unwrap();
-        let content_hash = hex::encode(Sha256::digest(bytes));
-        let input = PreparedImport {
-            stable_key: "runtime-root".into(),
-            media_name: "source.png".into(),
-            file_path: source.to_string_lossy().into_owned(),
+    fn image_import(path: &Path, stable_key: &str, color: [u8; 4]) -> PreparedImport {
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .save(path)
+            .unwrap();
+        let bytes = fs::read(path).unwrap();
+        PreparedImport {
+            stable_key: stable_key.into(),
+            media_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            file_path: path.to_string_lossy().into_owned(),
             facts: ImmutableMediaFacts {
                 mime: "image/png".into(),
                 size_bytes: bytes.len() as u64,
@@ -288,7 +388,7 @@ mod tests {
                 height: Some(8),
                 duration_ms: None,
                 frame_count: Some(1),
-                content_hash,
+                content_hash: hex::encode(Sha256::digest(&bytes)),
                 perceptual_hash: None,
                 palette: Vec::new(),
             },
@@ -301,7 +401,16 @@ mod tests {
             source_identity: None,
             imported_at_ms: 1_700_000_000_000,
             captured_at_ms: None,
-        };
+        }
+    }
+
+    #[test]
+    fn worker_prepares_the_visible_thumbnail_and_defers_other_derivatives() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let source = directory.path().join("source.png");
+        let input = image_import(&source, "runtime-root", [10, 20, 30, 255]);
+        let content_hash = input.facts.content_hash.clone();
         application
             .library()
             .enqueue_ingest_job(
@@ -324,6 +433,11 @@ mod tests {
         assert!(!source.exists());
         let details = application.library().details(report.root_ids[0]).unwrap();
         assert!(Path::new(&details.media[0].file_path).exists());
+        assert!(application
+            .blobs()
+            .find_thumbnail_path(&content_hash)
+            .unwrap()
+            .is_some());
         let work = application
             .library()
             .auxiliary_read(
@@ -338,5 +452,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(work, 3);
+    }
+
+    #[test]
+    fn collection_is_published_with_its_cover_thumbnail_ready() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let cover_path = directory.path().join("cover.png");
+        let member_path = directory.path().join("member.png");
+        let cover = image_import(&cover_path, "cover", [10, 20, 30, 255]);
+        let member = image_import(&member_path, "member", [40, 50, 60, 255]);
+        let cover_hash = cover.facts.content_hash.clone();
+        let member_hash = member.facts.content_hash.clone();
+        application
+            .library()
+            .enqueue_ingest_job(
+                &PreparedIngestJob {
+                    job_key: "manual:collection".into(),
+                    source_kind: "manual".into(),
+                    source_path: cover_path.to_string_lossy().into_owned(),
+                    source_item_id: None,
+                    delete_after_ingest: false,
+                    payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
+                        members: vec![cover, member],
+                        cover_index: 0,
+                        name: Some("Collection".into()),
+                        modified_at_ms: 1_700_000_000_000,
+                    }),
+                },
+                "2026-08-28T12:00:00Z",
+            )
+            .unwrap();
+
+        let report = run_batch(&application, 64).unwrap();
+        assert_eq!(report.ingested, 1);
+        let details = application.library().details(report.root_ids[0]).unwrap();
+        assert_eq!(details.root.kind, RootKind::Collection);
+        assert_eq!(details.root.media_count, 2);
+        assert!(application
+            .blobs()
+            .find_thumbnail_path(&cover_hash)
+            .unwrap()
+            .is_some());
+        assert!(application
+            .blobs()
+            .find_thumbnail_path(&member_hash)
+            .unwrap()
+            .is_none());
     }
 }
