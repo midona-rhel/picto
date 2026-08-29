@@ -273,7 +273,9 @@ pub fn query_ingest_settlement(
                 )
                 .optional()?;
             if let Some(message) = failed {
-                return Ok(Err(message.unwrap_or_else(|| "Canonical ingest failed".into())));
+                return Ok(Err(
+                    message.unwrap_or_else(|| "Canonical ingest failed".into())
+                ));
             }
             let pending = connection.query_row(
                 "SELECT EXISTS(
@@ -588,8 +590,7 @@ pub fn complete_query(
             )?
             .try_into()
             .unwrap_or(u32::MAX);
-        let continue_run = resume_cursor != Some("")
-            && added_posts < query.configured_post_limit();
+        let continue_run = resume_cursor != Some("") && added_posts < query.configured_post_limit();
         if continue_run {
             transaction.execute(
                 "UPDATE subscription_run_query
@@ -1071,13 +1072,9 @@ mod tests {
         complete_query(&application, &first, None, "2026-08-29T00:00:04Z").unwrap();
 
         let mut next_schedule = DomainSchedule::new();
-        let second = claim_next_query(
-            &application,
-            &mut next_schedule,
-            "2026-08-29T00:00:05Z",
-        )
-        .unwrap()
-        .expect("the second query retains its own one-post budget");
+        let second = claim_next_query(&application, &mut next_schedule, "2026-08-29T00:00:05Z")
+            .unwrap()
+            .expect("the second query retains its own one-post budget");
         assert_ne!(second.query_id, first.query_id);
         let statuses = application
             .library()

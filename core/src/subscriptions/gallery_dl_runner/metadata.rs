@@ -172,17 +172,47 @@ fn html_to_plain_text(raw: &str) -> Option<String> {
 
 fn normalize_metadata_text(raw: &str) -> Option<String> {
     static BRACKET_TAGS: OnceLock<regex::Regex> = OnceLock::new();
+    static WIKI_LINK_LABELED: OnceLock<regex::Regex> = OnceLock::new();
+    static WIKI_LINK: OnceLock<regex::Regex> = OnceLock::new();
+    static TAG_SEARCH: OnceLock<regex::Regex> = OnceLock::new();
+    static LABELED_URL: OnceLock<regex::Regex> = OnceLock::new();
+    static DTEXT_HEADER: OnceLock<regex::Regex> = OnceLock::new();
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
+    // Formatting tags only, so bracketed prose like "[18+]" survives.
     let tags = BRACKET_TAGS.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)\[/?(?:b|i|u|s|code|quote|section|spoiler|url)(?:=[^\]]*)?\]",
+            r"(?i)\[/?(?:b|i|u|s|code|quote|section|spoiler|url|color|sup|sub|size|center|left|right|justify|tn|table|thead|tbody|tr|td|th|hr)(?:=[^\]]*)?\]",
         )
         .expect("valid bracketed markup regex")
     });
     let plain = tags.replace_all(trimmed, " ");
+    // DText: [[link|label]] keeps the label, [[link]] keeps the link text.
+    let plain = WIKI_LINK_LABELED
+        .get_or_init(|| {
+            regex::Regex::new(r"\[\[[^\]|]*\|([^\]]+)\]\]").expect("valid wiki link regex")
+        })
+        .replace_all(&plain, "$1");
+    let plain = WIKI_LINK
+        .get_or_init(|| regex::Regex::new(r"\[\[([^\]]+)\]\]").expect("valid wiki link regex"))
+        .replace_all(&plain, "$1");
+    // DText: {{tag search}} keeps the search text.
+    let plain = TAG_SEARCH
+        .get_or_init(|| regex::Regex::new(r"\{\{([^}]+)\}\}").expect("valid tag search regex"))
+        .replace_all(&plain, "$1");
+    // DText: "label":url keeps the label. The target must look like a link so
+    // ordinary quoted prose followed by a colon is untouched.
+    let plain = LABELED_URL
+        .get_or_init(|| {
+            regex::Regex::new(r#""([^"\n]+)":(?:https?://|/)\S+"#).expect("valid labeled url regex")
+        })
+        .replace_all(&plain, "$1");
+    // DText: h1. .. h6. section headers at line starts.
+    let plain = DTEXT_HEADER
+        .get_or_init(|| regex::Regex::new(r"(?m)^h[1-6]\.\s*").expect("valid header regex"))
+        .replace_all(&plain, "");
     if plain.contains('<') && plain.contains('>') {
         return html_to_plain_text(&plain);
     }
@@ -1238,6 +1268,34 @@ mod tests {
         }));
 
         assert_eq!(parsed.description.as_deref(), Some("Midna 🐺💦 Follow-up"));
+    }
+
+    #[test]
+    fn e621_dtext_descriptions_keep_prose_and_drop_markup() {
+        let parsed = parse_metadata(&json!({
+            "category": "e621",
+            "id": 7,
+            "description": "h2. Commission info\n[color=#ff0000]Open[/color] for [[commission_sheet|sheets]] and {{ych}}.\nSee \"my terms\":https://example.com/tos before asking.\n[sup]updated[/sup] [table][tr][td]row[/td][/tr][/table]"
+        }));
+
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Commission info Open for sheets and ych. See my terms before asking. updated row")
+        );
+    }
+
+    #[test]
+    fn bracketed_prose_that_is_not_markup_survives_normalization() {
+        let parsed = parse_metadata(&json!({
+            "category": "e621",
+            "id": 8,
+            "description": "[18+] variant of chapter 2 [sic], part [3 of 4]"
+        }));
+
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("[18+] variant of chapter 2 [sic], part [3 of 4]")
+        );
     }
 
     #[test]

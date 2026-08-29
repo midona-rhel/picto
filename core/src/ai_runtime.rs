@@ -993,10 +993,7 @@ mod tests {
             prediction("general", "landscape"),
             prediction("general", "landscape"),
         ];
-        assert_eq!(
-            normalize_predictions(&predictions, false),
-            ["landscape"]
-        );
+        assert_eq!(normalize_predictions(&predictions, false), ["landscape"]);
         assert_eq!(
             normalize_predictions(&predictions, true),
             ["landscape", "rating:general"]

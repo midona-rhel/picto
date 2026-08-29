@@ -143,10 +143,7 @@ async fn prepare_fixture(
         lifecycle: Lifecycle::Inbox,
         rating: Rating::Unrated,
         notes: Some("Bundled public-domain guided-tour fixture".into()),
-        tags: vec![
-            "creator:leonardo da vinci".into(),
-            "tutorial".into(),
-        ],
+        tags: vec!["creator:leonardo da vinci".into(), "tutorial".into()],
         folders: Vec::new(),
         source_urls: vec![format!(
             "https://commons.wikimedia.org/wiki/File:{file_name}"

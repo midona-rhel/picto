@@ -168,12 +168,7 @@ fn settle_items(
         Err(error) => {
             let job_id = jobs[0].0;
             if matches!(error, LibraryError::ImportDeleted) {
-                settle_deleted_import(
-                    application,
-                    job_id,
-                    std::slice::from_ref(&jobs[0].1),
-                    now,
-                )?;
+                settle_deleted_import(application, job_id, std::slice::from_ref(&jobs[0].1), now)?;
                 report.skipped += 1;
                 report.cleanup_failures += cleanup_sources(jobs[0].2.clone());
             } else {
