@@ -916,4 +916,30 @@ mod weak_name_tests {
             assert!(!is_weak_name(strong), "{strong} should be strong");
         }
     }
+
+    /// Every synthetic shape the engine's name generators can emit must be
+    /// classified weak, so a later source carrying a human title can upgrade
+    /// it. Generators: `{category}_{post_id}` (no-title gallery-dl sites),
+    /// gallery-dl file stems (ids/hashes), and the OnlyFans
+    /// `{creator} - {date}` fallback.
+    #[test]
+    fn every_generated_name_shape_is_upgradeable() {
+        for generated in [
+            "gelbooru_14583420",
+            "danbooru_12086543",
+            "rule34_1263248",
+            "twitter_2085395535410712592",
+            "ehentai_8df0b5400a",
+            "idolcomplex_1084425",
+            // OnlyFans file stems like "0ig3r76odf_source" never become names:
+            // its bridge always emits a title. The hash-shaped stems below can.
+            "3840x5766_d491bd8d7f1b2feda50ced84657785a6",
+            "f1nn5ter - 2026-08-24",
+        ] {
+            assert!(is_weak_name(generated), "{generated} should be weak");
+        }
+        // OnlyFans post text used as a title is a human name and must never
+        // be downgraded.
+        assert!(!is_weak_name("custom latex catsuit..? don't mind if I"));
+    }
 }
