@@ -16,6 +16,9 @@ import { DuplicatesScreen, DuplicatesToolbar } from './DuplicatesScreen';
 
 const openDefaultAppForHash = vi.hoisted(() => vi.fn());
 const openDetailWindow = vi.hoisted(() => vi.fn());
+const duplicateInvalidation = vi.hoisted(() => ({
+  callback: null as null | (() => void),
+}));
 
 vi.mock('../../controllers/filesController', () => ({
   filesController: { openDefaultAppForHash },
@@ -30,6 +33,17 @@ vi.mock('../../platform/duplicateApi', () => ({
   getDuplicatePairs: vi.fn(),
   resolveDuplicatePair: vi.fn(),
   scanDuplicates: vi.fn(),
+}));
+
+vi.mock('../../runtime/libraryInvalidation', () => ({
+  libraryInvalidation: {
+    register: vi.fn((_resource: string, callback: () => void) => {
+      duplicateInvalidation.callback = callback;
+      return () => {
+        if (duplicateInvalidation.callback === callback) duplicateInvalidation.callback = null;
+      };
+    }),
+  },
 }));
 
 function file(fileId: number, hash: string, width = 100, height = 100) {
@@ -133,6 +147,7 @@ function setupUser() {
 describe('DuplicatesScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    duplicateInvalidation.callback = null;
     clearNotifications();
     vi.mocked(getDuplicatePairs).mockResolvedValue({
       items: [pair()],
@@ -280,6 +295,16 @@ describe('DuplicatesScreen', () => {
       if (itemId === 22) return details(itemId, 'right', 'Right image');
       if (itemId === 33) return details(itemId, 'next-left', 'Next left image');
       return details(itemId, 'next-right', 'Next right image');
+    });
+    vi.mocked(resolveDuplicatePair).mockImplementationOnce(async () => {
+      duplicateInvalidation.callback?.();
+      return {
+        status: 'resolved',
+        choice: 'KeepBoth',
+        affected_item_ids: [11, 22],
+        freed_file_hash: null,
+        receipt: { revision: 2, resources: ['duplicates'], item_ids: [11, 22] },
+      };
     });
 
     const user = setupUser();

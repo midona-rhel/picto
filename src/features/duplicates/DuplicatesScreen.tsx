@@ -472,6 +472,7 @@ export function DuplicatesScreen() {
   const requestIdRef = useRef(0);
   const preparedDetailsRef = useRef<PairDetails | null>(null);
   const scanningRef = useRef(false);
+  const resolutionInFlightRef = useRef(false);
   const leftPreviewRef = useRef<HTMLDivElement>(null);
   const rightPreviewRef = useRef<HTMLDivElement>(null);
 
@@ -564,6 +565,10 @@ export function DuplicatesScreen() {
   }, [loadPairs]);
 
   useEffect(() => libraryInvalidation.register('duplicates', () => {
+    // resolveDuplicatePair emits this invalidation itself. finishResolution
+    // already fetches and prepares the replacement pair atomically, whereas a
+    // second refresh would expose its hashes before its display names arrive.
+    if (resolutionInFlightRef.current) return;
     void loadPairs({ showLoading: false, resetProgress: true });
   }), [loadPairs]);
 
@@ -603,6 +608,7 @@ export function DuplicatesScreen() {
   }, [currentPair, pairKey, reportFailure]);
 
   const finishResolution = useCallback(async (pair: DuplicatePair, action: DuplicateAction) => {
+    resolutionInFlightRef.current = true;
     setResolving(true);
     setError(null);
     try {
@@ -631,6 +637,7 @@ export function DuplicatesScreen() {
     } catch (cause) {
       reportFailure(cause, 'Unable to resolve duplicate pair');
     } finally {
+      resolutionInFlightRef.current = false;
       setResolving(false);
     }
   }, [index, reportFailure]);
