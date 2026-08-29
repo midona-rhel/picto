@@ -43,7 +43,7 @@ export function QueryEditModal({
   }, [query]);
 
   const site = sortedSites.find((entry) => entry.id === siteId) ?? null;
-  const canSave = siteId !== '' && queryText.trim() !== '' && !busy;
+  const canSave = siteId !== '' && queryText.trim() !== '';
   const queryLabel = site?.supports_query ? 'Search' : 'Account';
 
   return (
@@ -57,6 +57,7 @@ export function QueryEditModal({
           <ActionButton variant="ghost" onClick={onClose}>Cancel</ActionButton>
           <ActionButton
             variant="primary"
+            pending={busy}
             disabled={!canSave}
             onClick={() =>
               onSave({

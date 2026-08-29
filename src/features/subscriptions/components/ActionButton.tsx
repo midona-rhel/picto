@@ -7,12 +7,15 @@ export function ActionButton({
   variant = 'secondary',
   compact = false,
   disabled = false,
+  pending = false,
   onClick,
   children,
 }: {
   variant?: Variant;
   compact?: boolean;
   disabled?: boolean;
+  /** Blocks repeat activation without visually dimming an in-flight action. */
+  pending?: boolean;
   onClick?: () => void;
   children: ReactNode;
 }) {
@@ -26,9 +29,9 @@ export function ActionButton({
 
   return (
     <button
-      className={`${variantClass} ${compact ? styles.buttonCompact : ''}`.trim()}
+      className={`${variantClass} ${compact ? styles.buttonCompact : ''} ${pending ? styles.buttonPending : ''}`.trim()}
       data-modal-primary={variant === 'primary' ? 'true' : undefined}
-      disabled={disabled}
+      disabled={disabled || pending}
       onClick={onClick}
       type="button"
     >

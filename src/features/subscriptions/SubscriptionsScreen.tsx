@@ -26,6 +26,7 @@ import { AddGalleryDialog, type AddGalleryInput } from './components/AddGalleryD
 import { isGalleryImportJob } from './subscriptionUtils';
 import {
   EMPTY_SUBSCRIPTION_DETAIL_STATE,
+  beginSubscriptionDetailRefresh,
   subscriptionsAccountsModalAtom,
   subscriptionsBusyKeyAtom,
   subscriptionsCoversAtom,
@@ -64,7 +65,9 @@ export function SubscriptionsScreen() {
   );
 
   const refreshDetail = useCallback(async (subscription: SubscriptionInfo) => {
-    setDetail((current) => ({ ...current, loading: true, subscriptionId: subscription.id }));
+    // Revalidation must not replace an already painted detail view with its
+    // loading state. Only a genuine subscription change needs that placeholder.
+    setDetail((current) => beginSubscriptionDetailRefresh(current, subscription.id));
     try {
       const [runs, issues] = await Promise.all([
         subscriptionsController.listRuns(subscription.id),

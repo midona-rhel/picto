@@ -127,6 +127,10 @@
   padding: 0 16px;
 }
 
+.buttonPending:disabled {
+  opacity: 1;
+}
+
 
 .emptyState {
   display: flex;

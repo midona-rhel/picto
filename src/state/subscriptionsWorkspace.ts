@@ -47,6 +47,16 @@ export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
   retryablePostCount: 0,
 };
 
+/** Keep painted detail data during same-subscription revalidation. */
+export function beginSubscriptionDetailRefresh(
+  current: SubscriptionDetailState,
+  subscriptionId: string,
+): SubscriptionDetailState {
+  return current.subscriptionId === subscriptionId
+    ? current
+    : { ...current, loading: true, subscriptionId };
+}
+
 export const subscriptionsWorkspaceSnapshotAtom = atom<SubscriptionWorkspaceSnapshot | null>(null);
 export const subscriptionsCoversAtom = atom<Map<string, SubscriptionCover>>(new Map());
 export const subscriptionsSelectionAtom = atom<SubscriptionsSelection>(null);

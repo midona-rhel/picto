@@ -232,11 +232,11 @@ export function SubscriptionDetail({
 
         <div className={styles.subscriptionActions}>
           {running ? (
-            <ActionButton variant="secondary" disabled={busy} onClick={() => controller.stop(subscription.id)}>
+            <ActionButton variant="secondary" pending={busy} onClick={() => controller.stop(subscription.id)}>
               <IconPlayerStop size={14} /> Stop
             </ActionButton>
           ) : (
-            <ActionButton variant="primary" disabled={busy || subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
+            <ActionButton variant="primary" pending={busy} disabled={subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
               <IconPlayerPlay size={14} /> Run now
             </ActionButton>
           )}
@@ -244,7 +244,7 @@ export function SubscriptionDetail({
             ? 'Resume automatic subscription runs'
             : 'Pause future runs until this subscription is resumed'}>
             <span className={styles.subscriptionActionTooltipTarget}>
-              <ActionButton variant="secondary" disabled={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
+              <ActionButton variant="secondary" pending={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
                 {subscription.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />} {subscription.paused ? 'Resume' : 'Pause'}
               </ActionButton>
             </span>
