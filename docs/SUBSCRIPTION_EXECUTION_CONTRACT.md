@@ -40,8 +40,9 @@ source identity keeps repeated work idempotent.
 ## Provider Requirements
 
 - Gallery providers pause extraction at each post boundary until Picto acknowledges settlement.
-- Provider processes may retain their native multi-post session. Picto's acknowledgement gate, not
-  a global one-post adapter override, enforces sequential settlement.
+- List providers run with an explicit one-source-post process window because extractor hooks may
+  pipeline discovery ahead of downloads. The durable runner starts the next window only after the
+  current post reaches canonical library state.
 - Gallery imports treat the entire gallery as the one current post.
 - Query providers continue past posts without usable media until the added-post budget is reached or
   source history ends.

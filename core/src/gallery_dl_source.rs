@@ -272,16 +272,23 @@ impl GalleryDlSourceRunner {
 
 fn effective_batch_size(query: &ClaimedQueryRun, override_size: Option<u32>) -> u32 {
     override_size.unwrap_or_else(|| {
-        let configured = if query.initial_run_complete {
-            query.periodic_post_limit.or(query.initial_post_limit)
-        } else {
-            query.initial_post_limit.or(query.periodic_post_limit)
-        };
-        configured
-            .filter(|value| *value > 0)
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(crate::subscriptions::DEFAULT_SOURCE_POST_BATCH_SIZE)
+        provider_process_post_limit(&query.site_id)
+            .expect("validated gallery provider has an execution policy")
     })
+}
+
+fn provider_process_post_limit(site_id: &str) -> Option<u32> {
+    // gallery-dl may pipeline extraction ahead of download hooks. Every
+    // supported list source therefore gets an explicit one-post process
+    // window; site-specific extractor adapters remain isolated in the bridge.
+    match site_id {
+        "pixiv" | "pixivuser" | "gelbooru" | "rule34" | "danbooru" | "webtoons"
+        | "hentaifoundry" | "baraag" | "deviantart" | "tumblr" | "twitter"
+        | "newgrounds" | "furaffinity" | "patreon" | "fanbox" | "subscribestar"
+        | "idolcomplex" | "sankaku" | "yandere" | "konachan" | "safebooru" | "e621"
+        | "ehentai" => Some(1),
+        _ => None,
+    }
 }
 
 fn map_runner_error(error: String) -> RunnerFailure {
@@ -1137,17 +1144,21 @@ mod tests {
     }
 
     #[test]
-    fn every_source_uses_the_subscription_batch_limit() {
-        let mut query = claimed_query();
-        query.site_id = "twitter".into();
-        assert_eq!(
-            effective_batch_size(&query, None),
-            crate::subscriptions::DEFAULT_SOURCE_POST_BATCH_SIZE
-        );
+    fn every_gallery_provider_has_an_explicit_single_post_process_window() {
+        for site in crate::subscriptions::gallery_dl_runner::SITES {
+            if site.id != "onlyfans" {
+                assert_eq!(
+                    provider_process_post_limit(site.id),
+                    Some(1),
+                    "{} may extract ahead of canonical settlement",
+                    site.id
+                );
+            }
+        }
 
-        query.initial_post_limit = Some(3);
-        assert_eq!(effective_batch_size(&query, None), 3);
-        assert_eq!(effective_batch_size(&query, Some(1)), 1);
+        let query = claimed_query();
+        assert_eq!(effective_batch_size(&query, None), 1);
+        assert_eq!(effective_batch_size(&query, Some(2)), 2);
     }
 
     #[test]
