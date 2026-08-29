@@ -153,7 +153,17 @@ async fn certify_selected_source() -> Result<(), String> {
     require_prefix_preserved(&first, &continued)?;
     let continued_checkpoint = read_checkpoint(&reopened, subscription_id)?;
     if continued.posts.len() == first.posts.len() && continued_checkpoint == checkpoint {
-        return Err("continuation neither materialized media nor advanced source history".into());
+        // A concrete gallery is one finite import unit: the correct
+        // continuation outcome is an idempotent replay that changes nothing.
+        if site_id == "ehentai" {
+            if continued != first {
+                return Err("idempotent gallery replay changed persisted evidence".into());
+            }
+        } else {
+            return Err(
+                "continuation neither materialized media nor advanced source history".into(),
+            );
+        }
     }
 
     let pacing = validate_request_pacing(&request_trace)?;
