@@ -3,7 +3,6 @@
 import contextlib
 import io
 import json
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -24,14 +23,23 @@ class OnlyFansBridgeTests(unittest.TestCase):
             "alice - 2026-08-25",
         )
 
-    def test_pacing_does_not_override_typed_download_concurrency(self) -> None:
-        previous = os.environ.pop("MAXFILE_SEMAPHORE", None)
-        try:
-            onlyfans_bridge.configure_pacing()
-            self.assertNotIn("MAXFILE_SEMAPHORE", os.environ)
-        finally:
-            if previous is not None:
-                os.environ["MAXFILE_SEMAPHORE"] = previous
+    def test_runtime_uses_ofscraper_native_pacing_and_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = onlyfans_bridge.write_runtime(
+                {
+                    "state_dir": str(root / "state"),
+                    "output_dir": str(root / "downloads"),
+                }
+            )
+
+            configured = json.loads(config.read_text())
+            self.assertNotIn("performance_options", configured)
+
+        arguments = onlyfans_bridge.ofscraper_arguments(
+            {"creator": "alice", "post_limit": 10, "before": None}, config
+        )
+        self.assertNotIn("--downloadsem", arguments)
 
     def test_recent_post_url_is_newest_first_and_uses_before_cursor(self) -> None:
         url = onlyfans_bridge.recent_posts_url(

@@ -92,7 +92,6 @@ def write_runtime(request: dict[str, object]) -> Path:
             "dir_format": "{model_username}/{post_id}",
             "file_format": "{media_id}.{ext}",
         },
-        "performance_options": {"download_sems": 1},
         # Owned media can be served as DRM DASH streams: decrypt through the
         # remote CDRM helper (the proven interactive setup) and give
         # OF-Scraper the bundled ffmpeg for segment merging.
@@ -109,29 +108,6 @@ def write_runtime(request: dict[str, object]) -> Path:
     }
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return config_path
-
-
-def configure_pacing() -> None:
-    # Picto runs one subscription query at a time. Reducing every OF-Scraper
-    # semaphore to one and every session interval to one second therefore gives
-    # one serial request stream for onlyfans.com, including media requests.
-    values = {
-        "OFSC_DOWNLOAD_SEM_DEFAULT": "1",
-        "OFSC_REQ_SEMAPHORE_MULTI": "1",
-        "OFSC_SUBSCRIPTION_SEMS": "1",
-        "OFSC_MAX_SEMS_BATCH_DOWNLOAD": "1",
-        "OFSC_MAX_SEMS_SINGLE_THREAD_DOWNLOAD": "1",
-        "OFSC_SESSION_MANAGER_SYNC_SEM_DEFAULT": "1",
-        "OFSC_SESSION_MANAGER_SEM_DEFAULT": "1",
-        "OFSC_API_REQ_SEM_MAX": "1",
-        "OFSC_API_MAX_AREAS": "1",
-        "OFSC_SESSION_MIN_SLEEP": "1",
-        "OFSC_DOWNLOAD_SESSION_MIN_SLEEP": "1",
-        "OFSC_METADATA_SESSION_MIN_SLEEP": "1",
-        "OFSC_SUBSCRIPTION_SESSION_MIN_SLEEP": "1",
-    }
-    for key, value in values.items():
-        os.environ[key] = value
 
 
 def monitor_parent(parent_pid: int) -> None:
@@ -658,9 +634,9 @@ def install_recent_post_window(request: dict[str, object]) -> dict[str, object]:
     return state
 
 
-def run_ofscraper(
-    request: dict[str, object], config_path: Path, auth: dict[str, object]
-) -> tuple[dict[str, object], set[str], set[str], set[str]]:
+def ofscraper_arguments(
+    request: dict[str, object], config_path: Path
+) -> list[str]:
     arguments = [
         "ofscraper",
         "--config", str(config_path),
@@ -669,7 +645,6 @@ def run_ofscraper(
         "--username", str(request["creator"]),
         "--download-area", "Purchased,Messages,Timeline,Archived,Pinned,Streams",
         "--max-post-count", str(request["post_limit"]),
-        "--downloadsem", "1",
         "--force-all",
         "--no-live",
     ]
@@ -682,6 +657,13 @@ def run_ofscraper(
     # that remains; earlier-group boundaries are enforced by follows_cursor.
     if before and before_group in (None, "feed"):
         arguments.extend(["--before", before])
+    return arguments
+
+
+def run_ofscraper(
+    request: dict[str, object], config_path: Path, auth: dict[str, object]
+) -> tuple[dict[str, object], set[str], set[str], set[str]]:
+    arguments = ofscraper_arguments(request, config_path)
     sys.argv = arguments
     install_ofscraper_compatibility()
     install_ofscraper_auth(auth)
@@ -1167,7 +1149,6 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
-        configure_pacing()
         sys.argv = ["ofscraper", "--no-live"]
         install_ofscraper_compatibility()
         install_ofscraper_auth(
@@ -1199,7 +1180,6 @@ def main() -> int:
             daemon=True,
         ).start()
     try:
-        configure_pacing()
         config = write_runtime(request)
         source_window, emitted_posts, emitted_media, completed_posts = run_ofscraper(
             request, config, auth_from_request(request)
