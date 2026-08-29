@@ -264,6 +264,10 @@ async fn run_claimed_query<R: SourceRunner>(
     let settled_at = Utc::now().to_rfc3339();
     match runner_result {
         Ok(Ok(success)) => {
+            if let Err(failure) = wait_for_query_ingest(application, &query, cancel).await {
+                settle_runner_failure(application, &query, failure, &settled_at)?;
+                return Ok(None);
+            }
             match state::complete_query(
                 application,
                 &query,
@@ -304,6 +308,35 @@ async fn run_claimed_query<R: SourceRunner>(
     }
 
     Ok(None)
+}
+
+async fn wait_for_query_ingest(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    cancel: &CancellationToken,
+) -> Result<(), RunnerFailure> {
+    loop {
+        crate::library_ingest_runtime::run_batch(application, 64)
+            .map_err(|error| RunnerFailure::retryable(RunnerFailureKind::Runtime, error))?;
+        match state::query_ingest_settlement(application, query.run_query_id)
+            .map_err(|error| RunnerFailure::retryable(RunnerFailureKind::Runtime, error))?
+        {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(RunnerFailure::retryable(RunnerFailureKind::Runtime, error));
+            }
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                return Err(RunnerFailure::retryable(
+                    RunnerFailureKind::Interrupted,
+                    "Subscription run interrupted while ingesting the current post",
+                ));
+            }
+            _ = tokio::time::sleep(RUN_STATE_POLL) => {}
+        }
+    }
 }
 
 async fn run_stream<R: SourceRunner>(
@@ -842,7 +875,7 @@ mod tests {
                     .unwrap();
                 acknowledged.await.unwrap();
                 Ok(RunnerSuccess {
-                    resume_cursor: None,
+                    resume_cursor: Some(String::new()),
                     cleanup_paths: self.cleanup_paths.clone(),
                 })
             })
@@ -879,7 +912,10 @@ mod tests {
                     .await
                     .unwrap();
                 acknowledged.await.unwrap();
-                Ok(RunnerSuccess::default())
+                Ok(RunnerSuccess {
+                    resume_cursor: Some(String::new()),
+                    cleanup_paths: Vec::new(),
+                })
             })
         }
     }
@@ -1040,9 +1076,9 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(status, "running");
+        assert_eq!(status, "succeeded");
         let report = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        assert_eq!(report.ingested, 1);
+        assert_eq!(report.ingested, 0);
         let state = application
             .library()
             .auxiliary_read(

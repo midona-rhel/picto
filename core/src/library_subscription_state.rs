@@ -161,18 +161,45 @@ pub fn claim_next_query(
                             requested_by: row.get(9)?,
                             initial_post_limit: row.get(10)?,
                             periodic_post_limit: row.get(11)?,
+                            run_post_limit: None,
                             initial_run_complete: row.get(12)?,
                             resume_cursor: row.get(13)?,
                             attempt_count: row.get(14)?,
                         })
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                let Some(candidate) = candidates
+                let Some(mut candidate) = candidates
                     .into_iter()
                     .find(|candidate| schedule.allows(&candidate.domain_key, now_ms))
                 else {
                     return Ok(None);
                 };
+                let accepted_posts: u32 = transaction
+                    .query_row(
+                        "SELECT COUNT(DISTINCT item.source_post_id)
+                         FROM subscription_run_source_item linked
+                         JOIN source_item item USING(source_item_id)
+                         WHERE linked.run_query_id = ?1
+                           AND item.state = 'ingested'",
+                        [candidate.run_query_id],
+                        |row| row.get::<_, i64>(0),
+                    )?
+                    .try_into()
+                    .unwrap_or(u32::MAX);
+                let configured_limit = candidate.source_post_batch_size();
+                let remaining = configured_limit.saturating_sub(accepted_posts);
+                if remaining == 0 {
+                    transaction.execute(
+                        "UPDATE subscription_run_query
+                         SET status = 'succeeded', finished_at = ?1,
+                             failure_kind = NULL, error_message = NULL
+                         WHERE run_query_id = ?2 AND status = 'pending'",
+                        params![now, candidate.run_query_id],
+                    )?;
+                    settle_run(transaction, candidate.run_id, now)?;
+                    return Ok(Some(None));
+                }
+                candidate.run_post_limit = Some(remaining);
                 if transaction.execute(
                     "UPDATE subscription_run_query
                      SET status = 'running', started_at = ?1, attempt_count = attempt_count + 1,
@@ -188,14 +215,14 @@ pub fn claim_next_query(
                      WHERE run_id = ?2 AND status = 'pending'",
                     params![now, candidate.run_id],
                 )?;
-                Ok(Some(ClaimedQueryRun {
+                Ok(Some(Some(ClaimedQueryRun {
                     attempt_count: candidate.attempt_count + 1,
                     ..candidate
-                }))
+                })))
             },
         )
         .map_err(|error| error.to_string())?;
-    let claim = result.map(|(claim, _)| claim);
+    let claim = result.and_then(|(claim, _)| claim);
     if let Some(claim) = &claim {
         schedule.mark_started(claim.domain_key.clone(), now_ms);
     }
@@ -218,6 +245,42 @@ pub fn query_is_running(
                 .optional()
                 .map(|value| value.unwrap_or(false))
                 .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub fn query_ingest_settlement(
+    application: &LibraryApplication,
+    run_query_id: i64,
+) -> Result<Result<bool, String>, String> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            let failed = connection
+                .query_row(
+                    "SELECT job.last_error
+                     FROM subscription_run_source_item linked
+                     JOIN ingest_job job USING(source_item_id)
+                     WHERE linked.run_query_id = ?1 AND job.status = 'failed'
+                     ORDER BY job.ingest_job_id LIMIT 1",
+                    [run_query_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?;
+            if let Some(message) = failed {
+                return Ok(Err(message.unwrap_or_else(|| "Canonical ingest failed".into())));
+            }
+            let pending = connection.query_row(
+                "SELECT EXISTS(
+                     SELECT 1
+                     FROM subscription_run_source_item linked
+                     JOIN source_item item USING(source_item_id)
+                     WHERE linked.run_query_id = ?1 AND item.state = 'downloaded'
+                 )",
+                [run_query_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            Ok(Ok(!pending))
         })
         .map_err(|error| error.to_string())
 }
@@ -503,6 +566,44 @@ pub fn complete_query(
     now: &str,
 ) -> Result<MutationReceipt, String> {
     write_transition(application, |transaction| {
+        let added_posts: u32 = transaction
+            .query_row(
+                "SELECT COUNT(DISTINCT item.source_post_id)
+                 FROM subscription_run_source_item linked
+                 JOIN source_item item USING(source_item_id)
+                 WHERE linked.run_query_id = ?1
+                   AND item.state = 'ingested'",
+                [query.run_query_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let continue_run = resume_cursor != Some("")
+            && added_posts < query.configured_post_limit();
+        if continue_run {
+            transaction.execute(
+                "UPDATE subscription_run_query
+                 SET status = 'pending', available_at = ?1, started_at = NULL,
+                     finished_at = NULL, resume_cursor = COALESCE(?2, resume_cursor),
+                     failure_kind = NULL, error_message = NULL
+                 WHERE run_query_id = ?3 AND status = 'running'",
+                params![now, resume_cursor, query.run_query_id],
+            )?;
+            transaction.execute(
+                "UPDATE subscription_query
+                 SET resume_cursor = COALESCE(?1, resume_cursor),
+                     last_failure_at = NULL, last_failure_kind = NULL,
+                     last_failure_message = NULL
+                 WHERE query_id = ?2",
+                params![resume_cursor, query.query_id],
+            )?;
+            transaction.execute(
+                "UPDATE subscription_run SET status = 'pending'
+                 WHERE run_id = ?1 AND status = 'running'",
+                [query.run_id],
+            )?;
+            return Ok(());
+        }
         transaction.execute(
             "UPDATE subscription_run_query
              SET status = 'succeeded', finished_at = ?1,
@@ -842,4 +943,113 @@ fn next_retry_at(now: &str, attempt_count: i64) -> Result<String, String> {
 
 fn sql_error(error: String) -> LibraryError {
     LibraryError::InvalidInput(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
+    use crate::subscriptions::{NormalizedItem, NormalizedPost};
+
+    #[test]
+    fn posts_per_run_is_independent_for_each_subscription_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Two sources".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![
+                NewSubscriptionQuery {
+                    site_id: "twitter".into(),
+                    query_text: "example".into(),
+                    display_name: None,
+                    notes: None,
+                    group_posts: true,
+                },
+                NewSubscriptionQuery {
+                    site_id: "e621".into(),
+                    query_text: "example".into(),
+                    display_name: None,
+                    notes: None,
+                    group_posts: true,
+                },
+            ],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let mut schedule = DomainSchedule::new();
+        let first = claim_next_query(&application, &mut schedule, "2026-08-29T00:00:01Z")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.source_post_batch_size(), 1);
+
+        let ids = record_post(
+            &application,
+            first.run_query_id,
+            &NormalizedPost {
+                site_id: first.site_id.clone(),
+                post_key: "post-1".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "media-1".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        mark_source_items_downloaded(&application, &[ids["media-1"]], "2026-08-29T00:00:03Z")
+            .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                WorkPriority::CanonicalIngest,
+                ["subscriptions".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested' WHERE source_item_id = ?1",
+                        [ids["media-1"]],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        complete_query(&application, &first, None, "2026-08-29T00:00:04Z").unwrap();
+
+        let mut next_schedule = DomainSchedule::new();
+        let second = claim_next_query(
+            &application,
+            &mut next_schedule,
+            "2026-08-29T00:00:05Z",
+        )
+        .unwrap()
+        .expect("the second query retains its own one-post budget");
+        assert_ne!(second.query_id, first.query_id);
+        let statuses = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                let mut statement = connection
+                    .prepare("SELECT status FROM subscription_run_query ORDER BY run_query_id")?;
+                let statuses = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(statuses)
+            })
+            .unwrap();
+        assert_eq!(statuses, ["succeeded", "running"]);
+    }
 }

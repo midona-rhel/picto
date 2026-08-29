@@ -280,7 +280,8 @@ fn query_state_dir(root: &Path, subscription_id: i64, query_id: i64) -> PathBuf 
 }
 
 fn query_limit(query: &ClaimedQueryRun) -> i64 {
-    i64::from(query.source_post_batch_size())
+    let _ = query;
+    1
 }
 
 #[derive(Serialize)]

@@ -49,6 +49,13 @@ renderer-specific count patches, sidebar patches, or speculative grid inserts.
 Subscriptions use one durable persisted worker for scheduled runs, manual runs, retries, and
 restart recovery. Progress is persisted and queried; interrupted work resumes idempotently.
 
+Every subscription query processes source posts serially. It discovers one post and records it as
+traversed, downloads all usable media for that post, durably ingests the complete post, records the
+post as added, and only then requests the next post. Posts without usable media are traversed but
+not added. The per-run post limit counts successfully added posts, not traversed posts or media
+files. Providers may download files within the current post concurrently, but they must not
+prefetch, download, or ingest media from a later post before the current post settles.
+
 # Host Input Automation Safety
 
 - Never use macOS System Events, `osascript`/AppleScript, Accessibility automation, or synthetic

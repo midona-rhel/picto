@@ -75,14 +75,14 @@ pub struct ClaimedQueryRun {
     pub requested_by: String,
     pub initial_post_limit: Option<i64>,
     pub periodic_post_limit: Option<i64>,
+    pub run_post_limit: Option<u32>,
     pub initial_run_complete: bool,
     pub resume_cursor: Option<String>,
     pub attempt_count: i64,
 }
 
 impl ClaimedQueryRun {
-    /// Select the persisted source-post window for this batch.
-    pub fn source_post_batch_size(&self) -> u32 {
+    pub fn configured_post_limit(&self) -> u32 {
         let configured = if self.initial_run_complete {
             self.periodic_post_limit.or(self.initial_post_limit)
         } else {
@@ -92,6 +92,13 @@ impl ClaimedQueryRun {
             .filter(|value| *value > 0)
             .and_then(|value| u32::try_from(value).ok())
             .unwrap_or(DEFAULT_SOURCE_POST_BATCH_SIZE)
+    }
+
+    /// Number of successfully added posts still available to this query run.
+    pub fn source_post_batch_size(&self) -> u32 {
+        let configured = self.configured_post_limit();
+        self.run_post_limit
+            .map_or(configured, |remaining| configured.min(remaining))
     }
 }
 
