@@ -688,6 +688,52 @@ fn tag_merge_and_delete_rewrite_saved_queries_and_restore_from_memory_history() 
 }
 
 #[test]
+fn deleting_a_starred_tag_prunes_settings_and_undo_restores_both() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    library
+        .ingest(&imported(
+            "starred-item",
+            Lifecycle::Active,
+            &["starred-delete"],
+        ))
+        .unwrap();
+    let tag_id = library.projections().snapshot().tag_ids_by_name["starred-delete"];
+    library
+        .replace_auxiliary_json(
+            "settings.replace",
+            "Replace settings",
+            "setting",
+            "application",
+            Some(r#"{"starredTags":["starred-delete"]}"#.into()),
+        )
+        .unwrap();
+
+    let receipt = library.delete_tag(tag_id, 1_700_000_000_900).unwrap();
+    assert!(receipt
+        .resources
+        .iter()
+        .any(|resource| resource == "settings"));
+    assert_eq!(starred_tags(&library), Vec::<String>::new());
+
+    library.undo().unwrap().unwrap();
+    assert!(library
+        .projections()
+        .snapshot()
+        .tag_ids_by_name
+        .contains_key("starred-delete"));
+    assert_eq!(starred_tags(&library), vec!["starred-delete"]);
+
+    library.redo().unwrap().unwrap();
+    assert!(!library
+        .projections()
+        .snapshot()
+        .tag_ids_by_name
+        .contains_key("starred-delete"));
+    assert_eq!(starred_tags(&library), Vec::<String>::new());
+}
+
+#[test]
 fn undo_and_redo_are_process_memory_only_and_restore_bitmap_state() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("library.sqlite");
@@ -869,6 +915,22 @@ fn folder_auto_tags(library: &Library, folder_id: picto_library::FolderId) -> Ve
             },
         )
         .unwrap()
+}
+
+fn starred_tags(library: &Library) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(
+        library
+            .read_auxiliary_json("setting", "application")
+            .unwrap()
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap()["starredTags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_owned())
+        .collect()
 }
 
 fn folder_name(library: &Library, folder_id: picto_library::FolderId) -> String {

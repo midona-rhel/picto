@@ -2962,6 +2962,13 @@ impl Library {
                     )?;
                     changes.extend(tag_changes);
                 }
+                let settings_changed =
+                    if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
+                        changes.push(change);
+                        true
+                    } else {
+                        false
+                    };
                 insert_cloud_journal(
                     transaction,
                     revision,
@@ -2971,9 +2978,14 @@ impl Library {
                     now_ms(),
                 )?;
                 next.revision = revision;
+                let mut resources =
+                    vec!["tags".into(), "navigation".into(), "smart-folders".into()];
+                if settings_changed {
+                    resources.push("settings".into());
+                }
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec!["tags".into(), "navigation".into(), "smart-folders".into()],
+                    resources,
                     Vec::new(),
                 );
                 Ok((receipt.clone(), PublishedDelta {
@@ -4821,13 +4833,23 @@ impl Library {
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 let mut next = (*snapshot).clone();
-                let (source_members, history_changes) = remove_tag_in_transaction(
+                let (source_members, mut history_changes) = remove_tag_in_transaction(
                     transaction,
                     &mut next,
                     source,
                     destination,
                     revision,
                 )?;
+                let settings_changed = if destination.is_none() {
+                    if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
+                        history_changes.push(change);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
                 transaction.execute(
                     "INSERT INTO cloud_journal
                          (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
@@ -4849,14 +4871,18 @@ impl Library {
                     ],
                 )?;
                 next.revision = revision;
+                let mut resources = vec![
+                    "roots".into(),
+                    "tags".into(),
+                    "navigation".into(),
+                    "smart-folders".into(),
+                ];
+                if settings_changed {
+                    resources.push("settings".into());
+                }
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec![
-                        "roots".into(),
-                        "tags".into(),
-                        "navigation".into(),
-                        "smart-folders".into(),
-                    ],
+                    resources,
                     source_members.iter().map(RootId),
                 );
                 let label = if destination.is_some() {
@@ -6711,6 +6737,60 @@ fn remove_tag_in_transaction(
         },
     );
     Ok((source_members, history_changes))
+}
+
+fn prune_deleted_starred_tags(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+) -> Result<Option<SemanticChange>> {
+    use rusqlite::OptionalExtension;
+
+    let before = transaction
+        .query_row(
+            "SELECT value_json FROM setting WHERE key = 'application'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(before) = before else {
+        return Ok(None);
+    };
+    let mut settings = serde_json::from_str::<serde_json::Value>(&before).map_err(|error| {
+        LibraryError::InvalidState(format!(
+            "application settings contain invalid JSON: {error}"
+        ))
+    })?;
+    let original = settings.clone();
+    let Some(starred_tags) = settings
+        .as_object_mut()
+        .and_then(|object| object.get_mut("starredTags"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(None);
+    };
+    starred_tags.retain(|entry| {
+        entry
+            .as_str()
+            .is_some_and(|name| snapshot.tag_ids_by_name.contains_key(name))
+    });
+    if settings == original {
+        return Ok(None);
+    }
+
+    let after = serde_json::to_string(&settings).map_err(|error| {
+        LibraryError::InvalidState(format!("application settings cannot be encoded: {error}"))
+    })?;
+    transaction.execute(
+        "UPDATE setting SET value_json = ?1 WHERE key = 'application'",
+        [&after],
+    )?;
+    Ok(Some(SemanticChange::AuxiliaryJson {
+        table: "setting",
+        key: "application".into(),
+        before: Some(before),
+        after: Some(after),
+        resource: "settings",
+    }))
 }
 
 fn load_namespace_name(
