@@ -138,8 +138,8 @@ function DisplayPanel() {
         gridController.saveViewPref({ spacing: next });
       })}
       {toggle('Fit Thumbnails', fitThumbs, () => { gridController.updateView({ fitThumbnails: !fitThumbs }); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
-      {scope.kind === 'folder' && toggle('Show Subfolders', showSubfolders, () => {
-        gridController.updateView({ showSubfolders: !showSubfolders });
+      {scope.kind === 'folder' && toggle('Show Subfolder Content', showSubfolders, () => {
+        gridController.updateView({ showSubfolders: !showSubfolders }, true);
         gridController.saveViewPref({ show_subfolders: !showSubfolders });
       })}
 

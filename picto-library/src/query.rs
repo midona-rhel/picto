@@ -32,6 +32,7 @@ pub enum ItemScope {
     Untagged,
     Uncategorized,
     Folder { folder_id: FolderId },
+    FolderTree { folder_id: FolderId },
     SmartFolder { smart_folder_id: SmartFolderId },
 }
 
@@ -456,6 +457,22 @@ fn page_inner(
     let (ids, next_cursor) = match query.scope {
         ItemScope::RecentlyViewed => page_recent_order(connection, &matches, limit, cursor)?,
         _ => match query.view.sort.field {
+            SortField::FolderOrder if matches!(&query.scope, ItemScope::FolderTree { .. }) => {
+                let sort = ItemSort {
+                    field: SortField::ImportedAt,
+                    direction: SortDirection::Descending,
+                    random_seed: None,
+                };
+                scan_integer(
+                    connection,
+                    "root.imported_at_ms",
+                    &matches,
+                    sparse,
+                    &sort,
+                    limit,
+                    cursor,
+                )?
+            }
             SortField::FolderOrder => page_folder_order(snapshot, query, &matches, limit, cursor)?,
             SortField::Rating => page_rating(snapshot, &matches, &query.view.sort, limit, cursor)?,
             SortField::Random => page_random(&matches, &query.view.sort, limit, cursor)?,
@@ -561,6 +578,18 @@ fn scope_bitmap(
             values &= snapshot.active();
             values
         }
+        ItemScope::FolderTree { folder_id } => {
+            let mut values = RoaringBitmap::new();
+            for descendant_id in
+                descendant_ids(connection, "folder_definition", "folder_id", folder_id.0)?
+            {
+                if let Some(descendant) = snapshot.folders.get(&FolderId(descendant_id)) {
+                    values |= descendant;
+                }
+            }
+            values &= snapshot.active();
+            values
+        }
         ItemScope::SmartFolder { smart_folder_id } => {
             let mut values = snapshot
                 .smart_results
@@ -578,6 +607,28 @@ fn scope_bitmap(
             values
         }
     })
+}
+
+fn descendant_ids(
+    connection: &Connection,
+    table: &str,
+    id_column: &str,
+    root_id: u32,
+) -> Result<Vec<u32>> {
+    let sql = format!(
+        "WITH RECURSIVE descendants(id) AS (
+             SELECT ?1
+             UNION ALL
+             SELECT child.{id_column}
+             FROM {table} child
+             JOIN descendants parent ON child.parent_id = parent.id
+         )
+         SELECT id FROM descendants"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([root_id], |row| row.get::<_, u32>(0))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn media_match_roots(

@@ -173,6 +173,9 @@ export type BaseScope =
   | { kind: 'folder'; folder_id: number }
   | { kind: 'smart_folder'; smart_folder_id: number };
 
+export type QueryScope = BaseScope
+  | { kind: 'folder_tree'; folder_id: number };
+
 export type SetMatchMode = 'any' | 'all' | 'exact';
 export type TextField = 'global' | 'name' | 'notes' | 'source_url';
 export type FilterClause =
@@ -217,7 +220,7 @@ export interface ViewQuerySpec {
   sort: ItemSort;
 }
 export interface EntityViewQuery {
-  scope: BaseScope;
+  scope: QueryScope;
   view: ViewQuerySpec;
 }
 export interface EntityViewPage {

@@ -999,6 +999,63 @@ fn folder_vector_is_the_only_folder_membership_authority() {
 }
 
 #[test]
+fn folder_tree_scope_includes_descendant_content_without_duplicates() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (parent_only, _) = library
+        .ingest(&imported("parent-only", Lifecycle::Active, &[]))
+        .unwrap();
+    let (child_only, _) = library
+        .ingest(&imported("child-only", Lifecycle::Active, &[]))
+        .unwrap();
+    let (shared, _) = library
+        .ingest(&imported("shared", Lifecycle::Active, &[]))
+        .unwrap();
+    let (parent, _) = library.create_folder("Parent", None).unwrap();
+    let (child, _) = library.create_folder("Child", Some(parent)).unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![parent_only, shared],
+            },
+            parent,
+        )
+        .unwrap();
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![child_only, shared],
+            },
+            child,
+        )
+        .unwrap();
+
+    let direct = library
+        .query(
+            &query(ItemScope::Folder { folder_id: parent }),
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(direct.total, 2);
+
+    let recursive = library
+        .query(
+            &query(ItemScope::FolderTree { folder_id: parent }),
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(recursive.total, 3);
+    assert_eq!(
+        recursive
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<std::collections::HashSet<_>>(),
+        [parent_only, child_only, shared].into_iter().collect()
+    );
+}
+
+#[test]
 fn folder_hierarchy_is_capped_at_eight_levels() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

@@ -146,6 +146,7 @@ export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
       random_seed: session.sort.randomSeed ?? null,
     },
     session.searchText,
+    session.view.showSubfolders,
   );
 });
 
@@ -179,12 +180,34 @@ export const gridScopeLabelAtom = atom((get) => {
 });
 
 export const gridChildFoldersAtom = atom((get) => {
-  const scope = get(gridSessionAtom).scope;
+  const session = get(gridSessionAtom);
+  const scope = session.scope;
   if (scope.kind !== 'folder') return [];
+  const nodes = get(folderNodesAtom);
+  const children = new Map<string, typeof nodes>();
+  for (const node of nodes) {
+    if (!node.parent_id) continue;
+    const siblings = children.get(node.parent_id) ?? [];
+    siblings.push(node);
+    children.set(node.parent_id, siblings);
+  }
+  for (const siblings of children.values()) {
+    siblings.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+  }
   const parentId = `folder:${scope.folder_id}`;
-  return get(folderNodesAtom)
-    .filter((node) => node.parent_id === parentId)
-    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+  if (!session.view.showSubfolders) return children.get(parentId) ?? [];
+  const descendants: typeof nodes = [];
+  const seen = new Set<string>();
+  const append = (parentId: string) => {
+    for (const child of children.get(parentId) ?? []) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      descendants.push(child);
+      append(child.id);
+    }
+  };
+  append(parentId);
+  return descendants;
 });
 
 export type { GridViewMode };

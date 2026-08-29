@@ -144,6 +144,7 @@ function queryForSession(session: GridSessionSnapshot): EntityViewQuery {
       random_seed: session.sort.randomSeed ?? null,
     },
     session.searchText,
+    session.view.showSubfolders,
   );
 }
 
@@ -274,7 +275,10 @@ class GridSessionController {
       this.setSortNow(intent.field, intent.direction);
       return;
     }
+    const changesQuery = intent.patch.showSubfolders != null
+      && intent.patch.showSubfolders !== store.get(gridSessionAtom).view.showSubfolders;
     this.updateView(intent.patch);
+    if (changesQuery) void this.loadFirstPage();
   }
 
   setFilters(filters: QueryFilters): void {

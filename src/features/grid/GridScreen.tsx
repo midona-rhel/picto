@@ -32,7 +32,6 @@ import {
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
   gridScopeAtom,
-  gridShowSubfoldersAtom,
   gridChildFoldersAtom,
   gridFilterToolbarOpenAtom,
   type GridTransitionPhase,
@@ -270,7 +269,6 @@ export function GridScreen({
     return () => { promise.then((fn: () => void) => fn()); };
   }, []);
 
-  const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
   const childFolders = useAtomValue(gridChildFoldersAtom);
   const filterToolbarOpen = useAtomValue(gridFilterToolbarOpenAtom);
   const viewportCommitKey = `${Number(filterToolbarOpen)}:${Number(sidebarCollapsed)}:${Number(inspectorCollapsed)}`;
@@ -718,10 +716,10 @@ export function GridScreen({
 
   useEffect(() => {
     const hasSubfolders = !viewerSession
-      && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
+      && childFolders.length > 0 && gridScope.kind === 'folder';
     const staticSurfaceCommitted = Boolean(error) || (isEmpty && !hasSubfolders);
     if (transitionPhase === 'waiting' && !loading && staticSurfaceCommitted) onFirstPaint?.();
-  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, showSubfolders, transitionPhase, viewerSession]);
+  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, transitionPhase, viewerSession]);
   const viewerIndex = viewerSession ? resolveViewerIndex(viewerSession, items) : -1;
   const viewerItem = viewerIndex >= 0 ? items[viewerIndex] ?? null : null;
   const quickLookIndex = quickLookSession ? resolveViewerIndex(quickLookSession, items) : -1;
@@ -916,7 +914,7 @@ export function GridScreen({
     // Quick Look overlays the settled grid; changing header geometry here would
     // trigger a needless canvas resize and scroll-anchor settlement.
     const hasSubfolders = !viewerSession
-      && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
+      && childFolders.length > 0 && gridScope.kind === 'folder';
 
     if (error) {
       return (

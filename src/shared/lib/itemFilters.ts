@@ -1,4 +1,5 @@
 import type {
+  BaseScope,
   EntityViewQuery,
   FilterExpr,
   ItemSort,
@@ -82,10 +83,11 @@ export function itemFiltersEqual(left: ItemFilters, right: ItemFilters): boolean
 }
 
 export function compileGridQuery(
-  scope: EntityViewQuery['scope'],
+  scope: BaseScope,
   filters: ItemFilters,
   sort: ItemSort,
   searchText = '',
+  includeDescendants = false,
 ): EntityViewQuery {
   const values: FilterExpr[] = [];
   const clause = (value: Extract<FilterExpr, { kind: 'clause' }>['value']): FilterExpr => ({
@@ -157,7 +159,13 @@ export function compileGridQuery(
     values.push(clause({ clause: 'color', color: hexToLab(filters.color_hex), delta_e: 12 }));
   }
 
-  return { scope, view: { filter: { kind: 'all', value: values }, sort } };
+  const queryScope: EntityViewQuery['scope'] = includeDescendants && scope.kind === 'folder'
+    ? { kind: 'folder_tree', folder_id: scope.folder_id }
+    : scope;
+  const querySort = includeDescendants && scope.kind === 'folder' && sort.field === 'folder_order'
+    ? { field: 'imported_at' as const, direction: 'descending' as const, random_seed: null }
+    : sort;
+  return { scope: queryScope, view: { filter: { kind: 'all', value: values }, sort: querySort } };
 }
 
 function addDateRange(

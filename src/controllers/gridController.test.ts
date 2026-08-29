@@ -222,6 +222,45 @@ describe('gridController pagination', () => {
     await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
 
     expect(store.get(gridShowSubfoldersAtom)).toBe(false);
+    expect(queryItemsMock.mock.calls[0][0].scope).toEqual({ kind: 'folder', folder_id: 7 });
+  });
+
+  it('queries the complete folder tree when subfolder content is enabled', async () => {
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { show_subfolders: true }
+      : {});
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
+
+    expect(store.get(gridShowSubfoldersAtom)).toBe(true);
+    expect(queryItemsMock.mock.calls[0][0].scope).toEqual({ kind: 'folder_tree', folder_id: 7 });
+  });
+
+  it('does not expose recursive content semantics to smart folders', async () => {
+    getViewPrefsMock.mockImplementation(async () => ({ show_subfolders: true }));
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'smart_folder', smart_folder_id: 9 });
+
+    expect(store.get(gridShowSubfoldersAtom)).toBe(false);
+    expect(queryItemsMock.mock.calls[0][0].scope).toEqual({ kind: 'smart_folder', smart_folder_id: 9 });
+  });
+
+  it('requeries the active folder when recursive content is toggled', async () => {
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      scope: { kind: 'folder', folder_id: 7 },
+      view: { ...store.get(gridSessionAtom).view, showSubfolders: false },
+      status: 'idle',
+    });
+    queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
+
+    gridController.applyIntent({ type: 'view', patch: { showSubfolders: true } });
+    await vi.waitFor(() => expect(store.get(gridLoadingAtom)).toBe(false));
+
+    expect(queryItemsMock).toHaveBeenCalledOnce();
+    expect(queryItemsMock.mock.calls[0][0].scope).toEqual({ kind: 'folder_tree', folder_id: 7 });
   });
 
   it('lets a scope override the application grid spacing without requerying', async () => {
