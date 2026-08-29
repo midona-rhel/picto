@@ -28,6 +28,7 @@
   flex-shrink: 0;
   height: var(--titlebar-height);
   display: flex;
+  contain: layout style;
   margin-right: var(--titlebar-inspector-width, 0px);
   -webkit-app-region: drag;
   font-family: var(--font-family-ui);

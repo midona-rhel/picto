@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isEditableTarget } from './editableTarget';
-import { buildPanelVisibilityContextEntries } from './AppShell';
+import { buildPanelVisibilityContextEntries, titlebarLayoutWidth } from './AppShell';
 
 describe('isEditableTarget', () => {
   it('recognizes editable controls and contenteditable elements', () => {
@@ -40,5 +40,12 @@ describe('panel visibility context menu', () => {
     }
     if ('action' in entries[1]) entries[1].action();
     expect(toggleSidebar).toHaveBeenCalledOnce();
+  });
+});
+
+describe('settled titlebar geometry', () => {
+  it('reserves the inspector without allowing a negative main titlebar width', () => {
+    expect(titlebarLayoutWidth(1_440, 360)).toBe(1_080);
+    expect(titlebarLayoutWidth(320, 480)).toBe(0);
   });
 });

@@ -5,7 +5,7 @@
  * buttons are right-aligned in the titlebar-left section.
  */
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { isNativeDragPending as isNativeDragPendingFn } from '../features/grid/dragState';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { IconSettings, IconPin, IconPinFilled } from '@tabler/icons-react';
@@ -61,6 +61,11 @@ import { createEmptyItemFilters, itemFiltersEqual } from '../shared/lib/itemFilt
 import styles from './AppShell.module.css';
 
 const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+export const TITLEBAR_RESIZE_SETTLE_MS = 180;
+
+export function titlebarLayoutWidth(shellWidth: number, reservedInspectorWidth: number): number {
+  return Math.max(0, Math.round(shellWidth - reservedInspectorWidth));
+}
 
 type PanelPresencePhase = 'shown' | 'entering' | 'exiting';
 type PanelPresenceMotion = 'slide' | 'fade';
@@ -354,8 +359,38 @@ export function AppShell() {
   const inspectorDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
   const sidebarDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
   const shellRef = useRef<HTMLDivElement>(null);
+  const titlebarRef = useRef<HTMLDivElement>(null);
   const inspectorElRef = useRef<HTMLDivElement>(null);
   const sidebarElRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    const titlebar = titlebarRef.current;
+    if (!shell || !titlebar) return;
+
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const commitWidth = () => {
+      const reservedWidth = reserveInspectorTitlebar ? inspectorWidth : 0;
+      titlebar.style.width = `${titlebarLayoutWidth(shell.clientWidth, reservedWidth)}px`;
+    };
+
+    // Freeze the titlebar's flex geometry during a native window resize. The
+    // shell clips it live, then one layout commit follows when resizing stops.
+    commitWidth();
+    const observer = new ResizeObserver(() => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        commitWidth();
+      }, TITLEBAR_RESIZE_SETTLE_MS);
+    });
+    observer.observe(shell);
+    return () => {
+      observer.disconnect();
+      if (settleTimer) clearTimeout(settleTimer);
+    };
+  }, [inspectorWidth, reserveInspectorTitlebar]);
+
   const onInspectorResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const el = inspectorElRef.current;
@@ -596,7 +631,7 @@ export function AppShell() {
         '--titlebar-inspector-width': reserveInspectorTitlebar ? `${inspectorWidth}px` : '0px',
       } as CSSProperties}
     >
-      <div className={styles.titlebar} data-window-drag-region="">
+      <div ref={titlebarRef} className={styles.titlebar} data-window-drag-region="">
         <div className={titlebarLeftClass} data-help-region="sidebar">
           <ApplicationMenuButton />
           <div className={styles.titlebarActions}>
