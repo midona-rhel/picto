@@ -145,6 +145,14 @@ pub fn claim_next_query(
                                JOIN subscription_query active_q ON active_q.query_id = active_rq.query_id
                                WHERE active_rq.status = 'running' AND active_q.domain_key = q.domain_key
                            )
+                           -- One exclusive execution per subscription: queries of
+                           -- one subscription run serially, never side by side.
+                           AND NOT EXISTS (
+                               SELECT 1 FROM subscription_run_query sibling_rq
+                               JOIN subscription_run sibling_run ON sibling_run.run_id = sibling_rq.run_id
+                               WHERE sibling_rq.status = 'running'
+                                 AND sibling_run.subscription_id = r.subscription_id
+                           )
                          ORDER BY qr.available_at, qr.run_query_id",
                     )?
                     .query_map([now], |row| {
@@ -1154,6 +1162,57 @@ mod tests {
             })
             .unwrap();
         assert_eq!(statuses, ["succeeded", "running"]);
+    }
+
+    #[test]
+    fn one_subscription_executes_its_queries_serially() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Serial".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![
+                NewSubscriptionQuery {
+                    site_id: "twitter".into(),
+                    query_text: "example".into(),
+                    display_name: None,
+                    notes: None,
+                    group_posts: true,
+                },
+                NewSubscriptionQuery {
+                    site_id: "e621".into(),
+                    query_text: "example".into(),
+                    display_name: None,
+                    notes: None,
+                    group_posts: true,
+                },
+            ],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let mut schedule = DomainSchedule::new();
+        let first = claim_next_query(&application, &mut schedule, "2026-08-29T00:00:01Z")
+            .unwrap()
+            .unwrap();
+
+        // While the first query is running, its sibling on a different domain
+        // must not be claimable — one exclusive execution per subscription.
+        let mut sibling_schedule = DomainSchedule::new();
+        assert!(claim_next_query(&application, &mut sibling_schedule, "2026-08-29T00:00:02Z")
+            .unwrap()
+            .is_none());
+
+        complete_query(&application, &first, None, "2026-08-29T00:00:03Z").unwrap();
+        let second = claim_next_query(&application, &mut sibling_schedule, "2026-08-29T00:00:04Z")
+            .unwrap()
+            .expect("the sibling becomes claimable once the first settles");
+        assert_ne!(second.query_id, first.query_id);
     }
 
     #[test]
