@@ -449,7 +449,7 @@ extractor exposes a generic post-list API.
 
 ### Request Pacing
 
-- Apply the one-request-per-second/domain policy at the actual HTTP request boundary.
+- Apply provider-specific randomized pacing at the actual HTTP request boundary, using a 0.5-2 second fallback.
 - Do not add a second unconditional sleep after extraction events, file writes, acknowledgements,
   ingest, or UI publication.
 - Permit bounded concurrent media downloads only within the current post.
@@ -730,7 +730,7 @@ There must be one production subscription path after cutover and no dual-write p
   every edit.
 - Run a final release-mode suite and `git diff --check` before handoff.
 - Trace one public provider and one authenticated provider end to end.
-- Compare request timestamps against the one-request-per-second/domain policy.
+- Compare request timestamps against the provider-specific per-domain pacing policy.
 - Flag any idle gap over 250 ms that is not network pacing, file transfer, thumbnail generation, or
   canonical ingest.
 - Perform UI verification only with the user's explicit coordination; do not compete for control of
@@ -788,7 +788,7 @@ There must be one production subscription path after cutover and no dual-write p
 - Gallery image progress updates throughout the download.
 - Same-query subscriptions are fully isolated.
 - Reset is deterministic and owner-scoped.
-- The one-request-per-second/domain limiter is the only deliberate request delay.
+- The provider-specific per-domain limiter is the only deliberate request delay.
 - Old archives, transient gallery subscriptions, duplicate progress systems, and ingest-state
   mirroring are deleted.
 - Focused crash, duplicate, reset, gallery, provider, and UI contract tests pass.

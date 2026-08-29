@@ -5,13 +5,11 @@ use super::{GalleryDlAuthConfig, RunOptions};
 pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     let mut extractor = serde_json::Map::new();
 
-    // Request pacing is NOT configured here. The bridge enforces the
-    // one-request-per-second/domain policy with a reservation limiter at the
-    // requests.Session boundary (scripts/gallery_dl_bridge.py), covering
-    // extractor requests and media downloads on one shared per-host clock.
-    // gallery-dl's own `sleep`/`sleep-request` measure from the previous
-    // response instead, so layering them stacks each request's latency onto
-    // the interval and slows runs ~30% below the allowed rate.
+    // The bridge replicates gallery-dl's provider intervals on one shared
+    // per-host clock. Disable gallery-dl's separate extractor and download
+    // clocks so a provider interval is applied exactly once.
+    extractor.insert("sleep-request".into(), serde_json::json!(0));
+    extractor.insert("sleep".into(), serde_json::json!(0));
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
 
     // Moebooru and Gelbooru-v0.2 expose categorized tags through the post
@@ -255,10 +253,11 @@ mod tests {
             .get("extractor")
             .and_then(|value| value.as_object())
             .expect("extractor config");
-        // Pacing lives in the bridge's session limiter; gallery-dl's own
-        // response-relative sleeps must stay unset or they stack on it.
-        assert!(extractor.get("sleep-request").is_none());
-        assert!(extractor.get("sleep").is_none());
+        assert_eq!(
+            extractor.get("sleep-request").and_then(|v| v.as_i64()),
+            Some(0)
+        );
+        assert_eq!(extractor.get("sleep").and_then(|v| v.as_i64()), Some(0));
         let gelbooru = config
             .get("extractor")
             .and_then(|value| value.get("gelbooru"))
@@ -404,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn rule34_uses_api_categories_and_one_second_pacing() {
+    fn rule34_uses_api_categories_and_bridge_owned_pacing() {
         let opts = RunOptions {
             subscription_id: Some(1),
             query_id: Some(2),
@@ -427,8 +426,11 @@ mod tests {
             .get("extractor")
             .and_then(|value| value.as_object())
             .expect("extractor config");
-        assert!(extractor.get("sleep-request").is_none());
-        assert!(extractor.get("sleep").is_none());
+        assert_eq!(
+            extractor.get("sleep-request").and_then(|v| v.as_i64()),
+            Some(0)
+        );
+        assert_eq!(extractor.get("sleep").and_then(|v| v.as_i64()), Some(0));
         assert!(extractor.get("rule34").is_none());
     }
 

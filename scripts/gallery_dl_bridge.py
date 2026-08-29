@@ -632,9 +632,22 @@ class _HookRegistry(dict):
         return callbacks
 
 
-_DOMAIN_INTERVAL_SECONDS = 1.0
+_DEFAULT_REQUEST_INTERVAL = (0.5, 2.0)
+_PROVIDER_REQUEST_INTERVALS = {
+    # Mirrored from gallery-dl 1.32.10 extractor defaults. Providers without
+    # an explicit upstream interval use Picto's randomized default above.
+    "danbooru": (0.5, 1.5),
+    "e621": (1.0, 1.5),
+    "ehentai": (3.0, 6.0),
+    "furaffinity": (1.0, 1.0),
+    "newgrounds": (0.5, 1.5),
+}
 _domain_slot_lock = __import__("threading").Lock()
 _next_request_monotonic: dict[str, float] = {}
+
+
+def _request_interval_for_site(site_id: str | None) -> tuple[float, float]:
+    return _PROVIDER_REQUEST_INTERVALS.get(site_id or "", _DEFAULT_REQUEST_INTERVAL)
 
 
 def _host_state_name(host: str) -> str:
@@ -670,41 +683,51 @@ def _store_host_slot(state_dir: str, host: str, slot: float) -> None:
         pass
 
 
-def _pace_domain_request(host: str, now: float, sleep=None, state_dir=None) -> float:
+def _pace_domain_request(
+    host: str,
+    now: float,
+    sleep=None,
+    state_dir=None,
+    interval=(1.0, 1.0),
+    uniform=None,
+) -> float:
     """Reserve the next send slot for the host, then sleep the remainder, so
-    consecutive requests to one host are at least one second apart whichever
+    consecutive requests to one host honor the provider interval whichever
     gallery-dl stream — extractor, page fetch, or media download — issued
     them, including concurrent callers.
 
-    gallery-dl paces its extractor requests (`sleep-request`) and its media
-    downloads (`sleep`) with two independent clocks, so their interleavings
-    can put two requests to the same host inside one second. This limiter at
-    the real HTTP boundary is the policy's guarantee; the gallery-dl options
-    stay on as defense in depth and never add delay beyond the remainder.
+    Picto mirrors gallery-dl's provider-specific intervals here and uses a
+    randomized 0.5-2 second fallback. gallery-dl's independent extractor and
+    download clocks are disabled so the interval is never applied twice.
 
     A bridge process runs one source window; `state_dir` carries each host's
     reserved slot across consecutive processes so a fresh process cannot
     request inside the previous process's interval.
     """
     import time as _time
+    import random
 
     sleep = sleep or _time.sleep
+    uniform = uniform or random.uniform
     with _domain_slot_lock:
         if state_dir and host not in _next_request_monotonic:
             stored = _load_host_slot(state_dir, host, now)
             if stored is not None:
                 _next_request_monotonic[host] = stored
         slot = max(now, _next_request_monotonic.get(host, now))
-        _next_request_monotonic[host] = slot + _DOMAIN_INTERVAL_SECONDS
+        delay = uniform(*interval)
+        _next_request_monotonic[host] = slot + delay
         if state_dir:
-            _store_host_slot(state_dir, host, slot + _DOMAIN_INTERVAL_SECONDS)
+            _store_host_slot(state_dir, host, slot + delay)
     if slot > now:
         sleep(slot - now)
     return slot
 
 
 def _install_request_pacing_and_trace(
-    trace_path: str | None, state_dir: str | None
+    trace_path: str | None,
+    state_dir: str | None,
+    interval: tuple[float, float],
 ) -> None:
     """Enforce the per-domain interval and optionally record every request's
     host and timestamp as certification evidence."""
@@ -718,7 +741,12 @@ def _install_request_pacing_and_trace(
 
     def paced(self, method, url, *args, **kwargs):
         host = urllib.parse.urlsplit(str(url)).hostname or ""
-        sent_at = _pace_domain_request(host, time.monotonic(), state_dir=state_dir)
+        sent_at = _pace_domain_request(
+            host,
+            time.monotonic(),
+            state_dir=state_dir,
+            interval=interval,
+        )
         if trace_path:
             entry = {
                 "ts_ms": int(time.time() * 1000),
@@ -1048,7 +1076,9 @@ def main() -> int:
     # Picto's Rust watchdog consumes this event; it is not renderer progress.
     config.set(("downloader",), "progress", 0.5)
     _install_request_pacing_and_trace(
-        request.get("request_trace_path"), request.get("pacing_state_dir")
+        request.get("request_trace_path"),
+        request.get("pacing_state_dir"),
+        _request_interval_for_site(request.get("site_id")),
     )
 
     _emit(

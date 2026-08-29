@@ -94,7 +94,7 @@ pub struct RunOptions {
     /// Optional archive key prefix (used to support targeted reset per subscription/query).
     pub archive_prefix: Option<String>,
     /// Directory carrying per-host request slots across bridge processes so
-    /// the one-request-per-second/domain pacing survives process boundaries.
+    /// provider-specific randomized pacing survives process boundaries.
     /// Empty = in-process pacing only.
     pub pacing_state_dir: PathBuf,
     /// Subscription/query-owned parent for invocation download directories.
@@ -321,7 +321,7 @@ impl GalleryDlRunner {
             site_id = %opts.site_id,
             gelbooru_tags_enabled = config_bool_at(&config, &["extractor", "gelbooru", "tags"]).unwrap_or(false),
             danbooru_tags_enabled = config_bool_at(&config, &["extractor", "danbooru", "tags"]).unwrap_or(false),
-            request_interval_seconds = 1,
+            request_pacing = "gallery-dl provider interval",
             metadata_enabled = config_bool_at(&config, &["extractor", "metadata"]).unwrap_or(false),
             config_path = %config_path.display(),
             "gallery-dl tag config prepared"
@@ -354,8 +354,8 @@ impl GalleryDlRunner {
             "post_terminal_mode": post_terminal_mode(&opts.site_id),
             "pacing_state_dir": (!opts.pacing_state_dir.as_os_str().is_empty())
                 .then(|| opts.pacing_state_dir.display().to_string()),
-            // Certification evidence: every HTTP request's host and timestamp,
-            // so the one-request-per-second/domain policy is provable.
+            // Certification evidence for the provider-specific per-host
+            // request pacing policy.
             "request_trace_path": std::env::var_os("PICTO_TRACE_REQUESTS").map(|value| {
                 let path = std::path::PathBuf::from(value);
                 if path.is_absolute() {

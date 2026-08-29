@@ -255,6 +255,32 @@ class DomainRequestPacingTests(unittest.TestCase):
         self.assertAlmostEqual(second, 101.0, places=6)
         self.assertAlmostEqual(third, 102.0, places=6)
 
+    def test_provider_intervals_match_gallery_dl_and_others_are_randomized(self):
+        self.assertEqual(bridge._request_interval_for_site("ehentai"), (3.0, 6.0))
+        self.assertEqual(bridge._request_interval_for_site("e621"), (1.0, 1.5))
+        self.assertEqual(bridge._request_interval_for_site("furaffinity"), (1.0, 1.0))
+        self.assertEqual(bridge._request_interval_for_site("twitter"), (0.5, 2.0))
+
+    def test_random_interval_reserves_the_sampled_delay(self):
+        first = bridge._pace_domain_request(
+            "example.com",
+            100.0,
+            sleep=self.sleep,
+            interval=(0.5, 2.0),
+            uniform=lambda _minimum, _maximum: 1.25,
+        )
+        second = bridge._pace_domain_request(
+            "example.com",
+            100.5,
+            sleep=self.sleep,
+            interval=(0.5, 2.0),
+            uniform=lambda _minimum, _maximum: 1.25,
+        )
+
+        self.assertAlmostEqual(first, 100.0, places=6)
+        self.assertAlmostEqual(second, 101.25, places=6)
+        self.assertAlmostEqual(self.sleeps[-1], 0.75, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

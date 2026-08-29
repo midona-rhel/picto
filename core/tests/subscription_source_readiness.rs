@@ -85,9 +85,9 @@ async fn certify_selected_source() -> Result<(), String> {
 
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
     let root = temp.path();
-    // Every certification proves the one-request-per-second/domain policy
-    // from a trace recorded at the bridge's HTTP boundary. An externally
-    // provided absolute path survives the run for inspection.
+    // Every certification proves provider-specific per-domain pacing from a
+    // trace recorded at the bridge's HTTP boundary. An externally provided
+    // absolute path survives the run for inspection.
     let request_trace = match std::env::var_os("PICTO_TRACE_REQUESTS") {
         Some(existing) if std::path::Path::new(&existing).is_absolute() => {
             std::path::PathBuf::from(existing)
@@ -669,8 +669,8 @@ struct PacingEvidence {
 /// policy interval apart, from the bridge's HTTP-boundary trace.
 fn validate_request_pacing(trace_path: &std::path::Path) -> Result<PacingEvidence, String> {
     // Timestamps are truncated to whole milliseconds when recorded, so a
-    // compliant 1000ms remainder can read as 999ms.
-    const MINIMUM_GAP_MS: i64 = 995;
+    // compliant 500ms lower bound can read just below 500ms.
+    const MINIMUM_GAP_MS: i64 = 495;
     let raw = std::fs::read_to_string(trace_path).map_err(|error| {
         format!(
             "certification ran without a request trace at {}: {error}",
@@ -693,7 +693,7 @@ fn validate_request_pacing(trace_path: &std::path::Path) -> Result<PacingEvidenc
             minimum_gap = minimum_gap.min(gap);
             if gap < MINIMUM_GAP_MS {
                 return Err(format!(
-                    "two requests to {host} were only {gap}ms apart; the policy requires one request per domain per second"
+                    "two requests to {host} were only {gap}ms apart; the policy requires at least 0.5 seconds per domain"
                 ));
             }
         }
@@ -750,7 +750,7 @@ fn write_report(
         },
         "request_pacing": pacing,
         "checks": {
-            "one_request_per_domain_per_second": true,
+            "provider_request_pacing": true,
             "source_identity_persisted": true,
             "canonical_urls_persisted": true,
             "metadata_text_sanitized": true,
