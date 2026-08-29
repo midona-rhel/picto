@@ -231,6 +231,36 @@
 .syncProgressText span:last-child { flex-shrink: 0; color: var(--color-text-tertiary); }
 .cloudMessage { margin: 12px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 
+.cloudProviderActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cloudProviderButton {
+  composes: btn from '../../shared/styles/actionButton.module.css';
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 38px;
+  padding-inline: 12px;
+  text-align: left;
+}
+
+.cloudProviderButton span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloudProviderButton small {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cloudLibraryList {
   display: flex;
   flex-direction: column;

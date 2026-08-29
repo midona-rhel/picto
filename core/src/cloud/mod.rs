@@ -303,6 +303,38 @@ pub fn set_paused_library(
     cloud_receipt_or_current(application, published)
 }
 
+pub fn disable_library(
+    application: &LibraryApplication,
+) -> Result<picto_library::MutationReceipt, String> {
+    let published = application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            ["cloud".to_string(), "tasks".to_string()],
+            [],
+            |transaction, _| {
+                let changed = transaction.execute(
+                    "UPDATE cloud_state
+                     SET provider = NULL, account_label = NULL, remote_root = NULL,
+                         paused = 0, state = 'disabled', phase = 'idle',
+                         blocking = 0, completed_units = 0, total_units = NULL,
+                         message = '', pending_blobs = 0, missing_blobs = 0
+                     WHERE singleton = 1
+                       AND (provider IS NOT NULL OR account_label IS NOT NULL
+                            OR remote_root IS NOT NULL OR paused != 0
+                            OR state != 'disabled' OR phase != 'idle'
+                            OR blocking != 0 OR completed_units != 0
+                            OR total_units IS NOT NULL OR message != ''
+                            OR pending_blobs != 0 OR missing_blobs != 0)",
+                    [],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    cloud_receipt_or_current(application, published)
+}
+
 fn cloud_receipt_or_current(
     application: &LibraryApplication,
     published: Option<((), picto_library::MutationReceipt)>,
@@ -366,4 +398,55 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
 
 fn json_sql_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabling_cloud_clears_binding_and_preserves_pending_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let application =
+            LibraryApplication::create(temp.path().join("CloudDisable.library")).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_state
+                         SET provider = 'dropbox', account_label = 'Personal',
+                             remote_root = '/tmp/dropbox', state = 'paused', paused = 1,
+                             phase = 'uploading', blocking = 1, completed_units = 2,
+                             total_units = 5, message = 'Uploading', pending_blobs = 3,
+                             missing_blobs = 1
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO cloud_journal
+                             (revision, operation_kind, payload_json, created_at_ms)
+                         VALUES (1, 'fixture', '{}', 1)",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        disable_library(&application).unwrap();
+
+        let configuration = configuration_library(&application).unwrap();
+        assert_eq!(configuration.provider, None);
+        assert_eq!(configuration.account_label, None);
+        assert_eq!(configuration.root_path, None);
+        let status = status_library(&application).unwrap();
+        assert_eq!(status.state, "disabled");
+        assert_eq!(status.phase, "idle");
+        assert!(!status.blocking);
+        assert_eq!(status.pending_mutations, 1);
+        assert!(!snapshot_due_library(&application, i64::MAX, 0).unwrap());
+    }
 }

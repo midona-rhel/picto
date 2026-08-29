@@ -463,6 +463,7 @@ pub fn dispatch_library(
             let input: CloudPauseInput = parse(args_json)?;
             read(crate::cloud::set_paused_library(application, input.paused)?)
         }
+        "cloud.disable" => read(crate::cloud::disable_library(application)?),
         "cloud.retention.update" => {
             let input: ValueInput = parse(args_json)?;
             read(crate::cloud::update_retention_library(

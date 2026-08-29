@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconAlertTriangle,
+  IconBrandDropbox,
+  IconBrandGoogleDrive,
   IconBooks,
   IconCheck,
   IconCloud,
+  IconCloudOff,
   IconDotsVertical,
   IconFolderOpen,
   IconPencil,
@@ -408,6 +411,15 @@ export function LibraryManager() {
       await refreshCloud();
     });
 
+  const disableCloud = () => {
+    if (!window.confirm('Stop syncing this library?\n\nLocal files and the existing cloud copy will not be deleted.')) return;
+    void run('cloud-disable', async () => {
+      await invoke('cloud.disable');
+      await refreshCloud();
+      setMessage('Cloud sync stopped.');
+    });
+  };
+
   const syncNow = () =>
     run('cloud-sync', async () => {
       await invoke('cloud.reconcile');
@@ -476,6 +488,12 @@ export function LibraryManager() {
             label: 'Show Cloud Folder',
             icon: <IconFolderOpen size={15} />,
             action: () => { void pictoShell().showInFolder(cloudConfiguration.root_path); },
+          },
+          {
+            label: 'Stop Syncing',
+            icon: <IconCloudOff size={15} />,
+            disabled: busy !== null,
+            action: disableCloud,
           },
         );
       } else if (cloudRoots.length > 0) {
@@ -758,7 +776,26 @@ export function LibraryManager() {
                       ) : cloudStatus?.message ? <p className={styles.cloudMessage}>{cloudStatus.message}</p> : null}
                     </>
                   ) : cloudRoots.length > 0 ? (
-                    <p className={styles.cardDescription}>Cloud sync is not configured. Choose an installed provider from Library actions.</p>
+                    <div className={styles.cloudProviderActions}>
+                      {cloudRoots.map((root) => {
+                        const isDropbox = root.provider === 'dropbox';
+                        const ProviderIcon = isDropbox ? IconBrandDropbox : IconBrandGoogleDrive;
+                        const providerName = isDropbox ? 'Dropbox' : 'Google Drive';
+                        return (
+                          <button
+                            key={`${root.provider}:${root.path}`}
+                            type="button"
+                            className={styles.cloudProviderButton}
+                            onClick={() => void configureCloud(root)}
+                            disabled={busy !== null}
+                          >
+                            <ProviderIcon size={18} />
+                            <span>Synchronize Library with {providerName}</span>
+                            <small>{root.account_label}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <p className={styles.cardDescription}>Install and sign in to Google Drive or Dropbox on this computer, then reopen Library Manager.</p>
                   )}
