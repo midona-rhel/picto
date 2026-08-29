@@ -58,6 +58,7 @@ fn main() {
         SubscriptionPostsPerRunInput, SubscriptionQueryInput, SubscriptionRunActivityInput,
         SubscriptionRunsInput, UpdateSubscriptionQueryInput, ValueInput,
     };
+    use picto_core::library_import::FolderTreeAnalysis;
     use picto_core::media_io::{
         ExportFormat, ExportResult, RequestThumbnailResult, ResolvedFilePath, ThumbnailQueueResult,
     };
@@ -121,6 +122,7 @@ fn main() {
         ThumbnailQueueResult,
         ExportFormat,
         ExportResult,
+        FolderTreeAnalysis,
         AiModelStatus,
         AiRuntimeStatus,
         AiTagPrediction,

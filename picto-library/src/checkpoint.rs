@@ -7,7 +7,7 @@ use crate::projection::{NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBi
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v8";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v10";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
@@ -38,11 +38,13 @@ struct CheckpointData {
     modified_at: NumericIndex,
     notes_present: roaring::RoaringBitmap,
     urls_present: roaring::RoaringBitmap,
+    smart_local_results: std::collections::HashMap<u32, SharedBitmap>,
     smart_results: std::collections::HashMap<u32, SharedBitmap>,
     // The public predicate DTO uses internally tagged enums for readable JSON.
     // Bincode cannot deserialize that serde representation, so checkpoint the
     // small smart-folder definitions as JSON inside the binary snapshot.
     smart_queries: std::collections::HashMap<u32, String>,
+    smart_effective_queries: std::collections::HashMap<u32, String>,
 }
 
 pub fn encode(snapshot: &ProjectionSnapshot) -> Result<Vec<u8>> {
@@ -74,9 +76,19 @@ pub fn encode(snapshot: &ProjectionSnapshot) -> Result<Vec<u8>> {
         modified_at: (*snapshot.modified_at).clone(),
         notes_present: (*snapshot.notes_present).clone(),
         urls_present: (*snapshot.urls_present).clone(),
+        smart_local_results: (*snapshot.smart_local_results).clone(),
         smart_results: (*snapshot.smart_results).clone(),
         smart_queries: snapshot
             .smart_queries
+            .iter()
+            .map(|(id, query)| {
+                serde_json::to_string(query)
+                    .map(|encoded| (*id, encoded))
+                    .map_err(LibraryError::from)
+            })
+            .collect::<Result<_>>()?,
+        smart_effective_queries: snapshot
+            .smart_effective_queries
             .iter()
             .map(|(id, query)| {
                 serde_json::to_string(query)
@@ -93,6 +105,15 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         .map_err(|error| LibraryError::Checkpoint(error.to_string()))?;
     let smart_queries = data
         .smart_queries
+        .into_iter()
+        .map(|(id, encoded)| {
+            serde_json::from_str(&encoded)
+                .map(|query| (id, query))
+                .map_err(LibraryError::from)
+        })
+        .collect::<Result<_>>()?;
+    let smart_effective_queries = data
+        .smart_effective_queries
         .into_iter()
         .map(|(id, encoded)| {
             serde_json::from_str(&encoded)
@@ -129,8 +150,10 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         modified_at: std::sync::Arc::new(data.modified_at),
         notes_present: std::sync::Arc::new(data.notes_present),
         urls_present: std::sync::Arc::new(data.urls_present),
+        smart_local_results: std::sync::Arc::new(data.smart_local_results),
         smart_results: std::sync::Arc::new(data.smart_results),
         smart_queries: std::sync::Arc::new(smart_queries),
+        smart_effective_queries: std::sync::Arc::new(smart_effective_queries),
     })
 }
 

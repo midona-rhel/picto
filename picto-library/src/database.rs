@@ -402,21 +402,20 @@ impl LibraryDatabase {
     }
 
     pub fn allocate_id(transaction: &Transaction<'_>) -> Result<u32> {
-        let next = transaction.query_row(
-            "SELECT next_local_id FROM library_meta WHERE singleton = 1",
-            [],
-            |row| row.get::<_, i64>(0).map(|value| value as u64),
-        )?;
-        if next == 0 || next > u32::MAX as u64 {
-            return Err(LibraryError::InvalidState(
-                "local ID space is exhausted".into(),
-            ));
-        }
-        transaction.execute(
-            "UPDATE library_meta SET next_local_id = next_local_id + 1 WHERE singleton = 1",
-            [],
-        )?;
-        Ok(next as u32)
+        transaction
+            .prepare_cached(
+                "UPDATE library_meta
+                 SET next_local_id = next_local_id + 1
+                 WHERE singleton = 1 AND next_local_id < 4294967295
+                 RETURNING next_local_id - 1",
+            )?
+            .query_row([], |row| row.get::<_, u32>(0))
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    LibraryError::InvalidState("local ID space is exhausted".into())
+                }
+                error => error.into(),
+            })
     }
 }
 

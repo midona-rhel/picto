@@ -804,6 +804,7 @@ impl Library {
         let color = normalized_optional(input.color.as_deref());
         let notes = normalized_optional(input.notes.as_deref());
         let view = input.view;
+        crate::smart::validate_view(&view)?;
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -812,6 +813,7 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
+                crate::smart::validate_capacity(transaction)?;
                 validate_smart_parent(transaction, parent_id, None)?;
                 let smart_folder_id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
                 let display_order = transaction.query_row(
@@ -846,7 +848,7 @@ impl Library {
                     changed_at_ms,
                 )?;
                 let mut next = (*snapshot).clone();
-                crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
+                crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
                 next.revision = revision;
                 let after = load_smart_folder_definition(transaction, smart_folder_id)?
                     .ok_or_else(|| {
@@ -894,6 +896,7 @@ impl Library {
         let color = normalized_optional(input.color.as_deref());
         let notes = normalized_optional(input.notes.as_deref());
         let view = input.view;
+        crate::smart::validate_view(&view)?;
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -907,6 +910,7 @@ impl Library {
                     .ok_or_else(|| {
                         LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
                     })?;
+                let query_changed = before.parent_id != parent_id || before.view != view;
                 if transaction.execute(
                     "UPDATE smart_folder_definition
                      SET parent_id = ?2, name = ?3, icon = ?4, color = ?5, notes = ?6,
@@ -937,7 +941,9 @@ impl Library {
                     changed_at_ms,
                 )?;
                 let mut next = (*snapshot).clone();
-                crate::smart::replace_query(transaction, &mut next, smart_folder_id, view.clone())?;
+                if query_changed {
+                    crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
+                }
                 next.revision = revision;
                 let after = load_smart_folder_definition(transaction, smart_folder_id)?
                     .ok_or_else(|| {
@@ -3003,19 +3009,7 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                if let Some(parent_id) = parent_id {
-                    let exists = transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1)",
-                        [parent_id.0],
-                        |row| row.get::<_, bool>(0),
-                    )?;
-                    if !exists {
-                        return Err(LibraryError::InvalidInput(format!(
-                            "parent folder {} does not exist",
-                            parent_id.0
-                        )));
-                    }
-                }
+                validate_folder_parent(transaction, parent_id, None)?;
                 let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
                 let display_order = transaction.query_row(
                     "SELECT COALESCE(MAX(display_order) + 1, 0)
@@ -3107,6 +3101,11 @@ impl Library {
                     |row| row.get::<_, i64>(0),
                 )?;
                 let rows = load_folder_clone_rows(transaction, source_id)?;
+                validate_folder_nesting(
+                    transaction,
+                    source.parent_id,
+                    folder_subtree_height(transaction, source_id)?,
+                )?;
                 let mut replacements = HashMap::<FolderId, FolderId>::new();
                 let mut changes = Vec::with_capacity(rows.len());
                 let mut next = (*snapshot).clone();
@@ -3408,6 +3407,12 @@ impl Library {
                 Ok(())
             },
         )
+    }
+
+    pub fn folder_child_capacity(&self, parent_id: Option<FolderId>) -> Result<usize> {
+        self.database.read(WorkPriority::VisibleRead, |connection| {
+            Ok(crate::model::MAX_FOLDER_DEPTH - folder_depth(connection, parent_id)?)
+        })
     }
 
     pub fn reorder_folder_children(
@@ -5987,6 +5992,9 @@ fn apply_semantic_change(
                 Arc::make_mut(&mut snapshot.smart_queries)
                     .insert(query.smart_folder_id.0, replacement_query.clone());
             }
+            if !queries.is_empty() {
+                crate::smart::refresh_all(transaction, snapshot)?;
+            }
             *affected |= &changed;
             if !queries.is_empty() {
                 *affected |= snapshot.active();
@@ -6180,12 +6188,7 @@ fn apply_semantic_change(
                             folder.display_order
                         ],
                     )?;
-                    crate::smart::replace_query(
-                        transaction,
-                        snapshot,
-                        *smart_folder_id,
-                        folder.view.clone(),
-                    )?;
+                    crate::smart::refresh_subtree(transaction, snapshot, *smart_folder_id)?;
                 }
                 None => {
                     transaction.execute(
@@ -7091,11 +7094,10 @@ fn validate_folder_parent(
             "a folder cannot be its own parent".into(),
         ));
     }
-    let Some(parent_id) = parent_id else {
-        return Ok(());
-    };
-    require_folder(connection, parent_id)?;
-    if let Some(child_id) = child_id {
+    if let Some(parent_id) = parent_id {
+        require_folder(connection, parent_id)?;
+    }
+    if let (Some(parent_id), Some(child_id)) = (parent_id, child_id) {
         let creates_cycle = connection.query_row(
             "WITH RECURSIVE descendants(folder_id) AS (
                  SELECT folder_id FROM folder_definition WHERE parent_id = ?1
@@ -7114,7 +7116,67 @@ fn validate_folder_parent(
             ));
         }
     }
+    let subtree_height = child_id
+        .map(|child_id| folder_subtree_height(connection, child_id))
+        .transpose()?
+        .unwrap_or(1);
+    validate_folder_nesting(connection, parent_id, subtree_height)
+}
+
+fn folder_subtree_height(connection: &rusqlite::Connection, folder_id: FolderId) -> Result<usize> {
+    require_folder(connection, folder_id)?;
+    connection
+        .query_row(
+            "WITH RECURSIVE descendants(folder_id, depth) AS (
+                 SELECT folder_id, 1 FROM folder_definition WHERE folder_id = ?1
+                 UNION ALL
+                 SELECT child.folder_id, parent.depth + 1
+                 FROM folder_definition child
+                 JOIN descendants parent ON child.parent_id = parent.folder_id
+             )
+             SELECT COALESCE(MAX(depth), 1) FROM descendants",
+            [folder_id.0],
+            |row| row.get::<_, u32>(0),
+        )
+        .map(|height| height as usize)
+        .map_err(Into::into)
+}
+
+fn validate_folder_nesting(
+    connection: &rusqlite::Connection,
+    parent_id: Option<FolderId>,
+    subtree_height: usize,
+) -> Result<()> {
+    let parent_depth = folder_depth(connection, parent_id)?;
+    if parent_depth + subtree_height > crate::model::MAX_FOLDER_DEPTH {
+        return Err(LibraryError::InvalidInput(format!(
+            "folders may be nested at most {} levels deep",
+            crate::model::MAX_FOLDER_DEPTH
+        )));
+    }
     Ok(())
+}
+
+fn folder_depth(connection: &rusqlite::Connection, folder_id: Option<FolderId>) -> Result<usize> {
+    let depth = if let Some(folder_id) = folder_id {
+        require_folder(connection, folder_id)?;
+        connection.query_row(
+            "WITH RECURSIVE ancestors(folder_id, parent_id, depth) AS (
+                 SELECT folder_id, parent_id, 1
+                 FROM folder_definition WHERE folder_id = ?1
+                 UNION ALL
+                 SELECT parent.folder_id, parent.parent_id, child.depth + 1
+                 FROM folder_definition parent
+                 JOIN ancestors child ON parent.folder_id = child.parent_id
+             )
+             SELECT COALESCE(MAX(depth), 0) FROM ancestors",
+            [folder_id.0],
+            |row| row.get::<_, u32>(0),
+        )? as usize
+    } else {
+        0
+    };
+    Ok(depth)
 }
 
 fn normalized_optional(value: Option<&str>) -> Option<String> {
@@ -7177,6 +7239,46 @@ fn validate_smart_parent(
                 ));
             }
         }
+    }
+    let parent_depth = if let Some(parent_id) = parent_id {
+        transaction.query_row(
+            "WITH RECURSIVE ancestors(smart_folder_id, parent_id, depth) AS (
+                 SELECT smart_folder_id, parent_id, 1
+                 FROM smart_folder_definition WHERE smart_folder_id = ?1
+                 UNION ALL
+                 SELECT parent.smart_folder_id, parent.parent_id, child.depth + 1
+                 FROM smart_folder_definition parent
+                 JOIN ancestors child ON parent.smart_folder_id = child.parent_id
+             )
+             SELECT COALESCE(MAX(depth), 0) FROM ancestors",
+            [parent_id.0],
+            |row| row.get::<_, u32>(0),
+        )? as usize
+    } else {
+        0
+    };
+    let subtree_height = if let Some(child_id) = child_id {
+        transaction.query_row(
+            "WITH RECURSIVE descendants(smart_folder_id, depth) AS (
+                 SELECT smart_folder_id, 1 FROM smart_folder_definition
+                 WHERE smart_folder_id = ?1
+                 UNION ALL
+                 SELECT child.smart_folder_id, parent.depth + 1
+                 FROM smart_folder_definition child
+                 JOIN descendants parent ON child.parent_id = parent.smart_folder_id
+             )
+             SELECT COALESCE(MAX(depth), 1) FROM descendants",
+            [child_id.0],
+            |row| row.get::<_, u32>(0),
+        )? as usize
+    } else {
+        1
+    };
+    if parent_depth + subtree_height > crate::smart::MAX_SMART_FOLDER_DEPTH {
+        return Err(LibraryError::InvalidInput(format!(
+            "smart folders may be nested at most {} levels deep",
+            crate::smart::MAX_SMART_FOLDER_DEPTH
+        )));
     }
     Ok(())
 }

@@ -10,6 +10,7 @@ use picto_library::{
     PreparedIngestJob, PreparedIngestPayload, Rating,
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::library_application::LibraryApplication;
 
@@ -48,6 +49,23 @@ pub struct ImportEnqueueReport {
     pub skipped: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderTreeAnalysisInput {
+    pub path: String,
+    pub destination_folder_id: Option<u32>,
+    pub include_subfolders: bool,
+    pub include_source_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderTreeAnalysis {
+    pub source_depth: usize,
+    pub destination_depth: usize,
+    pub retained_depth: usize,
+    pub consolidated_levels: usize,
+}
+
 #[derive(Debug, Clone)]
 struct ImportCandidate {
     path: PathBuf,
@@ -65,8 +83,43 @@ struct WatchedFolder {
 struct PendingWatch {
     folder_id: FolderId,
     path: PathBuf,
+    relative_parent: Option<PathBuf>,
     metadata: fs::Metadata,
     job_key: String,
+}
+
+pub fn analyze_folder_tree(
+    application: &LibraryApplication,
+    input: &FolderTreeAnalysisInput,
+) -> Result<FolderTreeAnalysis, String> {
+    let path = fs::canonicalize(input.path.trim())
+        .map_err(|error| format!("Failed to resolve folder: {error}"))?;
+    if !path.is_dir() {
+        return Err(format!("Selected path is not a folder: {}", path.display()));
+    }
+    let relative_depth = if input.include_subfolders {
+        collect_structure_directories(&path, true)?
+            .iter()
+            .map(|relative| relative_folder_depth(relative).saturating_sub(1))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let source_depth = relative_depth + usize::from(input.include_source_root);
+    let destination = input.destination_folder_id.map(FolderId);
+    let available = application
+        .library()
+        .folder_child_capacity(destination)
+        .map_err(|error| error.to_string())?;
+    let destination_depth = picto_library::MAX_FOLDER_DEPTH - available;
+    let retained_depth = source_depth.min(available);
+    Ok(FolderTreeAnalysis {
+        source_depth,
+        destination_depth,
+        retained_depth,
+        consolidated_levels: source_depth.saturating_sub(retained_depth),
+    })
 }
 
 pub async fn enqueue_manual_import(
@@ -87,6 +140,32 @@ pub async fn enqueue_manual_import(
         }
     }
     let candidates = collect_manual_candidates(application.root(), input)?;
+    let structure_directories = if input.preserve_structure && input.include_folders_without_media {
+        let mut directories = Vec::new();
+        for value in &input.paths {
+            let path = fs::canonicalize(value)
+                .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
+            if path.is_dir() {
+                directories.extend(collect_structure_directories(
+                    &path,
+                    input.include_subfolders,
+                )?);
+            }
+        }
+        directories
+    } else {
+        Vec::new()
+    };
+    let folder_capacity = input
+        .preserve_structure
+        .then(|| {
+            application
+                .library()
+                .folder_child_capacity(input.parent_folder_id)
+        })
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0);
     let invocation = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
     let mut folders = BTreeMap::new();
@@ -96,19 +175,13 @@ pub async fn enqueue_manual_import(
     };
 
     if input.preserve_structure && input.include_folders_without_media {
-        for value in &input.paths {
-            let path = fs::canonicalize(value)
-                .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
-            if path.is_dir() {
-                for relative in collect_structure_directories(&path, input.include_subfolders)? {
-                    ensure_relative_folder(
-                        application,
-                        input.parent_folder_id,
-                        Some(&relative),
-                        &mut folders,
-                    )?;
-                }
-            }
+        for relative in &structure_directories {
+            ensure_relative_folder(
+                application,
+                input.parent_folder_id,
+                truncate_relative_folder(relative, folder_capacity).as_deref(),
+                &mut folders,
+            )?;
         }
     }
 
@@ -136,7 +209,13 @@ pub async fn enqueue_manual_import(
                     ensure_relative_folder(
                         application,
                         input.parent_folder_id,
-                        candidate.relative_parent.as_deref(),
+                        candidate
+                            .relative_parent
+                            .as_deref()
+                            .and_then(|relative| {
+                                truncate_relative_folder(relative, folder_capacity)
+                            })
+                            .as_deref(),
                         &mut folders,
                     )?
                 } else {
@@ -226,10 +305,14 @@ fn attach_source_folder_watch(
         .file_name()
         .map(PathBuf::from)
         .ok_or_else(|| "The watched import folder must have a name".to_owned())?;
+    let capacity = application
+        .library()
+        .folder_child_capacity(input.parent_folder_id)
+        .map_err(|error| error.to_string())?;
     let folder_id = ensure_relative_folder(
         application,
         input.parent_folder_id,
-        Some(&root_name),
+        truncate_relative_folder(&root_name, capacity).as_deref(),
         folders,
     )?
     .ok_or_else(|| "Could not create a destination for the watched folder".to_owned())?;
@@ -322,6 +405,7 @@ pub async fn scan_watched_folders(
         delete_after_ingest: false,
         group_files: false,
     };
+    let mut folders = BTreeMap::new();
     for candidate in pending {
         if !file_is_stable(&candidate.path, &candidate.metadata) {
             report.skipped += 1;
@@ -330,13 +414,28 @@ pub async fn scan_watched_folders(
         match prepare_import(
             &candidate.path,
             &input,
-            Some(candidate.folder_id),
+            None,
             candidate.job_key.clone(),
             now.timestamp_millis(),
         )
         .await
         {
-            Ok(value) => {
+            Ok(mut value) => {
+                let capacity = application
+                    .library()
+                    .folder_child_capacity(Some(candidate.folder_id))
+                    .map_err(|error| error.to_string())?;
+                let folder_id = ensure_relative_folder(
+                    application,
+                    Some(candidate.folder_id),
+                    candidate
+                        .relative_parent
+                        .as_deref()
+                        .and_then(|relative| truncate_relative_folder(relative, capacity))
+                        .as_deref(),
+                    &mut folders,
+                )?;
+                value.folders = folder_id.into_iter().collect();
                 enqueue(
                     application,
                     &PreparedIngestJob {
@@ -365,7 +464,11 @@ fn collect_watched_candidates(
     let mut report = ImportEnqueueReport::default();
     let mut pending = Vec::new();
     for watch in watches {
-        for candidate in collect_directory(&watch.path, watch.recursive, None)? {
+        for candidate in collect_directory(
+            &watch.path,
+            watch.recursive,
+            watch.recursive.then(PathBuf::new),
+        )? {
             report.discovered += 1;
             let metadata = match fs::metadata(&candidate.path) {
                 Ok(metadata) => metadata,
@@ -382,6 +485,7 @@ fn collect_watched_candidates(
             pending.push(PendingWatch {
                 folder_id: watch.folder_id,
                 path: candidate.path,
+                relative_parent: candidate.relative_parent,
                 metadata,
                 job_key,
             });
@@ -607,6 +711,27 @@ fn collect_structure_directories(root: &Path, recursive: bool) -> Result<Vec<Pat
     directories.sort();
     directories.dedup();
     Ok(directories)
+}
+
+fn relative_folder_depth(path: &Path) -> usize {
+    path.components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .count()
+}
+
+fn truncate_relative_folder(path: &Path, maximum_depth: usize) -> Option<PathBuf> {
+    let mut truncated = PathBuf::new();
+    for component in path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .take(maximum_depth)
+    {
+        truncated.push(component);
+    }
+    (!truncated.as_os_str().is_empty()).then_some(truncated)
 }
 
 fn collect_directory(
@@ -866,7 +991,12 @@ mod tests {
         assert!(folder.watch_enabled);
         assert_eq!(
             folder.watch_path.as_deref(),
-            Some(source.to_string_lossy().as_ref())
+            Some(
+                fs::canonicalize(&source)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
         assert!(!folder.watch_subfolders);
     }
@@ -886,6 +1016,51 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("No supported media files"));
         assert!(application.navigation().unwrap().folders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn folder_import_consolidates_a_tree_deeper_than_eight_without_skipping_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("Downloads");
+        let mut deepest = source.clone();
+        for depth in 2..=9 {
+            deepest = deepest.join(format!("level-{depth}"));
+        }
+        fs::create_dir_all(&deepest).unwrap();
+        png(&deepest.join("source.png"), [10, 20, 30]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
+        folder_input.preserve_structure = true;
+
+        let analysis = analyze_folder_tree(
+            &application,
+            &FolderTreeAnalysisInput {
+                path: source.to_string_lossy().into_owned(),
+                destination_folder_id: None,
+                include_subfolders: true,
+                include_source_root: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(analysis.source_depth, 9);
+        assert_eq!(analysis.retained_depth, 8);
+        assert_eq!(analysis.consolidated_levels, 1);
+
+        let report = enqueue_manual_import(&application, &folder_input)
+            .await
+            .unwrap();
+        assert_eq!(report.queued, 1);
+        let folders = application.navigation().unwrap().folders;
+        assert_eq!(folders.len(), 8);
+        assert!(!folders.iter().any(|folder| folder.name == "level-9"));
+        let retained = folders
+            .iter()
+            .find(|folder| folder.name == "level-8")
+            .unwrap()
+            .folder_id;
+        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+        let details = application.library().details(settled.root_ids[0]).unwrap();
+        assert_eq!(details.folder_ids, vec![retained]);
     }
 
     #[tokio::test]
@@ -919,5 +1094,62 @@ mod tests {
         let details = application.library().details(settled.root_ids[0]).unwrap();
         assert_eq!(details.lifecycle, Lifecycle::Inbox);
         assert_eq!(details.folder_ids, vec![folder.folder_id]);
+    }
+
+    #[tokio::test]
+    async fn watched_folder_consolidates_paths_below_the_remaining_depth() {
+        let directory = tempfile::tempdir().unwrap();
+        let watched = directory.path().join("watched");
+        let source_parent = watched.join("first").join("second").join("third");
+        fs::create_dir_all(&source_parent).unwrap();
+        png(&source_parent.join("source.png"), [10, 20, 30]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+
+        let mut destination = None;
+        for depth in 1..=7 {
+            destination = Some(
+                application
+                    .create_folder(picto_library::CreateFolderInput {
+                        name: format!("Destination {depth}"),
+                        parent_id: destination,
+                    })
+                    .unwrap()
+                    .folder_id,
+            );
+        }
+        let destination = destination.unwrap();
+        application
+            .set_folder_watch(&picto_library::FolderWatchInput {
+                folder_id: destination,
+                path: watched.to_string_lossy().into_owned(),
+                include_subfolders: true,
+            })
+            .unwrap();
+
+        let analysis = analyze_folder_tree(
+            &application,
+            &FolderTreeAnalysisInput {
+                path: watched.to_string_lossy().into_owned(),
+                destination_folder_id: Some(destination.0),
+                include_subfolders: true,
+                include_source_root: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(analysis.retained_depth, 1);
+        assert_eq!(analysis.consolidated_levels, 2);
+
+        let report = scan_watched_folders(&application).await.unwrap();
+        assert_eq!(report.queued, 1);
+        let folders = application.navigation().unwrap().folders;
+        let retained = folders
+            .iter()
+            .find(|folder| folder.parent_id == Some(destination) && folder.name == "first")
+            .unwrap()
+            .folder_id;
+        assert!(!folders.iter().any(|folder| folder.name == "second"));
+        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+        let details = application.library().details(settled.root_ids[0]).unwrap();
+        assert_eq!(details.folder_ids, vec![retained]);
     }
 }

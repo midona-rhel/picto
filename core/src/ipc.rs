@@ -678,6 +678,13 @@ pub async fn dispatch_library_async(
             let input: crate::library_import::ManualImportInput = parse(args_json)?;
             read(crate::library_import::enqueue_manual_import(application, &input).await?)
         }
+        "imports.folder.analyze" => {
+            let input: crate::library_import::FolderTreeAnalysisInput = parse(args_json)?;
+            read(crate::library_import::analyze_folder_tree(
+                application,
+                &input,
+            )?)
+        }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
             read(

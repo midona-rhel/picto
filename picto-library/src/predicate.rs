@@ -152,6 +152,16 @@ pub fn contains_text(expression: &FilterExpr) -> bool {
     }
 }
 
+pub fn clause_count(expression: &FilterExpr) -> usize {
+    match expression {
+        FilterExpr::All(children) | FilterExpr::Any(children) => {
+            children.iter().map(clause_count).sum()
+        }
+        FilterExpr::Not(child) => clause_count(child),
+        FilterExpr::Clause(_) => 1,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DependencyChange {
     All,
@@ -268,7 +278,7 @@ pub fn evaluate(
         FilterExpr::All(children) => {
             let mut result = universe.clone();
             for child in children {
-                result &= evaluate(child, universe, snapshot, text)?;
+                result = evaluate(child, &result, snapshot, text)?;
                 if result.is_empty() {
                     break;
                 }

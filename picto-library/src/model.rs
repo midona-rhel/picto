@@ -296,6 +296,8 @@ pub struct FolderDeleteResult {
     pub receipt: crate::MutationReceipt,
 }
 
+pub const MAX_FOLDER_DEPTH: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateFolderInput {
     pub name: String,

@@ -245,6 +245,17 @@ fn durable_ingest_queue_persists_only_canonical_payloads() {
         .complete_ingest_jobs(&[job_id], "2026-08-28T10:00:04Z")
         .unwrap()
         .is_some());
+
+    let (reopened_job_id, _) = library
+        .enqueue_ingest_job(&job, "2026-08-28T10:00:05Z")
+        .unwrap();
+    assert_eq!(reopened_job_id, job_id);
+    let reopened = library
+        .claim_ingest_jobs(64, "2026-08-28T10:00:06Z")
+        .unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened[0].ingest_job_id, job_id);
+    assert_eq!(reopened[0].attempt_count, 1);
 }
 
 #[test]
@@ -926,6 +937,57 @@ fn folder_vector_is_the_only_folder_membership_authority() {
 }
 
 #[test]
+fn folder_hierarchy_is_capped_at_eight_levels() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+
+    let mut parent = None;
+    for depth in 1..=picto_library::MAX_FOLDER_DEPTH {
+        let (folder_id, _) = library
+            .create_folder(&format!("Level {depth}"), parent)
+            .unwrap();
+        parent = Some(folder_id);
+    }
+    let error = library.create_folder("Too deep", parent).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("folders may be nested at most 8 levels deep"));
+
+    let (subtree, _) = library.create_folder("Subtree", None).unwrap();
+    let (subtree_child, _) = library
+        .create_folder("Subtree child", Some(subtree))
+        .unwrap();
+    let destination = library
+        .folders()
+        .unwrap()
+        .into_iter()
+        .find(|folder| folder.name == "Level 7")
+        .unwrap()
+        .folder_id;
+    let error = library.move_folder(subtree, Some(destination)).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("folders may be nested at most 8 levels deep"));
+    let folders = library.folders().unwrap();
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.folder_id == subtree)
+            .unwrap()
+            .parent_id,
+        None
+    );
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.folder_id == subtree_child)
+            .unwrap()
+            .parent_id,
+        Some(subtree)
+    );
+}
+
+#[test]
 fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -1383,6 +1445,185 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
         1
     );
     assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+}
+
+#[test]
+fn nested_smart_folders_inherit_rules_with_bounded_depth_and_complexity() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    library
+        .ingest(&imported(
+            "alice-image",
+            Lifecycle::Active,
+            &["character:alice"],
+        ))
+        .unwrap();
+    let mut alice_video = imported("alice-video", Lifecycle::Active, &["character:alice"]);
+    alice_video.facts.mime = "video/mp4".into();
+    library.ingest(&alice_video).unwrap();
+    let mut bob_image = imported("bob-image", Lifecycle::Active, &["character:bob"]);
+    bob_image.facts.size_bytes = 2048;
+    let (bob_root, _) = library.ingest(&bob_image).unwrap();
+
+    let snapshot = library.projections().snapshot();
+    let alice = snapshot.tag_ids_by_name["character:alice"];
+    let bob = snapshot.tag_ids_by_name["character:bob"];
+    drop(snapshot);
+    let tag_view = |tag_id| ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::Tags {
+            tag_ids: vec![tag_id],
+            mode: SetMatchMode::All,
+        }),
+        sort: ItemSort::default(),
+    };
+    let (parent, _) = library
+        .create_smart_folder(smart_input("Alice", None, tag_view(alice)))
+        .unwrap();
+    let child_view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::Mime {
+            values: vec!["image/png".into()],
+            families: Vec::new(),
+        }),
+        sort: ItemSort::default(),
+    };
+    let (child, _) = library
+        .create_smart_folder(smart_input(
+            "Alice images",
+            Some(parent),
+            child_view.clone(),
+        ))
+        .unwrap();
+    let grandchild_view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::TotalSize {
+            minimum_bytes: Some(1024),
+            maximum_bytes: Some(1024),
+        }),
+        sort: ItemSort::default(),
+    };
+    let (grandchild, _) = library
+        .create_smart_folder(smart_input(
+            "Small Alice images",
+            Some(child),
+            grandchild_view,
+        ))
+        .unwrap();
+
+    let total = |smart_folder_id| {
+        library
+            .query(
+                &query(ItemScope::SmartFolder { smart_folder_id }),
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total
+    };
+    assert_eq!(total(parent), 2);
+    assert_eq!(total(child), 1);
+    assert_eq!(total(grandchild), 1);
+    assert_eq!(
+        picto_library::predicate::clause_count(
+            &library.projections().snapshot().smart_effective_queries[&grandchild.0].filter,
+        ),
+        3
+    );
+    let saved_child = library
+        .smart_folders()
+        .unwrap()
+        .into_iter()
+        .find(|folder| folder.smart_folder_id == child)
+        .unwrap();
+    assert_eq!(saved_child.view, child_view);
+
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![bob_root],
+            },
+            "character:alice",
+        )
+        .unwrap();
+    assert_eq!(total(parent), 3);
+    assert_eq!(total(child), 2);
+    assert_eq!(total(grandchild), 1);
+
+    library
+        .update_smart_folder(parent, smart_input("Bob", None, tag_view(bob)))
+        .unwrap();
+    assert_eq!(total(parent), 1);
+    assert_eq!(total(child), 1);
+    assert_eq!(total(grandchild), 0);
+
+    let great_grandchild_view = ViewQuerySpec {
+        filter: FilterExpr::Clause(FilterClause::NotesPresent { present: false }),
+        sort: ItemSort::default(),
+    };
+    let (great_grandchild, _) = library
+        .create_smart_folder(smart_input(
+            "Fourth level",
+            Some(grandchild),
+            great_grandchild_view,
+        ))
+        .unwrap();
+    assert_eq!(
+        picto_library::predicate::clause_count(
+            &library.projections().snapshot().smart_effective_queries[&great_grandchild.0].filter,
+        ),
+        4
+    );
+    let mut deepest = great_grandchild;
+    for level in 5..=8 {
+        deepest = library
+            .create_smart_folder(smart_input(
+                &format!("Level {level}"),
+                Some(deepest),
+                ViewQuerySpec {
+                    filter: FilterExpr::Clause(FilterClause::SourceUrlsPresent { present: true }),
+                    sort: ItemSort::default(),
+                },
+            ))
+            .unwrap()
+            .0;
+    }
+    assert_eq!(
+        picto_library::predicate::clause_count(
+            &library.projections().snapshot().smart_effective_queries[&deepest.0].filter,
+        ),
+        8
+    );
+    assert!(library
+        .create_smart_folder(smart_input(
+            "Too deep",
+            Some(deepest),
+            ViewQuerySpec::default(),
+        ))
+        .is_err());
+    let eleven_rules = ViewQuerySpec {
+        filter: FilterExpr::All(
+            (0..11)
+                .map(|_| FilterExpr::Clause(FilterClause::NotesPresent { present: true }))
+                .collect(),
+        ),
+        sort: ItemSort::default(),
+    };
+    assert!(library
+        .create_smart_folder(smart_input("Too many rules", None, eleven_rules))
+        .is_err());
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+    let reopened = Library::open(path).unwrap();
+    assert_eq!(
+        reopened
+            .query(
+                &query(ItemScope::SmartFolder {
+                    smart_folder_id: grandchild
+                }),
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        0
+    );
 }
 
 #[test]

@@ -2730,6 +2730,7 @@ dependencies = [
  "bincode",
  "chrono",
  "parking_lot",
+ "rayon",
  "roaring",
  "rusqlite",
  "serde",

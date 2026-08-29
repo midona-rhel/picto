@@ -19,6 +19,10 @@ use crate::{LibraryDatabase, Result};
 pub struct SharedBitmap(Arc<RoaringBitmap>);
 
 impl SharedBitmap {
+    pub(crate) fn allocation_id(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+
     pub(crate) fn insert(&mut self, value: u32) -> bool {
         Arc::make_mut(&mut self.0).insert(value)
     }
@@ -361,8 +365,14 @@ pub struct ProjectionSnapshot {
     pub modified_at: Arc<NumericIndex>,
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
+    /// Each smart folder's own rules evaluated over active roots.
+    pub smart_local_results: Arc<HashMap<u32, SharedBitmap>>,
+    /// Local results intersected with every ancestor result.
     pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
+    /// Definitions exactly as saved by each smart folder.
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
+    /// Local definitions composed with every ancestor definition.
+    pub smart_effective_queries: Arc<HashMap<u32, ViewQuerySpec>>,
 }
 
 impl ProjectionSnapshot {
@@ -393,7 +403,7 @@ impl ProjectionSnapshot {
             + bitmap_map_estimated_bytes(&self.mime)
             + bitmap_map_estimated_bytes(&self.mime_family)
             + bitmap_map_estimated_bytes(&self.color_cells)
-            + bitmap_map_estimated_bytes(&self.smart_results)
+            + shared_bitmap_pair_estimated_bytes(&self.smart_local_results, &self.smart_results)
             + self.notes_present.serialized_size()
             + self.urls_present.serialized_size()
             + self.image_media.serialized_size()
@@ -435,6 +445,11 @@ impl ProjectionSnapshot {
             .values()
             .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
             .sum::<usize>();
+        bytes += self
+            .smart_effective_queries
+            .values()
+            .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
+            .sum::<usize>();
         bytes
     }
 }
@@ -445,6 +460,22 @@ fn bitmap_map_estimated_bytes<K>(values: &HashMap<K, SharedBitmap>) -> usize {
         .map(|bitmap| bitmap.serialized_size())
         .sum::<usize>()
         + values.capacity()
+            * (std::mem::size_of::<SharedBitmap>() + 2 * std::mem::size_of::<usize>())
+}
+
+fn shared_bitmap_pair_estimated_bytes(
+    first: &HashMap<u32, SharedBitmap>,
+    second: &HashMap<u32, SharedBitmap>,
+) -> usize {
+    let mut allocations = std::collections::HashSet::new();
+    let payload_bytes = first
+        .values()
+        .chain(second.values())
+        .filter(|bitmap| allocations.insert(bitmap.allocation_id()))
+        .map(|bitmap| bitmap.serialized_size())
+        .sum::<usize>();
+    payload_bytes
+        + (first.capacity() + second.capacity())
             * (std::mem::size_of::<SharedBitmap>() + 2 * std::mem::size_of::<usize>())
 }
 
@@ -785,8 +816,10 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
         modified_at: Arc::new(modified_at),
         notes_present: Arc::new(notes_present),
         urls_present: Arc::new(urls_present),
+        smart_local_results: Arc::new(HashMap::new()),
         smart_results: Arc::new(HashMap::new()),
         smart_queries: Arc::new(HashMap::new()),
+        smart_effective_queries: Arc::new(HashMap::new()),
     };
     crate::smart::load(connection, &mut snapshot)?;
     Ok(snapshot)

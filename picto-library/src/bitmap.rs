@@ -219,6 +219,22 @@ pub fn replace_shards(
     high_bits: impl IntoIterator<Item = u16>,
 ) -> Result<usize> {
     let mut changed = 0;
+    let mut delete = transaction.prepare_cached(
+        "DELETE FROM canonical_bitmap
+         WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
+    )?;
+    let mut upsert = transaction.prepare_cached(
+        "INSERT INTO canonical_bitmap
+             (domain, key_id, high_bits, revision, cardinality, format_version, checksum, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(domain, key_id, high_bits) DO UPDATE SET
+             revision = excluded.revision,
+             cardinality = excluded.cardinality,
+             format_version = excluded.format_version,
+             checksum = excluded.checksum,
+             payload = excluded.payload
+         WHERE canonical_bitmap.checksum != excluded.checksum",
+    )?;
     for high in high_bits {
         let start = (high as u32) << 16;
         let end = start | u16::MAX as u32;
@@ -226,55 +242,22 @@ pub fn replace_shards(
             .range(start..=end)
             .map(|value| value & 0xffff)
             .collect::<RoaringBitmap>();
-        let current = transaction
-            .query_row(
-                "SELECT checksum FROM canonical_bitmap
-                 WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
-                params![key.domain as u8, key.key_id, high],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()?;
         if shard.is_empty() {
-            if current.is_some() {
-                transaction.execute(
-                    "DELETE FROM canonical_bitmap
-                     WHERE domain = ?1 AND key_id = ?2 AND high_bits = ?3",
-                    params![key.domain as u8, key.key_id, high],
-                )?;
-                changed += 1;
-            }
+            changed += delete.execute(params![key.domain as u8, key.key_id, high])?;
             continue;
         }
         let payload = encode(&shard)?;
         let digest = checksum(&payload);
-        if current
-            .as_ref()
-            .is_some_and(|value| value.as_slice() == digest)
-        {
-            continue;
-        }
-        transaction.execute(
-            "INSERT INTO canonical_bitmap
-                 (domain, key_id, high_bits, revision, cardinality, format_version, checksum, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(domain, key_id, high_bits) DO UPDATE SET
-                 revision = excluded.revision,
-                 cardinality = excluded.cardinality,
-                 format_version = excluded.format_version,
-                 checksum = excluded.checksum,
-                 payload = excluded.payload",
-            params![
-                key.domain as u8,
-                key.key_id,
-                high,
-                revision as i64,
-                shard.len() as i64,
-                BITMAP_FORMAT_VERSION,
-                digest.as_slice(),
-                payload
-            ],
-        )?;
-        changed += 1;
+        changed += upsert.execute(params![
+            key.domain as u8,
+            key.key_id,
+            high,
+            revision as i64,
+            shard.len() as i64,
+            BITMAP_FORMAT_VERSION,
+            digest.as_slice(),
+            payload
+        ])?;
     }
     Ok(changed)
 }
