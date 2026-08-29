@@ -374,6 +374,9 @@ export function AppShell() {
       if (pendingWidth < 0) return;
       if (el) el.style.width = `${pendingWidth}px`;
       shellRef.current?.style.setProperty('--inspector-width', `${pendingWidth}px`);
+      if (reserveInspectorTitlebar) {
+        shellRef.current?.style.setProperty('--titlebar-inspector-width', `${pendingWidth}px`);
+      }
       pendingWidth = -1;
     };
     const onMove = (ev: MouseEvent) => {
@@ -395,7 +398,7 @@ export function AppShell() {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [inspectorWidth, setInspectorWidth]);
+  }, [inspectorWidth, reserveInspectorTitlebar, setInspectorWidth]);
 
   const onSidebarResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
