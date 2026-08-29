@@ -1,6 +1,6 @@
 {
   "name": "picto-node",
-  "version": "0.5.0-alpha",
+  "version": "0.6.0-alpha",
   "private": true,
   "type": "module",
   "scripts": {
