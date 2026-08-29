@@ -67,8 +67,9 @@ prefetch, download, or ingest media from a later post before the current post se
 # Release Completion
 
 The executable backlog is `docs/RELEASE_COMPLETION_PLAN.md`. Do not start broad feature work while
-the Git index has unresolved entries. Agents receive disjoint write scopes and do not stage or
-commit; the integration owner reviews and commits coherent slices.
+the Git index has unresolved entries. Subagents receive disjoint write scopes and do not stage or
+commit. The integration owner reviews and may stage and commit coherent slices after explicit user
+approval.
 
 A PBI closes only after focused tests and an application smoke pass. Remove unreachable code, fake
 verification, no-op UI, unused dependencies, and superseded documentation instead of preserving
