@@ -44,6 +44,7 @@ import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { TitlebarRangeSlider } from '../../shared/ui/TitlebarControls';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { labToHex } from '../../shared/lib/labColor';
+import { getSettings, patchSettings } from '../../platform/settingsApi';
 
 type ViewMode = 'suggested' | 'below';
 
@@ -159,6 +160,7 @@ export function AiTaggerPanel() {
   const searchRef = useRef<HTMLInputElement>(null);
   const runGenerationRef = useRef(0);
   const runningRef = useRef(false);
+  const settingsWriteRef = useRef<Promise<unknown>>(Promise.resolve());
 
   const itemIds = useMemo(() => (target?.kind === 'explicit' ? target.root_ids : []), [target]);
   const itemFingerprint = itemIds.join('\n');
@@ -248,7 +250,8 @@ export function AiTaggerPanel() {
     void Promise.all([
       aiTaggerStatus(),
       Promise.allSettled(itemIds.map((itemId) => viewerController.getItemDetails(itemId))),
-    ]).then(([status, detailResults]) => {
+      getSettings(),
+    ]).then(([status, detailResults, settings]) => {
       if (generation !== runGenerationRef.current) return;
       const roots = detailResults.flatMap((result) => {
         if (result.status !== 'fulfilled') return [];
@@ -275,10 +278,14 @@ export function AiTaggerPanel() {
         setError(`${unsupported.length} selected items contain no images.`);
       }
       const downloaded = new Set(status.models.filter((model) => model.downloaded).map((model) => model.slug));
-      const previous = status.configuredModelSlugs.filter((slug) => downloaded.has(slug));
+      const remembered = settings.aiTaggerManualModelSlugs;
+      const previous = (remembered ?? status.configuredModelSlugs).filter((slug) => downloaded.has(slug));
       const fallback = status.models.find((model) => model.downloaded && model.recommended)
         ?? status.models.find((model) => model.downloaded);
-      setRunModels(new Set(previous.length > 0 ? previous : fallback ? [fallback.slug] : []));
+      const initial = remembered === null && previous.length === 0 && fallback
+        ? [fallback.slug]
+        : previous;
+      setRunModels(new Set(initial));
     }).catch((reason) => {
       if (generation === runGenerationRef.current) setError(String(reason));
     });
@@ -326,6 +333,11 @@ export function AiTaggerPanel() {
     if (next.has(slug)) next.delete(slug);
     else next.add(slug);
     setRunModels(next);
+    const selected = [...next];
+    settingsWriteRef.current = settingsWriteRef.current
+      .catch(() => undefined)
+      .then(() => patchSettings({ aiTaggerManualModelSlugs: selected }))
+      .catch((reason) => setError(`Could not remember model selection. ${String(reason)}`));
   }, [runModels]);
 
   const confidenceCutoff = confidence / 100;

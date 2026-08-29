@@ -88,6 +88,7 @@ export interface AppSettings {
   aiTaggerEva02Enabled: boolean;
   aiTaggerOppaiOracleEnabled: boolean;
   aiTaggerDanbooruTagQueryEnabled: boolean;
+  aiTaggerManualModelSlugs: string[] | null;
   aiTaggerAutoOnImport: boolean;
   aiTaggerWriteRating: boolean;
   aiThresholdGeneral: number;
@@ -150,6 +151,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false,
   aiTaggerDanbooruTagQueryEnabled: false,
+  aiTaggerManualModelSlugs: null,
   aiTaggerAutoOnImport: false,
   aiTaggerWriteRating: true,
   aiThresholdGeneral: 0.35,
@@ -217,6 +219,11 @@ function booleanValue(value: unknown, key: string): boolean {
 function nullableNumberValue(value: unknown, key: string): number | null {
   if (value === null) return null;
   return numberValue(value, key);
+}
+
+function nullableStringArrayValue(value: unknown, key: string): string[] | null {
+  if (value === null) return null;
+  return stringArrayValue(value, key);
 }
 
 function stringArrayValue(value: unknown, key: string): string[] {
@@ -305,6 +312,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     aiTaggerEva02Enabled: booleanValue(storedOrDefault(source, 'aiTaggerEva02Enabled', APP_SETTINGS_DEFAULTS.aiTaggerEva02Enabled), 'aiTaggerEva02Enabled'),
     aiTaggerOppaiOracleEnabled: booleanValue(storedOrDefault(source, 'aiTaggerOppaiOracleEnabled', APP_SETTINGS_DEFAULTS.aiTaggerOppaiOracleEnabled), 'aiTaggerOppaiOracleEnabled'),
     aiTaggerDanbooruTagQueryEnabled: booleanValue(storedOrDefault(source, 'aiTaggerDanbooruTagQueryEnabled', APP_SETTINGS_DEFAULTS.aiTaggerDanbooruTagQueryEnabled), 'aiTaggerDanbooruTagQueryEnabled'),
+    aiTaggerManualModelSlugs: nullableStringArrayValue(storedOrDefault(source, 'aiTaggerManualModelSlugs', APP_SETTINGS_DEFAULTS.aiTaggerManualModelSlugs), 'aiTaggerManualModelSlugs'),
     aiTaggerAutoOnImport: booleanValue(storedOrDefault(source, 'aiTaggerAutoOnImport', APP_SETTINGS_DEFAULTS.aiTaggerAutoOnImport), 'aiTaggerAutoOnImport'),
     aiTaggerWriteRating: booleanValue(storedOrDefault(source, 'aiTaggerWriteRating', APP_SETTINGS_DEFAULTS.aiTaggerWriteRating), 'aiTaggerWriteRating'),
     aiThresholdGeneral: numberValue(storedOrDefault(source, 'aiThresholdGeneral', APP_SETTINGS_DEFAULTS.aiThresholdGeneral), 'aiThresholdGeneral'),

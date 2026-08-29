@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   apply: vi.fn(),
   announce: vi.fn(),
   details: vi.fn(),
+  getSettings: vi.fn(),
+  patchSettings: vi.fn(),
   portalAtom: undefined as any,
   targetAtom: undefined as any,
 }));
@@ -21,6 +23,11 @@ vi.mock('../../platform/aiTaggerApi', () => ({
   aiTagPredict: mocks.predict,
   aiTaggerUnload: mocks.unload,
   aiTagApply: mocks.apply,
+}));
+
+vi.mock('../../platform/settingsApi', () => ({
+  getSettings: mocks.getSettings,
+  patchSettings: mocks.patchSettings,
 }));
 
 vi.mock('../../runtime/historyRuntime', () => ({
@@ -160,6 +167,8 @@ beforeEach(() => {
   mocks.details.mockImplementation(async (itemId: number) => details(itemId));
   mocks.apply.mockResolvedValue({ revision: 1, resources: ['tags'], item_ids: [1] });
   mocks.announce.mockResolvedValue(undefined);
+  mocks.getSettings.mockResolvedValue({ aiTaggerManualModelSlugs: null });
+  mocks.patchSettings.mockResolvedValue({ revision: 1, resources: ['settings'], item_ids: [] });
 });
 
 describe('AiTaggerPanel', () => {
@@ -233,6 +242,28 @@ describe('AiTaggerPanel', () => {
     const wdButton = screen.getAllByText('WD14').map((node) => node.closest('button')).find(Boolean);
     expect(wdButton?.className).toContain('sidebarItemSelected');
     expect(z3dButton?.className).toContain('sidebarItemSelected');
+  });
+
+  it('restores and persists the manual model selection independently of configured models', async () => {
+    const secondModel = { ...model, slug: 'z3d-e621-convnext', label: 'Z3D' };
+    mocks.status.mockResolvedValue({
+      models: [model, secondModel],
+      configuredModelSlugs: [model.slug, secondModel.slug],
+      thresholds: { general: 0.35, character: 0.35 },
+      cachedBackend: null,
+    });
+    mocks.getSettings.mockResolvedValue({ aiTaggerManualModelSlugs: [secondModel.slug] });
+    await renderPanel();
+
+    const wdButton = screen.getAllByText('WD14').map((node) => node.closest('button')).find(Boolean)!;
+    const z3dButton = screen.getAllByText('Z3D').map((node) => node.closest('button')).find(Boolean)!;
+    expect(wdButton.className).not.toContain('sidebarItemSelected');
+    expect(z3dButton.className).toContain('sidebarItemSelected');
+
+    await setupUser().click(wdButton);
+    await waitFor(() => expect(mocks.patchSettings).toHaveBeenCalledWith({
+      aiTaggerManualModelSlugs: [secondModel.slug, model.slug],
+    }));
   });
 
   it('reviews a collection once, unions member predictions, and applies once to its root', async () => {

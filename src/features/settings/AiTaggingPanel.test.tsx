@@ -52,6 +52,7 @@ const settings = {
   showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {}, sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
   aiTaggerOppaiOracleEnabled: false, aiTaggerDanbooruTagQueryEnabled: false,
+  aiTaggerManualModelSlugs: null,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
   aiThresholdGeneral: 0.35, aiThresholdCharacter: 0.35, aiThresholdCopyright: 0.35,
   aiThresholdArtist: 0.35, aiThresholdSpecies: 0.35, aiThresholdRating: 0.35,

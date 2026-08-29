@@ -51,6 +51,7 @@ describe('settings API', () => {
     expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.tagGroupColors).toEqual({});
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
+    expect(snapshot.value.aiTaggerManualModelSlugs).toBeNull();
   });
 
   it('rejects malformed snapshot values instead of silently defaulting them', async () => {
@@ -63,6 +64,16 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { starredTags: ['creator:alice', 2] }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('starredTags');
+  });
+
+  it('validates remembered manual AI model selections', async () => {
+    invoke.mockResolvedValue({ value: { aiTaggerManualModelSlugs: ['wd14', 'wd14', 'z3d'] }, revision: 1 });
+    await expect(getSettingsSnapshot()).resolves.toMatchObject({
+      value: { aiTaggerManualModelSlugs: ['wd14', 'z3d'] },
+    });
+
+    invoke.mockResolvedValue({ value: { aiTaggerManualModelSlugs: ['wd14', 2] }, revision: 1 });
+    await expect(getSettingsSnapshot()).rejects.toThrow('aiTaggerManualModelSlugs');
   });
 
   it('validates tag group color preferences', async () => {
