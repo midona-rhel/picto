@@ -89,13 +89,6 @@ export const AUTH_SITES = Object.freeze({
     'https://danbooru.donmai.us',
     {},
   ),
-  webtoons: cookieSite(
-    'webtoons',
-    'Webtoons',
-    'https://www.webtoons.com/member/login',
-    'https://www.webtoons.com',
-    { unauthenticatedUrlPattern: /\/(?:member\/(?:login|join)|(?:[a-z]{2}\/)?age-gate)(?:[/?#]|$)/i },
-  ),
   // These are gallery-dl's public application credentials and callback. Using
   // the same OAuth client lets Picto hand the resulting refresh token straight
   // back to gallery-dl instead of inventing a parallel DeviantArt login path.

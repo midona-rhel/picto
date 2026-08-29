@@ -526,12 +526,6 @@ def _post_identity(metadata: dict[str, Any]) -> str:
     category = str(metadata.get("category") or "")
     parent = metadata.get("_parent")
     parent = parent if isinstance(parent, dict) else {}
-    if category == "webtoons":
-        for source in (metadata, parent):
-            title_no = source.get("title_no")
-            episode_no = source.get("episode_no")
-            if title_no is not None and episode_no is not None:
-                return f"webtoons:episode:{title_no}:{episode_no}"
     fields = {
         "artstation": ("hash_id", "project_hash_id", "project_id"),
         "deviantart": ("deviationid",),

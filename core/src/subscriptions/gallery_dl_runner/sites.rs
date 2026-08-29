@@ -101,19 +101,6 @@ pub static SITES: &[SiteEntry] = &[
         oauth_provider: None,
     },
     SiteEntry {
-        id: "webtoons",
-        domain: "webtoons.com",
-        credential_owner_site_id: "webtoons",
-        name: "Webtoons",
-        example_query: "https://www.webtoons.com/en/fantasy/title/list?title_no=123",
-        supports_query: false,
-        supports_account: true,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        credential_types: COOKIE_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
         id: "hentaifoundry",
         domain: "hentai-foundry.com",
         credential_owner_site_id: "hentaifoundry",
@@ -364,7 +351,6 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "gelbooru" => build_booru_url("https://gelbooru.com/index.php?page=post&s=list", query),
         "rule34" => build_booru_url("https://rule34.xxx/index.php?page=post&s=list", query),
         "danbooru" => build_booru_url("https://danbooru.donmai.us/posts", query),
-        "webtoons" => normalize_webtoons_url(query).ok(),
         "hentaifoundry" => normalize_hentaifoundry_username(query)
             .ok()
             .and_then(|username| build_hentaifoundry_url(&username)),
@@ -1065,71 +1051,6 @@ fn build_deviantart_gallery_url(username: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-/// Normalize a user-supplied Webtoons comic list URL.
-///
-/// Webtoons subscriptions are deliberately URL-only: accepting arbitrary text
-/// here would make the source look like a generic search while gallery-dl only
-/// supports a specific comic list extractor.
-pub fn normalize_webtoons_url(raw: &str) -> Result<String, String> {
-    let parsed = Url::parse(raw.trim())
-        .map_err(|_| "Webtoons subscriptions require a comic list URL".to_string())?;
-    let host = parsed.host_str().unwrap_or_default();
-    if !matches!(host, "webtoons.com" | "www.webtoons.com") {
-        return Err("Webtoons subscriptions require a webtoons.com URL".to_string());
-    }
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.username() != ""
-        || parsed.password().is_some()
-        || parsed.port().is_some()
-    {
-        return Err("Webtoons subscriptions require a public HTTPS comic list URL".to_string());
-    }
-
-    let segments: Vec<_> = parsed
-        .path_segments()
-        .into_iter()
-        .flatten()
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.len() != 4 || segments[3] != "list" || !parsed.path().ends_with("/list") {
-        return Err("Webtoons subscriptions require a {lang}/{genre}/{comic}/list URL".to_string());
-    }
-
-    let title_numbers: Vec<_> = parsed
-        .query_pairs()
-        .filter(|(key, _)| key == "title_no")
-        .map(|(_, value)| value.to_string())
-        .collect();
-    if title_numbers.len() != 1 {
-        return Err("Webtoons comic list URLs require one positive title_no".to_string());
-    }
-    let title_no = title_numbers[0]
-        .parse::<u64>()
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| "Webtoons comic list URLs require a positive title_no".to_string())?;
-
-    let mut canonical = parsed;
-    canonical
-        .set_scheme("https")
-        .map_err(|_| "Invalid Webtoons URL".to_string())?;
-    canonical
-        .set_host(Some("www.webtoons.com"))
-        .map_err(|_| "Invalid Webtoons URL".to_string())?;
-    canonical
-        .set_username("")
-        .map_err(|_| "Invalid Webtoons URL".to_string())?;
-    canonical
-        .set_password(None)
-        .map_err(|_| "Invalid Webtoons URL".to_string())?;
-    canonical
-        .set_port(None)
-        .map_err(|_| "Invalid Webtoons URL".to_string())?;
-    canonical.set_query(Some(&format!("title_no={title_no}")));
-    canonical.set_fragment(None);
-    Ok(canonical.to_string())
-}
-
 fn build_pixiv_url(kind: &str, query: &str) -> Option<String> {
     let mut url = Url::parse("https://www.pixiv.net/en").ok()?;
     {
@@ -1172,7 +1093,6 @@ mod tests {
                 "gelbooru",
                 "rule34",
                 "danbooru",
-                "webtoons",
                 "hentaifoundry",
                 "baraag",
                 "deviantart",
@@ -1193,7 +1113,7 @@ mod tests {
                 "ehentai",
             ])
         );
-        assert_eq!(SITES.len(), 24);
+        assert_eq!(SITES.len(), 23);
     }
 
     #[test]
@@ -1276,14 +1196,6 @@ mod tests {
         assert_eq!(
             build_url("danbooru", "artist:name").as_deref(),
             Some("https://danbooru.donmai.us/posts?tags=artist%3Aname")
-        );
-        assert_eq!(
-            build_url(
-                "webtoons",
-                "http://webtoons.com/en/fantasy/title/list?title_no=123&page=2#episode"
-            )
-            .as_deref(),
-            Some("https://www.webtoons.com/en/fantasy/title/list?title_no=123")
         );
         assert_eq!(
             build_url("hentaifoundry", "artist-name").as_deref(),
@@ -1504,21 +1416,6 @@ mod tests {
                 normalize_subscribestar_creator(value).is_err(),
                 "accepted {value}"
             );
-        }
-    }
-
-    #[test]
-    fn webtoons_url_builder_rejects_arbitrary_hosts_and_invalid_lists() {
-        for value in [
-            "https://example.com/en/fantasy/title/list?title_no=123",
-            "https://www.webtoons.com/en/title/list?title_no=123",
-            "https://www.webtoons.com/en/fantasy/title/extra/list?title_no=123",
-            "https://www.webtoons.com/en/fantasy/title/viewer?title_no=123",
-            "https://www.webtoons.com/en/fantasy/title/list?title_no=0",
-            "https://www.webtoons.com/en/fantasy/title/list",
-            "https://www.webtoons.com.evil.example/en/fantasy/title/list?title_no=123",
-        ] {
-            assert!(build_url("webtoons", value).is_none(), "accepted {value}");
         }
     }
 

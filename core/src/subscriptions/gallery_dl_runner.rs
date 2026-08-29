@@ -41,15 +41,14 @@ pub use sites::{
     build_url, extract_domain, normalize_baraag_username, normalize_ehentai_gallery_url,
     normalize_fanbox_creator, normalize_furaffinity_username, normalize_newgrounds_username,
     normalize_onlyfans_creator, normalize_patreon_creator, normalize_subscribestar_creator,
-    normalize_tumblr_blog, normalize_twitter_username, normalize_webtoons_url, site_by_id,
-    SiteEntry, SITES,
+    normalize_tumblr_blog, normalize_twitter_username, site_by_id, SiteEntry, SITES,
 };
 
 pub fn post_terminal_mode(site_id: &str) -> Option<&'static str> {
     match site_id {
         "danbooru" | "e621" | "furaffinity" | "gelbooru" | "hentaifoundry" | "idolcomplex"
         | "konachan" | "rule34" | "safebooru" | "sankaku" | "yandere" => Some("single"),
-        "baraag" | "deviantart" | "tumblr" | "twitter" | "webtoons" => Some("count-one"),
+        "baraag" | "deviantart" | "tumblr" | "twitter" => Some("count-one"),
         "pixiv" | "pixivuser" => Some("count-zero"),
         _ => None,
     }
@@ -231,10 +230,6 @@ fn bridge_ranges_for_site(
         // The bridge pages whole deviations before expanding each one into
         // child media and emits the authoritative source cursor.
         return (None, None);
-    }
-    if site_id == "webtoons" {
-        let child_range = limit.map(|_| format!("{}-", start.max(1)));
-        return (None, child_range);
     }
     bridge_ranges(start, limit)
 }
@@ -882,15 +877,6 @@ mod tests {
             bridge_ranges_for_site("sankaku", 5, Some(2)),
             (Some("1-".to_string()), None)
         );
-    }
-
-    #[test]
-    fn webtoons_uses_child_range_without_splitting_episode_images() {
-        assert_eq!(
-            bridge_ranges_for_site("webtoons", 5, Some(2)),
-            (None, Some("5-".to_string()))
-        );
-        assert_eq!(bridge_ranges_for_site("webtoons", 1, None), (None, None));
     }
 
     #[test]

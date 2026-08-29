@@ -7,7 +7,7 @@ use crate::subscriptions::gallery_dl_runner::{
     build_url, normalize_baraag_username, normalize_ehentai_gallery_url, normalize_fanbox_creator,
     normalize_furaffinity_username, normalize_newgrounds_username, normalize_onlyfans_creator,
     normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
-    normalize_twitter_username, normalize_webtoons_url, site_by_id, SiteEntry,
+    normalize_twitter_username, site_by_id, SiteEntry,
 };
 
 pub use types::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
@@ -37,9 +37,6 @@ pub fn infer_query_kind(site_id: &str) -> &'static str {
 /// Normalize account input while leaving booru tag queries unchanged.
 pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> String {
     let trimmed = raw.trim();
-    if site_id == "webtoons" && query_kind == "user" {
-        return normalize_webtoons_url(trimmed).unwrap_or_else(|_| trimmed.to_string());
-    }
     if site_id == "ehentai" && query_kind == "user" {
         return normalize_ehentai_gallery_url(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
@@ -124,9 +121,6 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     let query_text = query_text.trim();
     if query_text.is_empty() {
         return Err("Subscription query cannot be empty".to_string());
-    }
-    if site_id == "webtoons" {
-        normalize_webtoons_url(query_text)?;
     }
     if site_id == "ehentai" {
         normalize_ehentai_gallery_url(query_text)?;
@@ -303,14 +297,6 @@ mod tests {
             "artist-name"
         );
         assert_eq!(
-            normalize_query_text(
-                "webtoons",
-                "user",
-                "http://webtoons.com/en/fantasy/title/list?title_no=123&page=2#episode"
-            ),
-            "https://www.webtoons.com/en/fantasy/title/list?title_no=123"
-        );
-        assert_eq!(
             normalize_query_text("baraag", "user", "https://baraag.net/@Blue_/media"),
             "Blue_"
         );
@@ -425,12 +411,6 @@ mod tests {
             "https://www.hentai-foundry.com/pictures/user/artist-name?x=1"
         )
         .is_err());
-        assert!(validate_query_text(
-            "webtoons",
-            "https://www.webtoons.com/en/fantasy/title/list?title_no=123"
-        )
-        .is_ok());
-        assert!(validate_query_text("webtoons", "https://example.com/list?title_no=123").is_err());
         assert!(validate_query_text("pixiv", "  ").is_err());
     }
 
@@ -487,8 +467,6 @@ mod tests {
         assert_eq!(infer_query_kind("artstation"), "search");
         assert!(describe_site("artstation").is_none());
         assert!(validate_query_kind("artstation", "user").is_err());
-        assert_eq!(infer_query_kind("webtoons"), "user");
-        assert_eq!(describe_site("webtoons").unwrap().display_name, "Webtoons");
     }
 
     #[test]

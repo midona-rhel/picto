@@ -306,10 +306,10 @@ fn provider_process_post_limit(site_id: &str) -> Option<u32> {
     // supported list source therefore gets an explicit one-post process
     // window; site-specific extractor adapters remain isolated in the bridge.
     match site_id {
-        "pixiv" | "pixivuser" | "gelbooru" | "rule34" | "danbooru" | "webtoons"
-        | "hentaifoundry" | "baraag" | "deviantart" | "tumblr" | "twitter" | "newgrounds"
-        | "furaffinity" | "patreon" | "fanbox" | "subscribestar" | "idolcomplex" | "sankaku"
-        | "yandere" | "konachan" | "safebooru" | "e621" | "ehentai" => Some(1),
+        "pixiv" | "pixivuser" | "gelbooru" | "rule34" | "danbooru" | "hentaifoundry" | "baraag"
+        | "deviantart" | "tumblr" | "twitter" | "newgrounds" | "furaffinity" | "patreon"
+        | "fanbox" | "subscribestar" | "idolcomplex" | "sankaku" | "yandere" | "konachan"
+        | "safebooru" | "e621" | "ehentai" => Some(1),
         _ => None,
     }
 }

@@ -268,7 +268,7 @@ describe('direct-site authentication', () => {
 
   it.each([
     'twitter', 'newgrounds', 'hentaifoundry', 'furaffinity', 'danbooru',
-    'webtoons', 'patreon', 'fanbox', 'subscribestar', 'idolcomplex',
+    'patreon', 'fanbox', 'subscribestar', 'idolcomplex',
     'sankaku', 'yandere', 'konachan', 'safebooru', 'e621', 'ehentai',
   ])(
     'opens %s with a fresh unspoofed session and only storage access enabled',

@@ -366,101 +366,6 @@ fn creator_identifier(json: &serde_json::Value) -> Option<String> {
     generic_creator_identifier(json)
 }
 
-fn webtoons_identity(json: &serde_json::Value) -> Option<(String, String)> {
-    let title_no = field_text(json, "title_no")?;
-    let episode_no = field_text(json, "episode_no")?;
-    if title_no.is_empty() || episode_no.is_empty() {
-        return None;
-    }
-    Some((title_no, episode_no))
-}
-
-fn webtoons_episode_candidates(json: &serde_json::Value, key: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(parent) = json.get("_parent") {
-        if let Some(value) = field_text(parent, key) {
-            candidates.push(value);
-        }
-    }
-    if let Some(value) = field_text(json, key) {
-        candidates.push(value);
-    }
-    candidates
-}
-
-fn canonical_webtoons_episode_url(raw: &str, title_no: &str, episode_no: &str) -> Option<String> {
-    let mut url = url::Url::parse(raw.trim()).ok()?;
-    if !matches!(url.scheme(), "http" | "https")
-        || !matches!(url.host_str(), Some("webtoons.com" | "www.webtoons.com"))
-        || url.username() != ""
-        || url.password().is_some()
-        || url.port().is_some()
-    {
-        return None;
-    }
-    let last_segment = url
-        .path_segments()
-        .into_iter()
-        .flatten()
-        .filter(|segment| !segment.is_empty())
-        .next_back();
-    if last_segment != Some("viewer") {
-        return None;
-    }
-
-    let pairs: Vec<_> = url.query_pairs().collect();
-    let actual_title = pairs
-        .iter()
-        .find(|(key, _)| key == "title_no")
-        .map(|(_, value)| value.as_ref());
-    let actual_episode = pairs
-        .iter()
-        .find(|(key, _)| key == "episode_no")
-        .map(|(_, value)| value.as_ref());
-    if actual_title != Some(title_no) || actual_episode != Some(episode_no) {
-        return None;
-    }
-
-    url.set_scheme("https").ok()?;
-    url.set_host(Some("www.webtoons.com")).ok()?;
-    url.set_username("").ok()?;
-    url.set_password(None).ok()?;
-    url.set_port(None).ok()?;
-    url.set_query(None);
-    url.query_pairs_mut()
-        .append_pair("title_no", title_no)
-        .append_pair("episode_no", episode_no);
-    url.set_fragment(None);
-    Some(url.to_string())
-}
-
-fn fallback_webtoons_episode_url(
-    json: &serde_json::Value,
-    title_no: &str,
-    episode_no: &str,
-) -> Option<String> {
-    let lang = field_text(json, "lang")?;
-    let genre = field_text(json, "genre")?;
-    let comic = field_text(json, "comic")?;
-    if lang.is_empty() || genre.is_empty() || comic.is_empty() {
-        return None;
-    }
-
-    let mut url = url::Url::parse("https://www.webtoons.com").ok()?;
-    {
-        let mut path = url.path_segments_mut().ok()?;
-        path.push(&lang)
-            .push(&genre)
-            .push(&comic)
-            .push("episode")
-            .push("viewer");
-    }
-    url.query_pairs_mut()
-        .append_pair("title_no", title_no)
-        .append_pair("episode_no", episode_no);
-    Some(url.to_string())
-}
-
 fn push_unique_url(urls: &mut Vec<String>, value: Option<String>) {
     let Some(value) = value else { return };
     if !urls.iter().any(|existing| existing == &value) {
@@ -532,10 +437,6 @@ fn parse_created_at(json: &serde_json::Value) -> Option<String> {
 
 fn post_id(json: &serde_json::Value) -> Option<String> {
     match canonical_metadata_category(&field_text(json, "category").unwrap_or_default()) {
-        "webtoons" => {
-            let (title_no, episode_no) = webtoons_identity(json)?;
-            Some(format!("{title_no}:{episode_no}"))
-        }
         "artstation" => artstation_project_field_text(json, "hash_id")
             .or_else(|| artstation_project_field_text(json, "project_hash_id"))
             .or_else(|| artstation_project_field_text(json, "project_id")),
@@ -659,24 +560,6 @@ fn canonical_post_url(
     origin_url: Option<&str>,
 ) -> Option<String> {
     match category {
-        Some("webtoons") => {
-            let (title_no, episode_no) = webtoons_identity(json)?;
-            for candidate in ["episode_url", "viewer_url", "page_url", "url", "_url"] {
-                for candidate in webtoons_episode_candidates(json, candidate) {
-                    if let Some(url) =
-                        canonical_webtoons_episode_url(&candidate, &title_no, &episode_no)
-                    {
-                        return Some(url);
-                    }
-                }
-            }
-            if let Some(url) =
-                item_url.and_then(|url| canonical_webtoons_episode_url(url, &title_no, &episode_no))
-            {
-                return Some(url);
-            }
-            return fallback_webtoons_episode_url(json, &title_no, &episode_no);
-        }
         Some("artstation") => {
             if let Some(post_id) = post_id {
                 return Some(format!("https://www.artstation.com/projects/{post_id}"));
@@ -1582,96 +1465,6 @@ mod tests {
         assert_eq!(parsed.page_num, Some(1));
         assert_eq!(parsed.page_count, Some(1));
         assert_eq!(parsed.item_key.as_deref(), Some("artstation:abcd3:1"));
-    }
-
-    #[test]
-    fn webtoons_episode_metadata_keeps_episode_identity_and_child_order() {
-        let parsed = parse_metadata_with_url(
-            &json!({
-                "category": "webtoons",
-                "title_no": 123,
-                "episode_no": "7",
-                "num": 2,
-                "count": 3,
-                "author_name": "Creator",
-                "title": "Comic title",
-                "episode_name": "Episode seven",
-                "description": "Episode description",
-                "date": "2026-08-14",
-                "genre": "Fantasy",
-                "lang": "en",
-                "language": "English",
-                "comic": "comic",
-                "file_url": "https://swebtoon-phinf.pstatic.net/page-2.jpg",
-                "_url": "https://swebtoon-phinf.pstatic.net/page-2.jpg",
-                "_parent": {
-                    "_url": "https://webtoons.com/en/fantasy/comic/episode/viewer?title_no=123&episode_no=7"
-                }
-            }),
-            Some("https://swebtoon-phinf.pstatic.net/page-2.jpg"),
-        );
-
-        assert_eq!(parsed.category.as_deref(), Some("webtoons"));
-        assert_eq!(parsed.post_id.as_deref(), Some("123:7"));
-        assert_eq!(parsed.page_num, Some(2));
-        assert_eq!(parsed.page_count, Some(3));
-        assert_eq!(parsed.item_key.as_deref(), Some("webtoons:123:7:2"));
-        assert_eq!(
-            parsed.canonical_post_url.as_deref(),
-            Some("https://www.webtoons.com/en/fantasy/comic/episode/viewer?title_no=123&episode_no=7")
-        );
-        assert_eq!(parsed.title.as_deref(), Some("Comic title"));
-        assert_eq!(parsed.description.as_deref(), Some("Episode description"));
-        assert!(parsed
-            .tags
-            .contains(&("creator".to_string(), "Creator".to_string())));
-        assert!(!parsed
-            .tags
-            .iter()
-            .any(|(namespace, _)| namespace == "genre" || namespace == "language"));
-        assert!(!parsed
-            .tags
-            .iter()
-            .any(|(namespace, _)| namespace.is_empty()));
-    }
-
-    #[test]
-    fn webtoons_episode_without_viewer_url_uses_structural_fallback() {
-        let parsed = parse_metadata(&json!({
-            "category": "webtoons",
-            "title_no": "456",
-            "episode_no": 9,
-            "num": "1",
-            "count": "2",
-            "username": "creator",
-            "file_url": "https://swebtoon-phinf.pstatic.net/page-1.jpg",
-            "lang": "en",
-            "genre": "fantasy",
-            "comic": "a comic/title"
-        }));
-
-        assert_eq!(parsed.post_id.as_deref(), Some("456:9"));
-        assert_eq!(parsed.page_num, Some(1));
-        assert_eq!(parsed.page_count, Some(2));
-        assert_eq!(
-            parsed.canonical_post_url.as_deref(),
-            Some(
-                "https://www.webtoons.com/en/fantasy/a%20comic%2Ftitle/episode/viewer?title_no=456&episode_no=9"
-            )
-        );
-    }
-
-    #[test]
-    fn webtoons_episode_without_structural_fields_has_no_canonical_url() {
-        let parsed = parse_metadata(&json!({
-            "category": "webtoons",
-            "title_no": 456,
-            "episode_no": 9,
-            "file_url": "https://swebtoon-phinf.pstatic.net/page-1.jpg"
-        }));
-
-        assert_eq!(parsed.post_id.as_deref(), Some("456:9"));
-        assert!(parsed.canonical_post_url.is_none());
     }
 
     #[test]

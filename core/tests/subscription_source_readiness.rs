@@ -466,7 +466,6 @@ fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<
         site_id,
         "pixiv"
             | "pixivuser"
-            | "webtoons"
             | "hentaifoundry"
             | "baraag"
             | "deviantart"
@@ -477,10 +476,7 @@ fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<
             | "subscribestar"
             | "onlyfans"
     );
-    let tagged_source = !matches!(
-        site_id,
-        "patreon" | "fanbox" | "subscribestar" | "webtoons" | "onlyfans"
-    );
+    let tagged_source = !matches!(site_id, "patreon" | "fanbox" | "subscribestar" | "onlyfans");
     let mut identities = BTreeSet::new();
     for post in &evidence.posts {
         if post.post_key.trim().is_empty() || !identities.insert(post.post_key.as_str()) {
