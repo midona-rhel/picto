@@ -359,6 +359,15 @@ fn compare_candidate_quality(
         if same_geometry && distance == 0 {
             let left_fidelity = still_encoding_fidelity(&left.mime_type);
             let right_fidelity = still_encoding_fidelity(&right.mime_type);
+            if left.mime_type.eq_ignore_ascii_case(&right.mime_type)
+                && left_fidelity != EncodingFidelity::Lossless
+            {
+                return match left.size_bytes.cmp(&right.size_bytes) {
+                    std::cmp::Ordering::Greater => DuplicateQualityDecision::LeftBetter,
+                    std::cmp::Ordering::Less => DuplicateQualityDecision::RightBetter,
+                    std::cmp::Ordering::Equal => stable_tie(),
+                };
+            }
             match (left_fidelity, right_fidelity) {
                 (EncodingFidelity::Lossless, EncodingFidelity::Lossy) => {
                     return DuplicateQualityDecision::LeftBetter;
@@ -373,10 +382,10 @@ fn compare_candidate_quality(
             if left_fidelity != EncodingFidelity::Lossless
                 || right_fidelity != EncodingFidelity::Lossless
             {
-                if materially_larger(left.size_bytes, right.size_bytes) {
+                if at_least_ratio(left.size_bytes, right.size_bytes, 6, 5) {
                     return DuplicateQualityDecision::LeftBetter;
                 }
-                if materially_larger(right.size_bytes, left.size_bytes) {
+                if at_least_ratio(right.size_bytes, left.size_bytes, 6, 5) {
                     return DuplicateQualityDecision::RightBetter;
                 }
             }
@@ -410,9 +419,15 @@ fn still_encoding_fidelity(mime_type: &str) -> EncodingFidelity {
     }
 }
 
-fn materially_larger(candidate_bytes: i64, other_bytes: i64) -> bool {
+fn at_least_ratio(
+    candidate_bytes: i64,
+    other_bytes: i64,
+    numerator: u128,
+    denominator: u128,
+) -> bool {
     candidate_bytes > other_bytes
-        && (candidate_bytes.max(0) as u128) >= (other_bytes.max(0) as u128) * 2
+        && (candidate_bytes.max(0) as u128) * denominator
+            >= (other_bytes.max(0) as u128) * numerator
 }
 
 pub(crate) fn affected_roots(
@@ -922,10 +937,32 @@ mod quality_tests {
     #[test]
     fn exact_visual_match_uses_a_materially_larger_representation_for_unknown_encodings() {
         let smaller = file(1, "image/webp", 200_000);
-        let larger = file(2, "image/avif", 400_000);
+        let larger = file(2, "image/avif", 240_000);
 
         assert_eq!(
             compare_candidate_quality(&smaller, &larger, 0),
+            DuplicateQualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn exact_jpeg_match_prefers_even_a_ten_percent_larger_file() {
+        let smaller = file(1, "image/jpeg", 1_000_000);
+        let larger = file(2, "image/jpeg", 1_100_000);
+
+        assert_eq!(
+            compare_candidate_quality(&smaller, &larger, 0),
+            DuplicateQualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn compact_lossless_file_still_wins_an_exact_match_against_lossy() {
+        let jpeg = file(1, "image/jpeg", 1_000_000);
+        let png = file(2, "image/png", 100_000);
+
+        assert_eq!(
+            compare_candidate_quality(&jpeg, &png, 0),
             DuplicateQualityDecision::RightBetter
         );
     }
