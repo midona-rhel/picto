@@ -95,15 +95,15 @@
   position: relative;
   display: flex;
   align-items: center;
-  width: 125px;
-  height: 26px;
+  width: 148px;
+  height: 24px;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
 
 .searchWrap > svg {
   position: absolute;
-  left: 7px;
+  left: 8px;
   color: var(--color-text-tertiary);
   pointer-events: none;
   z-index: 1;
@@ -112,18 +112,20 @@
 .searchInput {
   width: 100%;
   height: 100%;
-  padding: 0 8px 0 24px;
+  padding: 0 8px 0 27px;
   margin: 0;
   border: 1px solid var(--color-border-primary);
   border-radius: 5px;
-  background: var(--color-contrast-06);
+  background: color-mix(in srgb, var(--color-control-surface) 72%, transparent);
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
-  transition: border-color 200ms var(--ease-default),
-              background-color 200ms var(--ease-default);
+  line-height: 22px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-contrast) 3%, transparent);
+  transition: border-color 160ms var(--ease-default),
+              background-color 160ms var(--ease-default);
 }
 
 .filterBadge {

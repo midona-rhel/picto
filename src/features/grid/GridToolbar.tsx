@@ -95,7 +95,7 @@ function SearchInput() {
 
   return (
     <div className={styles.searchWrap}>
-      <IconSearch size={13} aria-hidden="true" />
+      <IconSearch size={14} stroke={1.7} aria-hidden="true" />
       <input
         ref={ref}
         type="text"
