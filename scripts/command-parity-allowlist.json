@@ -11,6 +11,7 @@
     "auth_session_cancel",
     "open_in_new_window",
     "open_external_url",
-    "open_library_manager"
+    "open_library_manager",
+    "library.initial_read_failed"
   ]
 }
