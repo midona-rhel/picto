@@ -48,6 +48,8 @@ export interface MenuSubmenu {
 
 export type MenuEntry = MenuItem | MenuSeparator | MenuCustom | MenuSubmenu;
 
+const SEARCH_ITEM_THRESHOLD = 7;
+
 function isSeparator(entry: MenuEntry): entry is MenuSeparator {
   return 'separator' in entry;
 }
@@ -128,8 +130,8 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
   const [openSubmenuLabel, setOpenSubmenuLabel] = useState<string | null>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [closing, setClosing] = useState(false);
-  const hasSearchableEntries = showSearch
-    && entries.some((entry) => !isSeparator(entry) && !isCustom(entry));
+  const searchableEntryCount = entries.filter((entry) => !isSeparator(entry) && !isCustom(entry)).length;
+  const hasSearchableEntries = showSearch && searchableEntryCount >= SEARCH_ITEM_THRESHOLD;
 
   const startClose = useCallback(() => {
     if (closing) return;

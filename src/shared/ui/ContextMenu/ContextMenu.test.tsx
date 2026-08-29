@@ -17,9 +17,17 @@ describe('ContextMenu', () => {
   });
 
   it('owns one canonical presentation regardless of the supplied entries', () => {
+    const sidebarEntries = Array.from({ length: 7 }, (_, index) => ({
+      label: `Sidebar action ${index + 1}`,
+      action: vi.fn(),
+    }));
+    const gridEntries = Array.from({ length: 7 }, (_, index) => ({
+      label: `Grid action ${index + 1}`,
+      action: vi.fn(),
+    }));
     const { rerender } = render(
       <ContextMenu
-        entries={[{ label: 'Sidebar action', action: vi.fn() }]}
+        entries={sidebarEntries}
         position={{ x: 20, y: 20 }}
         onClose={vi.fn()}
       />,
@@ -33,7 +41,7 @@ describe('ContextMenu', () => {
 
     rerender(
       <ContextMenu
-        entries={[{ label: 'Grid action', action: vi.fn() }]}
+        entries={gridEntries}
         position={{ x: 40, y: 40 }}
         onClose={vi.fn()}
       />,
@@ -42,7 +50,33 @@ describe('ContextMenu', () => {
     const gridMenu = screen.getByRole('menu', { name: 'Context menu' });
     expect(gridMenu.className).toBe(sidebarMenu.className);
     expect(screen.getByPlaceholderText('Search...')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Grid action' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Grid action 1' })).toBeInTheDocument();
+  });
+
+  it('shows search only for menus with at least seven items', () => {
+    const entries = Array.from({ length: 7 }, (_, index) => ({
+      label: `Action ${index + 1}`,
+      action: vi.fn(),
+    }));
+    const { rerender } = render(
+      <ContextMenu
+        entries={entries.slice(0, 6)}
+        position={{ x: 20, y: 20 }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByPlaceholderText('Search...')).not.toBeInTheDocument();
+
+    rerender(
+      <ContextMenu
+        entries={entries}
+        position={{ x: 20, y: 20 }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText('Search...')).toBeInTheDocument();
   });
 
   it('exposes menu semantics and disabled state', () => {
