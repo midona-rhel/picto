@@ -63,7 +63,7 @@ Do not repair this by adding more reconciliation states. Remove duplicate owners
 - One-at-a-time source-post traversal.
 - Per-post download staging and progress.
 - Canonical post ingestion.
-- Added, skipped, warning, and failed outcomes.
+- Added, skipped, and failed outcomes, with orthogonal warning records.
 - Restart recovery and idempotency.
 - Subscription reset and run history.
 - Compact progress invalidation.
@@ -274,7 +274,8 @@ manual/background imports if those operations still need it.
 
 Enforce these in code and tests:
 
-- `Added` requires the attempt's `created_root_id` to reference a live `library_root`.
+- `Added` requires at least one live `source_attempt_root` row; gallery imports require exactly
+  one, referencing a collection root.
 - Every successfully downloaded usable source item in an added post has live provenance in
   `source_provenance`.
 - Source tables carry no mutable ingest state; only attempt rows do.
