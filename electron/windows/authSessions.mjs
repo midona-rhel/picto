@@ -139,16 +139,28 @@ async function hasAuthenticatedDomSignal(webContents) {
     (() => {
       const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
       const hasLoginForm = Boolean(document.querySelector('input[type="password"], input[name*="password" i]'));
-      if (hasLoginForm) return false;
       const controls = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [role="menuitem"]'));
-      const authPattern = /\b(?:log ?out|sign ?out|my account|account home|account settings|profile|dashboard)\b/i;
+      const describe = (element) => ({
+        label: normalize([element.textContent, element.getAttribute('aria-label'), element.getAttribute('title')].filter(Boolean).join(' ')),
+        href: normalize(element.getAttribute('href')),
+      });
+      // A logout control is decisive: it only renders for a signed-in
+      // session, even on account pages that carry change-password fields.
+      const logoutPattern = /\b(?:log ?out|sign ?out)\b/i;
+      if (controls.some((element) => {
+        const { label, href } = describe(element);
+        return logoutPattern.test(label) || /\/(?:logout|sign_out)(?:[/?#]|$)/i.test(href);
+      })) return true;
+      // Without one, a visible password form means a login page — nav links
+      // like "My Account" appear there too and must not count.
+      if (hasLoginForm) return false;
+      const authPattern = /\b(?:my account|account home|account settings|profile|dashboard)\b/i;
       return controls.some((element) => {
-        const label = normalize([element.textContent, element.getAttribute('aria-label'), element.getAttribute('title')].filter(Boolean).join(' '));
-        const href = normalize(element.getAttribute('href'));
+        const { label, href } = describe(element);
         const consent = /(?:cookie|privacy|tracking|consent)/i.test(label)
           && /(?:accept|agree|allow|reject|settings|preferences)/i.test(label);
-        return !consent && (authPattern.test(label) || /\/(?:logout|sign_out|profile|account|dashboard)(?:[/?#]|$)/i.test(href));
-      }) || (!hasLoginForm && authPattern.test(normalize(document.body?.innerText)));
+        return !consent && (authPattern.test(label) || /\/(?:profile|account|dashboard)(?:[/?#]|$)/i.test(href));
+      }) || authPattern.test(normalize(document.body?.innerText));
     })()
   `, true);
 }
