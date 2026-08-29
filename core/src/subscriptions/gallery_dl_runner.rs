@@ -410,13 +410,7 @@ impl GalleryDlRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-
-        // On Windows: suppress console window and ensure clean process creation.
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        crate::sidecar_process::configure(&mut cmd);
 
         let mut child = cmd
             .spawn()
@@ -621,48 +615,7 @@ impl GalleryDlRunner {
         let (status, stalled) = tokio::select! {
             _ = opts.cancel.cancelled() => {
                 info!(pid = ?child_pid, "Gallery-dl cancelled by user, killing subprocess");
-                // On Windows, child.kill() only terminates the direct process, not
-                // the tree (the development fallback may run through Python). Use
-                // taskkill /F /T to kill the full process tree.
-                #[cfg(target_os = "windows")]
-                {
-                    if let Some(pid) = child_pid {
-                        info!(pid, "Windows: killing process tree via taskkill /F /T");
-                        use std::os::windows::process::CommandExt;
-                        let kill_result = tokio::process::Command::new("taskkill")
-                            .args(["/F", "/T", "/PID", &pid.to_string()])
-                            .creation_flags(0x08000000)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::piped())
-                            .output()
-                            .await;
-                        match &kill_result {
-                            Ok(output) => {
-                                let code = output.status.code().unwrap_or(-1);
-                                if code != 0 {
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    warn!(pid, exit_code = code, stderr = %stderr,
-                                        "taskkill returned non-zero; falling back to child.kill()");
-                                    let _ = child.kill().await;
-                                } else {
-                                    info!(pid, "taskkill succeeded");
-                                }
-                            }
-                            Err(e) => {
-                                warn!(pid, error = %e,
-                                    "taskkill failed to execute; falling back to child.kill()");
-                                let _ = child.kill().await;
-                            }
-                        }
-                    } else {
-                        warn!("gallery-dl child has no PID; falling back to child.kill()");
-                        let _ = child.kill().await;
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = child.kill().await;
-                }
+                crate::sidecar_process::terminate_tree(&mut child, "gallery-dl").await;
                 // Short timeout on wait — if the process doesn't die in 2s, move on
                 let status = match tokio::time::timeout(
                     std::time::Duration::from_secs(2),
@@ -685,7 +638,7 @@ impl GalleryDlRunner {
             }
             _ = &mut inactivity => {
                 warn!(pid = ?child_pid, "gallery-dl bridge made no progress; killing subprocess");
-                let _ = child.kill().await;
+                crate::sidecar_process::terminate_tree(&mut child, "gallery-dl").await;
                 let status = match tokio::time::timeout(
                     std::time::Duration::from_secs(2),
                     child.wait(),

@@ -26,6 +26,7 @@ pub mod media_processing;
 pub mod onlyfans_source;
 pub mod poison;
 pub mod settings;
+pub(crate) mod sidecar_process;
 pub mod state;
 pub mod subscription_activity;
 pub mod subscription_catalog;

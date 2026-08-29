@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -142,6 +142,24 @@ if (checkArtifacts) {
     'vendor/gallery-dl/THIRD_PARTY_LICENSES.txt',
     'vendor/onlyfans/THIRD_PARTY_LICENSES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
+
+  const executableSuffix = process.platform === 'win32' ? '.exe' : '';
+  for (const file of [
+    `vendor/ffmpeg/ffmpeg${executableSuffix}`,
+    `vendor/ffmpeg/ffprobe${executableSuffix}`,
+    `vendor/gallery-dl/picto-gallery-dl-bridge${executableSuffix}`,
+    `vendor/onlyfans/picto-onlyfans-bridge${executableSuffix}`,
+  ]) {
+    const artifact = path.join(root, file);
+    const exists = existsSync(artifact);
+    assert(exists, `release runtime is missing: ${file}`);
+    if (!exists) continue;
+    const stat = statSync(artifact);
+    assert(stat.isFile() && stat.size > 0, `release runtime is not a non-empty file: ${file}`);
+    if (process.platform !== 'win32') {
+      assert((stat.mode & 0o111) !== 0, `release runtime is not executable: ${file}`);
+    }
+  }
 
   if (process.platform === 'darwin') {
     const addon = path.join(root, 'native/picto-node/index.node');

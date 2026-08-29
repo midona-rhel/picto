@@ -2683,6 +2683,7 @@ dependencies = [
  "keyring",
  "kmeans_colors",
  "lcms2",
+ "libc",
  "lru",
  "ndarray",
  "open",

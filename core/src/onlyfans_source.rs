@@ -115,6 +115,7 @@ impl OnlyFansSourceRunner {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         configure_media_path(&mut command)?;
+        crate::sidecar_process::configure(&mut command);
         let mut child = command.spawn().map_err(runtime_failure)?;
         let stdout = child
             .stdout
@@ -138,12 +139,12 @@ impl OnlyFansSourceRunner {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
-                    let _ = child.kill().await;
+                    crate::sidecar_process::terminate_tree(&mut child, "OnlyFans").await;
                     return Err(RunnerFailure::retryable(RunnerFailureKind::Interrupted, "OnlyFans run cancelled"));
                 }
                 line = tokio::time::timeout(BRIDGE_INACTIVITY_TIMEOUT, lines.next_line()) => match line {
                     Err(_) => {
-                        let _ = child.kill().await;
+                        crate::sidecar_process::terminate_tree(&mut child, "OnlyFans").await;
                         return Err(RunnerFailure::retryable(
                             RunnerFailureKind::Network,
                             format!(
