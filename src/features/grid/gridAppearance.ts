@@ -13,6 +13,8 @@ export const GRID_TILE_RADIUS = 4;
 export const GRID_SELECTION_COLOR = '#3297ff';
 export const GRID_SELECTION_INNER_WIDTH = 1;
 export const GRID_SELECTION_OUTER_WIDTH = 2;
+/** The outer selection stroke reaches three pixels beyond the media rect. */
+export const GRID_SELECTION_EXTENT = 3;
 export const GRID_REORDER_COLOR = '#3297ff';
 
 export const GRID_BADGE_BACKGROUND = 'rgba(0, 0, 0, 0.50)';

@@ -12,6 +12,7 @@ import {
   GRID_SELECTION_COLOR,
   GRID_SELECTION_INNER_WIDTH,
   GRID_SELECTION_OUTER_WIDTH,
+  GRID_SELECTION_EXTENT,
   GRID_TILE_RADIUS,
   GRID_UI_FONT,
   gridGapForSpacing,
@@ -28,6 +29,7 @@ describe('grid spacing', () => {
     expect(GRID_TILE_RADIUS).toBe(4);
     expect(GRID_SELECTION_COLOR).toBe('#3297ff');
     expect([GRID_SELECTION_INNER_WIDTH, GRID_SELECTION_OUTER_WIDTH]).toEqual([1, 2]);
+    expect(GRID_SELECTION_EXTENT).toBe(3);
     expect(GRID_BADGE_BACKGROUND).toBe('rgba(0, 0, 0, 0.50)');
     expect(GRID_BADGE_BORDER).toBe('rgba(0, 0, 0, 0.20)');
     expect(GRID_BADGE_TEXT).toBe('rgba(255, 255, 255, 0.80)');

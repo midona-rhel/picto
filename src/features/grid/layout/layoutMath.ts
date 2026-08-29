@@ -1,4 +1,5 @@
 import type { LayoutItem, LayoutResult, GridViewMode } from './types';
+import { GRID_SELECTION_EXTENT } from '../gridAppearance';
 
 const LAYOUT_PADDING_TOP = 16;
 const LAYOUT_PADDING_BOTTOM = 16;
@@ -20,6 +21,7 @@ interface Geometry {
   columnWidth: number;
   offsetX: number;
   snappedSize: number;
+  itemGap: number;
 }
 
 export function safeAspectRatio(value: number): number {
@@ -57,11 +59,11 @@ export function computeStatefulLayout(
   const geometry = layoutGeometry(containerWidth, targetSize, gap, scrollbarWidth);
   let result: StatefulLayoutResult;
   if (viewMode === 'grid') {
-    result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, gap, textHeight);
+    result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, geometry.itemGap, textHeight);
   } else if (viewMode === 'justified') {
-    result = layoutJustified(aspectRatios, geometry.usedWidth, geometry.snappedSize, gap, textHeight);
+    result = layoutJustified(aspectRatios, geometry.usedWidth, geometry.snappedSize, geometry.itemGap, textHeight);
   } else {
-    result = layoutWaterfall(aspectRatios, geometry.columnWidth, geometry.columnCount, gap, textHeight);
+    result = layoutWaterfall(aspectRatios, geometry.columnWidth, geometry.columnCount, geometry.itemGap, textHeight);
   }
   return finalize(result, geometry.offsetX, 0);
 }
@@ -82,12 +84,12 @@ export function appendLayout(
   ), stablePrefix: 0 };
   const geometry = layoutGeometry(containerWidth, targetSize, gap, scrollbarWidth);
   if (viewMode === 'grid' && previous.continuation.mode === 'grid') {
-    const result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, gap, textHeight, previous.positions);
+    const result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, geometry.itemGap, textHeight, previous.positions);
     return { result: finalize(result, geometry.offsetX, previousCount), stablePrefix: previousCount };
   }
   if (viewMode === 'waterfall' && previous.continuation.mode === 'waterfall') {
     const result = layoutWaterfall(
-      aspectRatios, geometry.columnWidth, geometry.columnCount, gap, textHeight,
+      aspectRatios, geometry.columnWidth, geometry.columnCount, geometry.itemGap, textHeight,
       previous.positions, previous.continuation.columnHeights,
     );
     return { result: finalize(result, geometry.offsetX, previousCount), stablePrefix: previousCount };
@@ -95,7 +97,7 @@ export function appendLayout(
   if (viewMode === 'justified' && previous.continuation.mode === 'justified') {
     const start = previous.continuation.lastRowStart;
     const result = layoutJustified(
-      aspectRatios, geometry.usedWidth, geometry.snappedSize, gap, textHeight,
+      aspectRatios, geometry.usedWidth, geometry.snappedSize, geometry.itemGap, textHeight,
       previous.positions, start, previous.continuation.lastRowY,
     );
     return { result: finalize(result, geometry.offsetX, start), stablePrefix: start };
@@ -106,14 +108,19 @@ export function appendLayout(
 }
 
 function layoutGeometry(containerWidth: number, targetSize: number, gap: number, scrollbarWidth: number): Geometry {
-  const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
+  const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50) - 2 * GRID_SELECTION_EXTENT;
   const fullWidth = containerWidth + scrollbarWidth;
-  const minInnerWidth = fullWidth - 2 * gap;
-  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
-  const columnWidth = Math.floor((minInnerWidth - (columnCount - 1) * gap) / columnCount);
-  const usedWidth = columnCount * columnWidth + (columnCount - 1) * gap;
+  const drawableWidth = fullWidth - scrollbarWidth;
+  // Positions describe only the clickable media. The selection stroke lives
+  // outside that rect, so reserve its full extent on both sides of every tile.
+  const outerInset = gap + GRID_SELECTION_EXTENT;
+  const itemGap = gap + 2 * GRID_SELECTION_EXTENT;
+  const minInnerWidth = drawableWidth - 2 * outerInset;
+  const columnCount = Math.max(1, Math.round((minInnerWidth + itemGap) / (snappedSize + itemGap)));
+  const columnWidth = Math.floor((minInnerWidth - (columnCount - 1) * itemGap) / columnCount);
+  const usedWidth = columnCount * columnWidth + (columnCount - 1) * itemGap;
   return { fullWidth, usedWidth, columnCount, columnWidth,
-    offsetX: Math.floor((fullWidth - usedWidth) / 2), snappedSize };
+    offsetX: Math.floor((drawableWidth - usedWidth) / 2), snappedSize, itemGap };
 }
 
 function finalize(result: StatefulLayoutResult, offsetX: number, start: number): StatefulLayoutResult {
