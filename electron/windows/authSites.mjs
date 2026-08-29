@@ -80,12 +80,15 @@ export const AUTH_SITES = Object.freeze({
     {
       cookieNames: Object.freeze(['a', 'b']),
       authenticatedCookieNames: Object.freeze(['a', 'b']),
-      allowStorageAccess: true,
-      preserveUserAgent: true,
-      resetSessionOnStart: true,
     },
   ),
-  danbooru: cookieSite('danbooru', 'Danbooru', 'https://danbooru.donmai.us/session/new', 'https://danbooru.donmai.us'),
+  danbooru: cookieSite(
+    'danbooru',
+    'Danbooru',
+    'https://danbooru.donmai.us/session/new',
+    'https://danbooru.donmai.us',
+    {},
+  ),
   webtoons: cookieSite(
     'webtoons',
     'Webtoons',
@@ -165,12 +168,19 @@ export const AUTH_SITES = Object.freeze({
   yandere: cookieSite('yandere', 'Yande.re', 'https://yande.re/user/login', 'https://yande.re'),
   konachan: cookieSite('konachan', 'Konachan', 'https://konachan.com/user/login', 'https://konachan.com'),
   safebooru: cookieSite('safebooru', 'Safebooru', 'https://safebooru.org/index.php?page=account&s=login&code=00', 'https://safebooru.org'),
-  e621: cookieSite('e621', 'e621', 'https://e621.net/session/new', 'https://e621.net'),
+  e621: cookieSite(
+    'e621',
+    'e621',
+    'https://e621.net/session/new',
+    'https://e621.net',
+    {},
+  ),
   ehentai: Object.freeze({
     id: 'ehentai',
     label: 'ExHentai',
-    strategy: 'external-cookie',
+    strategy: 'cookies',
     loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
+    cookieUrl: 'https://forums.e-hentai.org',
     verificationUrl: 'https://exhentai.org/',
     cookieUrls: Object.freeze([
       'https://forums.e-hentai.org',

@@ -115,7 +115,8 @@ describe('direct-site authentication', () => {
       id: 'ehentai',
       loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
       verificationUrl: 'https://exhentai.org/',
-      strategy: 'external-cookie',
+      strategy: 'cookies',
+      cookieUrl: 'https://forums.e-hentai.org',
       cookieUrls: [
         'https://forums.e-hentai.org',
         'https://e-hentai.org',
@@ -127,35 +128,26 @@ describe('direct-site authentication', () => {
     expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
   });
 
-  it('verifies ExHentai in managed Chromium before persisting its gallery-dl cookies', async () => {
-    let completeLogin;
-    const completion = new Promise((resolve) => { completeLogin = resolve; });
-    const close = vi.fn(async () => {});
-    const launchCookieAuth = vi.fn(async () => ({ completion, close }));
-    const browser = createBrowserWindowMock();
-    const { sessions, persistCredential } = createHarness(browser, { launchCookieAuth });
+  it('verifies ExHentai in the managed login popup before persisting its gallery-dl cookies', async () => {
+    const browser = createBrowserWindowMock({
+      cookies: [
+        { name: 'ipb_member_id', value: 'member' },
+        { name: 'ipb_pass_hash', value: 'hash' },
+        { name: 'igneous', value: 'igneous' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
 
     await sessions.startAuthSession('ehentai');
-    expect(browser.instances).toHaveLength(0);
-    expect(launchCookieAuth).toHaveBeenCalledWith(expect.objectContaining({
-      siteCategory: 'ehentai',
-      label: 'ExHentai',
-      loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
-      verificationUrl: 'https://exhentai.org/',
-      cookieDomains: ['forums.e-hentai.org', 'e-hentai.org', 'exhentai.org'],
-      cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
-      authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
-    }));
+    expect(browser.instances).toHaveLength(1);
+    const popup = browser.instances[0];
+    expect(popup.loadedUrl).toBe('https://forums.e-hentai.org/index.php?act=Login&CODE=00');
 
-    completeLogin({
-      site_category: 'ehentai',
-      credential_type: 'cookies',
-      cookies: {
-        ipb_member_id: 'member',
-        ipb_pass_hash: 'hash',
-        igneous: 'igneous',
-      },
-    });
+    await popup.webContents.listeners.get('did-finish-load')();
+    await settle();
+    expect(popup.loadedUrl).toBe('https://exhentai.org/');
+
+    await popup.webContents.listeners.get('did-finish-load')();
     await settle();
 
     expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
@@ -167,11 +159,10 @@ describe('direct-site authentication', () => {
         igneous: 'igneous',
       },
     }));
-    expect(close).toHaveBeenCalledOnce();
     expect(sessions.getAuthSessionState()).toMatchObject({
       site_category: 'ehentai',
       status: 'completed',
-      message: 'ExHentai session captured and verified.',
+      message: 'ExHentai session captured.',
     });
   });
 
@@ -275,27 +266,34 @@ describe('direct-site authentication', () => {
     expect(persistCredential.mock.calls[0][0].cookies).toEqual({ a: 'required-a', b: 'required-b' });
   });
 
-  it('opens Fur Affinity with a fresh unspoofed session and only storage access enabled', async () => {
-    const browser = createBrowserWindowMock();
-    const { sessions } = createHarness(browser);
+  it.each([
+    'twitter', 'newgrounds', 'hentaifoundry', 'furaffinity', 'danbooru',
+    'webtoons', 'patreon', 'fanbox', 'subscribestar', 'idolcomplex',
+    'sankaku', 'yandere', 'konachan', 'safebooru', 'e621', 'ehentai',
+  ])(
+    'opens %s with a fresh unspoofed session and only storage access enabled',
+    async (siteId) => {
+      const browser = createBrowserWindowMock();
+      const { sessions } = createHarness(browser);
 
-    await sessions.startAuthSession('furaffinity');
+      await sessions.startAuthSession(siteId);
 
-    const popup = browser.instances[0];
-    expect(popup.userAgent).toBeUndefined();
-    expect(popup.webContents.session.clearCache).toHaveBeenCalledOnce();
-    expect(popup.webContents.session.clearStorageData).toHaveBeenCalledOnce();
-    expect(popup.permissionCheckHandler(null, 'storage-access')).toBe(true);
-    expect(popup.permissionCheckHandler(null, 'top-level-storage-access')).toBe(true);
-    expect(popup.permissionCheckHandler(null, 'media')).toBe(false);
+      const popup = browser.instances[0];
+      expect(popup.userAgent).toBeUndefined();
+      expect(popup.webContents.session.clearCache).toHaveBeenCalledOnce();
+      expect(popup.webContents.session.clearStorageData).toHaveBeenCalledOnce();
+      expect(popup.permissionCheckHandler(null, 'storage-access')).toBe(true);
+      expect(popup.permissionCheckHandler(null, 'top-level-storage-access')).toBe(true);
+      expect(popup.permissionCheckHandler(null, 'media')).toBe(false);
 
-    const storageCallback = vi.fn();
-    popup.permissionRequestHandler(null, 'storage-access', storageCallback);
-    expect(storageCallback).toHaveBeenCalledWith(true);
-    const notificationCallback = vi.fn();
-    popup.permissionRequestHandler(null, 'notifications', notificationCallback);
-    expect(notificationCallback).toHaveBeenCalledWith(false);
-  });
+      const storageCallback = vi.fn();
+      popup.permissionRequestHandler(null, 'storage-access', storageCallback);
+      expect(storageCallback).toHaveBeenCalledWith(true);
+      const notificationCallback = vi.fn();
+      popup.permissionRequestHandler(null, 'notifications', notificationCallback);
+      expect(notificationCallback).toHaveBeenCalledWith(false);
+    },
+  );
 
   it('captures the complete OnlyFans browser session from an authenticated API request', async () => {
     const browser = createBrowserWindowMock({

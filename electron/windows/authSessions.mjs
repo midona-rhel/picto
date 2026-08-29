@@ -2,7 +2,6 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { getStaticAuthLoginRoutes, resolveAuthSite } from './authSites.mjs';
 import {
   createManualOnlyFansCredential,
-  launchExternalCookieAuth,
   launchExternalOnlyFansAuth,
 } from './externalOnlyFansAuth.mjs';
 
@@ -16,18 +15,8 @@ function formBody(values) {
   return new URLSearchParams(values).toString();
 }
 
-function sanitizeUserAgent(userAgent) {
-  return String(userAgent || '')
-    .replace(/\s+Electron\/[^\s]+/gi, '')
-    .replace(/\s+Picto\/[^\s]+/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-
-function configureAuthPermissions(session, site) {
-  const permissionAllowed = (permission) => Boolean(
-    site.allowStorageAccess && STORAGE_ACCESS_PERMISSIONS.has(permission)
-  );
+function configureAuthPermissions(session) {
+  const permissionAllowed = (permission) => STORAGE_ACCESS_PERMISSIONS.has(permission);
   session?.setPermissionCheckHandler?.((_contents, permission) => permissionAllowed(permission));
   session?.setPermissionRequestHandler?.((_contents, permission, callback) => {
     callback(permissionAllowed(permission));
@@ -178,6 +167,7 @@ async function hasAuthenticatedFanboxSession(webContents) {
 }
 
 function createCookieAdapter(site) {
+  let navigatingToVerification = false;
   return {
     async prepare() {
       return { url: site.loginUrl, message: `Log in with ${site.label} in the popup window.` };
@@ -187,11 +177,50 @@ function createCookieAdapter(site) {
       if (site.unauthenticatedUrlPattern?.test(currentUrl)) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
       }
-      const stored = await contents.session.cookies.get({ url: site.cookieUrl });
+      const cookieUrls = site.cookieUrls ?? [site.cookieUrl];
+      const stored = (await Promise.all(
+        cookieUrls.map((url) => contents.session.cookies.get({ url })),
+      )).flat();
       const values = new Map(stored.map((cookie) => [cookie.name, cookie.value]));
       const authenticatedNames = site.authenticatedCookieNames ?? [];
       if (authenticatedNames.some((name) => !(values.get(name) || '').trim())) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
+      }
+      if (site.verificationUrl && !currentUrl.startsWith(site.verificationUrl)) {
+        if (!navigatingToVerification) {
+          navigatingToVerification = true;
+          return {
+            navigate: site.verificationUrl,
+            status: 'loading',
+            message: `Verifying ${site.label} access...`,
+          };
+        }
+        return { status: 'loading', message: `Verifying ${site.label} access...` };
+      }
+      if (site.verificationUrl) {
+        const verification = await contents.executeJavaScript(String.raw`
+          (() => {
+            const text = [
+              document.title,
+              document.body?.innerText || '',
+              ...Array.from(document.images).flatMap((image) => [image.src, image.alt, image.title]),
+            ].join(' ');
+            return {
+              challenge: /just a moment|verify (?:that )?you are human|checking your browser|cloudflare/i.test(text),
+              denied: /sad\s*panda|sadpanda|kokomade/i.test(text),
+              blank: (document.body?.innerText || '').trim().length === 0
+                && document.links.length === 0
+                && document.images.length === 0,
+            };
+          })()
+        `, true);
+        if (verification?.challenge) {
+          return { status: 'active', message: `Complete the ${site.label} browser check; Picto will continue automatically.` };
+        }
+        if (verification?.denied || verification?.blank) {
+          navigatingToVerification = false;
+          return { status: 'active', message: `${site.label} access was not accepted. Sign in again to refresh it.` };
+        }
       }
       if (authenticatedNames.length === 0 && !(await hasAuthenticatedDomSignal(contents))) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
@@ -466,7 +495,6 @@ export function createAuthSessions({
   BrowserWindow,
   getMainWindow,
   fetchImpl = fetch,
-  launchCookieAuth = launchExternalCookieAuth,
   launchOnlyFansAuth = launchExternalOnlyFansAuth,
   persistCredential = async () => { throw new Error('Credential persistence is unavailable.'); },
   beginPixivOAuth = async () => { throw new Error('Pixiv OAuth is unavailable.'); },
@@ -586,9 +614,7 @@ export function createAuthSessions({
         partition: site.sessionPartition ?? `persist:picto-auth-v1-${site.id}`,
       },
     });
-    const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());
-    if (!site.preserveUserAgent && userAgent) authWindow.webContents.setUserAgent(userAgent);
-    configureAuthPermissions(authWindow.webContents.session, site);
+    configureAuthPermissions(authWindow.webContents.session);
     authWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) queueMicrotask(() => {
         if (!authWindow.isDestroyed()) void authWindow.webContents.loadURL(url);
@@ -658,43 +684,6 @@ export function createAuthSessions({
     completed = false;
     finishing = false;
     inspecting = false;
-    if (site.strategy === 'external-cookie' && launchCookieAuth) {
-      emit({
-        site_category: site.id,
-        status: 'starting',
-        title: `Login: ${site.label}`,
-        current_url: site.loginUrl,
-        message: `Opening ${site.label} in your browser…`,
-      });
-      try {
-        const session = await launchCookieAuth({
-          siteCategory: site.id,
-          label: site.label,
-          loginUrl: site.loginUrl,
-          verificationUrl: site.verificationUrl,
-          cookieDomains: site.cookieUrls.map((url) => new URL(url).hostname),
-          cookieNames: site.cookieNames,
-          authenticatedCookieNames: site.authenticatedCookieNames,
-          onStatus: (message) => emit({ status: 'active', current_url: site.loginUrl, message }),
-        });
-        externalAuth = session;
-        emit({
-          status: 'active',
-          current_url: site.loginUrl,
-          message: `Complete the ${site.label} login in the browser.`,
-        });
-        void session.completion.then(async (credential) => {
-          if (externalAuth !== session || completed) return;
-          await finish({ credential, message: `${site.label} session captured and verified.` });
-        }).catch((error) => {
-          if (externalAuth !== session || completed) return;
-          emit({ status: 'error', message: error instanceof Error ? error.message : `${site.label} login failed.` });
-        });
-      } catch (error) {
-        emit({ status: 'error', message: error instanceof Error ? error.message : `${site.label} login setup failed.` });
-      }
-      return state;
-    }
     if (site.strategy === 'onlyfans' && launchOnlyFansAuth) {
       emit({
         site_category: site.id,
@@ -736,10 +725,8 @@ export function createAuthSessions({
       message: 'Preparing login…',
     });
     try {
-      if (site.resetSessionOnStart) {
-        await authWindow.webContents.session?.clearCache?.();
-        await authWindow.webContents.session?.clearStorageData?.();
-      }
+      await authWindow.webContents.session?.clearCache?.();
+      await authWindow.webContents.session?.clearStorageData?.();
       const prepared = await adapter.prepare();
       await authWindow.webContents.loadURL(prepared.url);
       emit({ status: 'active', current_url: prepared.url, message: prepared.message });
