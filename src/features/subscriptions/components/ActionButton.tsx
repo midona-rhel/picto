@@ -31,8 +31,10 @@ export function ActionButton({
     <button
       className={`${variantClass} ${compact ? styles.buttonCompact : ''} ${pending ? styles.buttonPending : ''}`.trim()}
       data-modal-primary={variant === 'primary' ? 'true' : undefined}
-      disabled={disabled || pending}
-      onClick={onClick}
+      disabled={disabled}
+      aria-disabled={disabled || pending || undefined}
+      aria-busy={pending || undefined}
+      onClick={pending ? undefined : onClick}
       type="button"
     >
       {children}

@@ -22,6 +22,7 @@ const RUN_ACTIVITY_REFRESH_MS = 10_000;
 let workspaceRefreshPromise: Promise<void> | null = null;
 let workspaceRefreshQueued = false;
 let runtimeRefreshPromise: Promise<void> | null = null;
+let workspaceStateVersion = 0;
 let runGraceUntil = 0;
 let syncPolling: (() => void) | null = null;
 const observedQueryStatuses = new Map<number, Map<number, string>>();
@@ -52,6 +53,7 @@ export function resetSubscriptionsSettleForTests(): void {
   workspaceRefreshPromise = null;
   workspaceRefreshQueued = false;
   runtimeRefreshPromise = null;
+  workspaceStateVersion = 0;
   runGraceUntil = 0;
   syncPolling = null;
   observedQueryStatuses.clear();
@@ -229,6 +231,7 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
           if (previousCover) covers.set(subscriptionId, previousCover);
           else covers.delete(subscriptionId);
         }
+        workspaceStateVersion += 1;
         store.set(subscriptionsWorkspaceSnapshotAtom, snapshot);
         store.set(subscriptionsCoversAtom, covers);
         store.set(subscriptionsSelectionAtom, (current) => {
@@ -266,10 +269,14 @@ export function refreshSubscriptionsRuntimeState(): Promise<void> {
   if (runtimeRefreshPromise) return runtimeRefreshPromise;
 
   const snapshot = store.get(subscriptionsWorkspaceSnapshotAtom);
+  const startedAtWorkspaceVersion = workspaceStateVersion;
   const runningIds = new Set(snapshot?.runningSubscriptionIds ?? []);
   const runningSubscriptions = snapshot?.subscriptions.filter((subscription) => runningIds.has(subscription.id)) ?? [];
   runtimeRefreshPromise = subscriptionsController.refreshRuntimeState(runningSubscriptions)
     .then((runtime) => {
+      // A complete workspace read is authoritative. Never let an older progress
+      // request arrive later and paint the previous Run/Stop state back on top.
+      if (startedAtWorkspaceVersion !== workspaceStateVersion) return;
       const previousProgress = snapshot?.runningProgress ?? [];
       const settledRuntime = {
         ...runtime,

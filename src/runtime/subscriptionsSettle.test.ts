@@ -164,6 +164,45 @@ describe('subscription settlement', () => {
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.runningSubscriptionIds).toEqual(['7']);
   });
 
+  it('does not let an older runtime read overwrite a newer workspace snapshot', async () => {
+    const original = { id: '7', name: 'Active feed' };
+    const refreshed = { id: '7', name: 'Renamed feed' };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [original],
+      sites: [],
+      credentials: [],
+      credentialHealth: [],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [{ subscription_id: '7', subscription_name: original.name, run_id: 44 }],
+      listMetrics: {},
+    } as never);
+    getRunActivity.mockResolvedValue(runActivity('running', 'running'));
+
+    let releaseRuntime = () => {};
+    refreshRuntimeState.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseRuntime = () => resolve({ runningSubscriptionIds: [], runningProgress: [] });
+    }));
+    loadWorkspaceSnapshot.mockResolvedValueOnce({
+      subscriptions: [refreshed],
+      sites: [],
+      credentials: [],
+      credentialHealth: [],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [{ subscription_id: '7', subscription_name: refreshed.name, run_id: 44 }],
+      listMetrics: {},
+      covers: new Map(),
+    });
+
+    const staleRuntimeRead = refreshSubscriptionsRuntimeState();
+    await refreshSubscriptionsWorkspace();
+    releaseRuntime();
+    await staleRuntimeRead;
+
+    const snapshot = store.get(subscriptionsWorkspaceSnapshotAtom);
+    expect(snapshot?.subscriptions[0]?.name).toBe('Renamed feed');
+    expect(snapshot?.runningSubscriptionIds).toEqual(['7']);
+  });
+
   it('refreshes persisted task progress for task invalidation', async () => {
     const runningSubscription = { id: '7', name: 'Active feed' };
     store.set(subscriptionsWorkspaceSnapshotAtom, {
