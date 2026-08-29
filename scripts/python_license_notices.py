@@ -34,6 +34,7 @@ def write_python_license_notices(destination: Path) -> None:
     )
     for distribution in distributions:
         name = distribution.metadata.get("Name") or "unknown"
+        files = _license_files(distribution)
         expression = distribution.metadata.get("License-Expression")
         declared = expression or distribution.metadata.get("License") or "UNKNOWN"
         if declared == "UNKNOWN":
@@ -44,9 +45,10 @@ def write_python_license_notices(destination: Path) -> None:
             ]
             declared = "; ".join(classifiers) or "UNKNOWN"
         if declared == "UNKNOWN":
-            raise RuntimeError(f"Python distribution {name}@{distribution.version} has no declared license")
+            if not files:
+                raise RuntimeError(f"Python distribution {name}@{distribution.version} has no license information")
+            declared = "See bundled license file(s)"
         sections.extend(("-" * 80, f"{name}@{distribution.version}", f"License: {declared}", "-" * 80))
-        files = _license_files(distribution)
         if not files:
             sections.append("The installed distribution contains no separate license file.")
         for license_file in files:
