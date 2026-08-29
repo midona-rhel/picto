@@ -2123,6 +2123,11 @@ mod tests {
             .execute("INSERT INTO archive(entry) VALUES (?1)", ["reset-post"])
             .unwrap();
         drop(archive);
+        let run_temp_path =
+            crate::subscriptions::archive::query_temp_root(application.root(), subscription_id, 1)
+                .join("run-crash-leftover");
+        std::fs::create_dir_all(&run_temp_path).unwrap();
+        std::fs::write(run_temp_path.join("download.part"), b"partial").unwrap();
         let other_archive_path =
             crate::subscriptions::archive::query_archive_path(application.root(), 999, 1);
         std::fs::create_dir_all(other_archive_path.parent().unwrap()).unwrap();
@@ -2283,6 +2288,7 @@ mod tests {
             .unwrap();
         assert!(!provider_state.exists());
         assert!(!archive_path.exists());
+        assert!(!run_temp_path.exists());
         assert!(other_archive_path.exists());
     }
 }

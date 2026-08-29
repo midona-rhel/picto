@@ -101,6 +101,7 @@ pub struct RunnerFailure {
     pub kind: RunnerFailureKind,
     pub message: String,
     pub retryable: bool,
+    pub cleanup_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +123,7 @@ impl RunnerFailure {
             kind,
             message: message.into(),
             retryable: true,
+            cleanup_paths: Vec::new(),
         }
     }
 
@@ -130,6 +132,7 @@ impl RunnerFailure {
             kind,
             message: message.into(),
             retryable: false,
+            cleanup_paths: Vec::new(),
         }
     }
 }
@@ -426,6 +429,8 @@ async fn run_stream<R: SourceRunner>(
         .await?;
     }
 
+    cleanup_runner_paths(&runner_result).await;
+
     if atomic_gallery && !atomic_items.is_empty() {
         if runner_result.is_ok() {
             return Ok(Err(RunnerFailure::retryable(
@@ -449,16 +454,17 @@ async fn run_stream<R: SourceRunner>(
         )));
     }
     progress.flush(application)?;
-    if let Ok(success) = &runner_result {
-        for path in &success.cleanup_paths {
-            if let Err(error) = std::fs::remove_dir_all(path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %path.display(), error = %error, "Could not clean completed source run");
-                }
-            }
-        }
-    }
     Ok(runner_result)
+}
+
+async fn cleanup_runner_paths(result: &Result<RunnerSuccess, RunnerFailure>) {
+    let paths = match result {
+        Ok(success) => &success.cleanup_paths,
+        Err(failure) => &failure.cleanup_paths,
+    };
+    for path in paths {
+        crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(path).await;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -901,6 +907,20 @@ mod tests {
     use super::*;
     use picto_library::{ImmutableMediaFacts, Lifecycle, Rating, SourceIdentity};
     use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn failed_runner_cleanup_removes_its_download_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("failed-run");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("partial-download"), b"partial").unwrap();
+        let mut failure = RunnerFailure::retryable(RunnerFailureKind::Download, "failed");
+        failure.cleanup_paths.push(path.clone());
+
+        cleanup_runner_paths(&Err(failure)).await;
+
+        assert!(!path.exists());
+    }
 
     struct OneItemRunner<'a> {
         application: &'a LibraryApplication,

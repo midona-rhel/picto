@@ -215,6 +215,7 @@ mod tests {
                 archive_path: std::path::PathBuf::new(),
                 archive_prefix: None,
                 pacing_state_dir: std::path::PathBuf::new(),
+                temp_root: std::path::PathBuf::new(),
                 cancel: Default::default(),
             };
             opts.site_id = site.to_string();
@@ -245,6 +246,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -297,6 +299,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -331,6 +334,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -357,6 +361,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -388,6 +393,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -412,6 +418,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -440,6 +447,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -462,6 +470,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -498,6 +507,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -527,6 +537,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -552,6 +563,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -582,6 +594,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -614,6 +627,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 
@@ -636,6 +650,7 @@ mod tests {
             archive_path: std::path::PathBuf::new(),
             archive_prefix: None,
             pacing_state_dir: std::path::PathBuf::new(),
+            temp_root: std::path::PathBuf::new(),
             cancel: tokio_util::sync::CancellationToken::new(),
         };
 

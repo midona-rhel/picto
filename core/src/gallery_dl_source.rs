@@ -131,6 +131,11 @@ impl GalleryDlSourceRunner {
             // Library-scoped so per-host pacing chains across every query,
             // window, and run; reset never clears it.
             pacing_state_dir: self.library_root.join("source-runners/gallery-dl/pacing"),
+            temp_root: crate::subscriptions::archive::query_temp_root(
+                &self.library_root,
+                query.subscription_id,
+                query.query_id,
+            ),
             cancel,
         };
 
@@ -180,7 +185,10 @@ impl GalleryDlSourceRunner {
         );
         if let Some(mut item) = pending_item {
             set_post_complete(&mut item, result.is_ok());
-            send_download(&output, item).await?;
+            if let Err(failure) = send_download(&output, item).await {
+                cleanup_result_paths(&result).await;
+                return Err(failure);
+            }
         }
         result
     }
@@ -772,6 +780,37 @@ impl BatchPosition {
 }
 
 fn settle_summary(
+    mut summary: RunSummary,
+    downloaded: usize,
+    ignored_non_media: usize,
+    batch: &BatchPosition,
+    require_media: bool,
+) -> Result<RunnerSuccess, RunnerFailure> {
+    let temp_dir = std::mem::take(&mut summary.temp_dir);
+    let result = settle_summary_inner(summary, downloaded, ignored_non_media, batch, require_media);
+    match result {
+        Ok(mut success) => {
+            success.cleanup_paths.push(temp_dir);
+            Ok(success)
+        }
+        Err(mut failure) => {
+            failure.cleanup_paths.push(temp_dir);
+            Err(failure)
+        }
+    }
+}
+
+async fn cleanup_result_paths(result: &Result<RunnerSuccess, RunnerFailure>) {
+    let paths = match result {
+        Ok(success) => &success.cleanup_paths,
+        Err(failure) => &failure.cleanup_paths,
+    };
+    for path in paths {
+        gallery_dl_runner::cleanup_temp_dir(path).await;
+    }
+}
+
+fn settle_summary_inner(
     summary: RunSummary,
     downloaded: usize,
     ignored_non_media: usize,
@@ -1104,6 +1143,7 @@ mod tests {
         let broken = settle_summary(summary(0, 10, 0), 0, 0, &complete, false).unwrap_err();
         assert_eq!(broken.kind, RunnerFailureKind::InvalidOutput);
         assert!(!broken.retryable);
+        assert_eq!(broken.cleanup_paths, vec![PathBuf::new()]);
 
         let attachments_only = settle_summary(summary(0, 1, 0), 0, 1, &complete, false).unwrap();
         assert_eq!(attachments_only.resume_cursor, Some(String::new()));
@@ -1113,6 +1153,7 @@ mod tests {
 
         let gallery = settle_summary(summary(0, 30, 0), 30, 0, &complete, true).unwrap();
         assert_eq!(gallery.resume_cursor, Some(String::new()));
+        assert_eq!(gallery.cleanup_paths, vec![PathBuf::new()]);
         assert!(empty_gallery
             .message
             .contains("without discovering any media"));
@@ -1133,6 +1174,20 @@ mod tests {
             },
         );
         assert!(settle_summary(missing_attachment, 0, 0, &complete, false).is_ok());
+    }
+
+    #[test]
+    fn unconsumed_runner_summary_removes_its_temp_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("unsettled-run");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("download.part"), b"partial").unwrap();
+        let mut result = summary(0, 1, 0);
+        result.temp_dir = path.clone();
+
+        drop(result);
+
+        assert!(!path.exists());
     }
 
     #[test]

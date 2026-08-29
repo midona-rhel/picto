@@ -28,6 +28,7 @@ use tracing::{debug, info, warn};
 use crate::subscriptions::source_adapter::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
 
 use self::config::build_config;
+use self::filesystem::RunTempDir;
 
 const BRIDGE_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
@@ -97,6 +98,8 @@ pub struct RunOptions {
     /// the one-request-per-second/domain pacing survives process boundaries.
     /// Empty = in-process pacing only.
     pub pacing_state_dir: PathBuf,
+    /// Subscription/query-owned parent for invocation download directories.
+    pub temp_root: PathBuf,
     /// Cancellation token — kills the subprocess when cancelled.
     pub cancel: CancellationToken,
 }
@@ -112,6 +115,16 @@ pub struct RunSummary {
     pub skipped_archive_items: usize,
     pub source_cursor: Option<String>,
     pub source_page_items: usize,
+}
+
+impl Drop for RunSummary {
+    fn drop(&mut self) {
+        if self.temp_dir.as_os_str().is_empty() {
+            return;
+        }
+        let path = std::mem::take(&mut self.temp_dir);
+        drop(RunTempDir::new(path));
+    }
 }
 
 #[derive(Debug)]
@@ -294,11 +307,13 @@ impl GalleryDlRunner {
         );
 
         // 1. Create temp download directory
-        let temp_dir =
-            std::env::temp_dir().join(format!("picto_gdl_{:016x}", rand::random::<u64>()));
+        let temp_dir = opts
+            .temp_root
+            .join(format!("run-{:016x}", rand::random::<u64>()));
         tokio::fs::create_dir_all(&temp_dir)
             .await
             .map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        let temp_dir_guard = RunTempDir::new(temp_dir.clone());
 
         // 2. Build and write temp config
         let config = build_config(opts, &temp_dir);
@@ -680,7 +695,7 @@ impl GalleryDlRunner {
             exit_code,
             had_download_errors,
             stderr_output: stderr,
-            temp_dir,
+            temp_dir: temp_dir_guard.into_path(),
             failed_items: bridge_stats.failed_items,
             discovered_items: bridge_stats.discovered_items,
             skipped_archive_items: bridge_stats.skipped_archive_items,

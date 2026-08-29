@@ -17,6 +17,12 @@ pub fn query_archive_path(library_root: &Path, subscription_id: i64, query_id: i
         .join("archive.sqlite3")
 }
 
+pub fn query_temp_root(library_root: &Path, subscription_id: i64, query_id: i64) -> PathBuf {
+    subscription_archive_root(library_root, subscription_id)
+        .join(format!("query-{query_id}"))
+        .join("runs")
+}
+
 /// Remove archive entries for specific posts of one query, so an interrupted
 /// post (some files downloaded, some not) is re-fetched WHOLE on the next run.
 /// Without this, gallery-dl would archive-skip the already-downloaded files and
