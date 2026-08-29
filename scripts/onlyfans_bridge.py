@@ -384,6 +384,19 @@ def recent_posts_url(model_id: object, area: str, before: object = None) -> str:
     return f"https://onlyfans.com/api2/v2/users/{model_id}/{suffix}?{urlencode(params)}"
 
 
+def recent_messages_url(model_id: object, before: object = None) -> str:
+    params: dict[str, object] = {
+        "limit": 100,
+        "order": "desc",
+        "skip_users": "all",
+        "skip_users_dups": 1,
+    }
+    _, before_post_id, before_group = decode_cursor_details(before)
+    if before_group == "messages" and before_post_id:
+        params["id"] = before_post_id
+    return f"https://onlyfans.com/api2/v2/chats/{model_id}/messages?{urlencode(params)}"
+
+
 def post_bounded_media(media: list[object], limit: int) -> list[object]:
     """Keep every file from the newest `limit` source posts."""
     if limit <= 0:
@@ -556,7 +569,6 @@ def install_recent_post_window(request: dict[str, object]) -> dict[str, object]:
         return await fetch(c, model_id, "Pinned")
 
     original_paid_posts = paid.get_paid_posts
-    original_messages = messages.get_messages
 
     async def purchased_posts(username, model_id, c=None):
         posts = list(await original_paid_posts(username, model_id, c=c) or [])
@@ -595,16 +607,19 @@ def install_recent_post_window(request: dict[str, object]) -> dict[str, object]:
         return posts
 
     async def creator_messages(model_id, username, c=None, post_id=None):
-        posts = list(
-            await original_messages(
-                model_id, username, c=c, post_id=post_id
-            )
-            or []
-        )
         before_timestamp, _, before_group = decode_cursor_details(before)
         if before_group == "feed":
-            posts = []
-        elif before_timestamp and before_group == "messages":
+            return []
+        url = recent_messages_url(model_id, before)
+        async with c.requests_async(url=url) as response:
+            if not 200 <= response.status < 300:
+                raise RuntimeError(
+                    f"OnlyFans Messages request failed with HTTP {response.status}"
+                )
+            payload = await response.json_()
+        posts = list(payload.get("list") or [])
+        state["has_more"] = bool(state["has_more"] or payload.get("hasMore"))
+        if before_timestamp and before_group == "messages":
             cutoff = _timestamp(before_timestamp)
             posts = [
                 post
@@ -621,8 +636,7 @@ def install_recent_post_window(request: dict[str, object]) -> dict[str, object]:
         return posts
 
     def limit_media_by_post(media):
-        selected = recent_post_ids(state["posts"], int(request["post_limit"]))
-        return [item for item in media if str(getattr(item, "post_id", "")) in selected]
+        return filter_selected_download_media(request, state["posts"], media)
 
     timeline.get_timeline_posts = timeline_posts
     archive.get_archived_posts = archived_posts
@@ -646,6 +660,7 @@ def run_ofscraper(
         "--download-area", "Purchased,Messages,Timeline,Archived,Pinned,Streams",
         "--max-post-count", str(request["post_limit"]),
         "--downloadsem", "1",
+        "--force-all",
         "--no-live",
     ]
     before, _, before_group = decode_cursor_details(request.get("before"))
@@ -746,6 +761,11 @@ def selected_posts(
         )
 
     groups = source_group_by_post(source_posts or [])
+    if source_posts is not None:
+        fetched_post_ids = {source_post_id(post) for post in source_posts}
+        candidates = [
+            post for post in candidates if source_post_id(post) in fetched_post_ids
+        ]
     for post in candidates:
         post_id = source_post_id(post)
         if post_id in groups:
@@ -779,6 +799,40 @@ def selected_posts(
     return [
         dict(post)
         for post in ordered_source_posts(candidates, int(request["post_limit"]))
+    ]
+
+
+def selected_download_post_ids(
+    request: dict[str, object], source_posts: list[dict[str, object]]
+) -> set[str]:
+    """Select the same persisted post window that Picto later validates."""
+    selected: set[str] = set()
+    for database in creator_databases(Path(str(request["state_dir"]))):
+        try:
+            connection = sqlite3.connect(
+                f"file:{database}?mode=ro", uri=True, timeout=1
+            )
+            connection.row_factory = sqlite3.Row
+            selected.update(
+                source_post_id(post)
+                for post in selected_posts(connection, request, source_posts)
+            )
+            connection.close()
+        except sqlite3.Error:
+            continue
+    return selected
+
+
+def filter_selected_download_media(
+    request: dict[str, object],
+    source_posts: list[dict[str, object]],
+    media: list[object],
+) -> list[object]:
+    selected = selected_download_post_ids(request, source_posts)
+    return [
+        item
+        for item in media
+        if str(getattr(item, "post_id", "")) in selected
     ]
 
 

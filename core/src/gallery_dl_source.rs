@@ -283,10 +283,9 @@ fn provider_process_post_limit(site_id: &str) -> Option<u32> {
     // window; site-specific extractor adapters remain isolated in the bridge.
     match site_id {
         "pixiv" | "pixivuser" | "gelbooru" | "rule34" | "danbooru" | "webtoons"
-        | "hentaifoundry" | "baraag" | "deviantart" | "tumblr" | "twitter"
-        | "newgrounds" | "furaffinity" | "patreon" | "fanbox" | "subscribestar"
-        | "idolcomplex" | "sankaku" | "yandere" | "konachan" | "safebooru" | "e621"
-        | "ehentai" => Some(1),
+        | "hentaifoundry" | "baraag" | "deviantart" | "tumblr" | "twitter" | "newgrounds"
+        | "furaffinity" | "patreon" | "fanbox" | "subscribestar" | "idolcomplex" | "sankaku"
+        | "yandere" | "konachan" | "safebooru" | "e621" | "ehentai" => Some(1),
         _ => None,
     }
 }
@@ -795,7 +794,11 @@ fn settle_summary(
         ));
     }
     Ok(RunnerSuccess {
-        resume_cursor: Some(batch.next_cursor(&summary)),
+        resume_cursor: Some(if require_media {
+            String::new()
+        } else {
+            batch.next_cursor(&summary)
+        }),
         cleanup_paths: Vec::new(),
     })
 }
@@ -908,6 +911,34 @@ mod tests {
             .await
             .unwrap();
         assert!(input.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn external_tags_keep_general_and_core_groups_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("post.png");
+        ImageBuffer::from_pixel(1, 1, Rgba([1_u8, 2, 3, 255]))
+            .save_with_format(&path, ImageFormat::Png)
+            .unwrap();
+        let item = normalize_downloads(
+            "e621",
+            path,
+            ParsedMetadata {
+                tags: vec![
+                    (String::new(), "solo".into()),
+                    ("artist".into(), "example".into()),
+                    ("meta".into(), "highres".into()),
+                ],
+                post_id: Some("42".into()),
+                item_key: Some("e621:42:0".into()),
+                ..ParsedMetadata::default()
+            },
+        )
+        .await
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(item.input.tags, ["solo", "creator:example"]);
     }
 
     #[tokio::test]
@@ -1029,6 +1060,9 @@ mod tests {
 
         let empty_gallery = settle_summary(summary(0, 0, 0), 0, 0, &complete, true).unwrap_err();
         assert_eq!(empty_gallery.kind, RunnerFailureKind::InvalidOutput);
+
+        let gallery = settle_summary(summary(0, 30, 0), 30, 0, &complete, true).unwrap();
+        assert_eq!(gallery.resume_cursor, Some(String::new()));
         assert!(empty_gallery
             .message
             .contains("without discovering any media"));

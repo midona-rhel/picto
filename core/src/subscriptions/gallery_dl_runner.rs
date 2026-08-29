@@ -416,6 +416,7 @@ impl GalleryDlRunner {
                         "item_discovered"
                             | "post_traversed"
                             | "post_complete"
+                            | "download_progress"
                             | "item_downloaded"
                             | "item_skipped_archive"
                             | "item_failed_final"

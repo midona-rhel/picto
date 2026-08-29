@@ -25,25 +25,29 @@ pub fn parse_local(value: &str) -> Result<(String, String), String> {
 }
 
 /// External adapters may use known aliases but cannot create namespaces.
-/// Unknown prefixes remain searchable literal text under `general`.
 pub fn parse_external(value: &str) -> Result<(String, String), String> {
     let (namespace, subtag) = parse_local(value)?;
     let namespace = match namespace.as_str() {
         "artist" | "contributor" => "creator",
         "copyright" => "series",
-        "metadata" => "general",
         "tag" | "ungrouped" => "general",
         value => value,
     };
     if EXTERNAL_NAMESPACES.contains(&namespace) {
         Ok((namespace.to_string(), subtag))
     } else {
-        Ok(("general".to_string(), format!("{namespace}:{subtag}")))
+        Err(format!(
+            "External tag namespace `{namespace}` is not supported"
+        ))
     }
 }
 
 pub fn format(namespace: &str, subtag: &str) -> String {
-    format!("{namespace}:{subtag}")
+    if namespace.is_empty() || namespace.eq_ignore_ascii_case("general") {
+        subtag.to_string()
+    } else {
+        format!("{namespace}:{subtag}")
+    }
 }
 
 #[cfg(test)]
@@ -51,19 +55,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn external_namespaces_are_mapped_or_folded_into_general() {
+    fn external_namespaces_are_mapped_or_rejected() {
         assert_eq!(
             parse_external("artist:Someone").unwrap(),
             ("creator".to_string(), "someone".to_string())
         );
-        assert_eq!(
-            parse_external("category:Original").unwrap(),
-            ("general".to_string(), "category:original".to_string())
-        );
-        assert_eq!(
-            parse_external("metadata:Highres").unwrap(),
-            ("general".to_string(), "highres".to_string())
-        );
+        assert!(parse_external("category:Original").is_err());
+        assert!(parse_external("metadata:Highres").is_err());
         assert_eq!(
             parse_external("tag:Blue Eyes").unwrap(),
             ("general".to_string(), "blue eyes".to_string())
@@ -72,14 +70,15 @@ mod tests {
             parse_external("contributor:Editor").unwrap(),
             ("creator".to_string(), "editor".to_string())
         );
-        assert_eq!(
-            parse_external("lore:Backstory").unwrap(),
-            ("general".to_string(), "lore:backstory".to_string())
-        );
-        assert_eq!(
-            parse_external("studio:Example").unwrap(),
-            ("general".to_string(), "studio:example".to_string())
-        );
+        assert!(parse_external("lore:Backstory").is_err());
+        assert!(parse_external("studio:Example").is_err());
+    }
+
+    #[test]
+    fn general_tags_are_serialized_without_a_namespace() {
+        assert_eq!(format("", "solo"), "solo");
+        assert_eq!(format("general", "solo"), "solo");
+        assert_eq!(format("character", "hero"), "character:hero");
     }
 
     #[test]

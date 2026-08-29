@@ -187,7 +187,8 @@ class OnlyFansBridgeTests(unittest.TestCase):
                         {
                             "id": "new",
                             "media": [{"id": "media-2"}, {"id": "media-1"}],
-                        }
+                        },
+                        {"id": "locked", "media": [{"id": "locked-media"}]},
                     ],
                 )
             events = [json.loads(line) for line in stream.getvalue().splitlines()]
@@ -397,6 +398,99 @@ class OnlyFansBridgeTests(unittest.TestCase):
                         "post_limit": 100,
                     }
                 )
+
+    def test_current_source_window_excludes_stale_database_posts(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE posts (
+                post_id TEXT, text TEXT, created_at TEXT, is_deleted INTEGER
+            );
+            INSERT INTO posts VALUES
+                ('stale', '', '2026-08-25T00:00:00Z', 0),
+                ('fetched', '', '2026-08-24T00:00:00Z', 0);
+            """
+        )
+
+        posts = onlyfans_bridge.selected_posts(
+            connection,
+            {"post_limit": 1},
+            [{"id": "fetched", "createdAt": "2026-08-24T00:00:00Z"}],
+        )
+
+        self.assertEqual([post["post_id"] for post in posts], ["fetched"])
+
+    def test_download_filter_uses_the_persisted_post_without_advancing(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            data = root / ".data" / "creator"
+            data.mkdir(parents=True)
+            connection = sqlite3.connect(data / "user_data.db")
+            connection.executescript(
+                """
+                CREATE TABLE posts (
+                    post_id TEXT, text TEXT, created_at TEXT, model_id TEXT,
+                    is_deleted INTEGER
+                );
+                CREATE TABLE medias (
+                    post_id TEXT, model_id TEXT, api_type TEXT
+                );
+                INSERT INTO posts VALUES
+                    ('persisted', '', '2026-08-28T19:00:16Z', 'creator', 0),
+                    ('later', '', '2026-08-27T19:00:16Z', 'creator', 0);
+                INSERT INTO medias VALUES
+                    ('persisted', 'creator', 'Timeline'),
+                    ('later', 'creator', 'Timeline');
+                """
+            )
+            connection.close()
+            source_posts = [
+                {
+                    "id": "raw-only",
+                    "createdAt": "2026-08-29T19:00:16Z",
+                    "_picto_source_group": "feed",
+                },
+                {
+                    "id": "persisted",
+                    "createdAt": "2026-08-28T19:00:16Z",
+                    "_picto_source_group": "feed",
+                },
+                {
+                    "id": "later",
+                    "createdAt": "2026-08-27T19:00:16Z",
+                    "_picto_source_group": "feed",
+                },
+            ]
+            request = {"state_dir": str(root), "post_limit": 1}
+            media = [
+                *[SimpleNamespace(post_id="persisted") for _ in range(22)],
+                SimpleNamespace(post_id="later"),
+            ]
+
+            self.assertEqual(
+                onlyfans_bridge.recent_post_ids(source_posts, 1), {"raw-only"}
+            )
+            filtered = onlyfans_bridge.filter_selected_download_media(
+                request, source_posts, media
+            )
+            self.assertEqual(len(filtered), 22)
+            self.assertEqual({item.post_id for item in filtered}, {"persisted"})
+
+    def test_message_cursor_requests_the_next_message_page(self) -> None:
+        cursor = onlyfans_bridge.encode_cursor(
+            "2026-08-24T00:00:00Z", "message-42", "messages"
+        )
+        self.assertIn(
+            "id=message-42",
+            onlyfans_bridge.recent_messages_url("creator", cursor),
+        )
+        purchased_cursor = onlyfans_bridge.encode_cursor(
+            "2026-08-24T00:00:00Z", "purchase-1", "purchased"
+        )
+        self.assertNotIn(
+            "id=", onlyfans_bridge.recent_messages_url("creator", purchased_cursor)
+        )
 
     def test_completed_posts_stream_newest_first_before_the_run_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

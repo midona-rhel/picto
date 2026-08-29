@@ -4,13 +4,11 @@ use serde_json::Value;
 pub(super) static ADAPTER: E621Adapter = E621Adapter;
 
 const NAMESPACE_MAP: &[(&str, &str)] = &[
-    ("artist", "artist"),
+    ("artist", "creator"),
     ("character", "character"),
-    ("copyright", "copyright"),
+    ("copyright", "series"),
     ("general", ""),
-    ("meta", "meta"),
     ("species", "species"),
-    ("lore", "lore"),
 ];
 
 pub(super) struct E621Adapter;
@@ -27,18 +25,18 @@ impl SiteAdapter for E621Adapter {
                 append_tag_values(&mut tags, namespace, value);
             }
         }
-        if found_categorized {
-            if let Some(fields) = json.as_object() {
-                for (key, value) in fields {
-                    let Some(category) = key.strip_prefix("tags_") else {
-                        continue;
-                    };
-                    if NAMESPACE_MAP.iter().any(|(known, _)| *known == category) {
-                        continue;
-                    }
-                    append_tag_values(&mut tags, category, value);
-                }
+        if let Some(rating) = json.get("rating").and_then(Value::as_str) {
+            let rating = match rating.trim().to_ascii_lowercase().as_str() {
+                "s" | "safe" => Some("safe"),
+                "q" | "questionable" => Some("questionable"),
+                "e" | "explicit" => Some("explicit"),
+                _ => None,
+            };
+            if let Some(rating) = rating {
+                tags.push(("rating".to_string(), rating.to_string()));
             }
+        }
+        if found_categorized {
             return tags;
         }
 
@@ -46,10 +44,12 @@ impl SiteAdapter for E621Adapter {
             return tags;
         };
         for (category, value) in categories {
-            let namespace = NAMESPACE_MAP
+            let Some(namespace) = NAMESPACE_MAP
                 .iter()
                 .find_map(|(known, namespace)| (*known == category).then_some(*namespace))
-                .unwrap_or(category.as_str());
+            else {
+                continue;
+            };
             append_tag_values(&mut tags, namespace, value);
         }
         tags
@@ -87,23 +87,24 @@ mod tests {
             "tags_contributor": ["reviewer"],
             "tags_invalid": ["legacy_tag"],
             "tags_species": ["canine"],
-            "tags_general": ["solo"]
+            "tags_general": ["solo"],
+            "tags_meta": ["highres"],
+            "rating": "s"
         }));
 
         assert_eq!(
             tags,
             vec![
-                ("artist".to_string(), "wlop".to_string()),
-                ("".to_string(), "solo".to_string()),
+                ("creator".to_string(), "wlop".to_string()),
+                (String::new(), "solo".to_string()),
                 ("species".to_string(), "canine".to_string()),
-                ("contributor".to_string(), "reviewer".to_string()),
-                ("invalid".to_string(), "legacy_tag".to_string())
+                ("rating".to_string(), "safe".to_string())
             ]
         );
     }
 
     #[test]
-    fn parses_legacy_category_object_and_preserves_unknown_categories() {
+    fn parses_legacy_category_object_and_drops_non_library_categories() {
         let tags = ADAPTER.parse_tags(&json!({
             "tags": {
                 "artist": ["wlop"],
@@ -113,9 +114,9 @@ mod tests {
             }
         }));
 
-        assert!(tags.contains(&("artist".to_string(), "wlop".to_string())));
+        assert!(tags.contains(&("creator".to_string(), "wlop".to_string())));
         assert!(tags.contains(&("species".to_string(), "canine".to_string())));
         assert!(tags.contains(&(String::new(), "solo".to_string())));
-        assert!(tags.contains(&("invalid".to_string(), "wat".to_string())));
+        assert!(!tags.iter().any(|(namespace, _)| namespace == "invalid"));
     }
 }

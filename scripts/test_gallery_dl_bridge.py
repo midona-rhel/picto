@@ -1,93 +1,146 @@
 import importlib.util
 import io
-import json
 import pathlib
 import sys
 import unittest
-from unittest.mock import Mock
 
 
-BRIDGE_PATH = pathlib.Path(__file__).with_name("gallery_dl_bridge.py")
-SPEC = importlib.util.spec_from_file_location("picto_gallery_dl_bridge", BRIDGE_PATH)
-BRIDGE = importlib.util.module_from_spec(SPEC)
+MODULE_PATH = pathlib.Path(__file__).with_name("gallery_dl_bridge.py")
+SPEC = importlib.util.spec_from_file_location("picto_gallery_dl_bridge", MODULE_PATH)
+bridge = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
-SPEC.loader.exec_module(BRIDGE)
+SPEC.loader.exec_module(bridge)
 
 
-class AcceptedPostGateTests(unittest.TestCase):
-    def test_post_completion_emits_boundary_then_consumes_acknowledgement(self):
-        stdin, stdout = sys.stdin, sys.stdout
-        gate = Mock()
-        gate.has_current.return_value = True
-        try:
-            sys.stdin = io.StringIO("continue\n")
-            sys.stdout = io.StringIO()
-            BRIDGE.PictoDownloadJob._on_post_complete(
-                type("Job", (), {"_post_gate": gate})(),
-                None,
-            )
-            event = json.loads(sys.stdout.getvalue())
-        finally:
-            sys.stdin, sys.stdout = stdin, stdout
-
-        self.assertEqual(event, {"event": "post_complete"})
-        gate.complete.assert_called_once_with()
-
-    def test_multi_file_post_identity_ignores_file_specific_urls(self):
-        first = {
-            "category": "webtoons",
-            "title_no": 123,
-            "episode_no": 7,
-            "url": "https://cdn.example/001.jpg",
+class PathFormat:
+    def __init__(self, post_id: str, path: str):
+        self.kwdict = {
+            "category": "subscribestar",
+            "post_id": post_id,
+            "url": f"https://example.invalid/{post_id}/{pathlib.Path(path).name}",
         }
-        second = {**first, "url": "https://cdn.example/002.jpg"}
+        self.path = path
 
-        self.assertEqual(BRIDGE._post_identity(first), BRIDGE._post_identity(second))
 
-    def test_only_supported_downloads_consume_the_post_limit(self):
-        from gallery_dl import exception
+class GalleryBridgePostBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.original_emit = bridge._emit
+        self.original_stdin = sys.stdin
+        bridge._emit = lambda event_type, **payload: self.events.append(event_type)
+        sys.stdin = io.StringIO("ack\nack\n")
+        self.job = bridge.PictoDownloadJob.__new__(bridge.PictoDownloadJob)
+        self.job._post_gate = bridge._AcceptedPostGate(2, ["jpg"])
 
-        gate = BRIDGE._AcceptedPostGate(2, ["jpg", "png"])
+    def tearDown(self):
+        bridge._emit = self.original_emit
+        sys.stdin = self.original_stdin
 
-        self.assertTrue(gate.begin({"category": "fanbox", "id": 1}, "unsupported.txt")[0])
-        gate.downloaded("unsupported.txt", {"category": "fanbox", "id": 1})
-        gate.complete()
+    def test_all_files_finish_before_the_post_is_acknowledged(self):
+        first = PathFormat("post-1", "/tmp/one.jpg")
+        second = PathFormat("post-1", "/tmp/two.jpg")
+        next_post = PathFormat("post-2", "/tmp/three.jpg")
 
-        self.assertTrue(gate.begin({"category": "fanbox", "id": 2}, "first.jpg")[0])
-        gate.downloaded("first.jpg", {"category": "fanbox", "id": 2})
-        self.assertFalse(gate.begin({"category": "fanbox", "id": 2}, "second.png")[0])
-        gate.downloaded("second.png", {"category": "fanbox", "id": 2})
-        gate.complete()
-
-        self.assertTrue(gate.begin({"category": "fanbox", "id": 3}, "third.png")[0])
-        gate.downloaded("third.png", {"category": "fanbox", "id": 3})
-        gate.complete()
-
-        with self.assertRaises(exception.StopExtraction):
-            gate.begin({"category": "fanbox", "id": 4}, "fourth.jpg")
-
-    def test_supported_posts_reserve_the_limit_before_completion_callbacks_arrive(self):
-        from gallery_dl import exception
-
-        gate = BRIDGE._AcceptedPostGate(1, ["jpg"])
-        gate.begin({"category": "e621", "id": 1}, "first.jpg")
-
-        with self.assertRaises(exception.StopExtraction):
-            gate.begin({"category": "e621", "id": 2}, "second.jpg")
-
-    def test_patreon_attachment_identity_does_not_bypass_post_limit(self):
-        from gallery_dl import exception
-
-        gate = BRIDGE._AcceptedPostGate(1, ["png"])
-        gate.begin({"category": "patreon", "id": 42}, "attachment.png")
-        gate.downloaded(
-            "attachment.png",
-            {"category": "patreon", "id": 9001, "post_id": 42},
+        self.job._on_post(first)
+        self.job._on_after(first)
+        self.job._on_post(second)
+        self.job._on_after(second)
+        self.assertEqual(
+            self.events,
+            ["post_traversed", "item_downloaded", "item_downloaded"],
         )
-        gate.complete()
 
-        with self.assertRaises(exception.StopExtraction):
-            gate.begin({"category": "patreon", "id": 43}, "second.png")
+        self.job._on_post(next_post)
+        self.assertEqual(
+            self.events,
+            [
+                "post_traversed",
+                "item_downloaded",
+                "item_downloaded",
+                "post_complete",
+                "post_traversed",
+            ],
+        )
+
+    def test_the_final_post_is_acknowledged_when_the_extractor_ends(self):
+        item = PathFormat("post-1", "/tmp/one.jpg")
+        self.job._on_post(item)
+        self.job._on_after(item)
+        self.job._job = type("FinishedJob", (), {"run": lambda _self: 0})()
+
+        self.assertEqual(self.job.run(), 0)
+        self.assertEqual(
+            self.events,
+            ["post_traversed", "item_downloaded", "post_complete"],
+        )
+
+    def test_limit_stops_before_announcing_the_next_post(self):
+        self.job._post_gate = bridge._AcceptedPostGate(1, ["jpg"])
+        first = PathFormat("post-1", "/tmp/directory-without-extension")
+        first.path = "/tmp/one.jpg"
+        next_post = PathFormat("post-2", "/tmp/directory-without-extension")
+
+        self.job._on_post(first)
+        self.job._on_prepare(first)
+        self.job._on_after(first)
+        self.job._acknowledge_current_post()
+
+        with self.assertRaises(Exception):
+            self.job._on_post(next_post)
+        self.assertEqual(
+            self.events,
+            [
+                "post_traversed",
+                "item_discovered",
+                "item_downloaded",
+                "post_complete",
+            ],
+        )
+
+
+class GalleryBridgeDownloadProgressTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.original_emit = bridge._emit
+        self.original_monotonic = bridge.time.monotonic
+        bridge._emit = lambda event_type, **payload: self.events.append(
+            (event_type, payload)
+        )
+
+    def tearDown(self):
+        bridge._emit = self.original_emit
+        bridge.time.monotonic = self.original_monotonic
+
+    def test_download_progress_is_throttled_to_the_watchdog_heartbeat_rate(self):
+        output = bridge._NullOutput()
+        moments = iter((1.0, 1.1, 1.5))
+        bridge.time.monotonic = lambda: next(moments)
+
+        output.progress(1_000, 100, 100)
+        output.progress(1_000, 200, 100)
+        output.progress(1_000, 600, 100)
+
+        self.assertEqual(
+            self.events,
+            [
+                (
+                    "download_progress",
+                    {
+                        "bytes_total": 1_000,
+                        "bytes_downloaded": 100,
+                        "bytes_per_second": 100,
+                    },
+                ),
+                (
+                    "download_progress",
+                    {
+                        "bytes_total": 1_000,
+                        "bytes_downloaded": 600,
+                        "bytes_per_second": 100,
+                    },
+                ),
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any
@@ -566,24 +567,27 @@ class _AcceptedPostGate:
         self.current: str | None = None
         self.current_has_media = False
 
-    def begin(self, metadata: dict[str, Any], path: str | None = None) -> tuple[bool, str]:
+    def begin(self, metadata: dict[str, Any]) -> tuple[bool, str]:
         identity = _post_identity(metadata)
         if identity in self.traversed:
             return False, identity
-        path = str(path or "")
-        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        supported = not self.accepted_extensions or extension in self.accepted_extensions
-        if supported and self.limit and len(self.reserved) >= self.limit:
+        if self.limit and len(self.accepted) >= self.limit:
             from gallery_dl import exception
 
             self.current = None
             raise exception.StopExtraction()
         self.traversed.add(identity)
-        if supported:
-            self.reserved.add(identity)
         self.current = identity
         self.current_has_media = False
         return True, identity
+
+    def prepare(self, path: str) -> None:
+        path = str(path)
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if self.accepted_extensions and extension not in self.accepted_extensions:
+            return
+        if self.current is not None:
+            self.reserved.add(self.current)
 
     def downloaded(self, path: str, metadata: dict[str, Any]) -> None:
         path = str(path)
@@ -599,6 +603,8 @@ class _AcceptedPostGate:
     def complete(self) -> None:
         if self.current is not None and self.current_has_media:
             self.accepted.add(self.current)
+        elif self.current is not None:
+            self.reserved.discard(self.current)
         self.current = None
         self.current_has_media = False
 
@@ -677,7 +683,6 @@ class PictoDownloadJob:
                     {
                         "prepare": bridge._safe_hook(bridge._on_prepare),
                         "post": bridge._safe_hook(bridge._on_post),
-                        "post-after": bridge._safe_hook(bridge._on_post_complete),
                         "after": bridge._safe_hook(bridge._on_after),
                         "skip": bridge._safe_hook(bridge._on_skip),
                         "error": bridge._safe_hook(bridge._on_error),
@@ -703,6 +708,7 @@ class PictoDownloadJob:
 
     def _on_prepare(self, pathfmt):
         _recent_download_errors.clear()
+        self._post_gate.prepare(pathfmt.path)
         _emit(
             "item_discovered",
             item_url=_item_url(pathfmt),
@@ -711,11 +717,14 @@ class PictoDownloadJob:
 
     def _on_post(self, pathfmt):
         metadata = _event_metadata(pathfmt)
-        first_visit, _ = self._post_gate.begin(metadata, pathfmt.path)
+        identity = _post_identity(metadata)
+        if self._post_gate.has_current() and self._post_gate.current != identity:
+            self._acknowledge_current_post()
+        first_visit, _ = self._post_gate.begin(metadata)
         if first_visit:
             _emit("post_traversed", metadata=metadata)
 
-    def _on_post_complete(self, _pathfmt):
+    def _acknowledge_current_post(self):
         if not self._post_gate.has_current():
             return
         _emit("post_complete")
@@ -756,11 +765,17 @@ class PictoDownloadJob:
         )
 
     def run(self) -> int:
-        return self._job.run()
+        status = self._job.run()
+        self._acknowledge_current_post()
+        return status
 
 
 class _NullOutput:
+    def __init__(self):
+        self._last_progress_at = 0.0
+
     def start(self, *_args, **_kwargs):
+        self._last_progress_at = 0.0
         return None
 
     def success(self, *_args, **_kwargs):
@@ -769,7 +784,17 @@ class _NullOutput:
     def skip(self, *_args, **_kwargs):
         return None
 
-    def progress(self, *_args, **_kwargs):
+    def progress(self, bytes_total, bytes_downloaded, bytes_per_second):
+        now = time.monotonic()
+        if now - self._last_progress_at < 0.5:
+            return None
+        self._last_progress_at = now
+        _emit(
+            "download_progress",
+            bytes_total=bytes_total,
+            bytes_downloaded=bytes_downloaded,
+            bytes_per_second=bytes_per_second,
+        )
         return None
 
 
@@ -892,7 +917,9 @@ def main() -> int:
     if request.get("archive_prefix"):
         config.set((), "archive-prefix", request["archive_prefix"])
     config.set(("output",), "mode", "null")
-    config.set(("downloader",), "progress", None)
+    # Keep an internal byte heartbeat while a large file is transferring.
+    # Picto's Rust watchdog consumes this event; it is not renderer progress.
+    config.set(("downloader",), "progress", 0.5)
 
     _emit(
         "run_started",

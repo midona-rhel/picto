@@ -995,11 +995,11 @@ mod tests {
         ];
         assert_eq!(
             normalize_predictions(&predictions, false),
-            ["general:landscape"]
+            ["landscape"]
         );
         assert_eq!(
             normalize_predictions(&predictions, true),
-            ["general:landscape", "rating:general"]
+            ["landscape", "rating:general"]
         );
     }
 

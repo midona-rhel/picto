@@ -145,7 +145,7 @@ async fn prepare_fixture(
         notes: Some("Bundled public-domain guided-tour fixture".into()),
         tags: vec![
             "creator:leonardo da vinci".into(),
-            "general:tutorial".into(),
+            "tutorial".into(),
         ],
         folders: Vec::new(),
         source_urls: vec![format!(

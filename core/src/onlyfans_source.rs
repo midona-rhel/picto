@@ -170,13 +170,7 @@ impl OnlyFansSourceRunner {
                                 }
                             }
                             BridgeEvent::PostComplete { post_id } => {
-                                if let Some(mut item) = pending.take() {
-                                    if item.post.post_key != post_id {
-                                        return Err(runtime_failure("OnlyFans completed a post that does not match its downloaded media"));
-                                    }
-                                    item.post_complete = true;
-                                    output.send(SourceEvent::MediaDownloaded(item)).await.map_err(|_| runtime_failure("subscription receiver closed"))?;
-                                }
+                                publish_completed_post(&output, &mut pending, &post_id).await?;
                             }
                             BridgeEvent::PostTraversed { post } => {
                                 output.send(SourceEvent::PostTraversed(post.into_post())).await
@@ -219,6 +213,33 @@ impl OnlyFansSourceRunner {
             cleanup_paths: vec![request.output_dir],
         })
     }
+}
+
+async fn publish_completed_post(
+    output: &mpsc::Sender<SourceEvent>,
+    pending: &mut Option<DownloadedItem>,
+    post_id: &str,
+) -> Result<(), RunnerFailure> {
+    if let Some(mut item) = pending.take() {
+        if item.post.post_key != post_id {
+            return Err(runtime_failure(
+                "OnlyFans completed a post that does not match its downloaded media",
+            ));
+        }
+        item.post_complete = true;
+        output
+            .send(SourceEvent::MediaDownloaded(item))
+            .await
+            .map_err(|_| runtime_failure("subscription receiver closed"))?;
+    }
+    let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
+    output
+        .send(SourceEvent::PostComplete(acknowledge))
+        .await
+        .map_err(|_| runtime_failure("subscription receiver closed"))?;
+    acknowledged
+        .await
+        .map_err(|_| runtime_failure("subscription post settlement was not acknowledged"))
 }
 
 impl SourceRunner for OnlyFansSourceRunner {
@@ -468,5 +489,20 @@ mod tests {
             metadata.tags,
             vec![("creator".to_string(), "alice".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn post_completion_waits_for_canonical_settlement() {
+        let (output, mut input) = mpsc::channel(1);
+        let task =
+            tokio::spawn(async move { publish_completed_post(&output, &mut None, "post-1").await });
+        let SourceEvent::PostComplete(acknowledge) = input.recv().await.unwrap() else {
+            panic!("OnlyFans did not publish the post settlement boundary");
+        };
+        assert!(!task.is_finished());
+
+        acknowledge.send(()).unwrap();
+
+        task.await.unwrap().unwrap();
     }
 }
