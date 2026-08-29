@@ -32,6 +32,7 @@ export function createLibraryHostService({
 }) {
   let openingLibraryPath = null;
   let tutorialSession = null;
+  let libraryFailure = null;
   const coverExtensions = ['jpg', 'png'];
 
   function materializedCoverPath(libraryPath, extension) {
@@ -188,6 +189,7 @@ export function createLibraryHostService({
   async function switchLibrary(newPath) {
     if (tutorialSession) throw new Error('Exit the guided tour before switching libraries');
     openingLibraryPath = newPath;
+    libraryFailure = null;
     sendToAllWindows('library-switching', { path: newPath });
 
     await applyPlatformLibraryIcon(newPath);
@@ -427,6 +429,7 @@ export function createLibraryHostService({
 
     const previousPath = getCurrentLibraryRoot();
     openingLibraryPath = targetRoot;
+    libraryFailure = null;
     sendToAllWindows('library-switching', { path: targetRoot });
     try {
       const serialized = await invokeSerialized('cloud.library.join', {
@@ -633,8 +636,27 @@ export function createLibraryHostService({
       ...config,
       currentPath: getCurrentLibraryRoot(),
       openingPath: openingLibraryPath,
+      libraryFailure,
       existsMap,
     };
+  }
+
+  async function failActiveLibrary(message) {
+    const failureMessage = String(message || 'The library navigation could not be loaded.');
+    const failedPath = getCurrentLibraryRoot();
+    libraryFailure = { path: failedPath, message: failureMessage };
+    openingLibraryPath = null;
+    if (failedPath) {
+      try {
+        await closeLibrary();
+      } catch (error) {
+        console.error('[library] failed to close after an initial read failure', error);
+      }
+    }
+    setCurrentLibraryRoot(null);
+    buildAppMenu();
+    sendToAllWindows('library-open-failed', libraryFailure);
+    return libraryFailure;
   }
 
   async function setLibraryMeta(libraryPath, meta) {
@@ -700,6 +722,7 @@ export function createLibraryHostService({
     startTutorialLibrary,
     resetTutorialLibrary,
     finishTutorialLibrary,
+    failActiveLibrary,
     getTutorialSession,
     switchLibrary,
     toggleLibraryPin,

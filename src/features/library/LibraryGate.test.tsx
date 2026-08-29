@@ -8,6 +8,7 @@ type EventHandler = (payload: unknown) => void;
 function installDesktop(currentPath: string | null) {
   const handlers = new Map<string, EventHandler>();
   const invoke = vi.fn().mockResolvedValue(null);
+  const getConfig = vi.fn().mockResolvedValue({ currentPath });
   Object.defineProperty(window, 'picto', {
     configurable: true,
     value: {
@@ -19,12 +20,12 @@ function installDesktop(currentPath: string | null) {
         }),
       },
       library: {
-        getConfig: vi.fn().mockResolvedValue({ currentPath }),
+        getConfig,
       },
       window: { call: vi.fn().mockResolvedValue(null) },
     },
   });
-  return { handlers, invoke };
+  return { handlers, invoke, getConfig };
 }
 
 afterEach(() => {
@@ -58,5 +59,32 @@ describe('LibraryGate', () => {
 
     expect(await screen.findByText('Library content')).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith('open_library_manager', {});
+  });
+
+  it('returns to library selection when the open library becomes unreadable', async () => {
+    const { handlers, invoke } = installDesktop('/tmp/Main.library');
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
+    expect(await screen.findByText('Library content')).toBeInTheDocument();
+
+    act(() => handlers.get('library-open-failed')?.({
+      path: '/tmp/Main.library',
+      message: 'database is unreadable',
+    }));
+
+    expect(await screen.findByText('Open a library to start')).toBeInTheDocument();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('open_library_manager', {}));
+  });
+
+  it('reports an unreadable library configuration before opening the chooser', async () => {
+    const { getConfig, invoke } = installDesktop('/tmp/Main.library');
+    getConfig.mockRejectedValue(new Error('configuration read failed'));
+
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
+
+    expect(await screen.findByText('Open a library to start')).toBeInTheDocument();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      'library.initial_read_failed',
+      { message: 'configuration read failed' },
+    ));
   });
 });

@@ -261,6 +261,11 @@ export function registerIpcHandlers({
       windowManager.openLibraryManager();
       return null;
     }
+    if (command === 'library.initial_read_failed') {
+      const failure = await libraryService.failActiveLibrary(args?.message);
+      windowManager.openLibraryManager();
+      return failure;
+    }
     if (command === 'open_in_new_window') {
       const hash = args?.hash;
       const itemId = Number(args?.item_id);

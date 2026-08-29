@@ -164,6 +164,12 @@ function fetchSidebarTree(replacePending: boolean): Promise<void> {
     .then((tree) => {
       if (generation === treeFetchGeneration) store.set(setSidebarTreeAtom, tree);
     })
+    .catch((error) => {
+      // A replaced read belongs to the previous library mount and must not
+      // eject the newly opened library if it happens to fail later.
+      if (generation !== treeFetchGeneration) return;
+      throw error;
+    })
     .finally(() => {
       if (generation !== treeFetchGeneration) return;
       store.set(sidebarLoadingAtom, false);
@@ -178,10 +184,15 @@ export const sidebarController = {
     return fetchSidebarTree(false);
   },
 
-  ensureLoaded() {
+  async ensureLoaded() {
     // LibraryGate remounts the application for each opened library. Always
     // replace a read left over from the previous mount, and prevent that stale
     // result from overwriting the newly opened library's navigation.
-    return fetchSidebarTree(true).catch(() => {});
+    try {
+      await fetchSidebarTree(true);
+    } catch (error) {
+      console.warn('[sidebar] initial navigation read failed; retrying once', error);
+      await fetchSidebarTree(true);
+    }
   },
 };

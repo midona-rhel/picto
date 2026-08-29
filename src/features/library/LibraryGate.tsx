@@ -10,6 +10,11 @@ interface LibraryConfig {
   openingPath?: string | null;
 }
 
+interface LibraryOpenFailure {
+  path?: string | null;
+  message: string;
+}
+
 interface CloudSyncStatus {
   phase: string;
   completed_units: number;
@@ -51,6 +56,12 @@ export function LibraryGate({ children }: { children: ReactNode }) {
       if (cancelled) dispose();
       else unlisteners.push(dispose);
     });
+    void listen<LibraryOpenFailure>('library-open-failed', () => {
+      if (!cancelled) setLibrary({ kind: 'closed' });
+    }).then((dispose) => {
+      if (cancelled) dispose();
+      else unlisteners.push(dispose);
+    });
 
     void getLibraryConfig()
       .then((config) => {
@@ -61,8 +72,14 @@ export function LibraryGate({ children }: { children: ReactNode }) {
             ? { kind: 'open', path: config.currentPath }
             : { kind: 'closed' });
       })
-      .catch(() => {
-        if (!cancelled) setLibrary({ kind: 'closed' });
+      .catch((error) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[library] failed to read the active library configuration', error);
+        setLibrary({ kind: 'closed' });
+        void invoke('library.initial_read_failed', { message }).catch((deactivationError) => {
+          console.error('[library] failed to leave after configuration could not be read', deactivationError);
+        });
       });
 
     return () => {

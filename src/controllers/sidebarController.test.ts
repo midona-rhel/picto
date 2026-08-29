@@ -194,4 +194,42 @@ describe('replacement sidebar reads', () => {
       count: 3,
     });
   });
+
+  it('reports an active initial read failure without clearing the previous tree', async () => {
+    store.set(setSidebarTreeAtom, { nodes: buildSidebarNodes(navigation, counts, 7), epoch: 11 });
+    getNavigation.mockRejectedValue(new Error('database is unreadable'));
+    getSidebarCounts.mockResolvedValue(counts);
+
+    await expect(sidebarController.ensureLoaded()).rejects.toThrow('database is unreadable');
+
+    expect(getNavigation).toHaveBeenCalledTimes(2);
+    expect(store.get(sidebarNodesAtom).some((node) => node.id === 'folder:4')).toBe(true);
+  });
+
+  it('recovers from a transient initial read failure', async () => {
+    getNavigation
+      .mockRejectedValueOnce(new Error('database is temporarily busy'))
+      .mockResolvedValueOnce(navigation);
+    getSidebarCounts.mockResolvedValue(counts);
+
+    await expect(sidebarController.ensureLoaded()).resolves.toBeUndefined();
+
+    expect(getNavigation).toHaveBeenCalledTimes(2);
+    expect(store.get(sidebarNodesAtom).some((node) => node.id === 'folder:4')).toBe(true);
+  });
+
+  it('ignores a failed read after another library replaces it', async () => {
+    let rejectOld!: (error: Error) => void;
+    const oldRead = new Promise<CanonicalNavigationSnapshot>((_resolve, reject) => { rejectOld = reject; });
+    getNavigation
+      .mockImplementationOnce(() => oldRead)
+      .mockResolvedValueOnce(navigation);
+    getSidebarCounts.mockResolvedValue(counts);
+
+    const staleFetch = sidebarController.fetchTree();
+    await sidebarController.ensureLoaded();
+    rejectOld(new Error('previous library failed'));
+
+    await expect(staleFetch).resolves.toBeUndefined();
+  });
 });

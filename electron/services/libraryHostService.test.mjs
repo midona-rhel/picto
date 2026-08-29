@@ -4,6 +4,43 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+test('an initial navigation failure closes the library and preserves its error for Library Manager', async () => {
+  const events = [];
+  let currentPath = '/Pictures/Broken.library';
+  let closeCalls = 0;
+  const service = createLibraryHostService({
+    fs: { access: async () => {} },
+    path,
+    dialog: {},
+    openLibrary: async () => {},
+    closeLibrary: async () => { closeCalls += 1; },
+    addLibraryToHistory: async () => {},
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({ libraryHistory: ['/Pictures/Broken.library'] }),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => currentPath,
+    setCurrentLibraryRoot: (value) => { currentPath = value; },
+    createMainWindow: () => {},
+    sendToAllWindows: (name, payload) => events.push([name, payload]),
+    buildAppMenu: () => {},
+  });
+
+  await service.failActiveLibrary('database is unreadable');
+
+  expect(closeCalls).toBe(1);
+  expect(currentPath).toBeNull();
+  expect(events).toContainEqual([
+    'library-open-failed',
+    { path: '/Pictures/Broken.library', message: 'database is unreadable' },
+  ]);
+  await expect(service.getLibraryConfig()).resolves.toMatchObject({
+    currentPath: null,
+    libraryFailure: { path: '/Pictures/Broken.library', message: 'database is unreadable' },
+  });
+});
+
 test('library image metadata is persisted and broadcast to every window', async () => {
   const config = { libraryMeta: {} };
   let saved = null;

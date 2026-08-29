@@ -40,6 +40,7 @@ import {
   singleFolderDeletionMessage,
 } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
+import { invoke } from '../../platform/ipc';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
 import { LibrarySwitcherButton } from '../library/LibrarySwitcherButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
@@ -442,7 +443,17 @@ export function Sidebar() {
 
   // Pending rename: when a new folder is created, we queue its ID here
   // and start inline rename once the node appears in the tree.
-  useEffect(() => { void sidebarController.ensureLoaded(); }, []);
+  useEffect(() => {
+    void sidebarController.ensureLoaded().catch(async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[sidebar] failed to load the active library navigation', error);
+      try {
+        await invoke('library.initial_read_failed', { message });
+      } catch (deactivationError) {
+        console.error('[library] failed to leave the unreadable library', deactivationError);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!pendingRevealNodeId) return;

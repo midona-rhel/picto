@@ -50,6 +50,7 @@ interface LibraryConfigResult {
     cloudLibraryId?: string | null;
   }>;
   currentPath: string | null;
+  libraryFailure?: { path?: string | null; message: string } | null;
   existsMap: Record<string, boolean>;
 }
 
@@ -125,6 +126,7 @@ export function LibraryManager() {
     try {
       const nextConfig = await pictoLibrary().getConfig();
       setConfig(nextConfig);
+      if (nextConfig.libraryFailure?.message) setError(nextConfig.libraryFailure.message);
       return nextConfig;
     } catch (e) {
       setError(String(e));
