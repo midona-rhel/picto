@@ -576,11 +576,19 @@ export function TagManagerScreen() {
   const lastVirtualRowIndex = virtualRows.length > 0
     ? virtualRows[virtualRows.length - 1].index
     : -1;
+  const firstSkeletonRowIndex = browseRows.findIndex((row) => row.kind === 'skeleton');
 
   useEffect(() => {
     if (!cursor || loadingMore || lastVirtualRowIndex < 0) return;
-    if (lastVirtualRowIndex >= browseRows.length - 4) loadMore();
-  }, [browseRows.length, cursor, lastVirtualRowIndex, loadMore, loadingMore]);
+    // The skeleton rows estimate the complete list height, so the end of
+    // browseRows can be hundreds of rows beyond the records loaded so far.
+    // Fetch at the loaded/unloaded boundary instead of waiting for the user to
+    // scroll through the entire estimate.
+    const loadBoundary = firstSkeletonRowIndex >= 0
+      ? firstSkeletonRowIndex
+      : browseRows.length;
+    if (lastVirtualRowIndex >= loadBoundary - 4) loadMore();
+  }, [browseRows.length, cursor, firstSkeletonRowIndex, lastVirtualRowIndex, loadMore, loadingMore]);
 
   const closeEditor = useCallback(() => {
     setEditorAction(null);

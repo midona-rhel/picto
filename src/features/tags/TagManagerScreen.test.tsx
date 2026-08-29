@@ -183,6 +183,22 @@ describe('TagManagerScreen', () => {
     expect(within(groupRail).getByRole('button', { name: 'Create tag group' })).toBeInTheDocument();
   });
 
+  it('loads the next page at the first unloaded row instead of the end of the estimated list', async () => {
+    mocks.getNamespaceSummary.mockResolvedValue([
+      { namespace_id: 1, name: 'character', tag_count: 1_664 },
+    ]);
+
+    await renderScreen();
+
+    expect(await screen.findByText('bob')).toBeInTheDocument();
+    expect(mocks.getPaginated).toHaveBeenCalledWith({
+      namespace: null,
+      search: null,
+      cursor: 'opaque-cursor',
+      limit: 500,
+    });
+  });
+
   it('resets the page and closes the editor when search or namespace changes', async () => {
     const user = setupUser();
     await renderScreen();
