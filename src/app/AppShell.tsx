@@ -374,7 +374,6 @@ export function AppShell() {
       if (pendingWidth < 0) return;
       if (el) el.style.width = `${pendingWidth}px`;
       shellRef.current?.style.setProperty('--inspector-width', `${pendingWidth}px`);
-      shellRef.current?.style.setProperty('--titlebar-inspector-width', `${pendingWidth}px`);
       pendingWidth = -1;
     };
     const onMove = (ev: MouseEvent) => {
@@ -407,13 +406,14 @@ export function AppShell() {
     drag.startWidth = el?.offsetWidth ?? sidebarWidth;
     el?.classList.add(styles.sidebarDragging);
     shellRef.current?.classList.add(styles.railDragging);
+    shellRef.current?.classList.add(styles.sidebarResizing);
 
     let pendingWidth = -1;
     let rafId = 0;
     const flush = () => {
       rafId = 0;
       if (pendingWidth < 0) return;
-      shellRef.current?.style.setProperty('--sidebar-width', `${pendingWidth}px`);
+      shellRef.current?.style.setProperty('--sidebar-panel-width', `${pendingWidth}px`);
       pendingWidth = -1;
     };
     const onMove = (event: MouseEvent) => {
@@ -432,6 +432,7 @@ export function AppShell() {
       flush();
       el?.classList.remove(styles.sidebarDragging);
       shellRef.current?.classList.remove(styles.railDragging);
+      shellRef.current?.classList.remove(styles.sidebarResizing);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       setSidebarWidth(el?.offsetWidth ?? drag.startWidth);
@@ -589,8 +590,9 @@ export function AppShell() {
       className={`${styles.shell} ${isMacPlatform ? styles.shellMac : ''}`}
       style={{
         '--sidebar-width': `${sidebarWidth}px`,
+        '--sidebar-panel-width': `${sidebarWidth}px`,
         '--inspector-width': showInspector ? `${inspectorWidth}px` : '0px',
-        '--sidebar-body-width': sidebarCollapsed ? '0px' : 'var(--sidebar-width)',
+        '--sidebar-body-width': sidebarCollapsed ? '0px' : 'var(--sidebar-panel-width)',
         '--titlebar-inspector-width': reserveInspectorTitlebar ? `${inspectorWidth}px` : '0px',
       } as CSSProperties}
     >
@@ -651,6 +653,9 @@ export function AppShell() {
           </div>
         </div>
       </div>
+      {!sidebarCollapsed && (
+        <div className={styles.sidebarResizeHandle} onMouseDown={onSidebarResizeStart} />
+      )}
       {panelMenu.state && (
         <ContextMenu
           entries={panelMenu.state.entries}
@@ -668,9 +673,6 @@ export function AppShell() {
           data-collapsed={sidebarCollapsed || undefined}
         >
           <Sidebar />
-          {!sidebarCollapsed && (
-            <div className={styles.sidebarResizeHandle} onMouseDown={onSidebarResizeStart} />
-          )}
         </div>
         <div
           className={styles.main}

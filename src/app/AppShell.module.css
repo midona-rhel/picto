@@ -170,7 +170,7 @@
   top: 0;
   left: 0;
   bottom: 0;
-  width: var(--sidebar-width);
+  width: var(--sidebar-panel-width, var(--sidebar-width));
   height: 100%;
   contain: layout style;
   border-right: 1px solid var(--color-border-secondary);
@@ -193,18 +193,19 @@
 .sidebarResizeHandle {
   position: absolute;
   top: 0;
-  right: -1px;
+  left: calc(var(--sidebar-panel-width, var(--sidebar-width)) - 5px);
   bottom: 0;
   width: 5px;
   cursor: col-resize;
   z-index: 10;
+  -webkit-app-region: no-drag;
   border-right: 1px solid var(--sidebar-border-color, var(--color-border-secondary));
   transition: border 200ms ease;
   transition-delay: 100ms;
 }
 
 .sidebarResizeHandle:hover,
-.sidebarDragging .sidebarResizeHandle {
+.sidebarResizing .sidebarResizeHandle {
   border-right-width: 2px;
   border-color: var(--color-primary-70);
   transition-delay: 0ms;
@@ -212,7 +213,7 @@
 
 .sidebar[data-collapsed] {
   pointer-events: none;
-  transform: translateX(calc(-1 * var(--sidebar-width)));
+  transform: translateX(calc(-1 * var(--sidebar-panel-width, var(--sidebar-width))));
 }
 
 .main {
