@@ -39,6 +39,6 @@ This ticket closes integration debt only. It must not introduce another architec
 - Fresh schema creation and restart recovery pass without pre-release migration scaffolding.
 - App smoke passes for import, grid, inspector, folder, flattened multi-file subscription import,
   duplicate manager, tag manager, and AI-tagging entry points.
-- Public branch history contains no personal absolute paths, competitor references, copied source,
+- Public branch history contains no personal absolute paths, reference-product names, copied source,
   generated captures, credentials, databases, or personal media.
 - No active PBI claims completion while its required gate is red.

@@ -30,7 +30,7 @@ native addons, and downloaded sidecars must not imply otherwise.
   and license information when Picto did not create them.
 - Third-party runtimes are fetched from pinned revisions or release URLs, verified where publisher
   digests exist, and accompanied by version-exact notices.
-- Release commits must contain no personal absolute paths, private-key markers, or competitor-source
+- Release commits must contain no personal absolute paths, private-key markers, or reference-source
   references. Run the source audit before publishing history.
 
 ## Outstanding release blockers
@@ -54,5 +54,5 @@ native addons, and downloaded sidecars must not imply otherwise.
 - The large dirty integration surface must be separated into reviewed commits before publishing or
   tagging; generated build output must remain untracked.
 - The public branch and tags have been rewritten to remove audited personal absolute paths,
-  competitor references, copied audit material, and generated captures. Keep the local lineage on
+  reference-product names, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.

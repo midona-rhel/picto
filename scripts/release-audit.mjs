@@ -20,12 +20,12 @@ for (const file of tracked) {
   assert(!file.startsWith('.vite/'), `tracked Vite cache must be removed: ${file}`);
   assert(!file.startsWith('.tmp/'), `tracked temporary file must be removed: ${file}`);
   assert(file !== '.claude/settings.local.json', 'tracked local Claude settings must be removed');
-  assert(file !== 'context-menu.js', 'copied competitor context-menu source must not ship in Picto');
+  assert(file !== 'context-menu.js', 'copied reference context-menu source must not ship in Picto');
   assert(!file.endsWith('/.DS_Store') && file !== '.DS_Store', `tracked OS metadata must be removed: ${file}`);
 }
 
 const textExtensions = new Set(['.c', '.css', '.html', '.js', '.json', '.md', '.mjs', '.py', '.rs', '.sh', '.toml', '.ts', '.tsx', '.txt', '.yml', '.yaml']);
-const competitorName = String.fromCharCode(69, 97, 103, 108, 101);
+const referenceProductName = String.fromCharCode(69, 97, 103, 108, 101);
 const trackedMediaExtensions = new Set([
   '.avif', '.bmp', '.gif', '.heic', '.icns', '.ico', '.jpeg', '.jpg', '.jxl', '.png', '.tif', '.tiff', '.webp',
   '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav', '.m4v', '.mkv', '.mov', '.mp4', '.webm',
@@ -58,7 +58,7 @@ for (const file of tracked) {
   assert(!contents.includes(macHomePrefix), `tracked source contains a personal absolute path: ${file}`);
   assert(!windowsHomePattern.test(contents), `tracked source contains a personal Windows path: ${file}`);
   assert(!privateKeyPattern.test(contents), `tracked source contains a private key marker: ${file}`);
-  assert(!contents.toLowerCase().includes(competitorName.toLowerCase()), `tracked source contains a competitor-specific reference: ${file}`);
+  assert(!contents.toLowerCase().includes(referenceProductName.toLowerCase()), `tracked source contains a reference-specific name: ${file}`);
 }
 
 const packageManifest = JSON.parse(read('package.json'));
