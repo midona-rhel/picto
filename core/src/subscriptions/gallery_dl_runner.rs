@@ -54,6 +54,14 @@ pub fn post_terminal_mode(site_id: &str) -> Option<&'static str> {
     }
 }
 
+/// Sites whose extractors page complete post metadata in bulk, so the generic
+/// next-post acknowledgement boundary holds without any additional provider
+/// request. They run a whole source window in one bridge process instead of
+/// paying a fresh extractor cold-start per post.
+pub fn page_window_site(site_id: &str) -> bool {
+    matches!(site_id, "patreon" | "subscribestar")
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GalleryDlAuthConfig {
     pub site_category: String,

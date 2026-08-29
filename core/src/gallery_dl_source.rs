@@ -282,7 +282,9 @@ impl GalleryDlSourceRunner {
 
 fn effective_batch_size(query: &ClaimedQueryRun, override_size: Option<u32>) -> u32 {
     override_size.unwrap_or_else(|| {
-        if gallery_dl_runner::post_terminal_mode(&query.site_id).is_some() {
+        if gallery_dl_runner::post_terminal_mode(&query.site_id).is_some()
+            || gallery_dl_runner::page_window_site(&query.site_id)
+        {
             query.source_post_batch_size()
         } else {
             provider_process_post_limit(&query.site_id)
@@ -1194,6 +1196,7 @@ mod tests {
         for site in crate::subscriptions::gallery_dl_runner::SITES {
             if site.id != "onlyfans"
                 && crate::subscriptions::gallery_dl_runner::post_terminal_mode(site.id).is_none()
+                && !crate::subscriptions::gallery_dl_runner::page_window_site(site.id)
             {
                 assert_eq!(
                     provider_process_post_limit(site.id),
@@ -1204,7 +1207,17 @@ mod tests {
             }
         }
 
-        let query = claimed_query();
+        let mut patreon = claimed_query();
+        patreon.site_id = "patreon".into();
+        patreon.initial_post_limit = Some(10);
+        assert_eq!(
+            effective_batch_size(&patreon, None),
+            10,
+            "page-window sites run a whole source window per bridge process"
+        );
+
+        let mut query = claimed_query();
+        query.site_id = "fanbox".into();
         assert_eq!(effective_batch_size(&query, None), 1);
         assert_eq!(effective_batch_size(&query, Some(2)), 2);
 
