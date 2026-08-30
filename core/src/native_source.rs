@@ -22,6 +22,7 @@ use picto_sources::{
 
 const CURRENT_POST_DOWNLOAD_CONCURRENCY: usize = 4;
 const MAX_TRAVERSED_PER_ADDED_TARGET: u32 = 10;
+const SOURCE_POST_PULL_SIZE: u32 = 1;
 
 pub struct NativeSourceRunner {
     library_root: PathBuf,
@@ -78,7 +79,7 @@ impl NativeSourceRunner {
             credentials.clone(),
             query.query_text.clone(),
             cursors,
-            query.source_post_batch_size().clamp(1, 32),
+            SOURCE_POST_PULL_SIZE,
             query.source_post_batch_size(),
         )
         .map_err(map_source_error)?;

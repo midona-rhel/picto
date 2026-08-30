@@ -21,7 +21,6 @@ pub struct SourceSession {
     adapter: Arc<dyn NativeSourceAdapter>,
     credentials: RequestCredentials,
     request: DiscoveryRequest,
-    pending: VecDeque<SourcePost>,
     active: Option<SourcePost>,
     source_exhausted: bool,
     failed: bool,
@@ -165,7 +164,6 @@ impl SourceSession {
             adapter,
             credentials,
             request,
-            pending: VecDeque::new(),
             active: None,
             source_exhausted: false,
             failed: false,
@@ -198,22 +196,21 @@ impl SourceSession {
         }
 
         loop {
-            if let Some(post) = self.pending.pop_front() {
-                let post = self
-                    .adapter
-                    .resolve_post(post, &self.credentials, http, cancel)
-                    .await?;
-                self.active = Some(post.clone());
-                return Ok(NextPost::Post(Box::new(post)));
-            }
             if self.source_exhausted {
                 return Ok(NextPost::SourceExhausted);
             }
 
-            let batch = self
+            let mut batch = self
                 .adapter
                 .discover(&self.request, &self.credentials, http, cancel)
                 .await?;
+            if batch.posts.len() > 1 {
+                return Err(SourceError::new(
+                    SourceErrorKind::InvalidResponse,
+                    "source returned more than one post for a serial discovery request",
+                    false,
+                ));
+            }
             if batch.posts.is_empty() && !batch.exhausted {
                 return Err(SourceError::new(
                     SourceErrorKind::InvalidResponse,
@@ -222,7 +219,15 @@ impl SourceSession {
                 ));
             }
             self.source_exhausted = batch.exhausted;
-            self.pending.extend(batch.posts);
+            let Some(post) = batch.posts.pop() else {
+                continue;
+            };
+            let post = self
+                .adapter
+                .resolve_post(post, &self.credentials, http, cancel)
+                .await?;
+            self.active = Some(post.clone());
+            return Ok(NextPost::Post(Box::new(post)));
         }
     }
 
@@ -287,6 +292,53 @@ mod tests {
     }
 
     struct PartitionFixtureSource;
+    struct MultiPostSource;
+
+    impl NativeSourceAdapter for MultiPostSource {
+        fn descriptor(&self) -> ProviderDescriptor {
+            ProviderDescriptor {
+                id: "multi-post-fixture",
+                display_name: "Multi-post fixture",
+                domain: "example.test",
+                partitions: &["posts"],
+                anonymous: true,
+            }
+        }
+
+        fn validate_query(&self, _query: &str) -> Result<(), SourceError> {
+            Ok(())
+        }
+
+        fn discover<'a>(
+            &'a self,
+            request: &'a DiscoveryRequest,
+            _credentials: &'a RequestCredentials,
+            _http: &'a HttpRuntime,
+            _cancel: &'a CancellationToken,
+        ) -> AdapterFuture<'a> {
+            Box::pin(async move {
+                Ok(DiscoveryBatch {
+                    posts: ["1", "2"]
+                        .into_iter()
+                        .map(|id| SourcePost {
+                            site_id: "multi-post-fixture".into(),
+                            partition: request.partition.clone(),
+                            stable_id: id.into(),
+                            canonical_url: None,
+                            creator: None,
+                            name: None,
+                            notes: None,
+                            created_at: None,
+                            tags: vec![],
+                            media: vec![],
+                            resume_cursor_after: Some(id.into()),
+                        })
+                        .collect(),
+                    exhausted: true,
+                })
+            })
+        }
+    }
 
     impl NativeSourceAdapter for PartitionFixtureSource {
         fn descriptor(&self) -> ProviderDescriptor {
@@ -362,21 +414,20 @@ mod tests {
                     .unwrap_or("0")
                     .parse::<u32>()
                     .unwrap();
-                let posts = (start + 1..=start + 2)
-                    .map(|id| SourcePost {
-                        site_id: "fixture".into(),
-                        partition: SourcePartition::new("posts"),
-                        stable_id: id.to_string(),
-                        canonical_url: None,
-                        creator: None,
-                        name: None,
-                        notes: None,
-                        created_at: None,
-                        tags: vec![],
-                        media: vec![],
-                        resume_cursor_after: Some(id.to_string()),
-                    })
-                    .collect();
+                let id = start + 1;
+                let posts = vec![SourcePost {
+                    site_id: "fixture".into(),
+                    partition: SourcePartition::new("posts"),
+                    stable_id: id.to_string(),
+                    canonical_url: None,
+                    creator: None,
+                    name: None,
+                    notes: None,
+                    created_at: None,
+                    tags: vec![],
+                    media: vec![],
+                    resume_cursor_after: Some(id.to_string()),
+                }];
                 Ok(DiscoveryBatch {
                     posts,
                     exhausted: self.exhausted,
@@ -465,6 +516,29 @@ mod tests {
         let second = post(&mut session, &runtime).await;
         assert_eq!(second.stable_id, "2");
         assert_eq!(source.resolutions.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn rejects_provider_batches_that_expose_more_than_one_post() {
+        let mut session = SourceSession::new(
+            Arc::new(MultiPostSource),
+            RequestCredentials::default(),
+            DiscoveryRequest {
+                query: "fixture".into(),
+                partition: SourcePartition::new("posts"),
+                cursor: None,
+                page_size: 1,
+            },
+            2,
+        )
+        .unwrap();
+
+        let error = session
+            .next_post(&runtime(), &CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::InvalidResponse);
+        assert!(error.message.contains("more than one post"));
     }
 
     #[tokio::test]
@@ -565,7 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_batch_reports_source_exhaustion_after_all_posts_settle() {
+    async fn terminal_pull_reports_source_exhaustion_after_settlement() {
         let source = Arc::new(FixtureSource {
             discoveries: AtomicUsize::new(0),
             resolutions: AtomicUsize::new(0),
@@ -574,18 +648,16 @@ mod tests {
         let runtime = runtime();
         let mut session = session(source.clone(), 3);
 
-        for expected_id in ["1", "2"] {
-            let current = post(&mut session, &runtime).await;
-            assert_eq!(current.stable_id, expected_id);
-            session
-                .settle(
-                    &current.stable_id,
-                    SourcePostOutcome::Skipped {
-                        reason: crate::SkipReason::NoUsableMedia,
-                    },
-                )
-                .unwrap();
-        }
+        let current = post(&mut session, &runtime).await;
+        assert_eq!(current.stable_id, "1");
+        session
+            .settle(
+                &current.stable_id,
+                SourcePostOutcome::Skipped {
+                    reason: crate::SkipReason::NoUsableMedia,
+                },
+            )
+            .unwrap();
 
         assert_eq!(
             session
@@ -595,7 +667,7 @@ mod tests {
             NextPost::SourceExhausted,
         );
         assert_eq!(source.discoveries.load(Ordering::SeqCst), 1);
-        assert_eq!(source.resolutions.load(Ordering::SeqCst), 2);
+        assert_eq!(source.resolutions.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
