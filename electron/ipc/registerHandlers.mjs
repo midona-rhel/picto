@@ -224,6 +224,28 @@ export function registerIpcHandlers({
   const openWithOptionsByExtension = new Map();
   const handle = createTrustedIpcHandle(ipcMain, windowManager.ownsWebContents);
 
+  const runWindowControl = (event, method) => {
+    if (!windowManager.ownsWebContents(event.sender)) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    switch (method) {
+      case 'minimize':
+        win.minimize();
+        break;
+      case 'toggleMaximize':
+        if (win.isMaximized()) win.unmaximize();
+        else win.maximize();
+        break;
+      case 'close':
+        win.close();
+        break;
+      default:
+        break;
+    }
+  };
+
+  ipcMain.on('picto:window-control', runWindowControl);
+
   handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
     if (!command || typeof command !== 'string') {
@@ -358,8 +380,8 @@ export function registerIpcHandlers({
         }
         return null;
       }
-      case 'minimize': win.minimize(); return null;
-      case 'toggleMaximize': win.isMaximized() ? win.unmaximize() : win.maximize(); return null;
+      case 'minimize': runWindowControl(event, method); return null;
+      case 'toggleMaximize': runWindowControl(event, method); return null;
       case 'setSize': {
         const width = Number(payload?.width);
         const height = Number(payload?.height);
@@ -370,9 +392,7 @@ export function registerIpcHandlers({
       case 'setAlwaysOnTop':
         win.setAlwaysOnTop(Boolean(payload?.value));
         return null;
-      case 'close':
-        win.close();
-        return null;
+      case 'close': runWindowControl(event, method); return null;
       case 'setFocus':
         win.focus();
         return null;

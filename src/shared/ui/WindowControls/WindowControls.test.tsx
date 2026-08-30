@@ -31,19 +31,19 @@ describe('WindowControls', () => {
   });
 
   it('routes every control through the desktop window API', () => {
-    const call = vi.fn().mockResolvedValue(undefined);
+    const minimize = vi.fn();
+    const toggleMaximize = vi.fn();
+    const close = vi.fn();
     Object.defineProperty(window, 'picto', {
-      value: { api: { window: { call } } },
+      value: { windowControls: { minimize, toggleMaximize, close } },
       configurable: true,
     });
     render(<MantineProvider><WindowControls platform="Win32" /></MantineProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Minimize' }));
     fireEvent.click(screen.getByRole('button', { name: 'Maximize' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(call.mock.calls).toEqual([
-      ['minimize'],
-      ['toggleMaximize'],
-      ['close'],
-    ]);
+    expect(minimize).toHaveBeenCalledOnce();
+    expect(toggleMaximize).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

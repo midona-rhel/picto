@@ -30,6 +30,12 @@ const api = {
   restartMainWindow: () => ipcRenderer.invoke('picto:restart-main-window'),
 };
 
+const windowControls = {
+  minimize: () => ipcRenderer.send('picto:window-control', 'minimize'),
+  toggleMaximize: () => ipcRenderer.send('picto:window-control', 'toggleMaximize'),
+  close: () => ipcRenderer.send('picto:window-control', 'close'),
+};
+
 const events = {
   on: (name, handler) => Promise.resolve(on(name, handler)),
   emit: (name, payload) => ipcRenderer.invoke('picto:event:emit', { name, payload, target: null }),
@@ -153,6 +159,7 @@ const webview = {
 
 contextBridge.exposeInMainWorld('picto', {
   api,
+  windowControls,
   events,
   dialog,
   diagnostics,

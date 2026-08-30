@@ -3,8 +3,8 @@ import { forwardRef } from 'react';
 import styles from './WindowControls.module.css';
 
 function closeCurrentWindow() {
-  const request = (window as any).picto?.api?.window?.call('close');
-  if (request?.catch) request.catch(() => window.close());
+  const close = (window as any).picto?.windowControls?.close;
+  if (typeof close === 'function') close();
   else window.close();
 }
 

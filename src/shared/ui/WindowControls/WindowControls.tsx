@@ -10,8 +10,10 @@ import { KbdTooltip } from '../KbdTooltip';
 import { WindowCloseButton } from './WindowCloseButton';
 import styles from './WindowControls.module.css';
 
-function callWindow(method: string) {
-  (window as any).picto?.api?.window?.call(method)?.catch?.(() => {});
+type WindowControlMethod = 'minimize' | 'toggleMaximize';
+
+function callWindow(method: WindowControlMethod) {
+  (window as any).picto?.windowControls?.[method]?.();
 }
 
 export function WindowControls({
