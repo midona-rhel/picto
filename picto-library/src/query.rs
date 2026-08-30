@@ -648,8 +648,7 @@ fn media_match_roots(
         .unwrap_or_else(|| vec![item_id]);
     let mut file_ids = RoaringBitmap::new();
     for chunk in media_ids.chunks(500) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!("SELECT file_id FROM media_item WHERE media_id IN ({placeholders})");
@@ -663,8 +662,7 @@ fn media_match_roots(
     let file_ids = file_ids.iter().collect::<Vec<_>>();
     let mut roots = RoaringBitmap::new();
     for chunk in file_ids.chunks(500) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!("SELECT media_id FROM media_item WHERE file_id IN ({placeholders})");
@@ -699,8 +697,7 @@ fn sparse_scan_integer(
     let ids = matches.iter().collect::<Vec<_>>();
     let mut entries = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(500) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -828,8 +825,7 @@ fn sparse_scan_text(
     let ids = matches.iter().collect::<Vec<_>>();
     let mut entries = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(500) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

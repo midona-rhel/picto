@@ -260,7 +260,7 @@ fn video_properties(probe: &serde_json::Value, video: &serde_json::Value) -> Vid
         .filter(|&n| n > 0)
         .unwrap_or_else(|| estimate_frame_count(video, duration_ms));
 
-    let has_audio = find_stream(&probe, "audio").is_some();
+    let has_audio = find_stream(probe, "audio").is_some();
 
     // Handle SAR (Sample Aspect Ratio)
     let (adj_w, adj_h) = apply_sar(video, width, height);

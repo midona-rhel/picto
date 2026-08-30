@@ -212,7 +212,11 @@ fn update_samples(
 }
 
 fn filter_variant(unique_filters: bool, index: usize) -> u64 {
-    unique_filters.then_some(index as u64).unwrap_or(0)
+    if unique_filters {
+        index as u64
+    } else {
+        0
+    }
 }
 
 fn input(

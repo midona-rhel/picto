@@ -68,7 +68,7 @@ const MIN_WEIGHT: f64 = 0.03;
 /// drops insignificant ones. Returns only truly distinct colors, sorted by
 /// abundance (most dominant first).
 pub fn extract_dominant_colors(img: &DynamicImage, max_colors: usize) -> Vec<DominantColor> {
-    let max_out = max_colors.min(10).max(1);
+    let max_out = max_colors.clamp(1, 10);
 
     // Downscale for performance — k-means on full resolution is wasteful.
     let small = img.resize(128, 128, image::imageops::FilterType::Triangle);

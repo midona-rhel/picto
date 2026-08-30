@@ -98,7 +98,7 @@ async fn test_audio_duration() {
         .expect("get_audio_duration_ms failed");
 
     assert!(
-        dur >= 2900 && dur <= 3100,
+        (2900..=3100).contains(&dur),
         "duration_ms = {} (expected ~3000)",
         dur
     );
@@ -246,7 +246,7 @@ async fn test_file_info_audio() {
 
     assert!(info.duration_ms.is_some());
     let dur = info.duration_ms.unwrap();
-    assert!(dur >= 2900 && dur <= 3100, "duration = {}", dur);
+    assert!((2900..=3100).contains(&dur), "duration = {}", dur);
 }
 
 #[tokio::test]

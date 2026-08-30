@@ -173,7 +173,7 @@ pub fn request_thumbnail_library(
     }
     let (_, enqueued, _) = application
         .library()
-        .enqueue_thumbnail_work(&[file_hash.0.clone()], &Utc::now().to_rfc3339())
+        .enqueue_thumbnail_work(std::slice::from_ref(&file_hash.0), &Utc::now().to_rfc3339())
         .map_err(|error| error.to_string())?;
     Ok(RequestThumbnailResult {
         ready: false,
@@ -215,10 +215,11 @@ pub fn enqueue_thumbnail_regeneration_library(
         already_queued: requested - enqueued,
     })
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
+    #[default]
     Original,
     Png,
     Jpeg,
@@ -226,11 +227,6 @@ pub enum ExportFormat {
     Avif,
 }
 
-impl Default for ExportFormat {
-    fn default() -> Self {
-        Self::Original
-    }
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExportRequest {
     pub target: picto_library::selection::SelectionTarget,
@@ -345,6 +341,7 @@ fn ordered_media_library(
         .map_err(|error| error.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn export_one(
     output_dir: &Path,
     format: ExportFormat,
@@ -392,7 +389,7 @@ fn export_one(
         .map_err(|error| format!("Failed to write {}: {error}", output_path.display()))
 }
 
-fn output_extension<'a>(format: ExportFormat, original: &'a str) -> &'a str {
+fn output_extension(format: ExportFormat, original: &str) -> &str {
     match format {
         ExportFormat::Original => original,
         ExportFormat::Png => "png",

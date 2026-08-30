@@ -125,7 +125,7 @@ pub async fn get_associated_applications(file_path: String) -> Result<String> {
             .to_string_lossy()
             .into_owned();
         unsafe { picto_free_string(value) };
-        return Ok(result);
+        Ok(result)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -147,7 +147,7 @@ pub fn open_with_application(application_path: String, file_path: String) -> Res
                 "Could not open file with the selected application",
             ));
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -166,7 +166,7 @@ pub fn set_file_icon(icon_path: String, file_path: String) -> Result<bool> {
     {
         let icon = CString::new(icon_path).map_err(|_| Error::from_reason("Invalid icon path"))?;
         let file = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
-        return Ok(unsafe { picto_set_file_icon(icon.as_ptr(), file.as_ptr()) });
+        Ok(unsafe { picto_set_file_icon(icon.as_ptr(), file.as_ptr()) })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -258,7 +258,7 @@ pub async fn open_library(library_path: String) -> Result<()> {
     let path = PathBuf::from(library_path);
     picto_core::state::open_library(path)
         .await
-        .map_err(|e| Error::from_reason(e))?;
+        .map_err(Error::from_reason)?;
     Ok(())
 }
 
@@ -279,7 +279,7 @@ pub async fn open_tutorial_library(library_path: String, fixture_root: String) -
 pub async fn close_library() -> Result<()> {
     picto_core::state::close_library()
         .await
-        .map_err(|e| Error::from_reason(e))?;
+        .map_err(Error::from_reason)?;
     Ok(())
 }
 
@@ -290,7 +290,7 @@ pub async fn close_library() -> Result<()> {
 pub async fn invoke(command: String, args_json: String) -> Result<String> {
     picto_core::state::invoke(&command, &args_json)
         .await
-        .map_err(|e| Error::from_reason(e))
+        .map_err(Error::from_reason)
 }
 
 /// Register a callback that receives native events from the core engine.
@@ -326,7 +326,7 @@ pub fn register_event_callback(callback: JsFunction) -> Result<()> {
         );
         if status != napi::Status::Ok {
             let count = EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-            if count == 1 || count % 100 == 0 {
+            if count == 1 || count.is_multiple_of(100) {
                 eprintln!(
                     "[picto-node] event delivery failed (status={:?}, total_dropped={})",
                     status, count

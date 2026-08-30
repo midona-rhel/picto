@@ -34,8 +34,9 @@ pub enum ChannelOrder {
 }
 
 /// Interpretation of each model output value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputActivation {
+    #[default]
     Probability,
 }
 
@@ -45,12 +46,6 @@ pub enum ModelAdapter {
     #[default]
     Wd,
     OppaiOracle,
-}
-
-impl Default for OutputActivation {
-    fn default() -> Self {
-        Self::Probability
-    }
 }
 
 /// A known tagger model that can be downloaded and used for inference.
@@ -217,7 +212,7 @@ pub fn optimization_supported(models_root: &std::path::Path, slug: &str) -> bool
         let Some(model) = find_model(slug) else {
             return false;
         };
-        return model.coreml.is_some();
+        model.coreml.is_some()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -232,7 +227,7 @@ pub fn is_model_optimized(models_root: &std::path::Path, slug: &str) -> bool {
         let Some(model) = find_model(slug) else {
             return false;
         };
-        return coreml_artifact_is_current(&model_dir(models_root, &model), &model);
+        coreml_artifact_is_current(&model_dir(models_root, &model), &model)
     }
     #[cfg(not(target_os = "macos"))]
     {

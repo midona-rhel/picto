@@ -212,7 +212,7 @@ pub(crate) async fn optimize(
         }
         .await;
         application.ai_model_downloads().lock().await.remove(slug);
-        return result;
+        result
     }
     #[cfg(not(target_os = "macos"))]
     Err("Model optimization is only required on macOS".into())

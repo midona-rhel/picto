@@ -125,7 +125,9 @@ fn synthetic(index: usize, rng: &mut Lcg) -> PreparedImport {
         },
         lifecycle: Lifecycle::Active,
         rating: Rating::Unrated,
-        notes: (index % 10_000 == 0).then(|| format!("release-marker-{index}")),
+        notes: index
+            .is_multiple_of(10_000)
+            .then(|| format!("release-marker-{index}")),
         tags: Vec::new(),
         folders: Vec::new(),
         source_urls: vec![format!("https://{}.example/{name}", rng.word())],

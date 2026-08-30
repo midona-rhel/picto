@@ -12,11 +12,13 @@ use super::{FileError, FileResult};
 /// SQLite file signature.
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3";
 
+type AnimationProperties = ((u32, u32), Option<u64>, Option<u32>);
+
 /// Get CLIP Studio Paint file properties: ((width, height), duration_ms, num_frames).
 ///
 /// CLIP files embed a SQLite database containing canvas metadata.
 /// The SQLite portion is extracted, then Canvas table is queried for dimensions.
-pub fn get_clip_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
+pub fn get_clip_properties(path: &Path) -> FileResult<AnimationProperties> {
     let clip_bytes = std::fs::read(path).map_err(FileError::Io)?;
 
     // Find the SQLite database within the CLIP file
@@ -398,7 +400,7 @@ pub fn generate_thumbnail_from_psd(
 /// Get Ugoira file properties: ((width, height), duration_ms, num_frames).
 ///
 /// Tries JSON metadata first, then falls back to scanning frame images.
-pub fn get_ugoira_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
+pub fn get_ugoira_properties(path: &Path) -> FileResult<AnimationProperties> {
     // Try JSON-based properties first
     if let Ok(props) = get_ugoira_properties_from_json(path) {
         return Ok(props);
@@ -416,9 +418,7 @@ pub fn get_ugoira_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>
 
 /// Get Ugoira properties from the animation.json metadata file.
 ///
-fn get_ugoira_properties_from_json(
-    path: &Path,
-) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
+fn get_ugoira_properties_from_json(path: &Path) -> FileResult<AnimationProperties> {
     let frame_data = get_ugoira_frame_data_json(path)?;
 
     if frame_data.is_empty() {
@@ -459,7 +459,7 @@ fn get_ugoira_frame_data_json(path: &Path) -> FileResult<Vec<UgoiraFrame>> {
     let json_str = String::from_utf8(json_bytes)
         .map_err(|_| FileError::UnsupportedFile("animation.json is not valid UTF-8".to_string()))?;
 
-    // gallery-dl exports as a bare array, others wrap in {frames: [...]}
+    // Accept both the bare provider array and the wrapped `{frames: [...]}` form.
     if let Ok(frames) = serde_json::from_str::<Vec<UgoiraFrame>>(&json_str) {
         return Ok(frames);
     }
@@ -631,7 +631,7 @@ pub fn get_flash_properties(path: &Path) -> FileResult<((u32, u32), u64, u32)> {
 
     // Total bits needed: 5 + 4*nbits
     let total_bits = 5 + 4 * nbits;
-    let total_bytes = (total_bits + 7) / 8;
+    let total_bytes = total_bits.div_ceil(8);
 
     if body_data.len() < total_bytes + 4 {
         return Err(FileError::UnsupportedFile(
@@ -672,7 +672,7 @@ fn read_swf_rect_values(data: &[u8], nbits: usize) -> [i64; 4] {
     let mut values = [0i64; 4];
     let mut bit_offset = 5; // skip first 5 bits (Nbits field)
 
-    for i in 0..4 {
+    for result in &mut values {
         let mut value: i64 = 0;
         for bit in 0..nbits {
             let byte_idx = (bit_offset + bit) / 8;
@@ -688,7 +688,7 @@ fn read_swf_rect_values(data: &[u8], nbits: usize) -> [i64; 4] {
             value |= !((1i64 << nbits) - 1);
         }
 
-        values[i] = value;
+        *result = value;
         bit_offset += nbits;
     }
 
@@ -801,11 +801,11 @@ mod tests {
         // First byte: nbits=5 means upper 5 bits = 00101 = 5
         // Then 4 values of 5 bits each
         let data: Vec<u8> = vec![
-            0b00101_000,  // nbits=5, start of first value (0 so far)
-            0b00_00000_0, // first value = 0, start of second value
-            0b0000_0000,  // second value continues
-            0b0_00000_00, // third value
-            0b000_00000,  // fourth value
+            0b0010_1000, // nbits=5, start of first value (0 so far)
+            0b0000_0000, // first value = 0, start of second value
+            0b0000_0000, // second value continues
+            0b0000_0000, // third value
+            0b0000_0000, // fourth value
         ];
         let values = read_swf_rect_values(&data, 5);
         assert_eq!(values[0], 0); // all zeros

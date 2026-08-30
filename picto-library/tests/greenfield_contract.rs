@@ -2575,7 +2575,10 @@ fn text_search_stays_fresh_across_repeated_queries_and_mutations() {
     library.rename_root(dragon, "phoenix-castle", 42).unwrap();
     assert!(library.settle_fts(64).unwrap().is_some());
     assert_eq!(
-        library.query(&query, &PageRequest::default()).unwrap().total,
+        library
+            .query(&query, &PageRequest::default())
+            .unwrap()
+            .total,
         0,
         "a rename away from the term drops the match"
     );

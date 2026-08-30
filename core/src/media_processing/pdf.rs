@@ -8,8 +8,10 @@ use super::{FileError, FileResult};
 /// Assumed DPI for calculating PDF page resolution.
 const PDF_ASSUMED_DPI: f64 = 300.0;
 
+type PdfInfo = (Option<u32>, (Option<u32>, Option<u32>));
+
 /// Get PDF info: word count (always None — needs PDF library) and page dimensions.
-pub fn get_pdf_info(path: &Path) -> FileResult<(Option<u32>, (Option<u32>, Option<u32>))> {
+pub fn get_pdf_info(path: &Path) -> FileResult<PdfInfo> {
     let data = std::fs::read(path).map_err(FileError::Io)?;
     let resolution = get_pdf_resolution_from_bytes(&data);
     let num_words = None;

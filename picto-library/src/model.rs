@@ -394,6 +394,7 @@ pub struct PreparedCollectionImport {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum PreparedIngestPayload {
     Item(PreparedImport),
     Collection(PreparedCollectionImport),
