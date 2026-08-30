@@ -80,8 +80,11 @@ async fn visible_text(
     ensure_site_filters(credentials, http, cancel, false).await?;
     let mut html = http.get_text(url.clone(), credentials, cancel).await?;
     if is_entry_page(&html) {
-        ensure_site_filters(credentials, http, cancel, true).await?;
-        html = http.get_text(url, credentials, cancel).await?;
+        // An expired captured PHP session overrides reqwest's fresh cookie jar.
+        // Recover with the new anonymous session the entry request established.
+        let recovered = without_stored_session(credentials);
+        ensure_site_filters(&recovered, http, cancel, true).await?;
+        html = http.get_text(url, &recovered, cancel).await?;
     }
     if is_entry_page(&html) {
         return Err(authentication_required());
@@ -149,8 +152,9 @@ async fn ensure_site_filters(
     form.insert("filter_order".into(), "date_new".into());
     form.insert("filter_type".into(), "0".into());
     form.insert("YII_CSRF_TOKEN".into(), csrf);
+    form.insert("yt0".into(), "Apply".into());
     http.post_form_text(
-        Url::parse("https://www.hentai-foundry.com/site/filters")
+        Url::parse("https://www.hentai-foundry.com/?enterAgree=1")
             .expect("static Hentai Foundry filters URL"),
         credentials,
         &form,
@@ -158,6 +162,15 @@ async fn ensure_site_filters(
     )
     .await?;
     Ok(())
+}
+
+fn without_stored_session(credentials: &RequestCredentials) -> RequestCredentials {
+    let mut recovered = credentials.clone();
+    recovered.cookies.clear();
+    recovered
+        .headers
+        .retain(|name, _| !name.eq_ignore_ascii_case("cookie"));
+    recovered
 }
 
 fn decode_cookie_value(value: &str) -> String {
@@ -576,6 +589,30 @@ mod tests {
             decode_cookie_value("hash%3A88%3A%22serialized-token%22%3B"),
             "serialized-token"
         );
+    }
+
+    #[test]
+    fn recovery_drops_only_the_stale_stored_session() {
+        let credentials = RequestCredentials {
+            headers: BTreeMap::from([
+                ("Cookie".into(), "PHPSESSID=stale".into()),
+                ("Accept".into(), "text/html".into()),
+            ]),
+            cookies: BTreeMap::from([("PHPSESSID".into(), "stale".into())]),
+            allowed_domains: ["hentai-foundry.com".into()].into_iter().collect(),
+            ..RequestCredentials::default()
+        };
+        let recovered = without_stored_session(&credentials);
+        assert!(recovered.cookies.is_empty());
+        assert!(!recovered
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("cookie")));
+        assert_eq!(
+            recovered.headers.get("Accept").map(String::as_str),
+            Some("text/html")
+        );
+        assert_eq!(recovered.allowed_domains, credentials.allowed_domains);
     }
 
     #[test]
