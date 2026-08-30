@@ -230,8 +230,14 @@ export function GridScreen({
     const webview = (window as any).picto?.webview;
     if (!webview?.onDragDropEvent) return;
 
-    const promise = webview.onDragDropEvent((event: { payload: { type: string; paths?: string[] } }) => {
-      const { type, paths } = event.payload;
+    const promise = webview.onDragDropEvent((event: { payload: {
+      type: string;
+      paths?: string[];
+      temporaryPaths?: string[];
+      sourceUrls?: string[];
+      error?: string;
+    } }) => {
+      const { type, paths, temporaryPaths = [], sourceUrls = [], error: dropError } = event.payload;
       // Completely ignore all drag events while any app-originated drag is active
       if (isNativeDragPending() || isDragActiveCheck() || isInternalDragOrigin()) return;
       if (gridScopeRef2.current.kind === 'media_matches') {
@@ -244,25 +250,42 @@ export function GridScreen({
       }
       if (type === 'enter') { setFileDragOver(true); return; }
       if (type === 'leave') { setFileDragOver(false); return; }
-      if (type !== 'drop' || !paths?.length) return;
+      if (type !== 'drop') return;
       setFileDragOver(false);
+      if (dropError) {
+        showErrorNotification({ title: 'Could not import dropped media', message: dropError });
+        return;
+      }
+      if (!paths?.length) return;
 
       const scope = gridScopeRef2.current;
       const folderId = scope.kind === 'folder' ? scope.folder_id : null;
+      const temporary = new Set(temporaryPaths);
+      const browserPaths = paths.filter((path) => temporary.has(path));
+      const localPaths = paths.filter((path) => !temporary.has(path));
 
       // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
-      if (paths.length === 1 && !mediaExt.test(paths[0])) {
+      if (localPaths.length === 1 && browserPaths.length === 0 && !mediaExt.test(localPaths[0])) {
         // Show import modal for folder drops
         store.set(folderImportModalAtom, {
           open: true,
-          path: paths[0],
+          path: localPaths[0],
           targetFolderId: folderId ?? null,
           lifecycle: manualImportParamsForScope(scope).lifecycle,
         });
-      } else {
-        void requestMediaImport(paths, manualImportParamsForScope(scope,
+        return;
+      }
+      if (localPaths.length > 0) {
+        void requestMediaImport(localPaths, manualImportParamsForScope(scope,
           folderId != null ? { parent_folder_id: folderId } : {}));
+      }
+      if (browserPaths.length > 0) {
+        void requestMediaImport(browserPaths, manualImportParamsForScope(scope, {
+          ...(folderId != null ? { parent_folder_id: folderId } : {}),
+          delete_after_ingest: true,
+          source_urls: sourceUrls,
+        }));
       }
     });
 

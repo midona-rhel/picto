@@ -138,9 +138,58 @@ const webview = {
     const drop = (e) => {
       e.preventDefault();
       dragCounter = 0;
-      const files = Array.from(e.dataTransfer?.files ?? []);
-      const paths = files.map((f) => webUtils.getPathForFile(f)).filter(Boolean);
-      handler({ payload: { type: 'drop', paths } });
+      const transfer = e.dataTransfer;
+      const files = Array.from(transfer?.files ?? []);
+      const readUrls = () => {
+        const candidates = [];
+        const downloadUrl = transfer?.getData('DownloadURL') ?? '';
+        if (downloadUrl) candidates.push(downloadUrl.split(':').slice(2).join(':'));
+        const html = transfer?.getData('text/html') ?? '';
+        const imageSource = html.match(/<img[^>]+src=["']([^"']+)/i)?.[1];
+        if (imageSource) candidates.push(imageSource.replaceAll('&amp;', '&'));
+        for (const type of ['text/uri-list', 'text/plain']) {
+          for (const value of (transfer?.getData(type) ?? '').split(/\r?\n/)) candidates.push(value);
+        }
+        return [...new Set(candidates.map((value) => value.trim()))]
+          .filter((value) => /^https?:\/\//i.test(value));
+      };
+      const urls = readUrls();
+
+      // Hide the overlay as soon as the browser completes the drop. In-memory
+      // browser files still need to be written before they can enter ingestion.
+      handler({ payload: { type: 'leave' } });
+      void (async () => {
+        try {
+          const entries = await Promise.all(files.map(async (file) => {
+            const path = webUtils.getPathForFile(file);
+            if (path) return { path, temporary: false, sourceUrl: null };
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            const materialized = await ipcRenderer.invoke('picto:drop:materialize', {
+              bytes,
+              name: file.name,
+              mimeType: file.type,
+            });
+            return { ...materialized, temporary: true };
+          }));
+          if (entries.length === 0 && urls[0]) {
+            const materialized = await ipcRenderer.invoke('picto:drop:materialize', { url: urls[0] });
+            entries.push({ ...materialized, temporary: true });
+          }
+          if (entries.length === 0) {
+            throw new Error('The dropped browser item did not contain an importable image.');
+          }
+          handler({
+            payload: {
+              type: 'drop',
+              paths: entries.map((entry) => entry.path),
+              temporaryPaths: entries.filter((entry) => entry.temporary).map((entry) => entry.path),
+              sourceUrls: [...new Set([...urls, ...entries.map((entry) => entry.sourceUrl).filter(Boolean)])],
+            },
+          });
+        } catch (error) {
+          handler({ payload: { type: 'drop', paths: [], error: error?.message ?? String(error) } });
+        }
+      })();
     };
 
     window.addEventListener('dragenter', dragEnter);
