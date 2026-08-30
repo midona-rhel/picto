@@ -100,6 +100,7 @@ export const AUTH_SITES = Object.freeze({
     clientSecret: '76b08c69cfb27f26d6161f9ab6d061a1',
     authorizeUrl: 'https://www.deviantart.com/oauth2/authorize',
     tokenUrl: 'https://www.deviantart.com/oauth2/token',
+    tokenAuth: 'basic',
     redirectUrl: 'https://mikf.github.io/gallery-dl/oauth-redirect.html',
     scope: 'browse user.manage',
     tokenField: 'refresh_token',

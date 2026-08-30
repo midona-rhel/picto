@@ -86,6 +86,22 @@ impl NativeSourceAdapter for DeviantArtSource {
                 )
                 .await?;
             apply_metadata(&mut post, response)?;
+            if post
+                .media
+                .iter()
+                .any(|media| media.stable_id.ends_with(":download"))
+            {
+                if let Some(original) = http
+                    .get_optional_json::<ApiContent>(
+                        download_url(&post.stable_id)?,
+                        &api_credentials(credentials, &access_token),
+                        cancel,
+                    )
+                    .await?
+                {
+                    apply_original_media(&mut post, original);
+                }
+            }
             Ok(post)
         })
     }
@@ -116,16 +132,14 @@ impl DeviantArtSource {
         }
 
         let response = match credential_key.as_deref() {
-            Some(refresh_token) => {
-                match request_access_token(http, credentials, Some(refresh_token), cancel).await {
-                    Ok(response) if response.has_access_token() => response,
-                    Ok(_) => request_access_token(http, credentials, None, cancel).await?,
-                    Err(error) if stored_login_can_fall_back(&error) => {
-                        request_access_token(http, credentials, None, cancel).await?
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
+            Some(refresh_token) => request_access_token(
+                http,
+                credentials,
+                Some(refresh_token),
+                cancel,
+            )
+            .await
+            .map_err(map_refresh_error)?,
             None => request_access_token(http, credentials, None, cancel).await?,
         };
         let access_token = response
@@ -171,13 +185,6 @@ async fn request_access_token(
         .map_err(|error| invalid_response(format!("invalid DeviantArt token: {error}")))
 }
 
-fn stored_login_can_fall_back(error: &SourceError) -> bool {
-    matches!(
-        error.kind,
-        SourceErrorKind::Authentication | SourceErrorKind::InvalidResponse
-    )
-}
-
 fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
     request
         .cursor
@@ -210,6 +217,16 @@ fn metadata_url(deviation_id: &str) -> Result<Url, SourceError> {
     url.query_pairs_mut()
         .append_pair("deviationids[0]", deviation_id)
         .append_pair("mature_content", "true");
+    Ok(url)
+}
+
+fn download_url(deviation_id: &str) -> Result<Url, SourceError> {
+    validate_deviation_id(deviation_id)?;
+    let mut url = Url::parse(&format!(
+        "https://www.deviantart.com/api/v1/oauth2/deviation/download/{deviation_id}"
+    ))
+    .expect("validated DeviantArt download URL");
+    url.query_pairs_mut().append_pair("mature_content", "true");
     Ok(url)
 }
 
@@ -263,7 +280,19 @@ fn normalize_deviation(
     let mut media = Vec::new();
     let mut seen = BTreeSet::new();
     if let Some(content) = deviation.content {
-        push_media(&mut media, &mut seen, &stable_id, &canonical_url, content);
+        let role = if deviation.is_downloadable {
+            "download"
+        } else {
+            "content"
+        };
+        push_media(
+            &mut media,
+            &mut seen,
+            &stable_id,
+            role,
+            &canonical_url,
+            content,
+        );
     }
     if let Some(video) = deviation
         .videos
@@ -275,6 +304,7 @@ fn normalize_deviation(
             &mut media,
             &mut seen,
             &stable_id,
+            "video",
             &canonical_url,
             video.into_content(),
         );
@@ -302,6 +332,7 @@ fn push_media(
     media: &mut Vec<crate::MediaDescriptor>,
     seen: &mut BTreeSet<String>,
     deviation_id: &str,
+    role: &str,
     canonical_url: &str,
     content: ApiContent,
 ) {
@@ -310,19 +341,47 @@ fn push_media(
         return;
     }
     let position = media.len() as u32;
-    let file_name = file_name_from_url(url)
+    let file_name = content
+        .filename
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| file_name_from_url(url))
         .unwrap_or_else(|| format!("deviantart_{deviation_id}_{position}.media"));
     media.push(
-        MediaDescriptorBuilder::new(
-            format!("deviantart:{deviation_id}:{position}"),
-            position,
-            url,
-        )
-        .canonical_url(canonical_url)
-        .file_name(file_name)
-        .expected_size(content.filesize)
-        .build(),
+        MediaDescriptorBuilder::new(format!("deviantart:{deviation_id}:{role}"), position, url)
+            .canonical_url(canonical_url)
+            .file_name(file_name)
+            .expected_size(content.filesize)
+            .build(),
     );
+}
+
+fn apply_original_media(post: &mut SourcePost, original: ApiContent) {
+    let mut replacement = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_media(
+        &mut replacement,
+        &mut seen,
+        &post.stable_id,
+        "content",
+        post.canonical_url.as_deref().unwrap_or_default(),
+        original,
+    );
+    let Some(mut original) = replacement.pop() else {
+        return;
+    };
+    if let Some(index) = post.media.iter().position(|media| {
+        media.stable_id.ends_with(":download") || media.stable_id.ends_with(":content")
+    }) {
+        original.stable_id.clone_from(&post.media[index].stable_id);
+        original.position = post.media[index].position;
+        post.media[index] = original;
+    } else {
+        for media in &mut post.media {
+            media.position = media.position.saturating_add(1);
+        }
+        original.position = 0;
+        post.media.insert(0, original);
+    }
 }
 
 fn apply_metadata(post: &mut SourcePost, response: MetadataResponse) -> Result<(), SourceError> {
@@ -487,20 +546,27 @@ fn authentication_required() -> SourceError {
     )
 }
 
+fn rejected_login() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::Authentication,
+        "DeviantArt rejected the saved login; reconnect the account",
+        false,
+    )
+}
+
+fn map_refresh_error(error: SourceError) -> SourceError {
+    match error.kind {
+        SourceErrorKind::Authentication | SourceErrorKind::InvalidResponse => rejected_login(),
+        _ => error,
+    }
+}
+
 #[derive(Deserialize)]
 struct AccessTokenResponse {
     #[serde(default)]
     access_token: Option<String>,
     #[serde(default)]
     expires_in: Option<u64>,
-}
-
-impl AccessTokenResponse {
-    fn has_access_token(&self) -> bool {
-        self.access_token
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-    }
 }
 
 #[derive(Deserialize)]
@@ -526,6 +592,8 @@ struct ApiDeviation {
     published_time: Option<Value>,
     author: ApiAuthor,
     #[serde(default)]
+    is_downloadable: bool,
+    #[serde(default)]
     content: Option<ApiContent>,
     #[serde(default)]
     videos: Option<Vec<ApiVideo>>,
@@ -541,6 +609,8 @@ struct ApiAuthor {
 #[derive(Deserialize)]
 struct ApiContent {
     src: String,
+    #[serde(default)]
+    filename: Option<String>,
     #[serde(default)]
     filesize: Option<u64>,
 }
@@ -565,6 +635,7 @@ impl ApiVideo {
     fn into_content(self) -> ApiContent {
         ApiContent {
             src: self.src,
+            filename: None,
             filesize: self.filesize,
         }
     }
@@ -669,33 +740,67 @@ mod tests {
     }
 
     #[test]
+    fn replaces_the_gallery_preview_with_the_downloadable_original() {
+        let response: GalleryResponse = serde_json::from_str(GALLERY).unwrap();
+        let mut post = normalize_gallery(&request(None), 0, response)
+            .unwrap()
+            .posts
+            .remove(0);
+        let video_url = post.media[1].url.clone();
+
+        apply_original_media(
+            &mut post,
+            ApiContent {
+                src: "https://images-wixmp.example/f/rendered-study-original.png".into(),
+                filename: Some("rendered-study-original.png".into()),
+                filesize: Some(40_000),
+            },
+        );
+
+        assert_eq!(post.media.len(), 2);
+        assert_eq!(post.media[0].stable_id, "deviantart:123456789:download");
+        assert_eq!(
+            post.media[0].url,
+            "https://images-wixmp.example/f/rendered-study-original.png"
+        );
+        assert_eq!(
+            post.media[0].file_name.as_deref(),
+            Some("rendered-study-original.png")
+        );
+        assert_eq!(post.media[0].expected_size, Some(40_000));
+        assert_eq!(post.media[1].url, video_url);
+    }
+
+    #[test]
+    fn original_download_request_is_scoped_to_one_valid_deviation() {
+        assert_eq!(
+            download_url("123456789").unwrap().as_str(),
+            "https://www.deviantart.com/api/v1/oauth2/deviation/download/123456789?mature_content=true"
+        );
+        assert!(download_url("../other").is_err());
+    }
+
+    #[test]
+    fn rejected_refresh_is_auth_but_transport_failures_remain_retryable() {
+        let rejected = map_refresh_error(SourceError::new(
+            SourceErrorKind::InvalidResponse,
+            "400 Bad Request",
+            false,
+        ));
+        assert_eq!(rejected.kind, SourceErrorKind::Authentication);
+        let network = map_refresh_error(SourceError::new(
+            SourceErrorKind::Network,
+            "offline",
+            true,
+        ));
+        assert_eq!(network.kind, SourceErrorKind::Network);
+        assert!(network.retryable);
+    }
+
+    #[test]
     fn cursor_is_bounded_and_applied_only_after_the_post() {
         assert_eq!(current_offset(&request(Some("42"))).unwrap(), 42);
         assert!(current_offset(&request(Some("1000000001"))).is_err());
         assert!(current_offset(&request(Some("next"))).is_err());
-    }
-
-    #[test]
-    fn optional_login_falls_back_only_for_rejected_token_exchanges() {
-        assert!(stored_login_can_fall_back(&SourceError::new(
-            SourceErrorKind::InvalidResponse,
-            "400 Bad Request",
-            false,
-        )));
-        assert!(stored_login_can_fall_back(&SourceError::new(
-            SourceErrorKind::Authentication,
-            "401 Unauthorized",
-            false,
-        )));
-        assert!(!stored_login_can_fall_back(&SourceError::new(
-            SourceErrorKind::Network,
-            "connection failed",
-            true,
-        )));
-        assert!(!stored_login_can_fall_back(&SourceError::new(
-            SourceErrorKind::RateLimited,
-            "retry later",
-            true,
-        )));
     }
 }

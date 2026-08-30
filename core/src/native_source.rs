@@ -452,10 +452,21 @@ fn shared_http_runtime() -> Arc<HttpRuntime> {
             request_timeout: std::time::Duration::from_secs(45),
             retries: 10,
         };
+        let deviantart = DomainPolicy {
+            minimum_interval: std::time::Duration::from_secs(2),
+            maximum_interval: std::time::Duration::from_secs(3),
+            media_minimum_interval: std::time::Duration::ZERO,
+            media_maximum_interval: std::time::Duration::ZERO,
+            request_timeout: std::time::Duration::from_secs(45),
+            retries: 3,
+        };
         Arc::new(
             HttpRuntime::with_domain_policies(
                 HttpPolicy::default(),
-                BTreeMap::from([("onlyfans.com".to_string(), onlyfans)]),
+                BTreeMap::from([
+                    ("onlyfans.com".to_string(), onlyfans),
+                    ("deviantart.com".to_string(), deviantart),
+                ]),
             )
             .expect("default native HTTP policy"),
         )

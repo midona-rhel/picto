@@ -23,7 +23,7 @@ function createBrowserWindowMock({ pageResult = false, cookies = [] } = {}) {
         loadURL: vi.fn(async (url) => { this.loadedUrl = url; }),
         on: (event, handler) => { this.webContents.listeners.set(event, handler); },
         send: (_channel, payload) => { this.messages.push(payload); },
-        getUserAgent: () => 'Mozilla/5.0 Electron/37.0.0 Picto/0.5.0',
+        getUserAgent: () => 'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36 Electron/37.0.0 Picto/0.5.0',
         setUserAgent: (value) => { this.userAgent = value; },
         setWindowOpenHandler: (handler) => { this.windowOpenHandler = handler; },
         getURL: () => this.loadedUrl ?? '',
@@ -187,6 +187,9 @@ describe('direct-site authentication', () => {
       minWidth: 760,
       minHeight: 640,
     });
+    expect(deviantartBrowser.instances[0].userAgent).toBe(
+      'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
+    );
     await deviantartSessions.cancelAuthSession();
 
     const patreonBrowser = createBrowserWindowMock();
@@ -271,7 +274,7 @@ describe('direct-site authentication', () => {
     'patreon', 'fanbox', 'subscribestar', 'idolcomplex',
     'sankaku', 'yandere', 'konachan', 'safebooru', 'e621', 'ehentai',
   ])(
-    'opens %s with a fresh unspoofed session and only storage access enabled',
+    'opens %s with a fresh browser-identical session and only storage access enabled',
     async (siteId) => {
       const browser = createBrowserWindowMock();
       const { sessions } = createHarness(browser);
@@ -279,7 +282,9 @@ describe('direct-site authentication', () => {
       await sessions.startAuthSession(siteId);
 
       const popup = browser.instances[0];
-      expect(popup.userAgent).toBeUndefined();
+      expect(popup.userAgent).toBe(
+        'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
+      );
       expect(popup.webContents.session.clearCache).toHaveBeenCalledOnce();
       expect(popup.webContents.session.clearStorageData).toHaveBeenCalledOnce();
       expect(popup.permissionCheckHandler(null, 'storage-access')).toBe(true);
@@ -404,7 +409,7 @@ describe('direct-site authentication', () => {
       site_id: 'fanbox',
       credential_type: 'cookies',
       cookies: { FANBOXSESSID: 'valid', __cf_bm: 'browser-session' },
-      headers: { 'user-agent': 'Mozilla/5.0 Electron/37.0.0 Picto/0.5.0' },
+      headers: { 'user-agent': 'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36' },
     }));
     expect(sessions.getAuthSessionState().status).toBe('completed');
   });
@@ -538,6 +543,16 @@ describe('direct-site authentication', () => {
     await settle();
 
     expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://www.deviantart.com/oauth2/token',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: `Basic ${Buffer.from('5388:76b08c69cfb27f26d6161f9ab6d061a1').toString('base64')}`,
+        }),
+      }),
+    );
+    const tokenRequest = fetchImpl.mock.calls[0][1];
+    expect(new URLSearchParams(tokenRequest.body).has('client_secret')).toBe(false);
     expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
       site_id: 'deviantart',
       credential_type: 'oauth_token',

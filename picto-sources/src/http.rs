@@ -151,6 +151,28 @@ impl HttpRuntime {
         })
     }
 
+    /// Fetch JSON for an optional provider resource. A 403/404 means the
+    /// resource is unavailable, not that the whole source session failed.
+    pub async fn get_optional_json<T: DeserializeOwned>(
+        &self,
+        url: Url,
+        credentials: &RequestCredentials,
+        cancel: &CancellationToken,
+    ) -> Result<Option<T>, SourceError> {
+        let response = self.get_with_inaccessible(url, credentials, cancel).await?;
+        if is_inaccessible(response.response.status()) {
+            return Ok(None);
+        }
+        response
+            .response
+            .json::<T>()
+            .await
+            .map(Some)
+            .map_err(|error| {
+                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+            })
+    }
+
     pub async fn get_text(
         &self,
         url: Url,

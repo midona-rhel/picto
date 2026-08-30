@@ -5,6 +5,7 @@
       "url": "https://www.deviantart.com/ArtistName/art/Rendered-Study-123456789",
       "title": "Rendered Study",
       "published_time": 1788048000,
+      "is_downloadable": true,
       "author": { "username": "ArtistName" },
       "content": {
         "src": "https://images-wixmp.example/f/rendered-study.png",

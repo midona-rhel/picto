@@ -348,14 +348,14 @@ fn push_media_candidate(
     fallback_id: Option<&str>,
 ) {
     let attributes = value.get("attributes").unwrap_or(value);
-    let url = ["download_url", "url", "large_url"]
-        .into_iter()
-        .find_map(|key| value_text(attributes, key))
+    let url = value_text(attributes, "download_url")
         .or_else(|| {
             attributes
                 .pointer("/image_urls/original")
                 .and_then(Value::as_str)
         })
+        .or_else(|| value_text(attributes, "url"))
+        .or_else(|| value_text(attributes, "large_url"))
         .or_else(|| {
             attributes
                 .pointer("/image_urls/large")
@@ -591,6 +591,23 @@ mod tests {
             .contains(&CanonicalTag::new("", "behind-the-scenes")));
         assert_eq!(post.notes.as_deref(), Some("Visible post prose"));
         assert!(validate_cursor(post.resume_cursor_after.as_deref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn original_image_beats_generic_and_large_urls() {
+        let value = serde_json::json!({
+            "attributes": {
+                "url": "https://cdn.example/preview.jpg",
+                "large_url": "https://cdn.example/large.jpg",
+                "image_urls": {
+                    "original": "https://cdn.example/original.png",
+                    "large": "https://cdn.example/image-large.jpg"
+                }
+            }
+        });
+        let mut candidates = Vec::new();
+        push_media_candidate(&mut candidates, &value, None);
+        assert_eq!(candidates[0].1, "https://cdn.example/original.png");
     }
 
     #[test]

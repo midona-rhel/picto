@@ -15,6 +15,15 @@ function formBody(values) {
   return new URLSearchParams(values).toString();
 }
 
+function sanitizeUserAgent(userAgent) {
+  const sanitized = String(userAgent || '')
+    .replace(/\s+Electron\/[^\s]+/gi, '')
+    .replace(/\s+Picto\/[^\s]+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return /\b(?:Chrome|Firefox|Safari)\//i.test(sanitized) ? sanitized : '';
+}
+
 function configureAuthPermissions(session) {
   const permissionAllowed = (permission) => STORAGE_ACCESS_PERMISSIONS.has(permission);
   session?.setPermissionCheckHandler?.((_contents, permission) => permissionAllowed(permission));
@@ -261,7 +270,7 @@ function createCookieAdapter(site) {
           return { status: 'active', message: `Log in with ${site.label} to continue.` };
         }
       }
-      const userAgent = String(contents.getUserAgent?.() ?? '').trim();
+      const userAgent = sanitizeUserAgent(contents.getUserAgent?.());
       return {
         credential: {
           site_category: site.id,
@@ -434,10 +443,22 @@ function createOAuthAdapter(site, fetchImpl) {
         const code = params.get('code');
         if (!code) throw new Error(`No code in ${site.label} OAuth callback.`);
         const redirectUri = site.redirectUrl ?? OAUTH_CALLBACK_URL;
+        const basicTokenAuth = site.tokenAuth === 'basic';
         const token = await responseJson(await fetchImpl(site.tokenUrl, {
           method: 'POST',
-          headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-          body: formBody({ client_id: clientId, client_secret: clientSecret, grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/x-www-form-urlencoded',
+            ...(basicTokenAuth
+              ? { Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}` }
+              : {}),
+          },
+          body: formBody({
+            ...(!basicTokenAuth ? { client_id: clientId, client_secret: clientSecret } : {}),
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+          }),
         }), `${site.label} token exchange`);
         const oauthToken = token[site.tokenField ?? 'access_token'];
         if (!oauthToken) throw new Error(`${site.label} token response was incomplete.`);
@@ -648,6 +669,8 @@ export function createAuthSessions({
         partition: site.sessionPartition ?? `persist:picto-auth-v1-${site.id}`,
       },
     });
+    const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());
+    if (userAgent) authWindow.webContents.setUserAgent(userAgent);
     configureAuthPermissions(authWindow.webContents.session);
     authWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) queueMicrotask(() => {

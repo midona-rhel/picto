@@ -48,7 +48,7 @@ impl NativeSourceAdapter for FanboxSource {
             let creator = normalize_creator(&request.query)?;
             let credentials = api_credentials(credentials);
             let url = listing_url(request.cursor.as_deref(), &creator)?;
-            let response = fanbox_json(http, url, &credentials, cancel).await?;
+            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
             normalize_listing(request, &creator, response)
         })
     }
@@ -65,29 +65,9 @@ impl NativeSourceAdapter for FanboxSource {
             let mut url =
                 Url::parse("https://api.fanbox.cc/post.info").expect("static FANBOX post endpoint");
             url.query_pairs_mut().append_pair("postId", &post.stable_id);
-            let response = fanbox_json(http, url, &credentials, cancel).await?;
+            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
             normalize_post(post, response)
         })
-    }
-}
-
-async fn fanbox_json(
-    http: &HttpRuntime,
-    url: Url,
-    credentials: &RequestCredentials,
-    cancel: &CancellationToken,
-) -> Result<Value, SourceError> {
-    match http
-        .get_json::<Value>(url.clone(), credentials, cancel)
-        .await
-    {
-        Err(error)
-            if error.kind == SourceErrorKind::Authentication && !credentials.cookies.is_empty() =>
-        {
-            let anonymous = api_credentials(&RequestCredentials::default());
-            http.get_json::<Value>(url, &anonymous, cancel).await
-        }
-        result => result,
     }
 }
 
