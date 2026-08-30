@@ -78,8 +78,15 @@ impl Default for PixivApi {
 }
 
 struct CachedToken {
+    refresh_token: String,
     value: String,
     refresh_after: Instant,
+}
+
+impl CachedToken {
+    fn is_valid_for(&self, refresh_token: &str) -> bool {
+        self.refresh_token == refresh_token && self.refresh_after > Instant::now()
+    }
 }
 
 impl PixivApi {
@@ -117,7 +124,7 @@ impl PixivApi {
         let mut cached = self.access_token.lock().await;
         if let Some(token) = cached
             .as_ref()
-            .filter(|token| token.refresh_after > Instant::now())
+            .filter(|token| token.is_valid_for(refresh_token))
         {
             return Ok(api_credentials(&token.value));
         }
@@ -170,6 +177,7 @@ impl PixivApi {
         let refresh_after =
             Instant::now() + Duration::from_secs(expires_in.saturating_sub(60).max(60));
         *cached = Some(CachedToken {
+            refresh_token: refresh_token.to_string(),
             value: token.clone(),
             refresh_after,
         });
@@ -501,5 +509,17 @@ mod tests {
         let batch = normalize_response("pixiv", &request(None), 0, response).unwrap();
         assert!(batch.posts[0].creator.is_none());
         assert!(batch.posts[0].media.is_empty());
+    }
+
+    #[test]
+    fn cached_access_tokens_are_scoped_to_the_current_login() {
+        let token = CachedToken {
+            refresh_token: "first-login".into(),
+            value: "access-token".into(),
+            refresh_after: Instant::now() + Duration::from_secs(60),
+        };
+
+        assert!(token.is_valid_for("first-login"));
+        assert!(!token.is_valid_for("replacement-login"));
     }
 }
