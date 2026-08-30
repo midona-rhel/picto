@@ -6,7 +6,7 @@ Active post-release implementation work:
 
 - [`PBI-618-native-onlyfans-coverage.md`](PBI-618-native-onlyfans-coverage.md)
 - [`PBI-619-duplicate-review-selection-stability.md`](PBI-619-duplicate-review-selection-stability.md)
-- [`PBI-620-restore-missing-subscription-providers.md`](PBI-620-restore-missing-subscription-providers.md)
+- [`PBI-620-certify-coomer-kemono-media-cdn.md`](PBI-620-certify-coomer-kemono-media-cdn.md)
 - [`PBI-621-subscription-merge-smart-names.md`](PBI-621-subscription-merge-smart-names.md)
 - [`PBI-622-minimum-text-search-length.md`](PBI-622-minimum-text-search-length.md)
 

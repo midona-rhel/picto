@@ -1,11 +1,12 @@
-# PBI-620: Restore Missing Subscription Providers
+# PBI-620: Certify Coomer And Kemono CDN Publication
 
 ## Observed Gap
 
 Pawchive, Coomer, and Kemono are native providers with fixture coverage. Pawchive has passed the
 durable live certification. Coomer and Kemono metadata endpoints were reachable on 2026-08-30, but
-their redirected media CDN endpoints did not return bytes within 20 seconds from the certification
-host, so complete live publication is not yet proven.
+their production-path runs did not return media bytes within the bounded 120-second certification
+window. Both runs cancelled cleanly without publishing false success, but complete live publication
+is not yet proven.
 
 ## Required Behavior
 
