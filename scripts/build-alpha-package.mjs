@@ -71,7 +71,6 @@ function prepareMacSigning() {
 
   const keychainPath = path.join(temporaryDirectory, 'picto-build.keychain-db');
   const keychainPassword = randomBytes(24).toString('hex');
-  const certificatePath = path.join(temporaryDirectory, 'picto-code-signing.crt');
 
   try {
     run('security', ['create-keychain', '-p', keychainPassword, keychainPath]);
@@ -88,23 +87,6 @@ function prepareMacSigning() {
       '/usr/bin/codesign',
     ]);
 
-    const certificate = run(
-      'security',
-      ['find-certificate', '-c', SIGNING_IDENTITY, '-p', keychainPath],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
-    );
-    writeFileSync(certificatePath, certificate.stdout, { mode: 0o600 });
-    run('security', [
-      'add-trusted-cert',
-      '-d',
-      '-r',
-      'trustRoot',
-      '-p',
-      'codeSign',
-      '-k',
-      keychainPath,
-      certificatePath,
-    ]);
     run('security', [
       'set-key-partition-list',
       '-S',
