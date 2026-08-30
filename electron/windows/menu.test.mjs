@@ -59,9 +59,42 @@ test('the log window is available in release menus and routes to the main window
   const view = template.find((item) => item.label === 'View');
   const logWindow = view.submenu.find((item) => item.label === 'Log Window');
 
-  expect(logWindow.accelerator).toBe('CmdOrCtrl+Shift+L');
+  expect(logWindow.accelerator).toBe('CmdOrCtrl+L');
   logWindow.click();
   expect(sendToMainWindow).toHaveBeenCalledWith('menu:toggle-diagnostics');
+});
+
+test('rebuilds native accelerators from the renderer shortcut registry', () => {
+  let template = null;
+  const manager = createMenuManager({
+    app: { name: 'Picto' },
+    Menu: {
+      buildFromTemplate: (next) => { template = next; return next; },
+      setApplicationMenu: () => {},
+    },
+    dialog: {},
+    isDev: false,
+    getCachedConfig: () => ({ pinnedLibraries: [], libraryHistory: [] }),
+    saveGlobalConfig: async () => {},
+    getCurrentLibraryRoot: () => null,
+    libraryDisplayName: (path) => path,
+    switchLibrary: async () => {},
+    openSettingsWindow: () => {},
+    openSubscriptionsWindow: () => {},
+    openLibraryManager: () => {},
+    sendToFocusedWindow: () => {},
+    sendToMainWindow: () => {},
+    platform: 'win32',
+  });
+
+  manager.setShortcutBindings({
+    'nav.allActive': 'Mod+Shift+1',
+    'view.toggleLogs': '',
+  });
+
+  const view = template.find((item) => item.label === 'View');
+  expect(view.submenu.find((item) => item.label === 'All Images').accelerator).toBe('CmdOrCtrl+Shift+1');
+  expect(view.submenu.find((item) => item.label === 'Log Window').accelerator).toBeUndefined();
 });
 
 test('library and file commands invoke live application workflows', () => {

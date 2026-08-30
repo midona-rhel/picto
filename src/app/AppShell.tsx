@@ -45,7 +45,12 @@ import { zoomController } from '../controllers/zoomController';
 import { gridController } from '../controllers/gridController';
 import { canGoBackAtom, canGoForwardAtom, goBack, goForward, navigateToNode, navigateWithGridFilters, pushSubscriptionsHistory } from '../state/navigationHistory';
 import { subscriptionsSelectionAtom, subscriptionsWorkspaceSnapshotAtom } from '../state/subscriptionsWorkspace';
-import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
+import {
+  formatKeysDisplay,
+  getShortcut,
+  matchesShortcutDef,
+  SHORTCUT_STATE_CHANGED_EVENT,
+} from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { ContextMenu, useContextMenu } from '../shared/ui/ContextMenu/ContextMenu';
 import type { MenuEntry } from '../shared/ui/ContextMenu/ContextMenu';
@@ -347,6 +352,13 @@ export function AppShell() {
     const openDiagnostics = () => setDiagnosticsOpen(true);
     window.addEventListener('picto:open-diagnostics', openDiagnostics);
     return () => window.removeEventListener('picto:open-diagnostics', openDiagnostics);
+  }, []);
+
+  useEffect(() => {
+    const sync = () => { void appController.syncApplicationMenuShortcuts(); };
+    sync();
+    window.addEventListener(SHORTCUT_STATE_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(SHORTCUT_STATE_CHANGED_EVENT, sync);
   }, []);
 
 

@@ -1,7 +1,13 @@
 import { listen } from '../platform/ipc';
+import { getApplicationMenuShortcutBindings } from '../shared/lib/shortcuts';
 import { openSettingsWindow } from '../platform/shellApi';
 
 export const appController = {
+  syncApplicationMenuShortcuts(): Promise<unknown> {
+    return (window as any).picto?.api?.setApplicationMenuShortcuts?.(
+      getApplicationMenuShortcutBindings(),
+    ) ?? Promise.resolve();
+  },
   openSettingsWindow(): Promise<void> {
     return openSettingsWindow();
   },

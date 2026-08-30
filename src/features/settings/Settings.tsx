@@ -1176,6 +1176,7 @@ export function Settings() {
       setKeyboardPreset(pendingKeyboardPreset);
       setAudioVisualizationMode(pendingAudioVisualization);
       persistShortcutState();
+      await appController.syncApplicationMenuShortcuts();
       savedSnapshotRef.current = {
         app: pendingAppSettings ? structuredClone(pendingAppSettings) : null,
         prefs: pendingViewPrefs ? structuredClone(pendingViewPrefs) : null,

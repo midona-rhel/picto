@@ -213,6 +213,7 @@ export function registerIpcHandlers({
   windowManager,
   libraryService,
   siteIconService,
+  menuManager,
   startNativeDrag,
   copyFiles,
   getAssociatedApplications,
@@ -596,6 +597,11 @@ export function registerIpcHandlers({
     // Their Picto equivalents already live in File/Help; the in-window menu
     // exposes the complete cross-platform application command surface.
     return process.platform === 'darwin' && items[0]?.label === app.name ? items.slice(1) : items;
+  });
+
+  handle('picto:application-menu:set-shortcuts', (_event, { bindings } = {}) => {
+    menuManager.setShortcutBindings(bindings);
+    return null;
   });
 
   handle('picto:application-menu:execute', (event, { id }) => {

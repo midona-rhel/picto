@@ -25,6 +25,7 @@ const api = {
   },
   getApplicationMenu: () => ipcRenderer.invoke('picto:application-menu:get'),
   executeApplicationMenuItem: (id) => ipcRenderer.invoke('picto:application-menu:execute', { id }),
+  setApplicationMenuShortcuts: (bindings) => ipcRenderer.invoke('picto:application-menu:set-shortcuts', { bindings }),
   restartMainWindow: () => ipcRenderer.invoke('picto:restart-main-window'),
 };
 

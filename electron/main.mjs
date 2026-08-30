@@ -313,6 +313,7 @@ registerIpcHandlers({
   windowManager,
   libraryService: libraryHost,
   siteIconService,
+  menuManager,
   startNativeDrag,
   copyFiles,
   getAssociatedApplications,

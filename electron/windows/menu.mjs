@@ -15,6 +15,19 @@ export function createMenuManager({
   sendToMainWindow,
   platform = process.platform,
 }) {
+  let shortcutBindings = {};
+
+  const accelerator = (id, fallback) => {
+    if (!Object.hasOwn(shortcutBindings, id)) return fallback;
+    const binding = shortcutBindings[id];
+    if (typeof binding !== 'string' || binding.length === 0) return undefined;
+    return binding
+      .split('+')
+      .filter(Boolean)
+      .map((part) => part === 'Mod' ? 'CmdOrCtrl' : part)
+      .join('+');
+  };
+
   function buildAppMenu() {
     const isMac = platform === 'darwin';
     const config = getCachedConfig();
@@ -78,7 +91,7 @@ export function createMenuManager({
               { type: 'separator' },
               {
                 label: 'Preferences…',
-                accelerator: 'CmdOrCtrl+,',
+                accelerator: accelerator('file.settings', 'CmdOrCtrl+,'),
                 click: () => openSettingsWindow(),
               },
               { type: 'separator' },
@@ -147,7 +160,7 @@ export function createMenuManager({
         submenu: [
           {
             label: 'Import Files…',
-            accelerator: 'CmdOrCtrl+I',
+            accelerator: accelerator('file.import', 'CmdOrCtrl+I'),
             click: () => sendToMainWindow('menu:import-files'),
           },
           {
@@ -158,19 +171,19 @@ export function createMenuManager({
           { type: 'separator' },
           {
             label: 'Export Originals…',
-            accelerator: 'CmdOrCtrl+E',
+            accelerator: accelerator('file.export', 'CmdOrCtrl+E'),
             click: () => sendToMainWindow('menu:export-basic'),
           },
           {
             label: 'Export As…',
-            accelerator: 'Shift+CmdOrCtrl+E',
+            accelerator: accelerator('file.exportAs', 'Shift+CmdOrCtrl+E'),
             click: () => sendToMainWindow('menu:export-advanced'),
           },
           ...(!isMac ? [
             { type: 'separator' },
             {
               label: 'Settings…',
-              accelerator: 'CmdOrCtrl+,',
+              accelerator: accelerator('file.settings', 'CmdOrCtrl+,'),
               click: () => openSettingsWindow(),
             },
           ] : []),
@@ -183,12 +196,12 @@ export function createMenuManager({
         submenu: [
           {
             label: 'Undo',
-            accelerator: 'CmdOrCtrl+Z',
+            accelerator: accelerator('edit.undo', 'CmdOrCtrl+Z'),
             click: () => sendToFocusedWindow('menu:undo'),
           },
           {
             label: 'Redo',
-            accelerator: isMac ? 'Shift+Cmd+Z' : 'Ctrl+Y',
+            accelerator: accelerator('edit.redo', isMac ? 'Shift+Cmd+Z' : 'Ctrl+Y'),
             click: () => sendToFocusedWindow('menu:redo'),
           },
           { type: 'separator' },
@@ -212,22 +225,22 @@ export function createMenuManager({
         submenu: [
           {
             label: 'All Images',
-            accelerator: 'CmdOrCtrl+1',
+            accelerator: accelerator('nav.allActive', 'CmdOrCtrl+1'),
             click: () => sendToFocusedWindow('menu:navigate', 'images'),
           },
           {
             label: 'Inbox',
-            accelerator: 'CmdOrCtrl+2',
+            accelerator: accelerator('nav.inbox', 'CmdOrCtrl+2'),
             click: () => sendToFocusedWindow('menu:navigate', 'review'),
           },
           {
             label: 'Untagged',
-            accelerator: 'CmdOrCtrl+3',
+            accelerator: accelerator('nav.untagged', 'CmdOrCtrl+3'),
             click: () => sendToFocusedWindow('menu:navigate', 'untagged'),
           },
           {
             label: 'Trash',
-            accelerator: 'CmdOrCtrl+4',
+            accelerator: accelerator('nav.trash', 'CmdOrCtrl+4'),
             click: () => sendToFocusedWindow('menu:navigate', 'trash'),
           },
           { type: 'separator' },
@@ -238,7 +251,7 @@ export function createMenuManager({
           { type: 'separator' },
           {
             label: 'Log Window',
-            accelerator: 'CmdOrCtrl+Shift+L',
+            accelerator: accelerator('view.toggleLogs', 'CmdOrCtrl+L'),
             click: () => sendToMainWindow('menu:toggle-diagnostics'),
           },
           { type: 'separator' },
@@ -274,5 +287,12 @@ export function createMenuManager({
     Menu.setApplicationMenu(menu);
   }
 
-  return { buildAppMenu };
+  function setShortcutBindings(bindings) {
+    shortcutBindings = bindings && typeof bindings === 'object' && !Array.isArray(bindings)
+      ? { ...bindings }
+      : {};
+    buildAppMenu();
+  }
+
+  return { buildAppMenu, setShortcutBindings };
 }

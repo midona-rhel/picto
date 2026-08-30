@@ -146,6 +146,7 @@ export type KeyboardPreset = 'us' | 'eu';
 
 const STORAGE_KEY = 'picto-keyboard-preset';
 const OVERRIDES_STORAGE_KEY = 'picto-shortcut-overrides';
+export const SHORTCUT_STATE_CHANGED_EVENT = 'picto:shortcut-state-changed';
 
 let activePreset: KeyboardPreset = (localStorage.getItem(STORAGE_KEY) as KeyboardPreset) || 'us';
 
@@ -207,6 +208,10 @@ export function reloadShortcutStateFromStorage(): void {
   shortcutOverrides = loadOverrides();
 }
 
+function announceShortcutStateChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(SHORTCUT_STATE_CHANGED_EVENT));
+}
+
 // Apply stored preset on load
 if (activePreset === 'eu') setKeyboardPreset('eu', false);
 
@@ -215,6 +220,7 @@ if (typeof window !== 'undefined') {
     if (event.storageArea !== localStorage) return;
     if (event.key !== STORAGE_KEY && event.key !== OVERRIDES_STORAGE_KEY && event.key !== null) return;
     reloadShortcutStateFromStorage();
+    announceShortcutStateChanged();
   });
 }
 
@@ -302,6 +308,25 @@ export function replaceShortcutOverrides(
 export function persistShortcutState(): void {
   localStorage.setItem(STORAGE_KEY, activePreset);
   localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(shortcutOverrides));
+  announceShortcutStateChanged();
+}
+
+const APPLICATION_MENU_SHORTCUT_IDS = [
+  'file.settings',
+  'file.import',
+  'file.export',
+  'file.exportAs',
+  'edit.undo',
+  'edit.redo',
+  'nav.allActive',
+  'nav.inbox',
+  'nav.untagged',
+  'nav.trash',
+  'view.toggleLogs',
+] as const;
+
+export function getApplicationMenuShortcutBindings(): Record<string, string> {
+  return Object.fromEntries(APPLICATION_MENU_SHORTCUT_IDS.map((id) => [id, getShortcut(id)?.keys ?? '']));
 }
 
 export interface ShortcutMatchOptions {
