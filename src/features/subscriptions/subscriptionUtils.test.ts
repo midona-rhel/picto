@@ -7,6 +7,7 @@ import type {
 import {
   describeSubscriptionState,
   getQueryAuthState,
+  getSubscriptionRunActionLabel,
   getSubscriptionRunTarget,
   isQueryCompleted,
   isGalleryImportJob,
@@ -147,6 +148,23 @@ describe('subscription run target', () => {
     const value = subscription([query({ id: 'one' }), query({ id: 'two' })]);
     value.posts_per_run = 40;
     expect(getSubscriptionRunTarget(value, 'manual-query')).toBe(40);
+  });
+});
+
+describe('subscription run action', () => {
+  it('continues a user-stopped run from its committed cursor', () => {
+    expect(getSubscriptionRunActionLabel({
+      ...subscription([query({ completed_initial_run: false })]),
+      run_status: 'cancelled',
+    })).toBe('Continue');
+  });
+
+  it('starts idle and terminally failed runs normally', () => {
+    expect(getSubscriptionRunActionLabel(subscription([query()]))).toBe('Run now');
+    expect(getSubscriptionRunActionLabel({
+      ...subscription([query({ last_failure_kind: 'network' })]),
+      run_status: 'failed',
+    })).toBe('Run now');
   });
 });
 

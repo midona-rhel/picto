@@ -21,6 +21,7 @@ import { QueryRow } from './QueryRow';
 import { SubscriptionCoverDisplay } from './SubscriptionCoverImage';
 import { StatusBadge } from './StatusBadge';
 import {
+  getSubscriptionRunActionLabel,
   describeSubscriptionState,
   describeFailure,
   formatRelativeTime,
@@ -154,6 +155,7 @@ export function SubscriptionDetail({
   const postsSkippedCount = progress?.posts_skipped ?? latestRun?.posts_skipped ?? 0;
   const filesDownloadedCount = progress?.files_downloaded ?? latestRun?.files_downloaded ?? 0;
   const runTarget = getSubscriptionRunTarget(subscription, progress?.mode);
+  const runActionLabel = getSubscriptionRunActionLabel(subscription);
   const runAdded = progress?.posts_added ?? 0;
   const runProgressPercent = runTarget > 0 ? Math.min(100, (runAdded / runTarget) * 100) : 0;
   const failedQuery = useMemo(() => subscription.queries.reduce<SubscriptionQueryInfo | null>((latest, query) => {
@@ -239,7 +241,7 @@ export function SubscriptionDetail({
             </ActionButton>
           ) : (
             <ActionButton variant="primary" pending={busy} disabled={subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
-              <IconPlayerPlay size={14} /> Run now
+              <IconPlayerPlay size={14} /> {runActionLabel}
             </ActionButton>
           )}
           <KbdTooltip label={subscription.paused

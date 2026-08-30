@@ -28,6 +28,10 @@ export function getSubscriptionRunTarget(
   return perQuery * Math.max(1, activeQueries);
 }
 
+export function getSubscriptionRunActionLabel(subscription: SubscriptionInfo): 'Continue' | 'Run now' {
+  return subscription.run_status === 'cancelled' ? 'Continue' : 'Run now';
+}
+
 export function formatRelativeTime(value: string | null | undefined): string {
   if (!value) return 'Never';
 
