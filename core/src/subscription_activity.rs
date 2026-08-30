@@ -898,4 +898,110 @@ mod tests {
         assert_eq!(progress.counts.downloaded, 0);
         assert_eq!(progress.counts.ingested, 0);
     }
+
+    #[test]
+    fn exact_hash_is_excluded_from_download_progress_before_ingest() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Exact duplicate".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-30T00:00:00Z")
+            .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::CanonicalIngest,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (7001, 'existing-hash', '/tmp/existing', 'image/png', 1)",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:00:01Z")
+            .unwrap();
+        let query = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-30T00:00:02Z",
+        )
+        .unwrap()
+        .unwrap();
+        let ids = crate::library_subscription_state::record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: "e621".into(),
+                post_key: "duplicate-post".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "duplicate-media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-30T00:00:03Z",
+        )
+        .unwrap();
+        assert!(crate::library_subscription_state::mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["duplicate-media"],
+            "existing-hash",
+            "/tmp/duplicate",
+            1,
+            "2026-08-30T00:00:04Z",
+        )
+        .unwrap());
+
+        let progress = current_progress_library(&application, subscription_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(progress.counts.posts_traversed, 1);
+        assert_eq!(progress.counts.fetched, 1);
+        assert_eq!(progress.counts.downloaded, 0);
+        assert_eq!(progress.counts.ingested, 0);
+        let state = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(connection.query_row(
+                        "SELECT file.state
+                         FROM source_file_attempt file
+                         JOIN source_post_attempt attempt USING(attempt_id)
+                         WHERE attempt.run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get::<_, String>(0),
+                    )?)
+                },
+            )
+            .unwrap();
+        assert_eq!(state, "duplicate");
+    }
 }
