@@ -18,8 +18,7 @@ use url::Url;
 
 use crate::{DownloadedMedia, MediaDescriptor, RequestCredentials, SourceError, SourceErrorKind};
 
-const DEFAULT_BROWSER_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0";
+const DEFAULT_USER_AGENT: &str = "Picto/0.6.0-alpha (+https://github.com/midona-rhel/picto)";
 
 #[derive(Debug, Clone)]
 pub struct HttpPolicy {
@@ -574,10 +573,7 @@ fn credential_headers(
         );
     }
     if !headers.contains_key(USER_AGENT) {
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_static(DEFAULT_BROWSER_USER_AGENT),
-        );
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_USER_AGENT));
     }
     Ok(headers)
 }
@@ -710,7 +706,7 @@ mod tests {
             third_party
                 .get(USER_AGENT)
                 .and_then(|value| value.to_str().ok()),
-            Some(DEFAULT_BROWSER_USER_AGENT)
+            Some(DEFAULT_USER_AGENT)
         );
     }
 

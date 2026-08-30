@@ -27,7 +27,7 @@ impl NativeSourceAdapter for FanboxSource {
             display_name: "pixivFANBOX",
             domain: "fanbox.cc",
             partitions: &["posts"],
-            anonymous: true,
+            anonymous: false,
         }
     }
 
@@ -80,6 +80,17 @@ fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
         .headers
         .entry("Origin".to_string())
         .or_insert_with(|| "https://www.fanbox.cc".to_string());
+    for (name, value) in [
+        ("Referer", "https://www.fanbox.cc/"),
+        ("Sec-Fetch-Dest", "empty"),
+        ("Sec-Fetch-Mode", "cors"),
+        ("Sec-Fetch-Site", "same-site"),
+    ] {
+        credentials
+            .headers
+            .entry(name.to_string())
+            .or_insert_with(|| value.to_string());
+    }
     credentials
 }
 
@@ -501,6 +512,27 @@ fn invalid_response(message: impl Into<String>) -> SourceError {
 mod tests {
     use super::*;
     use crate::{CanonicalTag, SourcePartition};
+
+    #[test]
+    fn requires_login_and_preserves_the_fanbox_browser_request_context() {
+        assert!(!adapter().descriptor().anonymous);
+        let credentials = api_credentials(&RequestCredentials::default());
+        assert_eq!(
+            credentials.headers.get("Origin").map(String::as_str),
+            Some("https://www.fanbox.cc")
+        );
+        assert_eq!(
+            credentials.headers.get("Referer").map(String::as_str),
+            Some("https://www.fanbox.cc/")
+        );
+        assert_eq!(
+            credentials
+                .headers
+                .get("Sec-Fetch-Site")
+                .map(String::as_str),
+            Some("same-site")
+        );
+    }
 
     fn request() -> DiscoveryRequest {
         DiscoveryRequest {

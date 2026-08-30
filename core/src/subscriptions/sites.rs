@@ -150,8 +150,8 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
+        auth_required_for_full_access: true,
+        auth_strictly_required: true,
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
@@ -203,7 +203,7 @@ pub static SITES: &[SiteEntry] = &[
         supports_query: false,
         supports_account: true,
         auth_required_for_full_access: true,
-        auth_strictly_required: false,
+        auth_strictly_required: true,
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
@@ -1273,10 +1273,10 @@ mod tests {
     }
 
     #[test]
-    fn twitter_runs_anonymously_but_still_offers_cookie_login() {
+    fn twitter_requires_the_direct_site_cookie_session() {
         let twitter = site_by_id("twitter").unwrap();
-        assert!(!twitter.auth_required_for_full_access);
-        assert!(!twitter.auth_strictly_required);
+        assert!(twitter.auth_required_for_full_access);
+        assert!(twitter.auth_strictly_required);
         assert_eq!(twitter.credential_types, COOKIE_CREDENTIAL_TYPES);
     }
 

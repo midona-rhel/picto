@@ -14,8 +14,8 @@ use crate::{
 const DOMAIN: &str = "x.com";
 const CURSOR: OpaqueCursor = OpaqueCursor::new(2_048);
 const PUBLIC_BEARER: &str = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
-const USER_LOOKUP_OPERATION: &str = "Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName";
-const USER_TIMELINE_OPERATION: &str = "SXVCYB8XHSS25nzIljNtZA/UserTweets";
+const USER_LOOKUP_OPERATION: &str = "ck5KkZ8t5cOmoLssopN99Q/UserByScreenName";
+const USER_MEDIA_OPERATION: &str = "jCRhbOzdgOHp6u9H4g2tEg/UserMedia";
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     TwitterSource
@@ -30,7 +30,7 @@ impl NativeSourceAdapter for TwitterSource {
             display_name: "Twitter / X",
             domain: DOMAIN,
             partitions: &["media"],
-            anonymous: true,
+            anonymous: false,
         }
     }
 
@@ -63,15 +63,7 @@ impl NativeSourceAdapter for TwitterSource {
                 });
             }
 
-            let (api_credentials, guest_token) = api_credentials(
-                credentials,
-                state
-                    .as_ref()
-                    .and_then(|state| state.guest_token.as_deref()),
-                http,
-                cancel,
-            )
-            .await?;
+            let api_credentials = api_credentials(credentials)?;
             let user_id = match state.as_ref() {
                 Some(state) => state.user_id.clone(),
                 None => {
@@ -93,24 +85,12 @@ impl NativeSourceAdapter for TwitterSource {
                     cancel,
                 )
                 .await?;
-            normalize_timeline(
-                request,
-                &username,
-                &user_id,
-                guest_token,
-                state.as_ref(),
-                &response,
-            )
+            normalize_timeline(request, &username, &user_id, state.as_ref(), &response)
         })
     }
 }
 
-async fn api_credentials(
-    credentials: &RequestCredentials,
-    persisted_guest_token: Option<&str>,
-    http: &HttpRuntime,
-    cancel: &CancellationToken,
-) -> Result<(RequestCredentials, Option<String>), SourceError> {
+fn api_credentials(credentials: &RequestCredentials) -> Result<RequestCredentials, SourceError> {
     let mut api = credentials.clone();
     api.allowed_domains.insert(DOMAIN.to_string());
     api.headers
@@ -123,72 +103,33 @@ async fn api_credentials(
     api.headers
         .insert("x-twitter-client-language".to_string(), "en".to_string());
 
-    if api.cookies.contains_key("auth_token") {
-        let csrf = api
-            .cookies
-            .get("ct0")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                SourceError::new(
-                    SourceErrorKind::Authentication,
-                    "Twitter / X session is missing its CSRF cookie",
-                    false,
-                )
-            })?;
-        api.headers
-            .insert("x-csrf-token".to_string(), csrf.to_string());
-        api.headers.insert(
-            "x-twitter-auth-type".to_string(),
-            "OAuth2Session".to_string(),
-        );
-        return Ok((api, None));
-    }
-
-    let guest_token = persisted_guest_token
-        .map(str::trim)
-        .filter(|value| valid_numeric_token(value))
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            api.cookies
-                .get("gt")
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|value| valid_numeric_token(value))
-                .map(ToOwned::to_owned)
-        });
-    let guest_token = match guest_token {
-        Some(token) => token,
-        None => activate_guest(&api, http, cancel).await?,
-    };
-    api.headers
-        .insert("x-guest-token".to_string(), guest_token.clone());
-    Ok((api, Some(guest_token)))
-}
-
-async fn activate_guest(
-    credentials: &RequestCredentials,
-    http: &HttpRuntime,
-    cancel: &CancellationToken,
-) -> Result<String, SourceError> {
-    let raw = http
-        .post_form_text(
-            Url::parse("https://api.x.com/1.1/guest/activate.json")
-                .expect("static Twitter guest URL"),
-            credentials,
-            &BTreeMap::new(),
-            cancel,
-        )
-        .await?;
-    let response: GuestTokenResponse = serde_json::from_str(&raw)
-        .map_err(|error| invalid_response(format!("invalid Twitter guest token: {error}")))?;
-    if !valid_numeric_token(&response.guest_token) {
-        return Err(invalid_response(
-            "Twitter / X returned an invalid guest token",
+    if !api.cookies.contains_key("auth_token") {
+        return Err(SourceError::new(
+            SourceErrorKind::Authentication,
+            "Twitter / X requires a signed-in direct-site session",
+            false,
         ));
     }
-    Ok(response.guest_token)
+    let csrf = api
+        .cookies
+        .get("ct0")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            SourceError::new(
+                SourceErrorKind::Authentication,
+                "Twitter / X session is missing its CSRF cookie",
+                false,
+            )
+        })?;
+    api.headers
+        .insert("x-csrf-token".to_string(), csrf.to_string());
+    api.headers.insert(
+        "x-twitter-auth-type".to_string(),
+        "OAuth2Session".to_string(),
+    );
+    Ok(api)
 }
 
 fn user_lookup_url(username: &str) -> Url {
@@ -200,7 +141,7 @@ fn user_lookup_url(username: &str) -> Url {
     graphql_url(
         USER_LOOKUP_OPERATION,
         variables,
-        common_features(),
+        user_features(),
         Some(field_toggles),
     )
 }
@@ -220,9 +161,9 @@ fn user_timeline_url(user_id: &str, cursor: Option<&str>) -> Url {
         variables["cursor"] = Value::String(cursor.to_string());
     }
     graphql_url(
-        USER_TIMELINE_OPERATION,
+        USER_MEDIA_OPERATION,
         variables,
-        common_features(),
+        timeline_features(),
         Some(json!({"withArticlePlainText": false})),
     )
 }
@@ -248,21 +189,59 @@ fn graphql_url(
     url
 }
 
-fn common_features() -> Value {
+fn user_features() -> Value {
     json!({
         "hidden_profile_subscriptions_enabled": true,
+        "payments_enabled": false,
+        "rweb_xchat_enabled": false,
+        "profile_label_improvements_pcf_label_in_post_enabled": true,
+        "rweb_tipjar_consumption_enabled": true,
+        "verified_phone_label_enabled": false,
+        "highlights_tweets_tab_ui_enabled": true,
+        "responsive_web_twitter_article_notes_tab_enabled": true,
+        "subscriptions_feature_can_gift_premium": true,
+        "creator_subscriptions_tweet_preview_api_enabled": true,
+        "responsive_web_graphql_timeline_navigation_enabled": true,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false
+    })
+}
+
+fn timeline_features() -> Value {
+    json!({
+        "rweb_video_screen_enabled": false,
+        "payments_enabled": false,
+        "rweb_xchat_enabled": false,
         "profile_label_improvements_pcf_label_in_post_enabled": true,
         "rweb_tipjar_consumption_enabled": true,
         "verified_phone_label_enabled": false,
         "creator_subscriptions_tweet_preview_api_enabled": true,
         "responsive_web_graphql_timeline_navigation_enabled": true,
         "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
+        "premium_content_api_read_enabled": false,
         "communities_web_enable_tweet_community_results_fetch": true,
+        "c9s_tweet_anatomy_moderator_badge_enabled": true,
+        "responsive_web_grok_analyze_button_fetch_trends_enabled": false,
+        "responsive_web_grok_analyze_post_followups_enabled": true,
+        "responsive_web_jetfuel_frame": true,
+        "responsive_web_grok_share_attachment_enabled": true,
+        "articles_preview_enabled": true,
         "responsive_web_edit_tweet_api_enabled": true,
         "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
         "view_counts_everywhere_api_enabled": true,
         "longform_notetweets_consumption_enabled": true,
+        "responsive_web_twitter_article_tweet_consumption_enabled": true,
+        "tweet_awards_web_tipping_enabled": false,
+        "responsive_web_grok_show_grok_translated_post": false,
+        "responsive_web_grok_analysis_button_from_backend": true,
+        "creator_subscriptions_quote_tweet_preview_enabled": false,
+        "freedom_of_speech_not_reach_fetch_enabled": true,
+        "standardized_nudges_misinfo": true,
         "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
+        "longform_notetweets_rich_text_read_enabled": true,
+        "longform_notetweets_inline_media_enabled": true,
+        "responsive_web_grok_image_annotation_enabled": true,
+        "responsive_web_grok_imagine_annotation_enabled": true,
+        "responsive_web_grok_community_note_auto_translation_is_enabled": false,
         "responsive_web_enhance_cards_enabled": false
     })
 }
@@ -271,7 +250,6 @@ fn normalize_timeline(
     request: &DiscoveryRequest,
     query_username: &str,
     user_id: &str,
-    guest_token: Option<String>,
     state: Option<&CursorState>,
     response: &Value,
 ) -> Result<DiscoveryBatch, SourceError> {
@@ -312,7 +290,6 @@ fn normalize_timeline(
                     user_id: user_id.to_string(),
                     timeline_cursor,
                     page_index,
-                    guest_token,
                 })?,
             )
         })
@@ -622,7 +599,6 @@ struct CursorState {
     user_id: String,
     timeline_cursor: Option<String>,
     page_index: u16,
-    guest_token: Option<String>,
 }
 
 fn encode_cursor(state: &CursorState) -> Result<String, SourceError> {
@@ -646,10 +622,6 @@ fn validate_cursor_state(state: &CursorState) -> Result<(), SourceError> {
         || state.timeline_cursor.as_deref().is_some_and(|value| {
             value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control)
         })
-        || state
-            .guest_token
-            .as_deref()
-            .is_some_and(|value| !valid_numeric_token(value))
     {
         return Err(invalid_cursor());
     }
@@ -676,11 +648,6 @@ fn invalid_cursor() -> SourceError {
     )
 }
 
-#[derive(Deserialize)]
-struct GuestTokenResponse {
-    guest_token: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +663,31 @@ mod tests {
             cursor,
             page_size: 1,
         }
+    }
+
+    #[test]
+    fn requires_a_complete_direct_site_session_before_network_access() {
+        let missing = api_credentials(&RequestCredentials::default()).unwrap_err();
+        assert_eq!(missing.kind, SourceErrorKind::Authentication);
+
+        let mut incomplete = RequestCredentials::default();
+        incomplete
+            .cookies
+            .insert("auth_token".to_string(), "session".to_string());
+        let missing_csrf = api_credentials(&incomplete).unwrap_err();
+        assert_eq!(missing_csrf.kind, SourceErrorKind::Authentication);
+
+        incomplete
+            .cookies
+            .insert("ct0".to_string(), "csrf".to_string());
+        let complete = api_credentials(&incomplete).unwrap();
+        assert_eq!(
+            complete
+                .headers
+                .get("x-twitter-auth-type")
+                .map(String::as_str),
+            Some("OAuth2Session")
+        );
     }
 
     #[test]
@@ -717,15 +709,7 @@ mod tests {
         assert_eq!(parse_user_id(&user).unwrap(), "783214");
 
         let media: Value = serde_json::from_str(MEDIA).unwrap();
-        let batch = normalize_timeline(
-            &request(None),
-            "OpenAI",
-            "783214",
-            Some("12345".to_string()),
-            None,
-            &media,
-        )
-        .unwrap();
+        let batch = normalize_timeline(&request(None), "OpenAI", "783214", None, &media).unwrap();
         assert_eq!(batch.posts.len(), 1);
         let post = &batch.posts[0];
         assert_eq!(post.stable_id, "1960123456789012345");
@@ -741,7 +725,6 @@ mod tests {
             user_id: "783214".to_string(),
             timeline_cursor: Some("DAABCgAB".to_string()),
             page_index: 4,
-            guest_token: Some("12345".to_string()),
         };
         let encoded = encode_cursor(&state).unwrap();
         assert_eq!(decode_cursor(&encoded).unwrap(), state);
@@ -758,7 +741,7 @@ mod tests {
             .unwrap();
         entries.insert(1, entries[0].clone());
         let batch =
-            normalize_timeline(&request(None), "OpenAI", "783214", None, None, &response).unwrap();
+            normalize_timeline(&request(None), "OpenAI", "783214", None, &response).unwrap();
         assert_eq!(batch.posts.len(), 1);
         let state = decode_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
         assert_eq!(state.page_index, 1);
