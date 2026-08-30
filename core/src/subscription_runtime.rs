@@ -1475,6 +1475,9 @@ mod tests {
             assert_eq!(rerun.runs[0].status, "succeeded");
             assert_eq!(rerun.runs[0].counts.posts_added, 0);
             assert_eq!(rerun.runs[0].counts.posts_skipped, 1);
+            assert_eq!(rerun.runs[0].counts.fetched, 1);
+            assert_eq!(rerun.runs[0].counts.downloaded, 0);
+            assert_eq!(rerun.runs[0].counts.ingested, 0);
         }
     }
 
