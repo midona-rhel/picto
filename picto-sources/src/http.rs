@@ -33,13 +33,18 @@ pub struct HttpPolicy {
 pub struct DomainPolicy {
     pub minimum_interval: Duration,
     pub maximum_interval: Duration,
+    pub media_minimum_interval: Duration,
+    pub media_maximum_interval: Duration,
     pub request_timeout: Duration,
     pub retries: u32,
 }
 
 impl DomainPolicy {
     fn validate(&self) -> Result<(), SourceError> {
-        if self.minimum_interval > self.maximum_interval || self.request_timeout.is_zero() {
+        if self.minimum_interval > self.maximum_interval
+            || self.media_minimum_interval > self.media_maximum_interval
+            || self.request_timeout.is_zero()
+        {
             return Err(SourceError::new(
                 SourceErrorKind::InvalidQuery,
                 "invalid domain HTTP policy",
@@ -101,6 +106,8 @@ impl HttpRuntime {
         let default_policy = DomainPolicy {
             minimum_interval: policy.minimum_interval,
             maximum_interval: policy.maximum_interval,
+            media_minimum_interval: policy.minimum_interval,
+            media_maximum_interval: policy.maximum_interval,
             request_timeout: policy.request_timeout,
             retries: policy.retries,
         };
@@ -372,10 +379,12 @@ impl HttpRuntime {
             })?
             .to_string();
         let policy = self.policy_for_domain(&domain);
+        let (minimum_interval, maximum_interval) = request_interval(purpose, policy);
         let retries = retry_count(purpose, policy);
         let mut last_error = None;
         for attempt in 0..=retries {
-            self.wait_for_domain(&domain, policy, cancel).await?;
+            self.wait_for_domain(&domain, minimum_interval, maximum_interval, cancel)
+                .await?;
             let permit = tokio::select! {
                 _ = cancel.cancelled() => {
                     return Err(SourceError::new(SourceErrorKind::Cancelled, "request cancelled", true));
@@ -385,7 +394,7 @@ impl HttpRuntime {
                 })?
             };
             let headers = credential_headers(credentials, &domain, request_headers)?;
-            trace_request(&domain, method.as_str(), attempt, policy.minimum_interval);
+            trace_request(&domain, method.as_str(), attempt, minimum_interval);
             let response = tokio::select! {
                 _ = cancel.cancelled() => {
                     return Err(SourceError::new(SourceErrorKind::Cancelled, "request cancelled", true));
@@ -467,10 +476,11 @@ impl HttpRuntime {
     async fn wait_for_domain(
         &self,
         domain: &str,
-        policy: &DomainPolicy,
+        minimum_interval: Duration,
+        maximum_interval: Duration,
         cancel: &CancellationToken,
     ) -> Result<(), SourceError> {
-        let delay = random_duration(policy.minimum_interval, policy.maximum_interval);
+        let delay = random_duration(minimum_interval, maximum_interval);
         let wait = {
             let mut schedule = self.next_request_by_domain.lock().await;
             let now = Instant::now();
@@ -494,6 +504,13 @@ impl HttpRuntime {
                 })
             })
             .unwrap_or(&self.default_policy)
+    }
+}
+
+fn request_interval(purpose: RequestPurpose, policy: &DomainPolicy) -> (Duration, Duration) {
+    match purpose {
+        RequestPurpose::Metadata => (policy.minimum_interval, policy.maximum_interval),
+        RequestPurpose::Media => (policy.media_minimum_interval, policy.media_maximum_interval),
     }
 }
 
@@ -640,6 +657,8 @@ mod tests {
             DomainPolicy {
                 minimum_interval: Duration::from_secs(2),
                 maximum_interval: Duration::from_secs(1),
+                media_minimum_interval: Duration::ZERO,
+                media_maximum_interval: Duration::ZERO,
                 request_timeout: Duration::from_secs(30),
                 retries: 1,
             },
@@ -652,6 +671,8 @@ mod tests {
         let policy = DomainPolicy {
             minimum_interval: Duration::ZERO,
             maximum_interval: Duration::ZERO,
+            media_minimum_interval: Duration::ZERO,
+            media_maximum_interval: Duration::ZERO,
             request_timeout: Duration::from_secs(45),
             retries: 3,
         };
@@ -664,6 +685,8 @@ mod tests {
         let override_policy = DomainPolicy {
             minimum_interval: Duration::ZERO,
             maximum_interval: Duration::ZERO,
+            media_minimum_interval: Duration::ZERO,
+            media_maximum_interval: Duration::ZERO,
             request_timeout: Duration::from_secs(30),
             retries: 2,
         };
@@ -680,6 +703,26 @@ mod tests {
         assert_eq!(
             runtime.policy_for_domain("notonlyfans.com"),
             &runtime.default_policy
+        );
+    }
+
+    #[test]
+    fn metadata_and_media_use_independent_domain_intervals() {
+        let policy = DomainPolicy {
+            minimum_interval: Duration::from_millis(500),
+            maximum_interval: Duration::from_millis(500),
+            media_minimum_interval: Duration::ZERO,
+            media_maximum_interval: Duration::ZERO,
+            request_timeout: Duration::from_secs(45),
+            retries: 3,
+        };
+        assert_eq!(
+            request_interval(RequestPurpose::Metadata, &policy),
+            (Duration::from_millis(500), Duration::from_millis(500))
+        );
+        assert_eq!(
+            request_interval(RequestPurpose::Media, &policy),
+            (Duration::ZERO, Duration::ZERO)
         );
     }
 

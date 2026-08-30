@@ -302,10 +302,12 @@ fn shared_http_runtime() -> Arc<HttpRuntime> {
     static HTTP: OnceLock<Arc<HttpRuntime>> = OnceLock::new();
     Arc::clone(HTTP.get_or_init(|| {
         let onlyfans = DomainPolicy {
-            minimum_interval: std::time::Duration::ZERO,
-            maximum_interval: std::time::Duration::ZERO,
+            minimum_interval: std::time::Duration::from_millis(500),
+            maximum_interval: std::time::Duration::from_millis(500),
+            media_minimum_interval: std::time::Duration::ZERO,
+            media_maximum_interval: std::time::Duration::ZERO,
             request_timeout: std::time::Duration::from_secs(45),
-            retries: 3,
+            retries: 10,
         };
         Arc::new(
             HttpRuntime::with_domain_policies(
