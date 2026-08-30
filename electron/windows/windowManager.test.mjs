@@ -1,7 +1,11 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { resolveThemeInfo, windowResizePersistenceEvent } from './windowManager.mjs';
+import {
+  calcDetailWindowAspectRatio,
+  resolveThemeInfo,
+  windowResizePersistenceEvent,
+} from './windowManager.mjs';
 
 test('resolves the globally persisted theme before creating a window', () => {
   expect(resolveThemeInfo('purple')).toEqual({ theme: 'purple', bgColor: '#1e1526' });
@@ -16,6 +20,16 @@ test('persists bounds only after native resize settles on macOS and Windows', ()
 
 test('uses the debounced continuous resize fallback on Linux', () => {
   expect(windowResizePersistenceEvent('linux')).toBe('resize');
+});
+
+test('uses the opened media aspect ratio for detail windows', () => {
+  expect(calcDetailWindowAspectRatio(3840, 2160)).toBeCloseTo(16 / 9);
+  expect(calcDetailWindowAspectRatio('1200', '1600')).toBe(0.75);
+  expect(calcDetailWindowAspectRatio(0, 1600)).toBeNull();
+  expect(calcDetailWindowAspectRatio(undefined, undefined)).toBeNull();
+
+  const source = readFileSync(resolve(process.cwd(), 'electron/windows/windowManager.mjs'), 'utf8');
+  expect(source).toContain('win.setAspectRatio(detailAspectRatio)');
 });
 
 test('keeps settings on the native macOS resize path', () => {

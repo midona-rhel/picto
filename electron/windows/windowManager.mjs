@@ -103,6 +103,15 @@ export function calcDetailWindowSize(screen, imgW, imgH) {
   return { width, height };
 }
 
+export function calcDetailWindowAspectRatio(imgW, imgH) {
+  const width = Number(imgW);
+  const height = Number(imgH);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return width / height;
+}
+
 export function createWindowManager({
   BrowserWindow,
   screen,
@@ -194,6 +203,7 @@ export function createWindowManager({
     width = MAIN_WINDOW_DEFAULT_WIDTH,
     height = MAIN_WINDOW_DEFAULT_HEIGHT,
     detailItemId = null,
+    detailAspectRatio = null,
   ) {
     const isSettings = label === 'settings';
     const isSubscriptions = label === 'subscriptions';
@@ -290,6 +300,12 @@ export function createWindowManager({
     }
 
     const win = new BrowserWindow(winOpts);
+
+    // Let the OS own live resizing so the detail surface stays exactly aligned
+    // with the media without renderer-side resize work or intermediate reflow.
+    if (isDetail && detailAspectRatio != null) {
+      win.setAspectRatio(detailAspectRatio);
+    }
 
     // Settings owns its close control, but retaining the hidden native frame
     // gives macOS its normal, forgiving edge and corner resize hit areas.
@@ -586,6 +602,7 @@ export function createWindowManager({
 
 
   return {
+    calcDetailWindowAspectRatio,
     calcDetailWindowSize: (imgW, imgH) => calcDetailWindowSize(screen, imgW, imgH),
     cancelAuthSession: authSessions.cancelAuthSession,
     getAuthSessionState: authSessions.getAuthSessionState,

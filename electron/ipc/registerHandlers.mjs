@@ -313,7 +313,17 @@ export function registerIpcHandlers({
         return null;
       }
       const { width, height } = windowManager.calcDetailWindowSize(args?.width, args?.height);
-      windowManager.createWindow(label, hasHash ? hash : null, width, height, hasItemId ? itemId : null);
+      const aspectRatio = hasHash
+        ? windowManager.calcDetailWindowAspectRatio(args?.width, args?.height)
+        : null;
+      windowManager.createWindow(
+        label,
+        hasHash ? hash : null,
+        width,
+        height,
+        hasItemId ? itemId : null,
+        aspectRatio,
+      );
       return null;
     }
     if (command === 'media.set_thumbnail') {

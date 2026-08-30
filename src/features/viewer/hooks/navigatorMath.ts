@@ -10,6 +10,8 @@ export interface NavigatorRect {
   h: number;
 }
 
+const FIT_ROUNDING_TOLERANCE_PX = 3;
+
 export function computeNavigatorRect(
   zoomState: { scale: number; tx: number; ty: number },
   imageSize: { width: number; height: number },
@@ -20,8 +22,13 @@ export function computeNavigatorRect(
   const scaledWidth = imageSize.width * zoomState.scale;
   const scaledHeight = imageSize.height * zoomState.scale;
 
-  // Image fits in container — no minimap needed
-  if (scaledWidth < cw + 1 && scaledHeight < ch + 1) return null;
+  // Native aspect-ratio resizing can leave the fitted image a few fractional
+  // pixels larger than the content area. Treat that as fitted so the navigator
+  // cannot flicker at the boundary while the window is being resized.
+  if (
+    scaledWidth <= cw + FIT_ROUNDING_TOLERANCE_PX
+    && scaledHeight <= ch + FIT_ROUNDING_TOLERANCE_PX
+  ) return null;
 
   const imageLeft = cw / 2 + zoomState.tx - scaledWidth / 2;
   const imageTop = ch / 2 + zoomState.ty - scaledHeight / 2;

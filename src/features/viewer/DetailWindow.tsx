@@ -6,7 +6,7 @@
  * - Navigation via IPC (receives image list from main window)
  * - Always-on-top pin toggle
  * - Proportional zoom on window resize (image stays fit)
- * - No aspect ratio lock — window resizes freely, theme bg fills gaps
+ * - Native window resizing locked to the initially opened image's aspect ratio
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';

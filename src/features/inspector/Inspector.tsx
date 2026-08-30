@@ -200,12 +200,16 @@ function Preview({
   type,
   formatLabel,
   fontHashes = new Set<string>(),
+  width,
+  height,
 }: {
   hashes: string[];
   backgrounds?: readonly (string | null)[];
   type: 'single' | 'collage' | 'stacked';
   formatLabel?: ReactNode;
   fontHashes?: ReadonlySet<string>;
+  width?: number | null;
+  height?: number | null;
 }) {
   const contextMenu = useContextMenu();
   if (type === 'single' && hashes[0]) {
@@ -217,7 +221,7 @@ function Preview({
           hash,
           onOpenDefault: (value) => { void filesController.openDefaultAppForHash(value); },
           onRevealInFolder: (value) => { void filesController.revealHashInFolder(value); },
-          onOpenNewWindow: () => { void windowController.openDetailWindow({ hash }); },
+          onOpenNewWindow: () => { void windowController.openDetailWindow({ hash, width, height }); },
         }).concat(buildLibraryCoverContextEntry(hash, () => {
           void openCurrentLibraryCoverPicker({
             media_item_id: -1,
@@ -803,6 +807,8 @@ export function Inspector() {
         hashes={primary ? [primary.facts.content_hash] : []}
         backgrounds={primary ? [background] : []}
         type="single"
+        width={primary?.facts.width}
+        height={primary?.facts.height}
         formatLabel={d.root.kind === 'collection'
           ? <GroupIcon size={14} />
           : primary ? formatLabelForMime(primary.facts.mime) : undefined}
