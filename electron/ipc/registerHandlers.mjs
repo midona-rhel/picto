@@ -176,7 +176,9 @@ export async function runReverseImageSearch({
     } finally {
       try {
         searchWin.webContents.debugger.detach();
-      } catch {}
+      } catch (error) {
+        console.warn('[main] failed to migrate the persisted theme preference', error);
+      }
     }
 
     if (cfg.postSetup) {
@@ -336,6 +338,14 @@ export function registerIpcHandlers({
       serialized = await invokeSerialized(command, args || {});
     } catch (error) {
       throw new Error(`${command}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (command === 'settings.get') {
+      try {
+        const theme = JSON.parse(serialized)?.value?.colorScheme;
+        await windowManager.setThemePreference(theme);
+      } catch {}
+    } else if ((command === 'settings.replace' || command === 'settings.patch') && typeof args?.value?.colorScheme === 'string') {
+      await windowManager.setThemePreference(args.value.colorScheme);
     }
     return {
       __pictoCoreJson: serialized,

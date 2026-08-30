@@ -7,6 +7,7 @@ const DEFAULT_CONFIG = {
   pinnedLibraries: [],
   cloudRoots: [],
   lastLibrary: null,
+  theme: null,
   windowState: {
     main: null,
   },

@@ -25,30 +25,33 @@ const THEME_BG_COLORS = {
 /** Native transparency themes that need special BrowserWindow options. */
 const NATIVE_THEMES = new Set(['vibrancy', 'liquidglass', 'mica', 'acrylic']);
 
-/** Try to read the theme from the last library's settings.json synchronously. */
+export function resolveThemeInfo(value, shouldUseDarkColors = false) {
+  let theme = typeof value === 'string' && Object.hasOwn(THEME_BG_COLORS, value)
+    ? value
+    : 'dark';
+  if (theme === 'auto') theme = shouldUseDarkColors ? 'dark' : 'light';
+  return { theme, bgColor: THEME_BG_COLORS[theme] ?? THEME_BG_COLORS.dark };
+}
+
+/** Read the app-level preference, with one legacy settings.json fallback. */
 function getThemeInfo(getCachedConfig) {
-  let theme = 'dark';
+  const config = getCachedConfig();
+  let theme = config?.theme;
   try {
-    const config = getCachedConfig();
     const libraryPath = config?.lastLibrary;
-    if (libraryPath) {
+    if (!theme && libraryPath) {
       const settingsPath = libraryPath + '/settings.json';
       const raw = fs.readFileSync(settingsPath, 'utf-8');
       const settings = JSON.parse(raw);
       theme = settings.colorScheme || settings.theme || 'dark';
     }
   } catch {}
-  if (theme === 'auto') {
-    // Resolve auto at creation time — CSS handles the rest
-    try {
-      const { nativeTheme } = esmRequire('electron');
-      theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
-    } catch {
-      theme = 'dark';
-    }
+  try {
+    const { nativeTheme } = esmRequire('electron');
+    return resolveThemeInfo(theme, nativeTheme.shouldUseDarkColors);
+  } catch {
+    return resolveThemeInfo(theme);
   }
-  const bgColor = THEME_BG_COLORS[theme] || THEME_BG_COLORS.dark;
-  return { theme, bgColor };
 }
 
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
@@ -468,6 +471,13 @@ export function createWindowManager({
     return BrowserWindow.getAllWindows();
   }
 
+  async function setThemePreference(theme) {
+    if (typeof theme !== 'string' || !Object.hasOwn(THEME_BG_COLORS, theme)) return;
+    const config = getCachedConfig();
+    if (config.theme === theme) return;
+    await saveGlobalConfig({ ...config, theme });
+  }
+
   function ownsWebContents(contents) {
     if (!contents || contents.isDestroyed?.()) return false;
     for (const win of windowsByLabel.values()) {
@@ -592,5 +602,6 @@ export function createWindowManager({
     sendToAllWindows,
     sendToFocusedWindow,
     sendToMainWindow,
+    setThemePreference,
   };
 }

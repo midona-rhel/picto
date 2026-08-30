@@ -1,7 +1,13 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { windowResizePersistenceEvent } from './windowManager.mjs';
+import { resolveThemeInfo, windowResizePersistenceEvent } from './windowManager.mjs';
+
+test('resolves the globally persisted theme before creating a window', () => {
+  expect(resolveThemeInfo('purple')).toEqual({ theme: 'purple', bgColor: '#1e1526' });
+  expect(resolveThemeInfo('auto', false)).toEqual({ theme: 'light', bgColor: '#ebedef' });
+  expect(resolveThemeInfo('auto', true)).toEqual({ theme: 'dark', bgColor: '#1a1a1e' });
+});
 
 test('persists bounds only after native resize settles on macOS and Windows', () => {
   expect(windowResizePersistenceEvent('darwin')).toBe('resized');

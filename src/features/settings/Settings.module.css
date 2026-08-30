@@ -428,17 +428,18 @@
   border: 1px solid var(--color-border-secondary);
   cursor: pointer;
   padding: 0;
-  transition: outline 100ms ease;
+  outline: 1.5px solid transparent;
+  outline-offset: 1.5px;
+  transition: outline-color 100ms ease;
 }
 
 .themeSwatch:hover {
-  outline: 1px solid var(--color-border-secondary);
+  outline-color: var(--color-text-secondary);
 }
 
 .themeSwatchActive,
 .themeSwatchActive:hover {
-  outline: 1.5px solid var(--color-text-primary);
-  outline-offset: 1.5px;
+  outline-color: var(--color-text-primary);
 }
 
 .themeSwatchAuto {
