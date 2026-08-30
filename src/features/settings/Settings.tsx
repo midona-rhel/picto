@@ -69,6 +69,7 @@ import type { LibraryStatistics } from '../../shared/types/generated/application
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { checkForUpdates, getUpdateState, installUpdate, onUpdateState, openUpdateRelease, type UpdateState } from '../../platform/updateApi';
+import packageMetadata from '../../../package.json';
 import { openExternalUrl } from '../../platform/shellApi';
 import pictoLogo from '../../../build/icons/picto-flat.svg';
 
@@ -213,7 +214,7 @@ function AboutPanel() {
       <div>
         <h1>Picto</h1>
         <p>Personal media library and organization.</p>
-        <span>Version {state?.currentVersion ?? '—'}{platform ? ` · ${platform}` : ''}</span>
+        <span>Version {packageMetadata.version}{platform ? ` · ${platform}` : ''}</span>
       </div>
     </div>
     <div className={styles.settingsBlock}>

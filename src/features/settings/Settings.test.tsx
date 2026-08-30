@@ -14,11 +14,20 @@ const mocks = vi.hoisted(() => ({
   viewPrefsToPatch: (prefs: Record<string, unknown>) => prefs,
   invoke: vi.fn(),
   listen: vi.fn(),
+  getUpdateState: vi.fn(),
 }));
 
 vi.mock('../../platform/ipc', () => ({
   invoke: mocks.invoke,
   listen: mocks.listen,
+}));
+
+vi.mock('../../platform/updateApi', () => ({
+  getUpdateState: mocks.getUpdateState,
+  checkForUpdates: vi.fn(),
+  installUpdate: vi.fn(),
+  onUpdateState: vi.fn().mockResolvedValue(() => {}),
+  openUpdateRelease: vi.fn(),
 }));
 
 vi.mock('../../controllers/settingsController', () => ({
@@ -115,6 +124,19 @@ beforeEach(() => {
   localStorage.removeItem('picto:audio-visualization');
   setKeyboardPreset('us');
   mocks.getSettings.mockResolvedValue(appSettings);
+  mocks.getUpdateState.mockResolvedValue({
+    status: 'idle',
+    currentVersion: '43.4.1',
+    platform: 'darwin',
+    automaticInstall: false,
+    version: null,
+    releaseName: null,
+    releaseDate: null,
+    releaseNotes: '',
+    releaseUrl: '',
+    progress: null,
+    error: null,
+  });
   mocks.replaceSettings.mockResolvedValue(undefined);
   mocks.setViewPrefs.mockResolvedValue(undefined);
   mocks.resetViewPrefs.mockResolvedValue(undefined);
@@ -172,6 +194,16 @@ beforeEach(() => {
 });
 
 describe('Settings', () => {
+  it('shows the Picto package version in About instead of the Electron runtime version', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'About' }));
+
+    expect(await screen.findByText('Version 0.6.0-alpha · macOS')).toBeInTheDocument();
+    expect(screen.queryByText(/43\.4\.1/)).not.toBeInTheDocument();
+  });
+
   it('preloads Cloud and AI Models before navigation without a loading-frame replacement', async () => {
     const user = setupUser();
     await renderSettings();
