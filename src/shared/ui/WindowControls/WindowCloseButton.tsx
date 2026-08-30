@@ -18,7 +18,7 @@ export const WindowCloseButton = forwardRef<HTMLButtonElement, {
   disabled = false,
 }, ref) {
   return (
-    <button ref={ref} className={`${styles.btn} ${styles.closeBtn}`} onClick={onClick} aria-label={ariaLabel} title={ariaLabel} type="button" disabled={disabled}>
+    <button ref={ref} className={`${styles.btn} ${styles.closeBtn}`} onClick={onClick} aria-label={ariaLabel} type="button" disabled={disabled}>
       <IconX size={16} stroke={1} />
     </button>
   );

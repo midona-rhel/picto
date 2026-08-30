@@ -375,7 +375,7 @@ describe('subscription settlement', () => {
       media_added: 24,
       error_message: null,
     }]);
-    cleanupGalleryImport.mockResolvedValue({ title: 'Example Gallery' });
+    cleanupGalleryImport.mockResolvedValue({ title: 'Example Gallery', already_exists: false });
 
     await refreshSubscriptionsRuntimeState();
     await vi.waitFor(() => expect(cleanupGalleryImport).toHaveBeenCalledWith('9'));
@@ -386,6 +386,39 @@ describe('subscription settlement', () => {
     });
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([]);
     expect(getRunActivity).not.toHaveBeenCalled();
+  });
+
+  it('reports an all-known gallery without curating another collection', async () => {
+    const galleryJob = {
+      id: '9',
+      name: 'E-Hentai Gallery 12345',
+      queries: [{ site_id: 'ehentai' }],
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [galleryJob],
+      runningSubscriptionIds: ['9'],
+      runningProgress: [{
+        subscription_id: '9',
+        subscription_name: galleryJob.name,
+        run_id: 90,
+      }],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({ runningSubscriptionIds: [], runningProgress: [] });
+    listRuns.mockResolvedValue([{
+      status: 'succeeded',
+      posts_added: 0,
+      posts_skipped: 1,
+      error_message: null,
+    }]);
+    cleanupGalleryImport.mockResolvedValue({ title: 'Example Gallery', already_exists: true });
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(cleanupGalleryImport).toHaveBeenCalledWith('9'));
+
+    expect(showSuccessNotification).toHaveBeenCalledWith({
+      title: 'Gallery already exists',
+      message: 'Example Gallery is already in the library.',
+    });
   });
 
   it('keeps a queued gallery import until its run record exists', async () => {

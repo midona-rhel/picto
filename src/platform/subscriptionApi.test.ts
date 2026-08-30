@@ -105,14 +105,13 @@ describe('replacement subscription API', () => {
   it('starts and cleans up transient gallery imports through dedicated commands', async () => {
     invoke
       .mockResolvedValueOnce({ revision: 5, resources: ['subscriptions'], item_ids: [] })
-      .mockResolvedValueOnce({ title: 'Example Gallery', revision: 6, resources: ['subscriptions'], item_ids: [] });
+      .mockResolvedValueOnce({ title: 'Example Gallery', already_exists: false, revision: 6, resources: ['subscriptions'], item_ids: [] });
 
     await startGalleryImport('https://e-hentai.org/g/2771523/3fc69c861a/');
     await expect(cleanupGalleryImport('7')).resolves.toMatchObject({ title: 'Example Gallery' });
 
     expect(invoke.mock.calls).toEqual([
       ['subscriptions.gallery.start', {
-        service_id: 'ehentai',
         url: 'https://e-hentai.org/g/2771523/3fc69c861a/',
       }],
       ['subscriptions.gallery.cleanup', { subscription_id: 7 }],

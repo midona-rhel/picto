@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { IconDotsVertical, IconDownload, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
+import { IconDotsVertical, IconDownload, IconHandStop, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus, IconRefresh } from '@tabler/icons-react';
 import type { SubscriptionCover, SubscriptionInfo, SubscriptionProgressEvent, SubscriptionQueryInfo } from '../../../shared/types/subscriptions';
 import type { SubscriptionDetailState } from '../../../state/subscriptionsWorkspace';
 import type { SubscriptionWorkspaceSnapshot } from '../../../shared/types/subscriptionsWorkspace';
@@ -35,7 +35,9 @@ import styles from '../SubscriptionsScreen.module.css';
 export interface DetailController {
   run: (id: string) => void;
   stop: (id: string) => void;
-  pause: (id: string, paused: boolean) => void;
+  pauseRun: (id: string) => void;
+  resumeRun: (id: string) => void;
+  hold: (id: string, held: boolean) => void;
   delete: (id: string) => void;
   rename: (id: string, currentName: string) => void;
   setSchedule: (id: string, schedule: string) => void;
@@ -133,17 +135,20 @@ export function SubscriptionDetail({
   const openFolderPicker = useSetAtom(folderPickerPortalAtom);
 
   const metrics = snapshot.listMetrics[subscription.id];
-  const waitingForInbox = subscription.run_status === 'inbox_full';
-  const running = progress != null || snapshot.runningSubscriptionIds.includes(subscription.id);
-  const state = waitingForInbox ? 'paused' : describeSubscriptionState({
-    paused: subscription.paused,
+  const active = subscription.active_run_id != null;
+  const running = snapshot.runningSubscriptionIds.includes(subscription.id);
+  const waitingForInbox = active && subscription.run_status === 'inbox_full';
+  const runPaused = active && !running;
+  const runFailed = runPaused && !['paused', 'inbox_full'].includes(subscription.run_status ?? '');
+  const state = runFailed ? 'attention' : waitingForInbox ? 'paused' : describeSubscriptionState({
+    paused: subscription.paused || runPaused,
     running,
     progress,
     failedPostCount: metrics?.failedPostCount ?? 0,
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
   const problemCount = detail.issueTotalCount + detail.failedPostTotalCount;
-  const completed = !running && isSubscriptionCompleted(subscription);
+  const completed = !active && isSubscriptionCompleted(subscription);
   const lastCheck = useMemo(() => subscription.queries.reduce<string | null>(
     (latest, query) => query.last_check_time && (!latest || query.last_check_time > latest) ? query.last_check_time : latest,
     null,
@@ -156,8 +161,11 @@ export function SubscriptionDetail({
   const filesDownloadedCount = progress?.files_downloaded ?? latestRun?.files_downloaded ?? 0;
   const runTarget = getSubscriptionRunTarget(subscription, progress?.mode);
   const runActionLabel = getSubscriptionRunActionLabel(subscription);
-  const runAdded = progress?.posts_added ?? 0;
-  const runProgressPercent = runTarget > 0 ? Math.min(100, (runAdded / runTarget) * 100) : 0;
+  const runAdded = progress?.posts_added ?? (active ? latestRun?.posts_added ?? 0 : 0);
+  const runSkipped = progress?.posts_skipped ?? (active ? latestRun?.posts_skipped ?? 0 : 0);
+  const runSettled = runAdded + runSkipped;
+  const runFilesDownloaded = progress?.files_downloaded ?? (active ? latestRun?.files_downloaded ?? 0 : 0);
+  const runProgressPercent = runTarget > 0 ? Math.min(100, (runSettled / runTarget) * 100) : 0;
   const failedQuery = useMemo(() => subscription.queries.reduce<SubscriptionQueryInfo | null>((latest, query) => {
     if (!query.last_failure_message) return latest;
     if (!latest?.last_failure_at) return query;
@@ -166,7 +174,9 @@ export function SubscriptionDetail({
   const concreteProblem = detail.issues.find((issue) => issue.status !== 'resolved')?.message
     ?? describeFailure(failedQuery?.last_failure_kind ?? null, failedQuery?.last_failure_message ?? null)
     ?? (detail.failedPostTotalCount > 0 ? `${detail.failedPostTotalCount} downloads failed` : null);
-  const statusLabel = waitingForInbox
+  const statusLabel = runFailed
+    ? 'Warning'
+    : waitingForInbox
     ? 'Inbox full'
     : state === 'running'
       ? 'Syncing'
@@ -235,21 +245,44 @@ export function SubscriptionDetail({
         </div>
 
         <div className={styles.subscriptionActions}>
-          {running ? (
-            <ActionButton variant="secondary" pending={busy} onClick={() => controller.stop(subscription.id)}>
-              <IconPlayerStop size={14} /> Stop
+          {active ? (
+            <ActionButton
+              variant={running ? 'secondary' : 'primary'}
+              pending={busy}
+              onClick={() => running
+                ? controller.pauseRun(subscription.id)
+                : controller.resumeRun(subscription.id)}
+            >
+              {running
+                ? <IconPlayerPause size={14} />
+                : runFailed
+                  ? <IconRefresh size={14} />
+                  : <IconPlayerPlay size={14} />}
+              {running ? 'Pause' : subscription.run_status === 'paused' ? 'Resume' : 'Retry'}
             </ActionButton>
           ) : (
             <ActionButton variant="primary" pending={busy} disabled={subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
               <IconPlayerPlay size={14} /> {runActionLabel}
             </ActionButton>
           )}
-          <KbdTooltip label={subscription.paused
-            ? 'Resume automatic subscription runs'
-            : 'Pause future runs until this subscription is resumed'}>
+          <KbdTooltip label={active
+            ? 'Stop this run and keep the posts already added'
+            : subscription.paused
+              ? 'Allow future runs again'
+              : 'Put future runs on hold'}>
             <span className={styles.subscriptionActionTooltipTarget}>
-              <ActionButton variant="secondary" pending={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
-                {subscription.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />} {subscription.paused ? 'Resume' : 'Pause'}
+              <ActionButton
+                variant="secondary"
+                pending={busy}
+                onClick={() => active
+                  ? controller.stop(subscription.id)
+                  : controller.hold(subscription.id, !subscription.paused)}
+              >
+                {active
+                  ? <><IconPlayerStop size={14} /> Stop</>
+                  : subscription.paused
+                    ? <><IconPlayerPlay size={14} /> Release</>
+                    : <><IconHandStop size={14} /> Hold</>}
               </ActionButton>
             </span>
           </KbdTooltip>
@@ -257,19 +290,19 @@ export function SubscriptionDetail({
         </div>
 
         <div
-          className={`${styles.subscriptionRunProgress} ${running ? styles.subscriptionRunProgressActive : ''}`.trim()}
-          aria-hidden={!running}
+          className={`${styles.subscriptionRunProgress} ${active ? styles.subscriptionRunProgressActive : ''}`.trim()}
+          aria-hidden={!active}
         >
           <div className={styles.subscriptionRunProgressLabel}>
-            <span>{runAdded.toLocaleString()} / {runTarget.toLocaleString()} posts added</span>
-            <span>{(progress?.files_downloaded ?? 0).toLocaleString()} files downloaded</span>
+            <span>{runSettled.toLocaleString()} / {runTarget.toLocaleString()} posts processed</span>
+            <span>{runFilesDownloaded.toLocaleString()} files downloaded</span>
           </div>
           <div
             className={styles.subscriptionRunProgressTrack}
-            role={running ? 'progressbar' : undefined}
-            aria-valuemin={running ? 0 : undefined}
-            aria-valuemax={running ? runTarget : undefined}
-            aria-valuenow={running ? runAdded : undefined}
+            role={active ? 'progressbar' : undefined}
+            aria-valuemin={active ? 0 : undefined}
+            aria-valuemax={active ? runTarget : undefined}
+            aria-valuenow={active ? runSettled : undefined}
           >
             <span style={{ width: `${runProgressPercent}%` }} />
           </div>
@@ -384,7 +417,7 @@ export function SubscriptionDetail({
                         query={query}
                         sites={snapshot.sites}
                         running={queryRunning}
-                        subscriptionRunning={running}
+                        subscriptionRunning={active}
                         paused={query.paused}
                         authWarning={auth.blocking ? auth.label : null}
                         busy={busy}

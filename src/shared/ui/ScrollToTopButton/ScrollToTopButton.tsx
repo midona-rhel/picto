@@ -19,7 +19,6 @@ export function ScrollToTopButton({
       style={{ '--scroll-to-top-bottom': `${bottom}px` } as React.CSSProperties}
       onClick={onClick}
       aria-label="Return to Top"
-      title="Return to Top"
       aria-hidden={!visible}
       tabIndex={visible ? 0 : -1}
     >

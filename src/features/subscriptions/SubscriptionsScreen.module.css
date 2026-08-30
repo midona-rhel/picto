@@ -1061,6 +1061,19 @@
   gap: 5px;
 }
 
+.galleryJobActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.galleryJobActions .querySmallBtn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
 .galleryJobText {
   display: flex;
   align-items: center;
@@ -1071,13 +1084,20 @@
 }
 
 .galleryJobText > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .galleryJobText > :last-child {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }

@@ -4,10 +4,15 @@ import { activeNodeIdAtom } from '../state/navigation';
 import { pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 import { clearNotifications, getCurrentNotification } from '../shared/lib/notifications';
 
-const { createFolderMock, deleteFoldersMock, renameFolderMock, sortFolderItemsMock } = vi.hoisted(() => ({
+const {
+  createFolderMock, deleteFoldersMock, moveFolderMock, renameFolderMock,
+  reorderFolderChildrenMock, sortFolderItemsMock,
+} = vi.hoisted(() => ({
   createFolderMock: vi.fn(),
   deleteFoldersMock: vi.fn(),
+  moveFolderMock: vi.fn(),
   renameFolderMock: vi.fn(),
+  reorderFolderChildrenMock: vi.fn(),
   sortFolderItemsMock: vi.fn(),
 }));
 
@@ -17,9 +22,9 @@ vi.mock('../platform/folderApi', () => ({
   createFolder: createFolderMock,
   deleteFolders: deleteFoldersMock,
   getFolderCoverHashes: vi.fn(),
-  moveFolder: vi.fn(),
+  moveFolder: moveFolderMock,
   renameFolder: renameFolderMock,
-  reorderFolderChildren: vi.fn(),
+  reorderFolderChildren: reorderFolderChildrenMock,
   setFolderMetadata: vi.fn(),
   setFolderWatchConfig: vi.fn(),
   sortFolderItems: sortFolderItemsMock,
@@ -47,6 +52,8 @@ describe('foldersController deletion settlement', () => {
     deleteFoldersMock.mockReset();
     createFolderMock.mockReset();
     renameFolderMock.mockReset();
+    moveFolderMock.mockReset();
+    reorderFolderChildrenMock.mockReset();
     sortFolderItemsMock.mockReset();
     clearNotifications();
     store.set(activeNodeIdAtom, 'system:active');
@@ -97,6 +104,20 @@ describe('foldersController deletion settlement', () => {
     await foldersController.sortContents(12, 'modified_at');
 
     expect(sortFolderItemsMock).toHaveBeenCalledWith(12, 'modified_at');
+  });
+
+  it('moves every selected root before reordering the destination once', async () => {
+    moveFolderMock.mockResolvedValue({ revision: 1, resources: [], item_ids: [] });
+    reorderFolderChildrenMock.mockResolvedValue({ revision: 2, resources: [], item_ids: [] });
+
+    await foldersController.moveMany([2, 4], null, [1, 3, 2, 4, 5]);
+
+    expect(moveFolderMock.mock.calls).toEqual([[2, null], [4, null]]);
+    expect(reorderFolderChildrenMock).toHaveBeenCalledOnce();
+    expect(reorderFolderChildrenMock).toHaveBeenCalledWith(null, [1, 3, 2, 4, 5]);
+    expect(moveFolderMock.mock.invocationCallOrder[1]).toBeLessThan(
+      reorderFolderChildrenMock.mock.invocationCallOrder[0],
+    );
   });
 
   it('states recursive deletion and media preservation in confirmations', () => {

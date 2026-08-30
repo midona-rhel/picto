@@ -154,14 +154,18 @@ export const foldersController = {
   },
 
   async move(folderId: number, parentFolderId: number | null, moves: [number, number][]) {
-    await warnOnFolderDepth(() => moveFolder(folderId, parentFolderId));
-    if (moves.length > 0) {
-      const orderedIds = [...moves]
-        .sort((left, right) => left[1] - right[1])
-        .map(([siblingId]) => siblingId);
-      await reorderFolderChildren(parentFolderId, orderedIds);
+    const orderedIds = [...moves]
+      .sort((left, right) => left[1] - right[1])
+      .map(([siblingId]) => siblingId);
+    await this.moveMany([folderId], parentFolderId, orderedIds);
+  },
+
+  async moveMany(folderIds: number[], parentFolderId: number | null, orderedIds: number[]) {
+    for (const folderId of folderIds) {
+      await warnOnFolderDepth(() => moveFolder(folderId, parentFolderId));
     }
-    await announceUndoableMutation(moves.length > 0 ? 'folders.reorder' : 'folders.move');
+    if (orderedIds.length > 0) await reorderFolderChildren(parentFolderId, orderedIds);
+    await announceUndoableMutation(orderedIds.length > 0 ? 'folders.reorder' : 'folders.move');
   },
 
   async sortContents(folderId: number, field: ContentSortField): Promise<void> {

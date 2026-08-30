@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconDownload, IconLibraryPlus, IconPlus, IconShieldLock } from '@tabler/icons-react';
+import { IconDownload, IconLibraryPlus, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus, IconRefresh, IconShieldLock } from '@tabler/icons-react';
 import type {
   SubscriptionCover,
   SubscriptionInfo,
@@ -8,7 +8,7 @@ import type {
 import type { SubscriptionListMetrics } from '../../../shared/types/subscriptionsWorkspace';
 import type { SubscriptionsSelection } from '../../../state/subscriptionsWorkspace';
 import { SubscriptionCoverDisplay } from './SubscriptionCoverImage';
-import { isSubscriptionCompleted } from '../subscriptionUtils';
+import { describeGalleryFailure, isSubscriptionCompleted } from '../subscriptionUtils';
 import { ActionButton } from './ActionButton';
 import { StatusBadge } from './StatusBadge';
 import { ProgressBar } from '../../../shared/ui/ProgressBar/ProgressBar';
@@ -121,6 +121,9 @@ export function SubscriptionsGrid({
   onAdd,
   galleryImportRunning,
   onAddGallery,
+  onPauseGallery,
+  onResumeGallery,
+  onStopGallery,
   onOpenAccounts,
   onSubscriptionMenu,
   onMultiMenu,
@@ -137,6 +140,9 @@ export function SubscriptionsGrid({
   /** Only one gallery download runs at a time — the button locks while one is active. */
   galleryImportRunning: boolean;
   onAddGallery: () => void;
+  onPauseGallery: (id: string) => void;
+  onResumeGallery: (id: string) => void;
+  onStopGallery: (id: string) => void;
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
   onMultiMenu: (position: { x: number; y: number }, subscriptionIds: string[]) => void;
@@ -155,11 +161,11 @@ export function SubscriptionsGrid({
         items: sub.total_items,
         sources: sub.queries.length,
         cover: covers.get(sub.id) ?? null,
-        running: running.has(sub.id) || progressBySubscriptionId.has(sub.id),
-        paused: sub.paused,
+        running: running.has(sub.id),
+        paused: sub.paused || (sub.active_run_id != null && !running.has(sub.id)),
         attention: hasAttention(sub.id),
         completed: !running.has(sub.id)
-          && !progressBySubscriptionId.has(sub.id)
+          && sub.active_run_id == null
           && isSubscriptionCompleted(sub),
         waitingForInbox: sub.run_status === 'inbox_full',
       })),
@@ -250,14 +256,20 @@ export function SubscriptionsGrid({
             const progress = progressBySubscriptionId.get(job.id);
             const downloaded = progress?.files_downloaded ?? 0;
             const total = progress?.gallery_total_items ?? null;
+            const jobRunning = running.has(job.id);
+            const failedQuery = job.queries.find((query) => query.last_failure_message) ?? null;
+            const failure = failedQuery?.last_failure_message ?? null;
+            const jobPaused = job.run_status === 'paused';
             return (
               <div className={styles.galleryJob} key={job.id}>
                 <IconDownload size={15} stroke={1.6} aria-hidden />
                 <div className={styles.galleryJobBody}>
                   <div className={styles.galleryJobText}>
-                    <span>{job.name}</span>
+                    <span title={job.name}>{job.name}</span>
                     <span>
-                      {total != null
+                      {failure && !jobRunning
+                        ? describeGalleryFailure(failedQuery?.last_failure_kind ?? null, failure)
+                        : total != null
                         ? `${downloaded.toLocaleString()} / ${total.toLocaleString()} images downloaded`
                         : `${downloaded.toLocaleString()} images downloaded`}
                     </span>
@@ -268,6 +280,32 @@ export function SubscriptionsGrid({
                     indeterminate={total == null}
                     height={2}
                   />
+                </div>
+                <div className={styles.galleryJobActions}>
+                  <button
+                    type="button"
+                    className={styles.querySmallBtn}
+                    aria-label={jobRunning
+                      ? 'Pause gallery download'
+                      : jobPaused
+                        ? 'Resume gallery download'
+                        : 'Retry gallery download'}
+                    onClick={() => jobRunning ? onPauseGallery(job.id) : onResumeGallery(job.id)}
+                  >
+                    {jobRunning
+                      ? <IconPlayerPause size={14} />
+                      : jobPaused
+                        ? <IconPlayerPlay size={14} />
+                        : <IconRefresh size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.querySmallBtn}
+                    aria-label="Stop gallery download"
+                    onClick={() => onStopGallery(job.id)}
+                  >
+                    <IconPlayerStop size={14} />
+                  </button>
                 </div>
               </div>
             );

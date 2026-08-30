@@ -43,6 +43,7 @@ export interface SubscriptionInfo {
   schedule: SubscriptionSchedule | string;
   paused: boolean;
   run_status: string | null;
+  active_run_id: number | null;
   created_at: string;
   total_items: number;
   posts_per_run: number;

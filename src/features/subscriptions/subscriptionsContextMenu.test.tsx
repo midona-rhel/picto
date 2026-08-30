@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IconPlayerPlay, IconRefresh } from '@tabler/icons-react';
+import type { ReactElement } from 'react';
 import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
 import { buildMultiCardMenu, buildSubscriptionMenu } from './subscriptionsContextMenu';
@@ -18,10 +20,13 @@ function resetEntry(
 ): [MenuItem, typeof onReset] {
   const entries = buildSubscriptionMenu({
     subscription: target,
+    active: running,
     running,
     onRun: vi.fn(),
     onStop: vi.fn(),
-    onPause: vi.fn(),
+    onPauseRun: vi.fn(),
+    onResumeRun: vi.fn(),
+    onHold: vi.fn(),
     onRename: vi.fn(),
     onSetCover: vi.fn(),
     onSetSchedule: vi.fn(),
@@ -57,12 +62,33 @@ describe('subscription context menu', () => {
     expect(pausedEntry.disabled).toBe(true);
   });
 
+  it('uses play for resume and refresh for retry', () => {
+    const build = (runStatus: string) => buildSubscriptionMenu({
+      subscription: { ...subscription, run_status: runStatus },
+      active: true,
+      running: false,
+      onRun: vi.fn(),
+      onStop: vi.fn(),
+      onPauseRun: vi.fn(),
+      onResumeRun: vi.fn(),
+      onHold: vi.fn(),
+      onRename: vi.fn(),
+      onSetCover: vi.fn(),
+      onSetSchedule: vi.fn(),
+      onReset: vi.fn(),
+      onDelete: vi.fn(),
+    })[0] as MenuItem;
+
+    expect((build('paused').icon as ReactElement).type).toBe(IconPlayerPlay);
+    expect((build('runtime').icon as ReactElement).type).toBe(IconRefresh);
+  });
+
   it('applies a schedule to every selected subscription', () => {
     const onSetScheduleSelected = vi.fn();
     const entries = buildMultiCardMenu({
       subscriptionIds: ['1', '2'],
       schedules: ['daily', 'weekly'],
-      anyRunning: false,
+      anyActive: false,
       onRunSelected: vi.fn(),
       onPauseSelected: vi.fn(),
       onSetScheduleSelected,

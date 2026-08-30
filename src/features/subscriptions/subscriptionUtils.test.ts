@@ -5,6 +5,7 @@ import type {
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
 import {
+  describeGalleryFailure,
   describeSubscriptionState,
   getQueryAuthState,
   getSubscriptionRunActionLabel,
@@ -49,6 +50,7 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     schedule: 'daily',
     paused: false,
     run_status: null,
+    active_run_id: null,
     created_at: '2026-08-05T19:08:25Z',
     total_items: 198,
     posts_per_run: 100,
@@ -96,6 +98,16 @@ describe('gallery imports', () => {
     expect(isVisibleGalleryImportJob(idle)).toBe(false);
     expect(isVisibleGalleryImportJob({ ...idle, run_status: 'pending' })).toBe(true);
     expect(isVisibleGalleryImportJob({ ...idle, run_status: 'running' })).toBe(true);
+  });
+
+  it('keeps internal media diagnostics out of the gallery row', () => {
+    expect(describeGalleryFailure('network', 'connection reset')).toBe('Download failed');
+    expect(describeGalleryFailure('unauthorized', null)).toBe('Login required');
+    expect(describeGalleryFailure('rate_limited', null)).toBe('Rate limited');
+    expect(describeGalleryFailure('runtime', 'Gallery download failed: original requires GP'))
+      .toBe('Original requires GP');
+    expect(describeGalleryFailure('runtime', 'The media host returned a web page instead of a file'))
+      .toBe('Invalid media response');
   });
 });
 
@@ -152,11 +164,11 @@ describe('subscription run target', () => {
 });
 
 describe('subscription run action', () => {
-  it('continues a user-stopped run from its committed cursor', () => {
+  it('starts a new run after a user-stopped run', () => {
     expect(getSubscriptionRunActionLabel({
       ...subscription([query({ completed_initial_run: false })]),
       run_status: 'cancelled',
-    })).toBe('Continue');
+    })).toBe('Run now');
   });
 
   it('starts idle and terminally failed runs normally', () => {

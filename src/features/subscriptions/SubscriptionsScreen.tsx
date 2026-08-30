@@ -179,16 +179,14 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
   const addGallery = useCallback(async (result: AddGalleryInput) => {
     const succeeded = await act('gallery', async () => {
       markSubscriptionRunTriggered();
-      await subscriptionsController.startGalleryImport(result.url, result.serviceId);
+      await subscriptionsController.startGalleryImport(result.url);
     });
     if (succeeded) setGalleryDialogOpen(false);
   }, [act]);
 
   const busy = busyKey != null;
   const galleryJobs = snapshot?.subscriptions.filter(isVisibleGalleryImportJob) ?? [];
-  const galleryImportRunning = galleryJobs.some(
-    (job) => snapshot?.runningSubscriptionIds.includes(job.id) || progressBySubscriptionId.has(job.id),
-  );
+  const galleryImportRunning = galleryJobs.some((job) => job.active_run_id != null);
   const visibleSubscriptions = snapshot?.subscriptions.filter(
     (subscription) => !isGalleryImportJob(subscription),
   ) ?? [];
@@ -198,7 +196,12 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
       void act(`run:${id}`, () => subscriptionsController.run(id));
     },
     stop: (id: string) => void act(`stop:${id}`, () => subscriptionsController.stop(id)),
-    pause: (id: string, paused: boolean) => void act(`pause:${id}`, () => subscriptionsController.pause(id, paused)),
+    pauseRun: (id: string) => void act(`pause-run:${id}`, () => subscriptionsController.pauseRun(id)),
+    resumeRun: (id: string) => {
+      markSubscriptionRunTriggered();
+      void act(`resume-run:${id}`, () => subscriptionsController.resumeRun(id));
+    },
+    hold: (id: string, held: boolean) => void act(`hold:${id}`, () => subscriptionsController.hold(id, held)),
     delete: (id: string) => {
       confirm(
         {
@@ -273,14 +276,17 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
   const openSubscriptionMenu = useCallback(
     (position: { x: number; y: number }, subscription: SubscriptionInfo) => {
       if (!snapshot) return;
-      const running = snapshot.runningSubscriptionIds.includes(subscription.id)
-        || progressBySubscriptionId.has(subscription.id);
+      const active = subscription.active_run_id != null;
+      const running = snapshot.runningSubscriptionIds.includes(subscription.id);
       contextMenu.openAt(position, buildSubscriptionMenu({
         subscription,
+        active,
         running,
         onRun: () => detailController.run(subscription.id),
         onStop: () => detailController.stop(subscription.id),
-        onPause: (paused) => detailController.pause(subscription.id, paused),
+        onPauseRun: () => detailController.pauseRun(subscription.id),
+        onResumeRun: () => detailController.resumeRun(subscription.id),
+        onHold: (held) => detailController.hold(subscription.id, held),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
         onSetCover: () => setCoverTarget({ id: subscription.id, name: subscription.name }),
         onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
@@ -295,16 +301,14 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
   const openMultiCardMenu = useCallback(
     (position: { x: number; y: number }, subscriptionIds: string[]) => {
       if (!snapshot) return;
-      const anyRunning = subscriptionIds.some(
-        (id) => snapshot.runningSubscriptionIds.includes(id) || progressBySubscriptionId.has(id),
-      );
       const selectedSubscriptions = subscriptionIds
         .map((id) => snapshot.subscriptions.find((subscription) => subscription.id === id))
         .filter((subscription): subscription is SubscriptionInfo => subscription != null);
+      const anyActive = selectedSubscriptions.some((subscription) => subscription.active_run_id != null);
       contextMenu.openAt(position, buildMultiCardMenu({
         subscriptionIds,
         schedules: selectedSubscriptions.map((subscription) => subscription.schedule),
-        anyRunning,
+        anyActive,
         onRunSelected: () => {
           markSubscriptionRunTriggered();
           void act('multi:run', async () => {
@@ -313,7 +317,7 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
         },
         onPauseSelected: (paused) =>
           void act('multi:pause', async () => {
-            for (const id of subscriptionIds) await subscriptionsController.pause(id, paused);
+            for (const id of subscriptionIds) await subscriptionsController.hold(id, paused);
           }),
         onSetScheduleSelected: (schedule) =>
           void act('multi:schedule', async () => {
@@ -349,6 +353,9 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
             onAdd={() => setWizard({ open: true })}
             galleryImportRunning={galleryImportRunning}
             onAddGallery={() => setGalleryDialogOpen(true)}
+            onPauseGallery={(id) => detailController.pauseRun(id)}
+            onResumeGallery={(id) => detailController.resumeRun(id)}
+            onStopGallery={(id) => detailController.stop(id)}
             onOpenAccounts={() => setAccountsModal({ open: true, focusSiteId: null })}
             onSubscriptionMenu={(position, id) => {
               const subscription = snapshot.subscriptions.find((sub) => sub.id === id);

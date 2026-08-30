@@ -136,6 +136,51 @@ export function resolveSidebarTreeDrop(
   };
 }
 
+export interface SidebarTreeMovePlan {
+  movingIds: string[];
+  parentId: string | null;
+  orderedChildIds: string[];
+}
+
+export function planSidebarTreeDrop(
+  nodes: SidebarNodeDto[],
+  selectedIds: Iterable<string>,
+  draggedNodeId: string,
+  targetNodeId: string,
+  position: 'before' | 'inside' | 'after',
+): SidebarTreeMovePlan | null {
+  const target = nodes.find((node) => node.id === targetNodeId);
+  if (!target) return null;
+  const prefix = draggedNodeId.startsWith('smart:') ? 'smart:' : 'folder:';
+  const selected = [...selectedIds].filter((id) => id.startsWith(prefix));
+  const rawMovingIds = selected.includes(draggedNodeId) && selected.length > 1
+    ? selected
+    : [draggedNodeId];
+  const movingSet = new Set(deduplicateParentChild(rawMovingIds, nodes));
+  if (movingSet.has(targetNodeId)) return null;
+  if ([...movingSet].some((id) => isDescendantOf(targetNodeId, id, nodes))) return null;
+
+  const movingIds = nodes.filter((node) => movingSet.has(node.id)).map((node) => node.id);
+  for (const id of movingSet) {
+    if (!movingIds.includes(id)) movingIds.push(id);
+  }
+  const parentId = position === 'inside' ? targetNodeId : target.parent_id;
+  const siblings = nodes
+    .filter((node) => node.parent_id === parentId && !movingSet.has(node.id))
+    .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0));
+  const insertAt = position === 'inside'
+    ? siblings.length
+    : siblings.findIndex((node) => node.id === targetNodeId)
+      + (position === 'after' ? 1 : 0);
+  if (insertAt < 0) return null;
+  siblings.splice(insertAt, 0, ...movingIds.map((id) => nodes.find((node) => node.id === id)!));
+  return {
+    movingIds,
+    parentId: parentId?.startsWith(prefix) ? parentId : null,
+    orderedChildIds: siblings.map((node) => node.id),
+  };
+}
+
 export function availableFolderMoveTargets(nodes: SidebarNodeDto[], movingFolderId: number): number[] {
   const parentById = new Map<number, number | null>();
   for (const node of nodes) {
@@ -246,10 +291,8 @@ export function Sidebar() {
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const subscriptionsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
-  const subscriptions = subscriptionsSnapshot?.subscriptions ?? [];
   const subscriptionsRunning = (subscriptionsSnapshot?.runningSubscriptionIds.length ?? 0) > 0;
-  const subscriptionsGloballyPaused = subscriptions.length > 0
-    && subscriptions.every((subscription) => subscription.paused);
+  const subscriptionsGloballyPaused = subscriptionsSnapshot?.globalPaused ?? false;
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const [treeFilter, setTreeFilter] = useState('');
@@ -355,68 +398,32 @@ export function Sidebar() {
 
         if (dropTargetId && dropPosition) {
           if (isSmartDrag) {
-            // Smart folder drag-drop — multi-select aware
-            const draggedId = parseSmartFolderIdNum(drag.nodeId);
-            const targetId = parseSmartFolderIdNum(dropTargetId);
-            if (draggedId != null && targetId != null) {
-              const targetNode = smartFolderNodes.find((n) => n.id === dropTargetId);
-              const rawIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
-                ? [...sidebarSelection].filter((id) => id.startsWith('smart:'))
-                : [drag.nodeId];
-              const movingIds = deduplicateParentChild(rawIds, smartFolderNodes);
-              const movingSet = new Set(movingIds);
-
-              if (dropPosition === 'inside') {
-                for (const id of movingIds) {
-                  const sfId = parseSmartFolderIdNum(id);
-                  if (sfId != null) void smartFoldersController.move(sfId, targetId, []);
-                }
-              } else {
-                const targetParentId = targetNode?.parent_id ?? null;
-                const parentSmartId = targetParentId ? parseSmartFolderIdNum(targetParentId) : null;
-                const siblings = smartFolderNodes
-                  .filter((n) => n.parent_id === targetParentId)
-                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-                const movingNodes = siblings.filter((s) => movingSet.has(s.id));
-                const without = siblings.filter((s) => !movingSet.has(s.id));
-                const targetIdx = without.findIndex((s) => s.id === dropTargetId);
-                const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
-                without.splice(insertAt, 0, ...movingNodes);
-                const moves: [number, number][] = without.map((s, i) => [parseSmartFolderIdNum(s.id)!, i]);
-                void smartFoldersController.move(draggedId, parentSmartId, moves);
-              }
+            const plan = planSidebarTreeDrop(
+              smartFolderNodes, sidebarSelection, drag.nodeId, dropTargetId, dropPosition,
+            );
+            if (plan) {
+              const movingIds = plan.movingIds
+                .map(parseSmartFolderIdNum)
+                .filter((id): id is number => id != null);
+              const parentId = plan.parentId == null ? null : parseSmartFolderIdNum(plan.parentId);
+              const orderedIds = plan.orderedChildIds
+                .map(parseSmartFolderIdNum)
+                .filter((id): id is number => id != null);
+              void smartFoldersController.moveMany(movingIds, parentId, orderedIds);
             }
           } else {
-            // Folder drag-drop — multi-select aware
-            const draggedFolderId = parseFolderId(drag.nodeId);
-            const targetFolderId = parseFolderId(dropTargetId);
-            if (draggedFolderId != null && targetFolderId != null) {
-              const targetNode = folderNodes.find((n) => n.id === dropTargetId);
-              const rawFolderIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
-                ? [...sidebarSelection].filter((id) => id.startsWith('folder:'))
-                : [drag.nodeId];
-              const movingIds = deduplicateParentChild(rawFolderIds, folderNodes);
-              const movingSet = new Set(movingIds);
-
-              if (dropPosition === 'inside') {
-                for (const id of movingIds) {
-                  const fid = parseFolderId(id);
-                  if (fid != null) void foldersController.move(fid, targetFolderId, []);
-                }
-              } else {
-                const targetParentId = targetNode?.parent_id ?? null;
-                const parentFolderId = targetParentId ? parseFolderId(targetParentId) : null;
-                const siblings = folderNodes
-                  .filter((n) => n.parent_id === targetParentId)
-                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-                const movingNodes = siblings.filter((s) => movingSet.has(s.id));
-                const without = siblings.filter((s) => !movingSet.has(s.id));
-                const targetIdx = without.findIndex((s) => s.id === dropTargetId);
-                const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
-                without.splice(insertAt, 0, ...movingNodes);
-                const moves: [number, number][] = without.map((s, i) => [parseFolderId(s.id)!, i]);
-                void foldersController.move(draggedFolderId, parentFolderId, moves);
-              }
+            const plan = planSidebarTreeDrop(
+              folderNodes, sidebarSelection, drag.nodeId, dropTargetId, dropPosition,
+            );
+            if (plan) {
+              const movingIds = plan.movingIds
+                .map(parseFolderId)
+                .filter((id): id is number => id != null);
+              const parentId = plan.parentId == null ? null : parseFolderId(plan.parentId);
+              const orderedIds = plan.orderedChildIds
+                .map(parseFolderId)
+                .filter((id): id is number => id != null);
+              void foldersController.moveMany(movingIds, parentId, orderedIds);
             }
           }
         }
@@ -1048,7 +1055,7 @@ export function Sidebar() {
               .map((candidate) => parseFolderId(candidate.id))
               .filter((id): id is number => id != null && availableIds.has(`folder:${id}`)),
             onApplyFolderParent: (parentId) => {
-              void Promise.all(movingFolderIds.map((folderId) => foldersController.move(folderId, parentId, [])));
+              void foldersController.moveMany(movingFolderIds, parentId, []);
             },
           });
         },
@@ -1063,7 +1070,7 @@ export function Sidebar() {
       entries.push({ submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
         {
           label: 'Top Level',
-          action: () => { void Promise.all(movingSmartIds.map((id) => smartFoldersController.move(id, null, []))); },
+          action: () => { void smartFoldersController.moveMany(movingSmartIds, null, []); },
         },
         ...availableIds.map((targetNodeId) => {
           const target = smartFolderNodes.find((candidate) => candidate.id === targetNodeId)!;
@@ -1071,7 +1078,7 @@ export function Sidebar() {
             label: target.name,
             action: () => {
               const parentId = parseSmartFolderIdNum(targetNodeId);
-              if (parentId != null) void Promise.all(movingSmartIds.map((id) => smartFoldersController.move(id, parentId, [])));
+              if (parentId != null) void smartFoldersController.moveMany(movingSmartIds, parentId, []);
             },
           } as MenuEntry;
         }),

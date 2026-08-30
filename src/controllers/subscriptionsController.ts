@@ -18,9 +18,10 @@ import {
   listCredentials,
   listSubscriptionIssues,
   listSubscriptionRuns,
-  pauseSubscription,
+  pauseSubscriptionRun,
   pauseAllSubscriptions,
   pauseSubscriptionQuery,
+  resumeSubscriptionRun,
   setSubscriptionQueryGrouping,
   renameSubscription,
   resetSubscription,
@@ -31,6 +32,7 @@ import {
   setSubscriptionPostsPerRun,
   setSubscriptionDestination,
   setSubscriptionCover,
+  setSubscriptionHold,
   stopSubscription,
 } from '../platform/subscriptionApi';
 import type { IssueCursor } from '../shared/types/generated/application/IssueCursor';
@@ -67,6 +69,7 @@ export const subscriptionsController = {
 
     return {
       subscriptions: overview.subscriptions,
+      globalPaused: overview.globalPaused,
       sites,
       credentials,
       credentialHealth,
@@ -163,8 +166,16 @@ export const subscriptionsController = {
     return resetSubscription(id);
   },
 
-  pause(id: string, paused: boolean): Promise<void> {
-    return pauseSubscription(id, paused);
+  hold(id: string, held: boolean): Promise<void> {
+    return setSubscriptionHold(id, held);
+  },
+
+  pauseRun(id: string): Promise<void> {
+    return pauseSubscriptionRun(id);
+  },
+
+  resumeRun(id: string): Promise<void> {
+    return resumeSubscriptionRun(id);
   },
 
   pauseAll(paused: boolean): Promise<void> {
@@ -179,8 +190,8 @@ export const subscriptionsController = {
     return runSubscriptionQuery(id);
   },
 
-  startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai'): Promise<void> {
-    return startGalleryImport(url, serviceId);
+  startGalleryImport(url: string): Promise<void> {
+    return startGalleryImport(url);
   },
 
   cleanupGalleryImport(id: string) {

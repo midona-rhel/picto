@@ -89,7 +89,7 @@ export function QueryRow({
             aria-label="Group multi-media posts"
             aria-pressed={query.group_posts}
             onClick={() => onGrouping(!query.group_posts)}
-            disabled={busy || running}
+            disabled={busy || subscriptionRunning}
           >
             <IconCopy size={14} />
           </button>
@@ -102,18 +102,18 @@ export function QueryRow({
             className={styles.querySmallBtn}
             aria-label={paused ? 'Resume query' : 'Put query on hold'}
             onClick={() => onPause(!paused)}
-            disabled={busy}
+            disabled={busy || subscriptionRunning}
           >
             {paused ? <IconPlayerPlay size={14} /> : <IconHandStop size={14} />}
           </button>
         </KbdTooltip>
         <KbdTooltip label="Edit">
-          <button type="button" className={styles.querySmallBtn} onClick={onEdit} disabled={busy}>
+          <button type="button" className={styles.querySmallBtn} onClick={onEdit} disabled={busy || subscriptionRunning}>
             <IconPencil size={14} />
           </button>
         </KbdTooltip>
         <KbdTooltip label="Delete">
-          <button type="button" className={styles.querySmallBtn} onClick={onDelete} disabled={busy}>
+          <button type="button" className={styles.querySmallBtn} onClick={onDelete} disabled={busy || subscriptionRunning}>
             <IconTrash size={14} />
           </button>
         </KbdTooltip>

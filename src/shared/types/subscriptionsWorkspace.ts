@@ -28,6 +28,7 @@ export interface SubscriptionListMetrics {
 
 export interface SubscriptionWorkspaceSnapshot {
   subscriptions: SubscriptionInfo[];
+  globalPaused: boolean;
   sites: SubscriptionSiteInfo[];
   credentials: CredentialDomain[];
   credentialHealth: CredentialHealth[];

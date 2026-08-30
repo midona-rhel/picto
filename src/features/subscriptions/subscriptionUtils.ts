@@ -18,6 +18,23 @@ export function isVisibleGalleryImportJob(subscription: SubscriptionInfo): boole
   return isGalleryImportJob(subscription) && subscription.run_status != null;
 }
 
+export function describeGalleryFailure(kind: string | null, message: string | null): string {
+  const normalized = message?.toLowerCase() ?? '';
+  if (normalized.includes('requires gp')) return 'Original requires GP';
+  if (normalized.includes('image viewing limit')) return 'Image limit reached';
+  if (normalized.includes('temporarily blocked')) return 'Temporarily rate limited';
+  if (normalized.includes('web page instead of a file')) return 'Invalid media response';
+  switch (kind) {
+    case 'unauthorized':
+    case 'expired':
+      return 'Login required';
+    case 'rate_limited':
+      return 'Rate limited';
+    default:
+      return 'Download failed';
+  }
+}
+
 export function getSubscriptionRunTarget(
   subscription: SubscriptionInfo,
   mode?: string | null,
@@ -28,8 +45,8 @@ export function getSubscriptionRunTarget(
   return perQuery * Math.max(1, activeQueries);
 }
 
-export function getSubscriptionRunActionLabel(subscription: SubscriptionInfo): 'Continue' | 'Run now' {
-  return subscription.run_status === 'cancelled' ? 'Continue' : 'Run now';
+export function getSubscriptionRunActionLabel(_subscription: SubscriptionInfo): 'Run now' {
+  return 'Run now';
 }
 
 export function formatRelativeTime(value: string | null | undefined): string {

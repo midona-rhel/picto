@@ -29,6 +29,7 @@ const observedQueryStatuses = new Map<number, Map<number, string>>();
 const observedRunProgress = new Map<number, { fingerprint: string; checkedAt: number }>();
 const runActivityReads = new Map<number, Promise<Awaited<ReturnType<typeof subscriptionsController.getRunActivity>>>>();
 const notifiedRunIds = new Set<number>();
+const notifiedPausedFailures = new Set<string>();
 const settlingGalleryIds = new Set<string>();
 
 export function retainGalleryProgressTotals(
@@ -60,6 +61,7 @@ export function resetSubscriptionsSettleForTests(): void {
   observedRunProgress.clear();
   runActivityReads.clear();
   notifiedRunIds.clear();
+  notifiedPausedFailures.clear();
   settlingGalleryIds.clear();
 }
 
@@ -69,6 +71,22 @@ function isSuccessfulTerminal(status: string): boolean {
 
 function completionSummary(postsAdded: number): string {
   return `${postsAdded} post${postsAdded === 1 ? '' : 's'} added to library`;
+}
+
+function observePausedFailures(
+  progress: SubscriptionProgressEvent[],
+  galleryIds: Set<string>,
+): void {
+  for (const entry of progress) {
+    if (entry.run_id == null || !entry.failure_kind || ['paused', 'inbox_full'].includes(entry.failure_kind)) continue;
+    const key = `${entry.run_id}:${entry.failure_kind}:${entry.error ?? entry.last_error ?? ''}`;
+    if (notifiedPausedFailures.has(key)) continue;
+    notifiedPausedFailures.add(key);
+    showErrorNotification({
+      title: galleryIds.has(entry.subscription_id) ? 'Gallery download paused' : 'Subscription paused',
+      message: entry.error ?? entry.last_error ?? 'The run paused after an error. Retry it when ready.',
+    });
+  }
 }
 
 function runProgressFingerprint(entry: SubscriptionProgressEvent): string {
@@ -167,9 +185,13 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
       if (latest.status === 'succeeded') {
         const cleanup = await subscriptionsController.cleanupGalleryImport(job.id);
         showSuccessNotification({
-          title: 'Gallery downloaded',
-          message: `${cleanup?.title ?? job.name} has been downloaded.`,
+          title: cleanup?.already_exists ? 'Gallery already exists' : 'Gallery downloaded',
+          message: cleanup?.already_exists
+            ? `${cleanup.title ?? job.name} is already in the library.`
+            : `${cleanup?.title ?? job.name} has been downloaded.`,
         });
+      } else if (latest.status === 'cancelled') {
+        await subscriptionsController.cleanupGalleryImport(job.id);
       } else {
         showErrorNotification({
           title: 'Gallery import failed',
@@ -246,6 +268,7 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
           return null;
         });
         const galleryIds = new Set(snapshot.subscriptions.filter(isGalleryImportJob).map((job) => job.id));
+        observePausedFailures(snapshot.runningProgress, galleryIds);
         void observeQueryCompletions(snapshot.runningProgress, galleryIds);
         void observeSubscriptionCompletions(
           previousSnapshot?.runningProgress ?? [],
@@ -289,6 +312,7 @@ export function refreshSubscriptionsRuntimeState(): Promise<void> {
         current ? { ...current, ...settledRuntime } : current
       ));
       const galleryIds = new Set(snapshot?.subscriptions.filter(isGalleryImportJob).map((job) => job.id) ?? []);
+      observePausedFailures(settledRuntime.runningProgress, galleryIds);
       void observeQueryCompletions(settledRuntime.runningProgress, galleryIds);
       void observeSubscriptionCompletions(previousProgress, settledRuntime.runningProgress, galleryIds);
       if (snapshot) settleFinishedGalleryImports({ ...snapshot, ...settledRuntime });

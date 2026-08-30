@@ -98,15 +98,17 @@ export const smartFoldersController = {
   },
 
   async move(smartFolderId: number, parentId: number | null, siblingOrder: [number, number][]) {
-    await moveSmartFolder(smartFolderId, parentId);
-    if (siblingOrder.length > 0) {
-      const orderedIds = [...siblingOrder]
-        .sort((left, right) => left[1] - right[1])
-        .map(([siblingId]) => siblingId);
-      await reorderSmartFolders(parentId, orderedIds);
-    }
+    const orderedIds = [...siblingOrder]
+      .sort((left, right) => left[1] - right[1])
+      .map(([siblingId]) => siblingId);
+    await this.moveMany([smartFolderId], parentId, orderedIds);
+  },
+
+  async moveMany(smartFolderIds: number[], parentId: number | null, orderedIds: number[]) {
+    for (const smartFolderId of smartFolderIds) await moveSmartFolder(smartFolderId, parentId);
+    if (orderedIds.length > 0) await reorderSmartFolders(parentId, orderedIds);
     await announceUndoableMutation(
-      siblingOrder.length > 0 ? 'smart_folders.reorder' : 'smart_folders.move',
+      orderedIds.length > 0 ? 'smart_folders.reorder' : 'smart_folders.move',
     );
   },
 };

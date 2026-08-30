@@ -1081,7 +1081,7 @@ export function GridScreen({
                   selectedFolderIds: sharedParent == null || Number.isNaN(sharedParent) ? [] : [sharedParent],
                   availableFolderIds: availableBulkFolderMoveTargets(sidebarNodes, movingFolderIds),
                   onApplyFolderParent: (parentId) => {
-                    void Promise.all(movingFolderIds.map((id) => foldersController.move(id, parentId, [])));
+                    void foldersController.moveMany(movingFolderIds, parentId, []);
                   },
                 });
               },

@@ -86,6 +86,7 @@ function mapSubscription(subscription: SubscriptionView): SubscriptionInfo {
     schedule: subscription.schedule,
     paused: subscription.paused,
     run_status: subscription.status,
+    active_run_id: subscription.active_run_id,
     created_at: '',
     total_items: subscription.root_count,
     posts_per_run: subscription.periodic_post_limit ?? subscription.initial_post_limit ?? 100,
@@ -101,9 +102,11 @@ function mapProgress(
 ): SubscriptionProgressEvent | null {
   const runId = current?.run_id ?? subscription.active_run_id;
   const status = current?.status ?? subscription.status;
-  if (!runId || !status || !['pending', 'running'].includes(status)) return null;
+  if (!runId || !status) return null;
   const counts = current?.counts ?? subscription.progress;
   const discovered = current?.counts.fetched ?? subscription.progress.discovered;
+  const failedQuery = subscription.queries.find((query) => query.last_failure_message != null) ?? null;
+  const failureKind = ['pending', 'running', 'paused', 'inbox_full'].includes(status) ? null : status;
   return {
     subscription_id: String(subscription.subscription_id),
     subscription_name: subscription.name,
@@ -131,10 +134,10 @@ function mapProgress(
     current_post_id: null,
     current_post_items: 0,
     resume_cursor: null,
-    last_error: null,
+    last_error: failedQuery?.last_failure_message ?? null,
     finished_status: null,
-    failure_kind: null,
-    error: null,
+    failure_kind: failureKind,
+    error: failedQuery?.last_failure_message ?? null,
   };
 }
 
@@ -196,11 +199,13 @@ async function listReplacementSubscriptions(): Promise<SubscriptionList> {
 export async function getSubscriptionOverview() {
   const list = await listReplacementSubscriptions();
   const subscriptions = list.subscriptions.map(mapSubscription);
-  const running = list.subscriptions.filter((subscription) =>
+  const active = list.subscriptions.filter((subscription) => subscription.active_run_id != null);
+  const running = active.filter((subscription) =>
     subscription.active_run_id != null && ['pending', 'running'].includes(subscription.status ?? ''),
   );
   return {
     subscriptions,
+    globalPaused: list.global_paused,
     covers: new Map(list.subscriptions.flatMap((subscription) => subscription.cover_file_hash
       ? [[String(subscription.subscription_id), {
         file_hash: subscription.cover_file_hash,
@@ -210,7 +215,7 @@ export async function getSubscriptionOverview() {
       }]] as const
       : [])),
     runningSubscriptionIds: running.map((subscription) => String(subscription.subscription_id)),
-    runningProgress: running
+    runningProgress: active
       .map((subscription) => mapProgress(subscription))
       .filter((entry): entry is SubscriptionProgressEvent => entry !== null),
     openIssueCounts: Object.fromEntries(list.subscriptions.map((subscription) => [
@@ -309,8 +314,8 @@ export function renameSubscription(id: string, name: string): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.rename', { subscription_id: Number(id), name }).then(() => undefined);
 }
 
-export function pauseSubscription(id: string, paused: boolean): Promise<void> {
-  return invoke<MutationReceipt>('subscriptions.pause', { subscription_id: Number(id), paused }).then(() => undefined);
+export function setSubscriptionHold(id: string, held: boolean): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.hold', { subscription_id: Number(id), paused: held }).then(() => undefined);
 }
 
 export function pauseAllSubscriptions(paused: boolean): Promise<void> {
@@ -321,19 +326,27 @@ export function runSubscription(id: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.run', { subscription_id: Number(id) }).then(() => undefined);
 }
 
+export function pauseSubscriptionRun(id: string): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.run.pause', { subscription_id: Number(id) }).then(() => undefined);
+}
+
+export function resumeSubscriptionRun(id: string): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.run.resume', { subscription_id: Number(id) }).then(() => undefined);
+}
+
 export function runSubscriptionQuery(id: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.queries.run', { query_id: Number(id) }).then(() => undefined);
 }
 
-export function startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai' = 'ehentai'): Promise<void> {
+export function startGalleryImport(url: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.gallery.start', {
-    service_id: serviceId,
     url,
   }).then(() => undefined);
 }
 
 export interface GalleryImportCleanupResult {
   title: string | null;
+  already_exists: boolean;
 }
 
 export function cleanupGalleryImport(id: string): Promise<GalleryImportCleanupResult | null> {

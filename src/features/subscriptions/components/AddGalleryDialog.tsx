@@ -77,7 +77,15 @@ export function AddGalleryDialog({
                 ? 'https://exhentai.org/g/12345/67890abcde/'
                 : 'https://e-hentai.org/g/12345/67890abcde/'}
               autoFocus
-              onChange={(event) => setUrl(event.target.value)}
+              onChange={(event) => {
+                const nextUrl = event.target.value;
+                setUrl(nextUrl);
+                if (/^https?:\/\/(?:www\.)?exhentai\.org\//i.test(nextUrl.trim())) {
+                  setServiceId('exhentai');
+                } else if (/^https?:\/\/(?:www\.)?e-hentai\.org\//i.test(nextUrl.trim())) {
+                  setServiceId('ehentai');
+                }
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !busy && trimmedUrl) {
                   onAdd({ serviceId, url: trimmedUrl });
