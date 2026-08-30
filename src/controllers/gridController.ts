@@ -108,17 +108,22 @@ function stateFromPreferences(
   overrides: ViewPrefsDto | null,
 ) {
   const fallbackSort = defaultSort(scope);
-  const configuredField = overrides?.sort_field ?? defaults?.sort_field ?? null;
-  const configuredDirection = overrides?.sort_order ?? defaults?.sort_order ?? null;
-  const field = scope.kind === 'inbox' || configuredField == null
+  // Inbox starts oldest-first, but a choice made in Inbox belongs to that
+  // scope and must remain user-controlled. Do not inherit the application
+  // default until the Inbox has an explicit override of its own.
+  const configuredField = overrides?.sort_field
+    ?? (scope.kind === 'inbox' ? null : defaults?.sort_field)
+    ?? null;
+  const configuredDirection = overrides?.sort_order
+    ?? (scope.kind === 'inbox' ? null : defaults?.sort_order)
+    ?? null;
+  const field = configuredField == null
     ? fallbackSort.field
     : preferenceSortField(configuredField);
   return {
     sort: {
       field,
-      direction: scope.kind === 'inbox'
-        ? fallbackSort.direction
-        : configuredDirection == null
+      direction: configuredDirection == null
         ? (field === 'folder_order' ? 'ascending' : fallbackSort.direction)
         : preferenceSortDirection(configuredDirection),
     },
@@ -184,7 +189,7 @@ class GridSessionController {
       scope,
       searchText: '',
       filters: cloneFilters(options?.filters ?? initialGridFilters),
-      sort: options?.sort && scope.kind !== 'inbox' ? {
+      sort: options?.sort ? {
         field: options.sort.field,
         direction: options.sort.direction,
         randomSeed: options.sort.random_seed,
@@ -455,12 +460,6 @@ class GridSessionController {
   }
 
   private setSortNow(field: SortField, direction: SortDirection): void {
-    const scope = store.get(gridSessionAtom).scope;
-    const persistSort = scope.kind !== 'inbox';
-    if (scope.kind === 'inbox') {
-      field = 'imported_at';
-      direction = 'ascending';
-    }
     updateSession({
       sort: {
         field,
@@ -470,7 +469,7 @@ class GridSessionController {
     });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
-    if (persistSort) this.saveViewPref({ sort_field: field, sort_order: direction });
+    this.saveViewPref({ sort_field: field, sort_order: direction });
     void this.loadFirstPage({ preserveItems: true });
   }
 

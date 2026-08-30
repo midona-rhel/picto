@@ -279,15 +279,13 @@ describe('gridController pagination', () => {
     expect(queryItemsMock).toHaveBeenCalledTimes(callsBeforeChange);
   });
 
-  it('keeps Inbox oldest first despite global or saved scope preferences', async () => {
+  it('defaults Inbox to oldest first without inheriting the application sort', async () => {
     getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
       ? { sort_field: 'name', sort_order: 'descending' }
-      : { sort_field: 'rating', sort_order: 'descending' });
+      : {});
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
-    await gridController.navigateTo({ kind: 'inbox' }, {
-      sort: { field: 'name', direction: 'descending', random_seed: null },
-    });
+    await gridController.navigateTo({ kind: 'inbox' });
 
     expect(queryItemsMock.mock.calls[0][0].view.sort).toEqual({
       field: 'imported_at',
@@ -295,12 +293,27 @@ describe('gridController pagination', () => {
       random_seed: null,
     });
 
-    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+  });
+
+  it('uses and changes the Inbox-specific sort like any other view', async () => {
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { sort_field: 'name', sort_order: 'ascending' }
+      : { sort_field: 'rating', sort_order: 'descending' });
+    queryItemsMock.mockResolvedValue(page([item(1)], 1));
 
     await gridController.navigateTo({ kind: 'inbox' });
 
+    expect(queryItemsMock.mock.calls[0][0].view.sort).toEqual({
+      field: 'rating',
+      direction: 'descending',
+      random_seed: null,
+    });
+
+    gridController.applyIntent({ type: 'sort', field: 'name', direction: 'ascending' });
+    await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));
+
     expect(queryItemsMock.mock.calls[1][0].view.sort).toEqual({
-      field: 'imported_at',
+      field: 'name',
       direction: 'ascending',
       random_seed: null,
     });

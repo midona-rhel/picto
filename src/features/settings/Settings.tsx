@@ -915,7 +915,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                   </button>
                 </Row>
                 <p className={styles.settingHint}>
-                  Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox always keeps new items at the bottom.
+                  Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox resets to oldest items first.
                 </p>
               </div>
             </div>
