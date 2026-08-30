@@ -261,8 +261,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       const prev = prevContainerDimsRef.current;
       if (prev.w > 0 && newW > 0 && imageSizeRef.current && (newW !== prev.w || newH !== prev.h)) {
         const iSize = imageSizeRef.current;
-        const oldFit = Math.min(prev.w / iSize.width, prev.h / iSize.height, 1);
-        const newFit = Math.min(newW / iSize.width, newH / iSize.height, 1);
+        const oldFit = Math.min(prev.w / iSize.width, prev.h / iSize.height);
+        const newFit = Math.min(newW / iSize.width, newH / iSize.height);
         if (oldFit > 0 && newFit > 0) {
           const scaleRatio = newFit / oldFit;
           zoom.setState((s: ZoomState) => ({
