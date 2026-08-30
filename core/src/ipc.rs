@@ -7,6 +7,7 @@
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 use ts_rs::TS;
 
 use crate::dto::FileHash;
@@ -15,6 +16,11 @@ use crate::subscription_catalog::{
     SubscriptionCoverSelection, SubscriptionDestinationPolicy,
 };
 use crate::subscriptions::sites::normalize_ehentai_gallery_url;
+
+fn gallery_start_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// Greenfield command path. Commands return `None` until their complete
 /// product behavior has moved to `LibraryApplication`; production state only
@@ -169,9 +175,9 @@ pub fn dispatch_library(
             let input: RenameSubscriptionInput = parse(args_json)?;
             read(application.rename_subscription_library(input.subscription_id, &input.name)?)
         }
-        "subscriptions.pause" => {
+        "subscriptions.hold" => {
             let input: PauseSubscriptionInput = parse(args_json)?;
-            read(application.pause_subscription_library(input.subscription_id, input.paused)?)
+            read(application.set_subscription_hold_library(input.subscription_id, input.paused)?)
         }
         "subscriptions.pause_all" => {
             let input: PauseAllSubscriptionsInput = parse(args_json)?;
@@ -218,6 +224,14 @@ pub fn dispatch_library(
                 "created": run.created,
                 "receipt": receipt
             }))
+        }
+        "subscriptions.run.pause" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(application.pause_subscription_run_library(input.subscription_id)?)
+        }
+        "subscriptions.run.resume" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(application.resume_subscription_run_library(input.subscription_id, &now())?)
         }
         "subscriptions.cancel" => {
             let input: SubscriptionInput = parse(args_json)?;
@@ -559,17 +573,12 @@ pub async fn dispatch_library_async(
             read(PixivOAuthExchangeOutput { ok: true })
         }
         "subscriptions.gallery.start" => {
+            let _gallery_start = gallery_start_lock()
+                .lock()
+                .map_err(|_| "Gallery download start lock is unavailable".to_string())?;
             let input: GalleryImportInput = parse(args_json)?;
             let url = normalize_ehentai_gallery_url(&input.url)?;
             let is_exhentai = url.starts_with("https://exhentai.org/");
-            if input.service_id.as_deref().is_some_and(|service| {
-                !matches!(
-                    (service, is_exhentai),
-                    ("ehentai", false) | ("exhentai", true)
-                )
-            }) {
-                return Err("The selected gallery service does not match the URL".into());
-            }
             let gallery_id = url
                 .split('/')
                 .nth(4)
@@ -648,12 +657,12 @@ pub async fn dispatch_library_async(
             if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
                 return Err("Only transient E-Hentai gallery jobs can use gallery cleanup".into());
             }
-            let title = application
+            let (title, already_exists) = application
                 .library()
                 .auxiliary_read(
                     picto_library::database::WorkPriority::VisibleRead,
                     |connection| {
-                        connection
+                        let title = connection
                             .query_row(
                                 "SELECT NULLIF(TRIM(post.title), '')
                                  FROM subscription_source_post link
@@ -664,13 +673,36 @@ pub async fn dispatch_library_async(
                                 |row| row.get::<_, Option<String>>(0),
                             )
                             .optional()
-                            .map(Option::flatten)
-                            .map_err(Into::into)
+                            .map(Option::flatten)?;
+                        let already_exists = connection.query_row(
+                            "SELECT EXISTS(
+                                 SELECT 1
+                                 FROM subscription_run run
+                                 JOIN subscription_run_query run_query USING(run_id)
+                                 JOIN source_post_attempt attempt USING(run_query_id)
+                                 WHERE run.subscription_id = ?1
+                                   AND run.run_id = (
+                                       SELECT MAX(latest.run_id)
+                                       FROM subscription_run latest
+                                       WHERE latest.subscription_id = ?1
+                                   )
+                                   AND run.status = 'succeeded'
+                                   AND attempt.state = 'skipped'
+                                   AND attempt.terminal_reason = 'exact_duplicate'
+                             )",
+                            [input.subscription_id],
+                            |row| row.get::<_, bool>(0),
+                        )?;
+                        Ok((title, already_exists))
                     },
                 )
                 .map_err(|error| error.to_string())?;
             match application.delete_subscription_library(input.subscription_id) {
-                Ok(receipt) => read(GalleryImportCleanupResult { title, receipt }),
+                Ok(receipt) => read(GalleryImportCleanupResult {
+                    title,
+                    already_exists,
+                    receipt,
+                }),
                 Err(error) if error.contains("subscription does not exist") => {
                     read(Option::<GalleryImportCleanupResult>::None)
                 }
@@ -876,6 +908,7 @@ struct CreatedSubscriptionRun {
 #[derive(Serialize)]
 struct GalleryImportCleanupResult {
     title: Option<String>,
+    already_exists: bool,
     receipt: picto_library::MutationReceipt,
 }
 
@@ -952,7 +985,6 @@ pub struct AddSubscriptionQueryInput {
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct GalleryImportInput {
-    service_id: Option<String>,
     url: String,
 }
 

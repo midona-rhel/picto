@@ -92,7 +92,7 @@ impl ClaimedQueryRun {
             .unwrap_or(DEFAULT_SOURCE_POST_BATCH_SIZE)
     }
 
-    /// Number of successfully added posts still available to this query run.
+    /// Number of added posts still available to this query run.
     pub fn source_post_batch_size(&self) -> u32 {
         let configured = self.configured_post_limit();
         self.run_post_limit

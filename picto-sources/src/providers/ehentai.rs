@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 use regex::Regex;
 use tokio_util::sync::CancellationToken;
@@ -7,8 +9,9 @@ use url::Url;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptor, MediaDescriptorBuilder, NativeSourceAdapter, PostFuture,
-    ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
+    HttpRuntime, MediaDescriptor, MediaDescriptorBuilder, MediaFallback, MediaFuture,
+    NativeSourceAdapter, PostFuture, ProviderDescriptor, RequestCredentials, SourceError,
+    SourceErrorKind, SourcePost,
 };
 
 const DONE_CURSOR: &str = "done";
@@ -30,6 +33,10 @@ impl NativeSourceAdapter for EHentaiSource {
             partitions: &["gallery"],
             anonymous: true,
         }
+    }
+
+    fn credential_domains(&self) -> &'static [&'static str] {
+        &["e-hentai.org", "exhentai.org"]
     }
 
     fn validate_query(&self, query: &str) -> Result<(), SourceError> {
@@ -73,6 +80,20 @@ impl NativeSourceAdapter for EHentaiSource {
     ) -> PostFuture<'a> {
         Box::pin(async move { resolve_gallery(post, credentials, http, cancel).await })
     }
+
+    fn resolve_media<'a>(
+        &'a self,
+        media: MediaDescriptor,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> MediaFuture<'a> {
+        Box::pin(async move { resolve_gallery_media(media, credentials, http, cancel).await })
+    }
+
+    fn media_concurrency(&self) -> usize {
+        1
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,12 +119,8 @@ fn normalize_gallery_url(raw: &str) -> Result<GalleryAddress, SourceError> {
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
     {
-        return Err(invalid_query(
-            "E-Hentai imports require a canonical /g/<id>/<token>/ URL",
-        ));
+        return Err(invalid_query("Enter an E-Hentai or ExHentai gallery URL"));
     }
     let segments = url
         .path_segments()
@@ -176,6 +193,15 @@ async fn resolve_gallery(
     }
     require_private_gallery_session(&gallery, credentials)?;
     let credentials = site_credentials(credentials, &gallery);
+    #[cfg(debug_assertions)]
+    let started = Instant::now();
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        target: "picto_sources::providers::ehentai",
+        gallery_id = gallery.gallery_id,
+        private = gallery.private,
+        "Gallery resolution started"
+    );
 
     let first_page = http
         .get_text(gallery.url.clone(), &credentials, cancel)
@@ -184,6 +210,14 @@ async fn resolve_gallery(
     let metadata = parse_gallery_metadata(&first_page)?;
     let mut image_pages = BTreeMap::new();
     collect_image_pages(&first_page, &gallery, metadata.file_count, &mut image_pages)?;
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        target: "picto_sources::providers::ehentai",
+        gallery_id = gallery.gallery_id,
+        total_images = metadata.file_count,
+        discovered_image_pages = image_pages.len(),
+        "Gallery metadata resolved"
+    );
 
     let mut page = 1_usize;
     while image_pages.len() < metadata.file_count {
@@ -203,26 +237,34 @@ async fn resolve_gallery(
                 "E-Hentai gallery pagination repeated without exposing the remaining images",
             ));
         }
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            target: "picto_sources::providers::ehentai",
+            gallery_id = gallery.gallery_id,
+            gallery_page = page,
+            added_image_pages = added,
+            discovered_image_pages = image_pages.len(),
+            total_images = metadata.file_count,
+            "Gallery index page resolved"
+        );
         page += 1;
     }
     ensure_complete_image_sequence(&image_pages, metadata.file_count)?;
 
-    let mut media = Vec::with_capacity(metadata.file_count);
-    for image_page in image_pages.values() {
-        let Some(html) = http
-            .get_optional_text(image_page.url.clone(), &credentials, cancel)
-            .await?
-        else {
-            continue;
-        };
-        validate_image_page(&html, &gallery)?;
-        media.push(media_from_image_page(
-            &gallery,
-            image_page,
-            &html,
-            canonical_url,
-        )?);
-    }
+    let media = image_pages
+        .values()
+        .map(|image_page| deferred_media_from_image_page(&gallery, image_page, canonical_url))
+        .collect::<Vec<_>>();
+
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        target: "picto_sources::providers::ehentai",
+        gallery_id = gallery.gallery_id,
+        queued_media = media.len(),
+        total_images = metadata.file_count,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "Gallery resolution completed"
+    );
 
     post.creator = metadata.creator;
     post.name = metadata.name;
@@ -230,6 +272,91 @@ async fn resolve_gallery(
     post.tags = metadata.tags;
     post.media = media;
     Ok(post)
+}
+
+async fn resolve_gallery_media(
+    media: MediaDescriptor,
+    credentials: &RequestCredentials,
+    http: &HttpRuntime,
+    cancel: &CancellationToken,
+) -> Result<MediaDescriptor, SourceError> {
+    let canonical_url = media
+        .canonical_url
+        .as_deref()
+        .ok_or_else(|| invalid_response("E-Hentai media is missing its gallery URL"))?;
+    let gallery = normalize_gallery_url(canonical_url)
+        .map_err(|_| invalid_response("E-Hentai media has an invalid gallery URL"))?;
+    require_private_gallery_session(&gallery, credentials)?;
+    let original_allowed = !credentials.is_empty();
+    let number = usize::try_from(media.position)
+        .ok()
+        .and_then(|position| position.checked_add(1))
+        .ok_or_else(|| invalid_response("E-Hentai media has an invalid position"))?;
+    let page_url = Url::parse(&media.url)
+        .map_err(|_| invalid_response("E-Hentai media page URL is invalid"))?;
+    if page_url.host_str() != gallery.url.host_str()
+        || !page_url.path().starts_with("/s/")
+        || !page_url
+            .path()
+            .ends_with(&format!("/{}-{number}", gallery.gallery_id))
+    {
+        return Err(invalid_response(
+            "E-Hentai media page does not belong to its gallery",
+        ));
+    }
+    let token = page_url
+        .path_segments()
+        .and_then(|mut segments| segments.nth(1))
+        .unwrap_or_default()
+        .to_string();
+    let image_page = ImagePage {
+        number,
+        token,
+        url: page_url,
+    };
+    let credentials = site_credentials(credentials, &gallery);
+    let html = http
+        .get_optional_text(image_page.url.clone(), &credentials, cancel)
+        .await?
+        .ok_or_else(|| {
+            invalid_response(format!(
+                "E-Hentai image page {number} is no longer available"
+            ))
+        })?;
+    validate_image_page(&html, &gallery)?;
+    let resolved = media_from_image_page(
+        &gallery,
+        &image_page,
+        &html,
+        canonical_url,
+        original_allowed,
+    )?;
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        target: "picto_sources::providers::ehentai",
+        gallery_id = gallery.gallery_id,
+        resolved_media = number,
+        original = resolved
+            .url
+            .parse::<Url>()
+            .is_ok_and(|url| url.path().starts_with("/fullimg")),
+        "Gallery media URL resolved"
+    );
+    Ok(resolved)
+}
+
+fn deferred_media_from_image_page(
+    gallery: &GalleryAddress,
+    image_page: &ImagePage,
+    canonical_gallery_url: &str,
+) -> MediaDescriptor {
+    MediaDescriptorBuilder::new(
+        format!("ehentai:{}:{}", gallery.gallery_id, image_page.number),
+        (image_page.number - 1) as u32,
+        image_page.url.to_string(),
+    )
+    .canonical_url(canonical_gallery_url)
+    .build()
 }
 
 fn site_credentials(
@@ -448,8 +575,9 @@ fn media_from_image_page(
     image_page: &ImagePage,
     html: &str,
     canonical_gallery_url: &str,
+    original_allowed: bool,
 ) -> Result<MediaDescriptor, SourceError> {
-    let image = capture(html, image_element_regex(), 0)
+    let displayed_image = capture(html, image_element_regex(), 0)
         .and_then(|element| capture(element, src_attribute_regex(), 1))
         .map(decode_html_attribute)
         .ok_or_else(|| {
@@ -458,12 +586,26 @@ fn media_from_image_page(
                 image_page.number
             ))
         })?;
-    let mut url = if image.starts_with("//") {
-        Url::parse(&format!("https:{image}"))
-    } else {
-        image_page.url.join(&image)
+    let original_image = capture(html, original_image_regex(), 1).map(decode_html_attribute);
+    if original_allowed && original_image.is_none() && original_download_regex().is_match(html) {
+        return Err(invalid_response(format!(
+            "E-Hentai image page {} advertises an original file but its URL could not be resolved",
+            image_page.number
+        )));
     }
-    .map_err(|_| invalid_response("E-Hentai image page returned an invalid media URL"))?;
+    let selected_original = original_allowed && original_image.is_some();
+    let mut url = match original_image.filter(|_| original_allowed) {
+        Some(original_image) => original_image_url(gallery, &image_page.url, &original_image)?,
+        None if displayed_image.starts_with("//") => {
+            Url::parse(&format!("https:{displayed_image}")).map_err(|_| {
+                invalid_response("E-Hentai image page returned an invalid media URL")
+            })?
+        }
+        None => image_page
+            .url
+            .join(&displayed_image)
+            .map_err(|_| invalid_response("E-Hentai image page returned an invalid media URL"))?,
+    };
     if url.scheme() == "http" {
         url.set_scheme("https")
             .map_err(|_| invalid_response("E-Hentai image URL cannot use HTTPS"))?;
@@ -480,22 +622,31 @@ fn media_from_image_page(
         ));
     }
     if url.path().ends_with("/509.gif") {
-        return Err(SourceError::new(
-            SourceErrorKind::RateLimited,
-            "E-Hentai image quota is exhausted",
-            true,
-        ));
+        return Err(image_quota_error());
     }
     if is_archive(url.path()) {
         return Err(invalid_response(
             "E-Hentai image page returned an archive instead of an image",
         ));
     }
-    let file_name = url
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
+    let mut displayed_url = if displayed_image.starts_with("//") {
+        Url::parse(&format!("https:{displayed_image}"))
+    } else {
+        image_page.url.join(&displayed_image)
+    }
+    .ok();
+    if let Some(displayed_url) = displayed_url.as_mut() {
+        if displayed_url.scheme() == "http" {
+            let _ = displayed_url.set_scheme("https");
+        }
+        if displayed_url.path().ends_with("/509.gif") {
+            return Err(image_quota_error());
+        }
+    }
+    let file_name = selected_original
+        .then(|| media_file_name(&url))
+        .flatten()
+        .or_else(|| displayed_url.as_ref().and_then(media_file_name))
         .unwrap_or_else(|| {
             format!(
                 "ehentai_{}_{:04}.image",
@@ -503,15 +654,99 @@ fn media_from_image_page(
             )
         });
     let headers = BTreeMap::from([("Referer".to_string(), image_page.url.to_string())]);
-    Ok(MediaDescriptorBuilder::new(
+    let display_fallback = selected_original
+        .then_some(displayed_url.as_ref())
+        .flatten()
+        .filter(|url| {
+            url.scheme() == "https"
+                && url
+                    .port()
+                    .is_none_or(|_| is_hath_host(url.host_str().unwrap_or_default()))
+                && allowed_image_host(url.host_str().unwrap_or_default())
+        })
+        .map(|url| {
+            let file_name = media_file_name(url);
+            let mime_hint = file_name
+                .as_deref()
+                .and_then(|name| mime_guess::from_path(name).first_raw())
+                .map(ToOwned::to_owned);
+            MediaFallback {
+                url: url.to_string(),
+                file_name,
+                mime_hint,
+                expected_size: None,
+                html_marker: Some("requires gp".into()),
+            }
+        });
+    let mut builder = MediaDescriptorBuilder::new(
         format!("ehentai:{}:{}", gallery.gallery_id, image_page.number),
         (image_page.number - 1) as u32,
         url.to_string(),
     )
     .canonical_url(canonical_gallery_url)
     .file_name(file_name)
-    .headers(headers)
-    .build())
+    .headers(headers);
+    if selected_original {
+        if let Some(nl) = capture(html, nl_token_regex(), 1).map(decode_html_attribute) {
+            let mut retry_url = url.clone();
+            retry_url.query_pairs_mut().append_pair("nl", &nl);
+            for _ in 0..2 {
+                let retry_file_name = media_file_name(&url);
+                let retry_mime_hint = retry_file_name
+                    .as_deref()
+                    .and_then(|name| mime_guess::from_path(name).first_raw())
+                    .map(ToOwned::to_owned);
+                builder = builder.fallback(MediaFallback {
+                    url: retry_url.to_string(),
+                    file_name: retry_file_name,
+                    mime_hint: retry_mime_hint,
+                    expected_size: None,
+                    html_marker: None,
+                });
+            }
+        }
+    }
+    if let Some(fallback) = display_fallback {
+        builder = builder.fallback(fallback);
+    }
+    Ok(builder.build())
+}
+
+fn media_file_name(url: &Url) -> Option<String> {
+    url.path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("fullimg.php"))
+        .map(ToOwned::to_owned)
+}
+
+fn original_image_url(
+    gallery: &GalleryAddress,
+    image_page_url: &Url,
+    original_image: &str,
+) -> Result<Url, SourceError> {
+    let mut url = if original_image.starts_with("//") {
+        Url::parse(&format!("https:{original_image}"))
+    } else {
+        image_page_url.join(original_image)
+    }
+    .map_err(|_| invalid_response("E-Hentai image page returned an invalid original URL"))?;
+    if !matches!(url.host_str(), Some("e-hentai.org" | "exhentai.org"))
+        || !(url.path().starts_with("/fullimg.php") || url.path().starts_with("/fullimg/"))
+    {
+        return Err(invalid_response(
+            "E-Hentai image page returned an unsupported original URL",
+        ));
+    }
+
+    // Match gallery-dl: apply the original path to the selected gallery host
+    // so a private gallery keeps using its captured ExHentai session.
+    url.set_scheme("https")
+        .map_err(|_| invalid_response("E-Hentai original URL cannot use HTTPS"))?;
+    url.set_host(gallery.url.host_str())
+        .map_err(|_| invalid_response("E-Hentai original URL has an invalid host"))?;
+    url.set_port(None)
+        .map_err(|_| invalid_response("E-Hentai original URL has an invalid port"))?;
+    Ok(url)
 }
 
 fn allowed_image_host(host: &str) -> bool {
@@ -565,7 +800,27 @@ fn validate_image_page(html: &str, gallery: &GalleryAddress) -> Result<(), Sourc
     if html.starts_with("Invalid page") || html.starts_with("Keep trying") {
         return Err(invalid_response("E-Hentai returned an invalid image page"));
     }
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("temporarily banned") {
+        return Err(SourceError::new(
+            SourceErrorKind::RateLimited,
+            "E-Hentai temporarily blocked image downloads; retry later",
+            true,
+        ));
+    }
+    if lower.contains("exceeded your image viewing limit") || lower.contains("image limit exceeded")
+    {
+        return Err(image_quota_error());
+    }
     Ok(())
+}
+
+fn image_quota_error() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::RateLimited,
+        "E-Hentai image quota is exhausted",
+        true,
+    )
 }
 
 fn is_archive(raw: &str) -> bool {
@@ -614,6 +869,12 @@ regex_fn!(
     r#"(?is)<img\b[^>]*\bid=[\"']img[\"'][^>]*>"#
 );
 regex_fn!(src_attribute_regex, r#"(?i)\bsrc=[\"']([^\"']+)[\"']"#);
+regex_fn!(
+    original_image_regex,
+    r#"(?is)<a\b[^>]*\bhref=[\"']([^\"']*/fullimg(?:\.php|/)[^\"']*)[\"'][^>]*>"#
+);
+regex_fn!(original_download_regex, r#"(?i)download\s+original\b"#);
+regex_fn!(nl_token_regex, r#"(?i)\bnl\(\s*['\"]([^'\"]+)"#);
 
 fn invalid_query(message: impl Into<String>) -> SourceError {
     SourceError::new(SourceErrorKind::InvalidQuery, message, false)
@@ -651,6 +912,7 @@ mod tests {
 
     #[test]
     fn accepts_only_concrete_gallery_urls_and_preserves_the_selected_host() {
+        assert_eq!(EHentaiSource.media_concurrency(), 1);
         let public = normalize_gallery_url("http://www.e-hentai.org/g/12345/67890ABCDE/").unwrap();
         assert_eq!(
             public.url.as_str(),
@@ -663,13 +925,18 @@ mod tests {
             "https://exhentai.org/g/12345/67890abcde/"
         );
         assert!(private.private);
+        let paged =
+            normalize_gallery_url("https://exhentai.org/g/1449482/9051983a03/?p=1#page").unwrap();
+        assert_eq!(
+            paged.url.as_str(),
+            "https://exhentai.org/g/1449482/9051983a03/"
+        );
 
         for invalid in [
             "https://e-hentai.org/?f_search=fixture",
             "https://e-hentai.org/favorites.php",
             "https://e-hentai.org/mpv/12345/67890abcde/",
             "https://e-hentai.org/s/1111111111/12345-1",
-            "https://e-hentai.org/g/12345/67890abcde/?p=1",
             "https://example.com/g/12345/67890abcde/",
         ] {
             assert!(
@@ -774,35 +1041,143 @@ mod tests {
     }
 
     #[test]
-    fn resolves_the_displayed_image_without_archive_or_original_paths() {
+    fn prefers_the_original_image_over_the_displayed_resample() {
         let gallery = public_gallery();
         let image_page = ImagePage {
             number: 1,
             token: "1111111111".to_string(),
             url: Url::parse("https://e-hentai.org/s/1111111111/12345-1").unwrap(),
         };
-        let media =
-            media_from_image_page(&gallery, &image_page, IMAGE_PAGE_1, gallery.url.as_str())
-                .unwrap();
+        let media = media_from_image_page(
+            &gallery,
+            &image_page,
+            IMAGE_PAGE_1,
+            gallery.url.as_str(),
+            true,
+        )
+        .unwrap();
         assert_eq!(media.position, 0);
         assert_eq!(media.stable_id, "ehentai:12345:1");
         assert_eq!(media.file_name.as_deref(), Some("fixture-01.jpg"));
         assert_eq!(media.mime_hint.as_deref(), Some("image/jpeg"));
         assert_eq!(
             media.url,
-            "https://a.example.hath.network:41330/h/fixture-01.jpg?token=temporary&expires=1"
+            "https://e-hentai.org/fullimg.php?gid=12345&page=1&key=fixture-key"
         );
         assert_eq!(media.canonical_url.as_deref(), Some(gallery.url.as_str()));
         assert_eq!(
             media.headers.get("Referer").map(String::as_str),
             Some(image_page.url.as_str())
         );
-        assert!(!media.url.contains("fullimg"));
+        assert!(media.url.contains("fullimg"));
         assert!(!media.url.contains("archiver"));
+        let fallback = media.fallbacks.last().expect("display fallback");
+        assert!(fallback.url.contains("hath.network"));
+        assert_eq!(fallback.file_name.as_deref(), Some("fixture-01.jpg"));
+        assert_eq!(fallback.html_marker.as_deref(), Some("requires gp"));
+        assert_eq!(media.fallbacks.len(), 3);
+        assert!(media.fallbacks[0].url.contains("nl=fixture-nl"));
+        assert!(media.fallbacks[1].url.contains("nl=fixture-nl"));
+        assert!(media.fallbacks[..2]
+            .iter()
+            .all(|fallback| fallback.html_marker.is_none()));
+    }
+
+    #[test]
+    fn accepts_path_style_originals_and_pins_them_to_the_gallery_domain() {
+        let gallery = normalize_gallery_url("https://exhentai.org/g/12345/67890abcde/").unwrap();
+        let image_page = ImagePage {
+            number: 1,
+            token: "1111111111".to_string(),
+            url: Url::parse("https://exhentai.org/s/1111111111/12345-1").unwrap(),
+        };
+        let html = IMAGE_PAGE_1
+            .replace(
+                "https://e-hentai.org/fullimg.php?gid=12345&amp;page=1&amp;key=fixture-key",
+                "https://e-hentai.org/fullimg/12345/fixture-key/fixture-01.jpg",
+            )
+            .replace(
+                "fixture-01.jpg?token=temporary",
+                "fixture-01.webp?token=temporary",
+            );
+
+        let media = media_from_image_page(&gallery, &image_page, &html, gallery.url.as_str(), true)
+            .unwrap();
+
+        assert_eq!(
+            media.url,
+            "https://exhentai.org/fullimg/12345/fixture-key/fixture-01.jpg"
+        );
+        assert_eq!(media.file_name.as_deref(), Some("fixture-01.jpg"));
+        assert_eq!(media.mime_hint.as_deref(), Some("image/jpeg"));
+        assert!(!media.fallbacks.is_empty());
+        assert!(!media.url.contains("hath.network"));
+    }
+
+    #[test]
+    fn does_not_silently_use_a_resample_when_an_original_link_is_unrecognized() {
+        let gallery = public_gallery();
+        let image_page = ImagePage {
+            number: 1,
+            token: "1111111111".to_string(),
+            url: Url::parse("https://e-hentai.org/s/1111111111/12345-1").unwrap(),
+        };
+        let html = IMAGE_PAGE_1.replace("fullimg.php", "original.php");
+
+        let error = media_from_image_page(&gallery, &image_page, &html, gallery.url.as_str(), true)
+            .unwrap_err();
+
+        assert_eq!(error.kind, SourceErrorKind::InvalidResponse);
+        assert!(error.message.contains("original file"));
+    }
+
+    #[test]
+    fn anonymous_public_galleries_use_the_displayed_file_like_gallery_dl() {
+        let gallery = public_gallery();
+        let image_page = ImagePage {
+            number: 1,
+            token: "1111111111".to_string(),
+            url: Url::parse("https://e-hentai.org/s/1111111111/12345-1").unwrap(),
+        };
+
+        let media = media_from_image_page(
+            &gallery,
+            &image_page,
+            IMAGE_PAGE_1,
+            gallery.url.as_str(),
+            false,
+        )
+        .unwrap();
+
+        assert!(media.url.contains("hath.network"));
+        assert!(!media.url.contains("fullimg"));
+    }
+
+    #[test]
+    fn defers_each_image_page_until_the_downloader_is_ready_for_it() {
+        let gallery = public_gallery();
+        let image_page = ImagePage {
+            number: 1,
+            token: "1111111111".to_string(),
+            url: Url::parse("https://e-hentai.org/s/1111111111/12345-1").unwrap(),
+        };
+        let deferred = deferred_media_from_image_page(&gallery, &image_page, gallery.url.as_str());
+
+        assert_eq!(deferred.stable_id, "ehentai:12345:1");
+        assert_eq!(deferred.url, image_page.url.as_str());
+        assert_eq!(
+            deferred.canonical_url.as_deref(),
+            Some(gallery.url.as_str())
+        );
+        assert!(deferred.file_name.is_none());
     }
 
     #[test]
     fn requires_only_the_pinned_extractor_session_cookies_for_exhentai() {
+        assert_eq!(
+            EHentaiSource.credential_domains(),
+            &["e-hentai.org", "exhentai.org"]
+        );
         let gallery = normalize_gallery_url("https://exhentai.org/g/12345/67890abcde/").unwrap();
         let mut credentials = RequestCredentials::default();
         assert_eq!(
@@ -834,15 +1209,43 @@ mod tests {
             &image_page,
             "<img id=\"img\" src=\"https://ehgt.org/g/509.gif\">",
             gallery.url.as_str(),
+            false,
         )
         .unwrap_err();
         assert_eq!(quota.kind, SourceErrorKind::RateLimited);
+        let quota_with_original = media_from_image_page(
+            &gallery,
+            &image_page,
+            &IMAGE_PAGE_1.replace(
+                "https://a.example.hath.network:41330/h/fixture-01.jpg?token=temporary&amp;expires=1",
+                "https://ehgt.org/g/509.gif",
+            ),
+            gallery.url.as_str(),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(quota_with_original.kind, SourceErrorKind::RateLimited);
         assert!(media_from_image_page(
             &gallery,
             &image_page,
             "<img id=\"img\" src=\"https://ehgt.org/g/gallery.zip\">",
             gallery.url.as_str(),
+            false,
         )
         .is_err());
+    }
+
+    #[test]
+    fn image_page_bans_and_limits_are_retryable_rate_limits() {
+        let gallery = public_gallery();
+        for html in [
+            "Your IP address has been temporarily banned",
+            "You have exceeded your image viewing limit",
+            "Image limit exceeded",
+        ] {
+            let error = validate_image_page(html, &gallery).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::RateLimited);
+            assert!(error.retryable);
+        }
     }
 }

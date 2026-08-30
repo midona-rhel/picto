@@ -23,12 +23,12 @@
     ]
   },
   "attachments": [
-    {"server": "https://n3.kemono.cr", "name": "cover.png", "path": "/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"},
-    {"server": "https://n2.kemono.cr", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"},
-    {"server": "https://n1.kemono.cr", "name": "source.zip", "path": "/cc/cc/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.zip"}
+    {"server": "https://file.pawchive.pw", "name": "cover.png", "path": "/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"},
+    {"server": "https://file.pawchive.pw", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"},
+    {"server": "https://file.pawchive.pw", "name": "source.zip", "path": "/cc/cc/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.zip"}
   ],
   "videos": [
-    {"server": "https://n2.kemono.cr", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"}
+    {"server": "https://file.pawchive.pw", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"}
   ],
   "previews": []
 }

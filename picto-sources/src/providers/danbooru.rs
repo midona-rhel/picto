@@ -41,6 +41,10 @@ impl JsonPageSource for DanbooruSource {
         }
     }
 
+    fn user_agent(&self) -> Option<&'static str> {
+        Some(crate::http::APPLICATION_USER_AGENT)
+    }
+
     fn validate_query(&self, query: &str) -> Result<(), SourceError> {
         QUERY.validate(query)
     }
@@ -88,15 +92,37 @@ fn normalize_post(request: &DiscoveryRequest, post: ApiPost) -> SourcePost {
     add_words(&mut tags, "", &post.tag_string_meta);
     RATINGS.add(&mut tags, post.rating.as_deref());
 
-    let media = post
-        .file_url
-        .or(post.large_file_url)
+    let media_url = match post.file_ext.as_deref() {
+        Some("zip") => post
+            .large_file_url
+            .as_deref()
+            .and_then(normalize_media_url)
+            .filter(|url| {
+                let path = Url::parse(url)
+                    .ok()
+                    .map(|url| url.path().to_ascii_lowercase())
+                    .unwrap_or_default();
+                path.ends_with(".webm") || path.ends_with(".mp4")
+            }),
+        _ => post.file_url.as_deref().and_then(normalize_media_url),
+    };
+    let media = media_url
         .filter(|url| !url.trim().is_empty())
         .map(|url| {
+            let selected_extension = if post.file_ext.as_deref() == Some("zip") {
+                Url::parse(&url).ok().and_then(|url| {
+                    url.path_segments()
+                        .and_then(|mut segments| segments.next_back())
+                        .and_then(|name| name.rsplit_once('.'))
+                        .map(|(_, extension)| extension.to_string())
+                })
+            } else {
+                post.file_ext.clone()
+            };
             let file_name = post
                 .md5
                 .as_deref()
-                .zip(post.file_ext.as_deref())
+                .zip(selected_extension.as_deref())
                 .map(|(hash, extension)| format!("{hash}.{extension}"))
                 .unwrap_or_else(|| format!("danbooru_{post_id}.media"));
             MediaDescriptorBuilder::new(format!("danbooru:{post_id}:0"), 0, url)
@@ -122,6 +148,19 @@ fn normalize_post(request: &DiscoveryRequest, post: ApiPost) -> SourcePost {
         media,
         resume_cursor_after: Some(CURSOR.encode(post_id)),
     }
+}
+
+fn normalize_media_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Url::parse("https://danbooru.donmai.us")
+        .expect("static Danbooru root")
+        .join(value)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.to_string())
 }
 
 fn add_words(tags: &mut CanonicalTagSet, namespace: &str, words: &str) {
@@ -209,5 +248,59 @@ mod tests {
         assert!(post.tags.contains(&CanonicalTag::new("", "highres")));
         assert!(post.tags.contains(&CanonicalTag::new("rating", "explicit")));
         assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/png"));
+        assert_eq!(post.media[0].url, "https://cdn.donmai.us/file.png");
+    }
+
+    #[test]
+    fn never_substitutes_the_large_sample_for_a_missing_original() {
+        let request = DiscoveryRequest {
+            query: "canine".into(),
+            partition: SourcePartition::new("posts"),
+            cursor: None,
+            page_size: 10,
+        };
+        let response: Vec<ApiPost> = serde_json::from_value(json!([{
+            "id": 43,
+            "large_file_url": "https://cdn.donmai.us/sample/sample-43.jpg"
+        }]))
+        .unwrap();
+        let batch = DanbooruSource.normalize(&request, response).unwrap();
+        assert!(batch.posts[0].media.is_empty());
+    }
+
+    #[test]
+    fn ugoira_uses_the_derived_video_instead_of_the_source_archive() {
+        let request = DiscoveryRequest {
+            query: "animated".into(),
+            partition: SourcePartition::new("posts"),
+            cursor: None,
+            page_size: 10,
+        };
+        let response: Vec<ApiPost> = serde_json::from_value(json!([{
+            "id": 44,
+            "file_url": "https://cdn.donmai.us/original/44.zip",
+            "large_file_url": "https://cdn.donmai.us/original/44.webm",
+            "file_ext": "zip",
+            "md5": "0123456789abcdef0123456789abcdef"
+        }]))
+        .unwrap();
+        let batch = DanbooruSource.normalize(&request, response).unwrap();
+        assert_eq!(batch.posts[0].media.len(), 1);
+        assert_eq!(
+            batch.posts[0].media[0].url,
+            "https://cdn.donmai.us/original/44.webm"
+        );
+        assert_eq!(
+            batch.posts[0].media[0].file_name.as_deref(),
+            Some("0123456789abcdef0123456789abcdef.webm")
+        );
+    }
+
+    #[test]
+    fn normalizes_scheme_relative_original_urls() {
+        assert_eq!(
+            normalize_media_url("//cdn.donmai.us/original/file.png").as_deref(),
+            Some("https://cdn.donmai.us/original/file.png")
+        );
     }
 }

@@ -1,5 +1,5 @@
+mod archive_feed;
 pub mod baraag;
-pub mod coomer;
 pub mod danbooru;
 pub mod deviantart;
 pub mod e621;
@@ -9,7 +9,6 @@ pub mod furaffinity;
 pub mod gelbooru;
 pub mod hentaifoundry;
 pub mod idolcomplex;
-pub mod kemono;
 pub mod konachan;
 mod moebooru;
 pub mod newgrounds;

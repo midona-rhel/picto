@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration};
+use chrono::DateTime;
 use picto_library::database::WorkPriority;
 use picto_library::{LibraryError, MutationReceipt};
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -17,9 +17,6 @@ use crate::subscriptions::{
 use picto_sources::{SkipReason, SourcePostOutcome};
 
 const RESOURCES: [&str; 2] = ["subscriptions", "tasks"];
-const MAX_ATTEMPTS: i64 = 3;
-const RETRY_BASE_SECONDS: i64 = 60;
-
 fn resources() -> Vec<String> {
     RESOURCES.iter().map(|value| (*value).to_owned()).collect()
 }
@@ -37,7 +34,7 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
             resources(),
             [],
             |transaction, _| {
-                transaction.execute(
+                let settled_added = transaction.execute(
                     "UPDATE source_post_attempt
                      SET state = 'added', terminal_reason = NULL, settled_at = ?1
                      WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
@@ -48,7 +45,7 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                        )",
                     [now],
                 )?;
-                transaction.execute(
+                let settled_skipped = transaction.execute(
                     "UPDATE source_post_attempt
                      SET state = 'skipped', terminal_reason = 'exact_duplicate', settled_at = ?1
                      WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
@@ -65,7 +62,7 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                        )",
                     [now],
                 )?;
-                transaction.execute(
+                let reconciled_files = transaction.execute(
                     "UPDATE source_file_attempt
                      SET state = CASE
                              WHEN EXISTS (
@@ -86,9 +83,16 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                 )?;
                 // No canonical commit exists for these attempts. Replay the
                 // same provider boundary from its last committed cursor.
-                transaction.execute(
+                let abandoned_attempts = transaction.execute(
                     "DELETE FROM source_post_attempt
-                     WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                     WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM subscription_run_query run_query
+                           JOIN subscription_query query USING(query_id)
+                           WHERE run_query.run_query_id = source_post_attempt.run_query_id
+                             AND query.site_id = 'ehentai'
+                       )",
                     [],
                 )?;
                 let query_runs = transaction.execute(
@@ -108,7 +112,26 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                     [],
                 )?;
                 let counts = RecoveryCounts { runs, query_runs };
-                Ok((runs != 0 || query_runs != 0).then_some(counts))
+                let changed = settled_added != 0
+                    || settled_skipped != 0
+                    || reconciled_files != 0
+                    || abandoned_attempts != 0
+                    || runs != 0
+                    || query_runs != 0;
+                #[cfg(debug_assertions)]
+                if changed {
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        settled_added,
+                        settled_skipped,
+                        reconciled_files,
+                        abandoned_attempts,
+                        runs,
+                        query_runs,
+                        "Recovered durable subscription state"
+                    );
+                }
+                Ok(changed.then_some(counts))
             },
         )
         .map_err(|error| error.to_string())?;
@@ -180,6 +203,9 @@ pub fn claim_next_query(
             resources(),
             [],
             |transaction, _| {
+                if crate::subscription_catalog::subscriptions_globally_paused(transaction)? {
+                    return Ok(None);
+                }
                 let candidates = transaction
                     .prepare(
                         "SELECT qr.run_query_id, qr.run_id, qr.query_id, r.subscription_id,
@@ -192,7 +218,9 @@ pub fn claim_next_query(
                          JOIN subscription_query q ON q.query_id = qr.query_id
                          JOIN subscription s ON s.subscription_id = r.subscription_id
                          WHERE qr.status = 'pending' AND qr.available_at <= ?1
+                           AND qr.failure_kind IS NULL
                            AND r.status IN ('pending', 'running')
+                           AND r.failure_kind IS NULL
                            AND s.paused = 0
                            AND (q.paused = 0 OR r.requested_by = 'manual-query')
                            AND NOT EXISTS (
@@ -249,7 +277,7 @@ pub fn claim_next_query(
                 else {
                     return Ok(None);
                 };
-                let accepted_posts: u32 = transaction
+                let added_posts: u32 = transaction
                     .query_row(
                         "SELECT COUNT(*) FROM source_post_attempt
                          WHERE run_query_id = ?1 AND state = 'added'",
@@ -259,7 +287,7 @@ pub fn claim_next_query(
                     .try_into()
                     .unwrap_or(u32::MAX);
                 let configured_limit = candidate.source_post_batch_size();
-                let remaining = configured_limit.saturating_sub(accepted_posts);
+                let remaining = configured_limit.saturating_sub(added_posts);
                 if remaining == 0 {
                     transaction.execute(
                         "UPDATE subscription_run_query
@@ -271,14 +299,8 @@ pub fn claim_next_query(
                     settle_run(transaction, candidate.run_id, now)?;
                     return Ok(Some(None));
                 }
-                // Downloads settle ahead of canonical ingestion. A post that is
-                // downloaded but not yet ingested is invisible to the accepted
-                // count above, so an unreserved claim would hand out a window
-                // that overruns the added-post budget once ingestion catches
-                // up. Reserve those in-flight posts; when they fill the whole
-                // remaining budget, wait for ingestion instead of claiming or
-                // prematurely settling (a skip releases its reservation on the
-                // next tick).
+                // A traversed post may still be downloading or ingesting. Do not
+                // admit another worker while that single unsettled post exists.
                 let in_flight_posts: u32 = transaction
                     .query_row(
                         "SELECT COUNT(*) FROM source_post_attempt
@@ -289,7 +311,9 @@ pub fn claim_next_query(
                     )?
                     .try_into()
                     .unwrap_or(u32::MAX);
-                if in_flight_posts != 0 {
+                if in_flight_posts != 0
+                    && !(candidate.site_id == "ehentai" && in_flight_posts == 1)
+                {
                     return Ok(None);
                 }
                 candidate.run_post_limit = Some(remaining);
@@ -381,7 +405,7 @@ pub fn query_ingest_settlement(
 }
 
 /// Resolve the current post from canonical state after its ingest work has
-/// settled. Source runners use this result to advance their cursor and added
+/// settled. Source runners use this result to advance their cursor and post
 /// budget; they never infer success from downloads alone.
 pub fn settled_post_outcome(
     application: &LibraryApplication,
@@ -781,10 +805,7 @@ pub fn mark_source_item_failed(
                        AND (state != 'failed' OR last_error IS NOT ?1)",
                     params![error, now, source_item_id],
                 )?;
-                if changed == 0 {
-                    return Ok(None);
-                }
-                transaction.execute(
+                let issue_changed = transaction.execute(
                     "INSERT INTO subscription_issue (
                          issue_key, subscription_id, query_id, issue_kind, message,
                          status, first_seen_at, last_seen_at
@@ -800,7 +821,7 @@ pub fn mark_source_item_failed(
                         now,
                     ],
                 )?;
-                Ok((changed != 0).then_some(()))
+                Ok((changed != 0 || issue_changed != 0).then_some(()))
             },
         )
         .map(|_| ())
@@ -947,6 +968,34 @@ fn record_post_in(
         )?;
         ids.insert(item.item_key.clone(), source_item_id);
     }
+    let stale_items = {
+        let mut statement = transaction.prepare(
+            "SELECT source_item_id, item_key
+             FROM source_item
+             WHERE source_post_id = ?1
+               AND media_item_id IS NULL
+               AND state IN ('pending', 'downloaded')",
+        )?;
+        let items = statement
+            .query_map([source_post_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        items
+    };
+    for (source_item_id, item_key) in stale_items {
+        if ids.contains_key(&item_key) {
+            continue;
+        }
+        transaction.execute(
+            "UPDATE source_item
+             SET state = 'deleted', last_error = NULL, updated_at = ?1
+             WHERE source_item_id = ?2
+               AND media_item_id IS NULL
+               AND state IN ('pending', 'downloaded')",
+            params![now, source_item_id],
+        )?;
+    }
     Ok(ids)
 }
 
@@ -957,6 +1006,28 @@ pub fn complete_query(
     now: &str,
 ) -> Result<MutationReceipt, String> {
     complete_query_with_policy(application, query, resume_cursor, true, now)
+}
+
+pub fn checkpoint_query_cursor(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    resume_cursor: &str,
+) -> Result<MutationReceipt, String> {
+    write_transition(application, |transaction| {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET resume_cursor = ?1
+             WHERE run_query_id = ?2 AND status = 'running'",
+            params![resume_cursor, query.run_query_id],
+        )?;
+        transaction.execute(
+            "UPDATE subscription_query
+             SET resume_cursor = ?1
+             WHERE query_id = ?2",
+            params![resume_cursor, query.query_id],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn complete_query_terminal(
@@ -1047,6 +1118,25 @@ pub fn interrupt_query(
     now: &str,
 ) -> Result<MutationReceipt, String> {
     write_transition(application, |transaction| {
+        let abandoned_attempts = if query.site_id == "ehentai" {
+            0
+        } else {
+            transaction.execute(
+                "DELETE FROM source_post_attempt
+                 WHERE run_query_id = ?1
+                   AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                [query.run_query_id],
+            )?
+        };
+        #[cfg(debug_assertions)]
+        if abandoned_attempts != 0 {
+            tracing::debug!(
+                target: "picto_core::native_source",
+                run_query_id = query.run_query_id,
+                abandoned_attempts,
+                "Discarded interrupted source-post work for replay"
+            );
+        }
         transaction.execute(
             "UPDATE subscription_run_query
              SET status = 'pending', available_at = ?1, started_at = NULL, finished_at = NULL,
@@ -1070,53 +1160,25 @@ pub fn fail_query(
     query: &ClaimedQueryRun,
     kind: &str,
     message: &str,
-    retryable: bool,
+    _retryable: bool,
     now: &str,
 ) -> Result<MutationReceipt, String> {
-    // A site that states when its limit resets gets parked until then
-    // instead of burning generic backoff retries against a closed window.
-    let stated_reset = (kind == "rate_limited")
-        .then(|| rate_limit_reset_at(message, now))
-        .flatten();
-    let retry_at = if retryable {
-        match stated_reset {
-            Some(reset) => Some(reset),
-            None => (query.attempt_count < MAX_ATTEMPTS)
-                .then(|| next_retry_at(now, query.attempt_count))
-                .transpose()?,
-        }
-    } else {
-        None
-    };
     write_transition(application, |transaction| {
-        let (status, finished): (&str, Option<&str>) = if retry_at.is_some() {
-            ("pending", None)
-        } else {
-            ("failed", Some(now))
-        };
+        // Request-level retries are exhausted before this boundary. Preserve
+        // the run for an explicit Retry, but do not loop it again this session.
+        transaction.execute(
+            "DELETE FROM source_post_attempt
+             WHERE run_query_id = ?1
+               AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+            [query.run_query_id],
+        )?;
         transaction.execute(
             "UPDATE subscription_run_query
-             SET status = ?1, available_at = COALESCE(?2, available_at), finished_at = ?3,
-                 failure_kind = ?4, error_message = ?5
-             WHERE run_query_id = ?6 AND status = 'running'",
-            params![
-                status,
-                retry_at,
-                finished,
-                kind,
-                message,
-                query.run_query_id
-            ],
+             SET status = 'pending', finished_at = NULL,
+                 failure_kind = ?1, error_message = ?2
+             WHERE run_query_id = ?3 AND status = 'running'",
+            params![kind, message, query.run_query_id],
         )?;
-        if retry_at.is_none() {
-            transaction.execute(
-                "UPDATE source_post_attempt
-                 SET state = 'failed', terminal_reason = ?1, settled_at = ?2
-                 WHERE run_query_id = ?3
-                   AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
-                params![kind, now, query.run_query_id],
-            )?;
-        }
         transaction.execute(
             "UPDATE subscription_query
              SET last_failure_at = ?1, last_failure_kind = ?2, last_failure_message = ?3
@@ -1141,15 +1203,13 @@ pub fn fail_query(
                 now
             ],
         )?;
-        if retry_at.is_some() {
-            transaction.execute(
-                "UPDATE subscription_run SET status = 'pending', finished_at = NULL
-                 WHERE run_id = ?1 AND status = 'running'",
-                [query.run_id],
-            )?;
-        } else {
-            settle_run(transaction, query.run_id, now)?;
-        }
+        transaction.execute(
+            "UPDATE subscription_run
+             SET status = 'pending', finished_at = NULL,
+                 failure_kind = ?1, error_message = ?2
+             WHERE run_id = ?3 AND status = 'running'",
+            params![kind, message, query.run_id],
+        )?;
         Ok(())
     })
 }
@@ -1361,38 +1421,6 @@ fn validate_post(post: &NormalizedPost) -> Result<(), String> {
         return Err("source post contains invalid or duplicate items".into());
     }
     Ok(())
-}
-
-/// Parse a provider-stated local reset time ("Rate limit will reset at
-/// 20:04:22") into the next matching instant, with a safety margin.
-fn rate_limit_reset_at(message: &str, now: &str) -> Option<String> {
-    static RESET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let captures = RESET
-        .get_or_init(|| {
-            regex::Regex::new(r"reset at (\d{1,2}):(\d{2}):(\d{2})").expect("valid reset regex")
-        })
-        .captures(message)?;
-    let time = chrono::NaiveTime::from_hms_opt(
-        captures[1].parse().ok()?,
-        captures[2].parse().ok()?,
-        captures[3].parse().ok()?,
-    )?;
-    let now_local = DateTime::parse_from_rfc3339(now)
-        .ok()?
-        .with_timezone(&chrono::Local);
-    let mut candidate = now_local.date_naive().and_time(time);
-    if candidate <= now_local.naive_local() {
-        candidate += Duration::days(1);
-    }
-    let candidate = candidate.and_local_timezone(chrono::Local).earliest()? + Duration::minutes(2);
-    Some(candidate.with_timezone(&chrono::Utc).to_rfc3339())
-}
-
-fn next_retry_at(now: &str, attempt_count: i64) -> Result<String, String> {
-    let timestamp = DateTime::parse_from_rfc3339(now)
-        .map_err(|error| format!("invalid retry timestamp {now}: {error}"))?;
-    let exponent = attempt_count.saturating_sub(1).clamp(0, 3) as u32;
-    Ok((timestamp + Duration::seconds(RETRY_BASE_SECONDS * 2_i64.pow(exponent))).to_rfc3339())
 }
 
 fn sql_error(error: String) -> LibraryError {
@@ -1967,6 +1995,63 @@ mod tests {
         )
         .unwrap();
 
+        interrupt_query(&application, &query, "2026-08-29T00:00:04Z").unwrap();
+        let attempts_after_interrupt: i64 = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM source_post_attempt WHERE run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(
+            attempts_after_interrupt, 0,
+            "a graceful interruption discards the partial post before returning to pending"
+        );
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:05Z",
+        )
+        .unwrap()
+        .unwrap();
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: query.site_id.clone(),
+                post_key: "interrupted".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "interrupted:media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:06Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["interrupted:media"],
+            "interrupted-hash",
+            "/tmp/interrupted",
+            1,
+            "2026-08-29T00:00:07Z",
+        )
+        .unwrap();
+
         assert_eq!(
             recover(&application, "2026-08-29T00:01:00Z").unwrap(),
             RecoveryCounts {
@@ -2002,13 +2087,124 @@ mod tests {
         );
         assert_eq!(run_status, "pending");
         assert_eq!(query_status, "pending");
-        assert!(claim_next_query(
+        let pending_query = claim_next_query(
             &application,
             &mut DomainSchedule::new(),
             "2026-08-29T00:01:01Z",
         )
         .unwrap()
-        .is_some());
+        .expect("recovered query is claimable");
+        let ids = record_post(
+            &application,
+            pending_query.run_query_id,
+            &NormalizedPost {
+                site_id: pending_query.site_id.clone(),
+                post_key: "pending-interrupted".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "pending-interrupted:media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:01:02Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            pending_query.run_query_id,
+            ids["pending-interrupted:media"],
+            "pending-interrupted-hash",
+            "/tmp/pending-interrupted",
+            1,
+            "2026-08-29T00:01:03Z",
+        )
+        .unwrap();
+
+        // Reproduce the pre-fix hot-reload race: the old worker returned its
+        // run to pending but left the partial post behind.
+        write_transition(&application, |transaction| {
+            transaction.execute(
+                "UPDATE subscription_run_query SET status = 'pending' WHERE run_query_id = ?1",
+                [pending_query.run_query_id],
+            )?;
+            transaction.execute(
+                "UPDATE subscription_run SET status = 'pending' WHERE run_id = ?1",
+                [pending_query.run_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            recover(&application, "2026-08-29T00:02:00Z").unwrap(),
+            RecoveryCounts::default(),
+            "the run was already pending"
+        );
+        let attempts_after_pending_recovery: i64 = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM source_post_attempt WHERE run_query_id = ?1",
+                        [pending_query.run_query_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(
+            attempts_after_pending_recovery, 0,
+            "recovery commits abandoned-post cleanup even when run states do not change"
+        );
+    }
+
+    #[test]
+    fn post_cursor_checkpoint_survives_worker_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Cursor checkpoint".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(20),
+            periodic_post_limit: Some(20),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "furaffinity".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        checkpoint_query_cursor(&application, &query, "20").unwrap();
+
+        recover(&application, "2026-08-29T00:01:00Z").unwrap();
+        let resumed = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:01:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resumed.resume_cursor.as_deref(), Some("20"));
     }
 
     #[test]
@@ -2241,6 +2437,137 @@ mod tests {
                     .query_row(
                         "SELECT state FROM source_item WHERE source_item_id = ?1",
                         [ids["gallery-1:page-1"]],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(state, "pending");
+    }
+
+    #[test]
+    fn current_post_metadata_retires_only_stale_unowned_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Post media reconciliation".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "patreon".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let item = |item_key: &str, position: i64| NormalizedItem {
+            item_key: item_key.into(),
+            position,
+            media_url: None,
+            canonical_url: None,
+        };
+        let mut post = NormalizedPost {
+            site_id: query.site_id.clone(),
+            post_key: "post-1".into(),
+            canonical_url: None,
+            creator_name: None,
+            title: None,
+            description: None,
+            captured_at: None,
+            metadata_json: None,
+            items: vec![
+                item("current", 0),
+                item("stale-pending", 1),
+                item("historic", 2),
+            ],
+        };
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &post,
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                WorkPriority::CanonicalIngest,
+                ["subscriptions".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested' WHERE source_item_id = ?1",
+                        [ids["historic"]],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        post.items.truncate(1);
+        record_post(
+            &application,
+            query.run_query_id,
+            &post,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
+        let states = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT item_key, state FROM source_item
+                     WHERE source_post_id = (
+                         SELECT source_post_id FROM source_post
+                         WHERE site_id = 'patreon' AND post_key = 'post-1'
+                     ) ORDER BY item_key",
+                )?;
+                let states = statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+                Ok(states)
+            })
+            .unwrap();
+        assert_eq!(states["current"], "pending");
+        assert_eq!(states["historic"], "ingested");
+        assert_eq!(states["stale-pending"], "deleted");
+
+        post.items.push(item("stale-pending", 1));
+        record_post(
+            &application,
+            query.run_query_id,
+            &post,
+            "2026-08-29T00:00:04Z",
+        )
+        .unwrap();
+        let state = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT state FROM source_item
+                         WHERE source_post_id = (
+                             SELECT source_post_id FROM source_post
+                             WHERE site_id = 'patreon' AND post_key = 'post-1'
+                         ) AND item_key = 'stale-pending'",
+                        [],
                         |row| row.get::<_, String>(0),
                     )
                     .map_err(Into::into)

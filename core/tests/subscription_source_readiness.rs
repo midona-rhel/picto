@@ -165,9 +165,8 @@ async fn certify_selected_source() -> Result<(), String> {
     if first.posts.is_empty() {
         return Err("source run succeeded without materializing any media posts".into());
     }
-    // Traversal may exceed the batch: no-media and duplicate posts are
-    // skipped without consuming the added-post budget, and page-window
-    // boundary detection announces the first post beyond the limit.
+    // Added and skipped posts share the batch budget. Discovery must not
+    // announce a post beyond the configured limit.
     if first.posts.len() > batch_size as usize {
         return Err(format!(
             "source materialized {} posts for a requested batch of {batch_size}",

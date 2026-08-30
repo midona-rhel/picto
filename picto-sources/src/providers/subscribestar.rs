@@ -13,7 +13,8 @@ use crate::{
 };
 
 const DOMAIN: &str = "subscribestar.art";
-const CURSOR: OpaqueCursor = OpaqueCursor::new(4_096);
+const CURSOR: OpaqueCursor = OpaqueCursor::new(64);
+const MAX_PAGES_PER_DISCOVERY: usize = 4_096;
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     SubscribeStarSource
@@ -45,22 +46,30 @@ impl NativeSourceAdapter for SubscribeStarSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let creator = normalize_creator(&request.query)?;
-            let cursor = request
-                .cursor
-                .as_deref()
-                .filter(|cursor| !cursor.is_empty())
-                .map(decode_cursor)
-                .transpose()?
-                .unwrap_or_else(|| CursorState {
-                    url: profile_url(&creator),
-                    index: 0,
-                });
+            let cursor = decode_cursor(request.cursor.as_deref())?;
             let credentials = site_credentials(credentials);
-            let response = http
-                .get_text(cursor.url.clone(), &credentials, cancel)
-                .await?;
-            let html = unwrap_html_response(&response)?;
-            normalize_page(request, &creator, &cursor, &html)
+            let mut page_url = profile_url(&creator);
+            for _ in 0..MAX_PAGES_PER_DISCOVERY {
+                let (final_url, response) = http
+                    .get_text_with_final_url(page_url.clone(), &credentials, cancel)
+                    .await?;
+                detect_access_url(&final_url)?;
+                validate_page_url(&final_url)?;
+                let html = unwrap_html_response(&response)?;
+                match normalize_page(request, &creator, &cursor, &final_url, &html)? {
+                    PageResult::Post(batch) => return Ok(batch),
+                    PageResult::Continue(Some(next)) => page_url = next,
+                    PageResult::Continue(None) => {
+                        return Ok(DiscoveryBatch {
+                            posts: Vec::new(),
+                            exhausted: true,
+                        });
+                    }
+                }
+            }
+            Err(invalid_response(
+                "SubscribeStar pagination exceeded its safety bound",
+            ))
         })
     }
 }
@@ -68,6 +77,10 @@ impl NativeSourceAdapter for SubscribeStarSource {
 fn site_credentials(credentials: &RequestCredentials) -> RequestCredentials {
     let mut credentials = credentials.clone();
     credentials.allowed_domains.insert(DOMAIN.to_string());
+    credentials
+        .cookies
+        .entry("18_plus_agreement_generic".to_string())
+        .or_insert_with(|| "true".to_string());
     credentials
         .headers
         .entry("Accept".to_string())
@@ -86,52 +99,118 @@ fn profile_url(creator: &str) -> Url {
 }
 
 fn unwrap_html_response(response: &str) -> Result<String, SourceError> {
-    if response.trim_start().starts_with('{') {
+    let html = if response.trim_start().starts_with('{') {
         let value: Value = serde_json::from_str(response).map_err(|_| {
             invalid_response("SubscribeStar returned an invalid pagination response")
         })?;
-        return value
+        value
             .get("html")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .ok_or_else(|| invalid_response("SubscribeStar pagination response is missing HTML"));
+            .ok_or_else(|| invalid_response("SubscribeStar pagination response is missing HTML"))?
+    } else {
+        response.to_string()
+    };
+    detect_access_page(&html)?;
+    Ok(html)
+}
+
+fn detect_access_page(html: &str) -> Result<(), SourceError> {
+    let lower = html.to_ascii_lowercase();
+    if [
+        "/verify_subscriber",
+        "/age_confirmation_warning",
+        "18_plus_agreement_generic",
+        "age confirmation warning",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err(access_verification_required());
     }
-    Ok(response.to_string())
+    if html.len() < 250 && lower.contains(">redirected<") {
+        return Err(invalid_response(
+            "SubscribeStar returned an unresolved HTML redirect",
+        ));
+    }
+    Ok(())
+}
+
+fn detect_access_url(url: &Url) -> Result<(), SourceError> {
+    if ["/verify_subscriber", "/age_confirmation_warning"]
+        .iter()
+        .any(|marker| url.path() == *marker || url.path().starts_with(&format!("{marker}/")))
+    {
+        return Err(access_verification_required());
+    }
+    Ok(())
+}
+
+fn access_verification_required() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::AccessDenied,
+        "SubscribeStar requires subscriber or age verification in the managed login",
+        false,
+    )
 }
 
 fn normalize_page(
     request: &DiscoveryRequest,
     creator: &str,
     cursor: &CursorState,
+    page_url: &Url,
     html: &str,
-) -> Result<DiscoveryBatch, SourceError> {
+) -> Result<PageResult, SourceError> {
+    detect_access_page(html)?;
     let posts = post_fragments(html);
     if posts.is_empty() {
-        return Ok(DiscoveryBatch {
-            posts: Vec::new(),
-            exhausted: true,
-        });
+        return Ok(PageResult::Continue(next_page_url(html, page_url)?));
     }
-    if cursor.index >= posts.len() {
-        return Err(invalid_response(
-            "SubscribeStar page changed before its persisted cursor",
-        ));
-    }
-    let next_page = next_page_url(html, &cursor.url)?;
-    let next_cursor = if cursor.index + 1 < posts.len() {
-        Some(encode_cursor(&cursor.url, cursor.index + 1)?)
-    } else {
-        next_page
-            .as_ref()
-            .map(|url| encode_cursor(url, 0))
-            .transpose()?
+    let next_page = next_page_url(html, page_url)?;
+    let Some(index) = next_post_index(&posts, cursor.anchor.as_deref())? else {
+        return Ok(PageResult::Continue(next_page));
     };
-    let exhausted = cursor.index + 1 == posts.len() && next_page.is_none();
-    let post = normalize_post(request, creator, posts[cursor.index], next_cursor)?;
-    Ok(DiscoveryBatch {
+    let post_id = fragment_post_id(posts[index])?;
+    let post = normalize_post(
+        request,
+        creator,
+        posts[index],
+        Some(encode_cursor(post_id)?),
+    )?;
+    Ok(PageResult::Post(DiscoveryBatch {
         posts: vec![post],
-        exhausted,
-    })
+        exhausted: index + 1 == posts.len() && next_page.is_none(),
+    }))
+}
+
+enum PageResult {
+    Post(DiscoveryBatch),
+    Continue(Option<Url>),
+}
+
+fn next_post_index(posts: &[&str], anchor: Option<&str>) -> Result<Option<usize>, SourceError> {
+    let Some(anchor) = anchor else {
+        return Ok((!posts.is_empty()).then_some(0));
+    };
+    for (index, post) in posts.iter().enumerate() {
+        let post_id = fragment_post_id(post)?;
+        if numeric_id_is_older(post_id, anchor) {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+fn fragment_post_id(html: &str) -> Result<&str, SourceError> {
+    capture(html, post_id_regex(), 1)
+        .filter(|id| valid_numeric_id(id))
+        .ok_or_else(|| invalid_response("SubscribeStar post has an invalid ID"))
+}
+
+fn numeric_id_is_older(candidate: &str, anchor: &str) -> bool {
+    let candidate = candidate.trim_start_matches('0');
+    let anchor = anchor.trim_start_matches('0');
+    candidate.len() < anchor.len() || (candidate.len() == anchor.len() && candidate < anchor)
 }
 
 fn normalize_post(
@@ -140,9 +219,7 @@ fn normalize_post(
     html: &str,
     resume_cursor_after: Option<String>,
 ) -> Result<SourcePost, SourceError> {
-    let post_id = capture(html, post_id_regex(), 1)
-        .filter(|id| valid_numeric_id(id))
-        .ok_or_else(|| invalid_response("SubscribeStar post has an invalid ID"))?;
+    let post_id = fragment_post_id(html)?;
     let author = capture(html, author_regex(), 1)
         .map(decode_html)
         .and_then(|author| normalize_creator(&author).ok())
@@ -244,7 +321,9 @@ fn post_media(
             .filter(|name| !name.trim().is_empty())
             .or_else(|| file_name_from_url(&url))
             .unwrap_or_else(|| format!("subscribestar_{post_id}_{}", media.len()));
-        if is_archive(&file_name) || is_archive(&url) {
+        if crate::media::is_unsupported_archive(&file_name)
+            || crate::media::is_unsupported_archive(&url)
+        {
             continue;
         }
         let stable_id = source_id
@@ -278,33 +357,33 @@ fn next_page_url(html: &str, current: &Url) -> Result<Option<Url>, SourceError> 
     Ok(Some(url))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CursorState {
-    url: Url,
-    index: usize,
+    anchor: Option<String>,
 }
 
-fn encode_cursor(url: &Url, index: usize) -> Result<String, SourceError> {
-    validate_page_url(url)?;
-    let mut url = url.clone();
-    url.set_fragment(Some(&format!("picto={index}")));
-    let cursor = url.to_string();
+fn encode_cursor(post_id: &str) -> Result<String, SourceError> {
+    if !valid_numeric_id(post_id) {
+        return Err(invalid_cursor());
+    }
+    let cursor = format!("p{post_id}");
     CURSOR.validate(&cursor)?;
     Ok(cursor)
 }
 
-fn decode_cursor(raw: &str) -> Result<CursorState, SourceError> {
+fn decode_cursor(raw: Option<&str>) -> Result<CursorState, SourceError> {
+    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+        return Ok(CursorState::default());
+    };
     CURSOR.validate(raw)?;
-    let mut url = Url::parse(raw).map_err(|_| invalid_cursor())?;
-    let fragment = url.fragment().ok_or_else(invalid_cursor)?;
-    let index = fragment
-        .strip_prefix("picto=")
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|index| *index < 100)
+    let anchor = raw
+        .strip_prefix('p')
+        .filter(|value| valid_numeric_id(value))
+        .map(ToOwned::to_owned)
         .ok_or_else(invalid_cursor)?;
-    url.set_fragment(None);
-    validate_page_url(&url)?;
-    Ok(CursorState { url, index })
+    Ok(CursorState {
+        anchor: Some(anchor),
+    })
 }
 
 fn validate_page_url(url: &Url) -> Result<(), SourceError> {
@@ -395,13 +474,6 @@ fn file_name_from_url(raw: &str) -> Option<String> {
         .next_back()
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn is_archive(raw: &str) -> bool {
-    let path = raw.split('?').next().unwrap_or(raw).to_ascii_lowercase();
-    [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
 }
 
 fn value_id(value: &Value) -> String {
@@ -498,29 +570,34 @@ mod tests {
     #[test]
     fn page_exposes_exactly_one_post_and_advances_within_the_same_page() {
         let html = include_str!("../../tests/fixtures/subscribestar/profile.html");
-        let cursor = CursorState {
-            url: profile_url("creator-name"),
-            index: 0,
+        let page_url = profile_url("creator-name");
+        let cursor = CursorState::default();
+        let PageResult::Post(batch) =
+            normalize_page(&request(), "creator-name", &cursor, &page_url, html).unwrap()
+        else {
+            panic!("expected one post");
         };
-        let batch = normalize_page(&request(), "creator-name", &cursor, html).unwrap();
         assert_eq!(batch.posts.len(), 1);
         assert_eq!(batch.posts[0].stable_id, "778899");
-        let next = decode_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
-        assert_eq!(next.index, 1);
-        assert_eq!(next.url, cursor.url);
+        let next = decode_cursor(batch.posts[0].resume_cursor_after.as_deref()).unwrap();
+        assert_eq!(next.anchor.as_deref(), Some("778899"));
     }
 
     #[test]
     fn maps_gallery_documents_audio_tags_and_text() {
         let html = include_str!("../../tests/fixtures/subscribestar/profile.html");
-        let cursor = CursorState {
-            url: profile_url("creator-name"),
-            index: 0,
+        let page_url = profile_url("creator-name");
+        let PageResult::Post(mut batch) = normalize_page(
+            &request(),
+            "creator-name",
+            &CursorState::default(),
+            &page_url,
+            html,
+        )
+        .unwrap() else {
+            panic!("expected one post");
         };
-        let post = normalize_page(&request(), "creator-name", &cursor, html)
-            .unwrap()
-            .posts
-            .remove(0);
+        let post = batch.posts.remove(0);
         assert_eq!(post.media.len(), 3);
         assert!(post
             .tags
@@ -533,9 +610,11 @@ mod tests {
     }
 
     #[test]
-    fn cursor_rejects_cross_domain_pages_and_large_indexes() {
-        assert!(decode_cursor("https://evil.test/page#picto=0").is_err());
-        assert!(decode_cursor("https://subscribestar.art/page#picto=100").is_err());
+    fn cursor_accepts_only_bounded_post_id_anchors() {
+        assert_eq!(encode_cursor("778899").unwrap(), "p778899");
+        assert!(decode_cursor(Some("https://subscribestar.art/page#picto=1")).is_err());
+        assert!(decode_cursor(Some("pnot-a-post")).is_err());
+        assert!(decode_cursor(Some("p123456789012345678901234567890123")).is_err());
     }
 
     #[test]
@@ -543,5 +622,105 @@ mod tests {
         let json = include_str!("../../tests/fixtures/subscribestar/page.json");
         let html = unwrap_html_response(json).unwrap();
         assert!(html.contains("data-id=\"9900\""));
+    }
+
+    #[test]
+    fn age_and_subscriber_verification_are_terminal_access_errors() {
+        for html in [
+            r#"<a href="/verify_subscriber">redirected</a>"#,
+            r#"<a href="/age_confirmation_warning">redirected</a>"#,
+        ] {
+            let error = unwrap_html_response(html).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::AccessDenied);
+            assert!(!error.retryable);
+        }
+    }
+
+    #[test]
+    fn final_verification_redirects_are_terminal_access_errors() {
+        for path in [
+            "/verify_subscriber",
+            "/verify_subscriber/continue",
+            "/age_confirmation_warning",
+        ] {
+            let url = Url::parse(&format!("https://subscribestar.art{path}")).unwrap();
+            let error = detect_access_url(&url).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::AccessDenied);
+            assert!(!error.retryable);
+        }
+        assert!(detect_access_url(&profile_url("creator-name")).is_ok());
+    }
+
+    #[test]
+    fn provider_credentials_include_the_adult_age_cookie() {
+        let credentials = site_credentials(&RequestCredentials::default());
+        assert_eq!(
+            credentials
+                .cookies
+                .get("18_plus_agreement_generic")
+                .map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn anchored_cursor_survives_insertions_and_anchor_deletion() {
+        let page_url = profile_url("creator-name");
+        let persisted = encode_cursor("200").unwrap();
+        let cursor = decode_cursor(Some(&persisted)).unwrap();
+        for html in [
+            simple_page(&["300", "200", "199"]),
+            simple_page(&["300", "199", "198"]),
+        ] {
+            let PageResult::Post(batch) =
+                normalize_page(&request(), "creator-name", &cursor, &page_url, &html).unwrap()
+            else {
+                panic!("expected the first older post");
+            };
+            assert_eq!(batch.posts[0].stable_id, "199");
+            assert_eq!(batch.posts.len(), 1);
+        }
+    }
+
+    #[test]
+    fn page_with_only_newer_posts_continues_without_publishing() {
+        let html = format!(
+            "{}<a data-role=\"infinite_scroll-next_page\" href=\"/creator-name?page=2\"></a>",
+            simple_page(&["300", "250"])
+        );
+        let cursor = CursorState {
+            anchor: Some("200".to_string()),
+        };
+        let PageResult::Continue(Some(next)) = normalize_page(
+            &request(),
+            "creator-name",
+            &cursor,
+            &profile_url("creator-name"),
+            &html,
+        )
+        .unwrap() else {
+            panic!("expected pagination to continue");
+        };
+        assert_eq!(
+            next.as_str(),
+            "https://subscribestar.art/creator-name?page=2"
+        );
+    }
+
+    fn simple_page(ids: &[&str]) -> String {
+        ids.iter()
+            .map(|id| {
+                format!(
+                    concat!(
+                        "<div class=\"post visible\" data-id=\"{id}\" data-user-id=\"42\">",
+                        "<a href=\"/creator-name\">Creator</a>",
+                        "<div class=\"post-date\">Aug 28, 2026</div>",
+                        "<div class=\"post-content\" data-role=\"post_content-text\"><p>Post {id}</p></div>",
+                        "<div class=\"post-uploads for-youtube\"></div></div>"
+                    ),
+                    id = id,
+                )
+            })
+            .collect()
     }
 }

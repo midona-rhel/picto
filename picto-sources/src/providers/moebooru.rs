@@ -1,10 +1,14 @@
+use std::sync::OnceLock;
+
+use regex::Regex;
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
-    CanonicalTagSet, DiscoveryBatch, DiscoveryRequest, JsonPageSource, JsonSourceAdapter,
-    MediaDescriptorBuilder, NativeSourceAdapter, PageCursor, ProviderDescriptor, RatingMap,
-    SearchQueryPolicy, SourceError, SourcePost,
+    AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest, HttpRuntime,
+    MediaDescriptorBuilder, NativeSourceAdapter, PageCursor, PostFuture, ProviderDescriptor,
+    RatingMap, RequestCredentials, SearchQueryPolicy, SourceError, SourceErrorKind, SourcePost,
 };
 
 const CURSOR: PageCursor = PageCursor::new(1_000_000);
@@ -27,16 +31,14 @@ pub(super) struct MoebooruConfig {
 }
 
 pub(super) fn adapter(config: MoebooruConfig) -> impl NativeSourceAdapter {
-    JsonSourceAdapter::new(MoebooruSource { config })
+    MoebooruSource { config }
 }
 
 struct MoebooruSource {
     config: MoebooruConfig,
 }
 
-impl JsonPageSource for MoebooruSource {
-    type Response = Vec<ApiPost>;
-
+impl NativeSourceAdapter for MoebooruSource {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
             id: self.config.id,
@@ -51,17 +53,101 @@ impl JsonPageSource for MoebooruSource {
         QUERY.validate(query)
     }
 
-    fn request_url(&self, request: &DiscoveryRequest) -> Result<Url, SourceError> {
-        request_url(self.config, request)
+    fn discover<'a>(
+        &'a self,
+        request: &'a DiscoveryRequest,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> AdapterFuture<'a> {
+        Box::pin(async move {
+            self.validate_query(&request.query)?;
+            let response = http
+                .get_json::<Vec<ApiPost>>(request_url(self.config, request)?, credentials, cancel)
+                .await?;
+            normalize(self.config, request, response)
+        })
     }
 
-    fn normalize(
-        &self,
-        request: &DiscoveryRequest,
-        response: Self::Response,
-    ) -> Result<DiscoveryBatch, SourceError> {
-        normalize(self.config, request, response)
+    fn resolve_post<'a>(
+        &'a self,
+        mut post: SourcePost,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> PostFuture<'a> {
+        Box::pin(async move {
+            let url = post
+                .canonical_url
+                .as_deref()
+                .and_then(|value| Url::parse(value).ok())
+                .ok_or_else(|| {
+                    SourceError::new(
+                        SourceErrorKind::InvalidResponse,
+                        "Moebooru post is missing its canonical URL",
+                        false,
+                    )
+                })?;
+            let Some(html) = http.get_optional_text(url, credentials, cancel).await? else {
+                return Ok(post);
+            };
+            if let Some((tags, creator)) = canonical_tags_from_html(&html, &post.tags) {
+                post.tags = tags;
+                post.creator = creator;
+            }
+            Ok(post)
+        })
     }
+}
+
+fn canonical_tags_from_html(
+    html: &str,
+    existing: &[crate::CanonicalTag],
+) -> Option<(Vec<crate::CanonicalTag>, Option<String>)> {
+    static TAGS: OnceLock<Regex> = OnceLock::new();
+    let pattern = TAGS.get_or_init(|| {
+        Regex::new(r#"(?s)tag-type-([^\"' ]+).*?[?;]tags=([^\"'+&]+)"#)
+            .expect("valid Moebooru tag regex")
+    });
+    let mut tags = CanonicalTagSet::default();
+    let mut creator = None;
+    let mut found = false;
+    let mut categorized = std::collections::BTreeSet::new();
+    for captures in pattern.captures_iter(html) {
+        let category = captures.get(1)?.as_str();
+        let encoded = captures.get(2)?.as_str();
+        let value = decode_tag(encoded)?;
+        let namespace = match category {
+            "artist" => "creator",
+            "character" => "character",
+            "copyright" => "series",
+            "species" => "species",
+            _ => "",
+        };
+        if namespace == "creator" && creator.is_none() {
+            creator = Some(value.clone());
+        }
+        categorized.insert(value.clone());
+        tags.insert(namespace, value);
+        found = true;
+    }
+    if !found {
+        return None;
+    }
+    for tag in existing {
+        if tag.namespace == "rating" || !categorized.contains(&tag.value) {
+            tags.insert(&tag.namespace, &tag.value);
+        }
+    }
+    Some((tags.into_vec(), creator))
+}
+
+fn decode_tag(value: &str) -> Option<String> {
+    Url::parse(&format!("https://example.invalid/?tags={value}"))
+        .ok()?
+        .query_pairs()
+        .find_map(|(key, value)| (key == "tags").then(|| value.into_owned()))
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn request_url(config: MoebooruConfig, request: &DiscoveryRequest) -> Result<Url, SourceError> {
@@ -118,7 +204,8 @@ fn normalize_post(
 
     let media = post
         .file_url
-        .filter(|url| !url.trim().is_empty())
+        .as_deref()
+        .and_then(|url| normalize_media_url(config.root, url))
         .map(|url| {
             let file_name = post
                 .md5
@@ -153,6 +240,19 @@ fn normalize_post(
         media,
         resume_cursor_after: Some(resume_cursor_after),
     }
+}
+
+fn normalize_media_url(root: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Url::parse(root)
+        .ok()?
+        .join(value)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.to_string())
 }
 
 fn current_page(request: &DiscoveryRequest) -> Result<u32, SourceError> {
@@ -226,6 +326,36 @@ mod tests {
             }
         ]))
         .unwrap()
+    }
+
+    #[test]
+    fn detail_html_restores_canonical_tag_categories() {
+        let existing = vec![CanonicalTag::new("rating", "safe")];
+        let html = r#"
+            <ul id="tag-sidebar">
+              <li class="tag-type-artist"><a href="/post?tags=artist_name">artist</a></li>
+              <li class="tag-type-character"><a href="/post?tags=hero_name">character</a></li>
+              <li class="tag-type-copyright"><a href="/post?tags=example_series">series</a></li>
+              <li class="tag-type-general"><a href="/post?tags=highres">general</a></li>
+            </ul>
+        "#;
+        let (tags, creator) = canonical_tags_from_html(html, &existing).unwrap();
+
+        assert_eq!(creator.as_deref(), Some("artist_name"));
+        assert!(tags.contains(&CanonicalTag::new("creator", "artist_name")));
+        assert!(tags.contains(&CanonicalTag::new("character", "hero_name")));
+        assert!(tags.contains(&CanonicalTag::new("series", "example_series")));
+        assert!(tags.contains(&CanonicalTag::new("", "highres")));
+        assert!(tags.contains(&CanonicalTag::new("rating", "safe")));
+        assert!(!tags.contains(&CanonicalTag::new("", "artist_name")));
+    }
+
+    #[test]
+    fn normalizes_relative_original_media_urls() {
+        assert_eq!(
+            normalize_media_url("https://yande.re", "/image/hash.jpg").as_deref(),
+            Some("https://yande.re/image/hash.jpg")
+        );
     }
 
     #[test]

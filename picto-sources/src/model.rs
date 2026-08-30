@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+
+pub type OAuthTokenUpdater = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SourcePartition(pub String);
@@ -20,6 +23,7 @@ pub struct RequestCredentials {
     pub api_key: Option<String>,
     pub oauth_token: Option<String>,
     pub oauth_token_secret: Option<String>,
+    pub oauth_token_update: Option<OAuthTokenUpdater>,
     /// Exact hosts or parent domains allowed to receive this authentication.
     /// Empty credentials may leave this empty; non-empty credentials may not.
     pub allowed_domains: BTreeSet<String>,
@@ -32,6 +36,7 @@ impl std::fmt::Debug for RequestCredentials {
             .field("header_count", &self.headers.len())
             .field("cookie_count", &self.cookies.len())
             .field("allowed_domain_count", &self.allowed_domains.len())
+            .field("can_update_oauth_token", &self.oauth_token_update.is_some())
             .finish()
     }
 }
@@ -81,6 +86,15 @@ impl CanonicalTag {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaFallback {
+    pub url: String,
+    pub file_name: Option<String>,
+    pub mime_hint: Option<String>,
+    pub expected_size: Option<u64>,
+    pub html_marker: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaDescriptor {
     pub stable_id: String,
     pub position: u32,
@@ -90,6 +104,8 @@ pub struct MediaDescriptor {
     pub mime_hint: Option<String>,
     pub expected_size: Option<u64>,
     pub headers: BTreeMap<String, String>,
+    pub fallbacks: Vec<MediaFallback>,
+    pub rejected_final_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +116,17 @@ pub enum MediaDelivery {
 }
 
 impl MediaDescriptor {
+    pub fn fallback_descriptor(&self, index: usize) -> Option<Self> {
+        let fallback = self.fallbacks.get(index)?;
+        let mut descriptor = self.clone();
+        descriptor.url.clone_from(&fallback.url);
+        descriptor.file_name.clone_from(&fallback.file_name);
+        descriptor.mime_hint.clone_from(&fallback.mime_hint);
+        descriptor.expected_size = fallback.expected_size;
+        descriptor.fallbacks.remove(index);
+        Some(descriptor)
+    }
+
     /// Providers declare segmented delivery with the standard manifest MIME
     /// type. The URL suffix is a fallback for APIs that omit a content type.
     pub fn delivery(&self) -> MediaDelivery {
@@ -188,7 +215,7 @@ pub enum SourcePostOutcome {
 }
 
 impl SourcePostOutcome {
-    pub fn consumes_added_budget(&self) -> bool {
+    pub fn counts_as_added_post(&self) -> bool {
         matches!(self, Self::Added { .. })
     }
 }

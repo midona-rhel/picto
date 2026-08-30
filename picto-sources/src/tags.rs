@@ -6,6 +6,10 @@ use crate::CanonicalTag;
 pub struct CanonicalTagSet(BTreeSet<(String, String)>);
 
 impl CanonicalTagSet {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn insert(&mut self, namespace: impl Into<String>, value: impl AsRef<str>) {
         let value = value.as_ref().trim();
         if !value.is_empty() {

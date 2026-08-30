@@ -2,17 +2,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, PageCursor, PostFuture,
+    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, OpaqueCursor, PostFuture,
     ProviderDescriptor, RatingMap, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
-const CURSOR: PageCursor = PageCursor::new(1_000_000);
-const POSTS_PER_PAGE: u32 = 48;
+const CURSOR: OpaqueCursor = OpaqueCursor::new(64);
+const MAX_PAGE: u32 = 1_000_000;
+const MAX_PAGE_INDEX: u16 = 10_000;
+const PAGE_CAPACITY: usize = 48;
 const RATINGS: RatingMap = RatingMap::new(&[
     ("general", "safe"),
     ("mature", "questionable"),
@@ -49,14 +52,14 @@ impl NativeSourceAdapter for FurAffinitySource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
-            let offset = current_offset(request)?;
+            let cursor = current_cursor(request)?;
             let html = http
-                .get_text(gallery_url(&username, offset)?, credentials, cancel)
+                .get_text(gallery_url(&username, cursor.page)?, credentials, cancel)
                 .await?;
             if is_login_page(&html) {
                 return Err(authentication_required());
             }
-            normalize_gallery(request, &username, offset, &html)
+            normalize_gallery(request, &username, cursor, &html)
         })
     }
 
@@ -82,8 +85,8 @@ impl NativeSourceAdapter for FurAffinitySource {
     }
 }
 
-fn gallery_url(username: &str, offset: u32) -> Result<Url, SourceError> {
-    let page = offset / POSTS_PER_PAGE + 1;
+fn gallery_url(username: &str, page: u32) -> Result<Url, SourceError> {
+    validate_cursor(CursorState { page, index: 0 })?;
     let mut url = Url::parse("https://www.furaffinity.net").expect("static Fur Affinity URL");
     url.path_segments_mut()
         .map_err(|_| invalid_response("invalid Fur Affinity gallery URL"))?
@@ -94,10 +97,11 @@ fn gallery_url(username: &str, offset: u32) -> Result<Url, SourceError> {
 fn normalize_gallery(
     request: &DiscoveryRequest,
     username: &str,
-    offset: u32,
+    cursor: CursorState,
     html: &str,
 ) -> Result<DiscoveryBatch, SourceError> {
-    let page_index = (offset % POSTS_PER_PAGE) as usize;
+    validate_cursor(cursor)?;
+    let page_index = cursor.index as usize;
     let ids = gallery_post_ids(html);
     if ids.is_empty() {
         return Ok(DiscoveryBatch {
@@ -105,25 +109,32 @@ fn normalize_gallery(
             exhausted: true,
         });
     }
-    if page_index >= ids.len() {
+    if page_index > ids.len() {
         return Err(invalid_response(
             "Fur Affinity gallery changed before its persisted cursor",
         ));
     }
-    let take = (ids.len() - page_index).min(request.page_size.max(1) as usize);
-    let posts = ids[page_index..page_index + take]
-        .iter()
-        .enumerate()
-        .map(|(index, id)| {
-            discovered_post(
-                request,
-                username,
-                id,
-                offset.saturating_add(index as u32).saturating_add(1),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let exhausted = ids.len() < POSTS_PER_PAGE as usize && page_index + take >= ids.len();
+    let has_next = ids.len() >= PAGE_CAPACITY || has_next_gallery_page(html, username, cursor.page);
+    if page_index == ids.len() {
+        return Ok(DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: !has_next,
+        });
+    }
+    let last_on_page = page_index + 1 == ids.len();
+    let next = if last_on_page && has_next {
+        CursorState {
+            page: cursor.page.saturating_add(1),
+            index: 0,
+        }
+    } else {
+        CursorState {
+            page: cursor.page,
+            index: cursor.index.saturating_add(1),
+        }
+    };
+    let posts = vec![discovered_post(request, username, &ids[page_index], next)?];
+    let exhausted = last_on_page && !has_next;
     Ok(DiscoveryBatch { posts, exhausted })
 }
 
@@ -131,7 +142,7 @@ fn discovered_post(
     request: &DiscoveryRequest,
     username: &str,
     stable_id: &str,
-    next_offset: u32,
+    next_cursor: CursorState,
 ) -> Result<SourcePost, SourceError> {
     Ok(SourcePost {
         site_id: "furaffinity".to_string(),
@@ -144,7 +155,7 @@ fn discovered_post(
         created_at: None,
         tags: Vec::new(),
         media: Vec::new(),
-        resume_cursor_after: Some(CURSOR.encode(next_offset)?),
+        resume_cursor_after: Some(encode_cursor(next_cursor)?),
     })
 }
 
@@ -226,6 +237,19 @@ fn gallery_post_ids(html: &str) -> Vec<String> {
         .collect()
 }
 
+fn has_next_gallery_page(html: &str, username: &str, page: u32) -> bool {
+    let expected = page.saturating_add(1);
+    gallery_page_regex().captures_iter(html).any(|captures| {
+        captures
+            .get(1)
+            .is_some_and(|value| value.as_str().eq_ignore_ascii_case(username))
+            && captures
+                .get(2)
+                .and_then(|value| value.as_str().parse::<u32>().ok())
+                == Some(expected)
+    })
+}
+
 fn normalize_username(raw: &str) -> Result<String, SourceError> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -278,22 +302,57 @@ fn normalize_username(raw: &str) -> Result<String, SourceError> {
     Ok(username)
 }
 
-fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
-    request
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct CursorState {
+    page: u32,
+    index: u16,
+}
+
+fn current_cursor(request: &DiscoveryRequest) -> Result<CursorState, SourceError> {
+    let Some(raw) = request
         .cursor
         .as_deref()
         .filter(|cursor| !cursor.is_empty())
-        .map(|cursor| CURSOR.validate(cursor))
-        .unwrap_or(Ok(0))
+    else {
+        return Ok(CursorState { page: 1, index: 0 });
+    };
+    let raw = CURSOR.validate(raw)?;
+    let cursor = serde_json::from_str(raw).map_err(|_| invalid_cursor())?;
+    validate_cursor(cursor)?;
+    Ok(cursor)
+}
+
+fn encode_cursor(cursor: CursorState) -> Result<String, SourceError> {
+    validate_cursor(cursor)?;
+    let raw = serde_json::to_string(&cursor).map_err(|_| invalid_cursor())?;
+    CURSOR.validate(&raw)?;
+    Ok(raw)
+}
+
+fn validate_cursor(cursor: CursorState) -> Result<(), SourceError> {
+    if cursor.page == 0 || cursor.page > MAX_PAGE || cursor.index > MAX_PAGE_INDEX {
+        return Err(invalid_cursor());
+    }
+    Ok(())
 }
 
 fn media_url(raw: &str) -> Result<String, SourceError> {
-    if raw.starts_with("//") {
-        return Ok(format!("https:{raw}"));
+    let raw = if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        raw.to_string()
+    };
+    let url = Url::parse(&raw).map_err(|error| invalid_response(error.to_string()))?;
+    let host = url.host_str().unwrap_or_default();
+    if url.scheme() != "https"
+        || !host.starts_with('d')
+        || !(host.ends_with(".furaffinity.net") || host.ends_with(".facdn.net"))
+    {
+        return Err(invalid_response(
+            "Fur Affinity returned a non-download media URL",
+        ));
     }
-    Url::parse(raw)
-        .map(|url| url.to_string())
-        .map_err(|error| invalid_response(error.to_string()))
+    Ok(url.to_string())
 }
 
 fn file_name(raw: &str) -> Option<String> {
@@ -331,8 +390,12 @@ macro_rules! regex_fn {
 
 regex_fn!(gallery_id_regex, r#"id=\"sid-([0-9]+)\""#);
 regex_fn!(
+    gallery_page_regex,
+    r#"(?i)href=\"(?:https://www\.furaffinity\.net)?/gallery/([^/\"?#]+)/([0-9]+)/?[^\"]*\""#
+);
+regex_fn!(
     download_regex,
-    r#"(?s)<a[^>]+href=\"([^\"]+)\"[^>]*>\s*Download\s*</a>"#
+    r#"(?s)<a[^>]+href=\"((?:https:)?//d[^\"]+)\"[^>]*>"#
 );
 regex_fn!(title_regex, r#"data-artwork-title=\"([^\"]+)\""#);
 regex_fn!(
@@ -358,6 +421,14 @@ fn invalid_query(message: impl Into<String>) -> SourceError {
 
 fn invalid_response(message: impl Into<String>) -> SourceError {
     SourceError::new(SourceErrorKind::InvalidResponse, message, true)
+}
+
+fn invalid_cursor() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidQuery,
+        "invalid Fur Affinity cursor",
+        false,
+    )
 }
 
 fn authentication_required() -> SourceError {
@@ -401,24 +472,61 @@ mod tests {
 
     #[test]
     fn maps_bounded_gallery_pages_to_settlement_cursors() {
-        let batch =
-            normalize_gallery(&request(Some("1"), 1), "Example_Artist", 1, GALLERY).unwrap();
+        let cursor = CursorState { page: 1, index: 1 };
+        let batch = normalize_gallery(
+            &request(Some(&encode_cursor(cursor).unwrap()), 1),
+            "Example_Artist",
+            cursor,
+            GALLERY,
+        )
+        .unwrap();
         assert_eq!(batch.posts.len(), 1);
         assert!(batch.exhausted);
         assert_eq!(batch.posts[0].stable_id, "123455");
-        assert_eq!(batch.posts[0].resume_cursor_after.as_deref(), Some("2"));
         assert_eq!(
-            gallery_url("Example_Artist", 48).unwrap().path(),
+            decode_test_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()),
+            CursorState { page: 1, index: 2 }
+        );
+        assert_eq!(
+            gallery_url("Example_Artist", 2).unwrap().path(),
             "/gallery/Example_Artist/2"
         );
     }
 
     #[test]
+    fn short_nonterminal_page_advances_to_the_explicit_next_page() {
+        let html = r#"
+            <figure id="sid-10"></figure>
+            <figure id="sid-9"></figure>
+            <a href="/gallery/Example_Artist/2/">Next</a>
+        "#;
+        let batch = normalize_gallery(
+            &request(None, 1),
+            "Example_Artist",
+            CursorState { page: 1, index: 1 },
+            html,
+        )
+        .unwrap();
+        assert_eq!(batch.posts.len(), 1);
+        assert!(!batch.exhausted);
+        assert_eq!(batch.posts[0].stable_id, "9");
+        assert_eq!(
+            decode_test_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()),
+            CursorState { page: 2, index: 0 }
+        );
+    }
+
+    #[test]
     fn maps_post_media_text_and_canonical_groups() {
-        let discovered = normalize_gallery(&request(None, 10), "Example_Artist", 0, GALLERY)
-            .unwrap()
-            .posts
-            .remove(0);
+        let discovered = normalize_gallery(
+            &request(None, 10),
+            "Example_Artist",
+            CursorState { page: 1, index: 0 },
+            GALLERY,
+        )
+        .unwrap()
+        .posts
+        .remove(0);
         let post = resolve_html(discovered, POST).unwrap();
         assert_eq!(post.name.as_deref(), Some("Example work"));
         assert_eq!(post.creator.as_deref(), Some("ExampleArtist"));
@@ -434,6 +542,10 @@ mod tests {
             .contains(&CanonicalTag::new("", "artwork_digital")));
         assert!(post.tags.contains(&CanonicalTag::new("", "night")));
         assert_eq!(post.media.len(), 1);
+        assert_eq!(
+            post.media[0].url,
+            "https://d.furaffinity.net/art/example/1788000000/example.png"
+        );
         assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/png"));
         assert_eq!(
             post.media[0].headers.get("Referer"),
@@ -442,18 +554,47 @@ mod tests {
     }
 
     #[test]
+    fn ignores_a_generic_download_label_that_is_not_the_direct_media_host() {
+        let discovered = normalize_gallery(
+            &request(None, 10),
+            "Example_Artist",
+            CursorState { page: 1, index: 0 },
+            GALLERY,
+        )
+        .unwrap()
+        .posts
+        .remove(0);
+        let post = resolve_html(
+            discovered,
+            r#"<a href="https://www.furaffinity.net/login/">Download</a>"#,
+        )
+        .unwrap();
+        assert!(post.media.is_empty());
+    }
+
+    #[test]
     fn missing_download_is_a_traversed_post_without_usable_media() {
-        let discovered = normalize_gallery(&request(None, 10), "Example_Artist", 0, GALLERY)
-            .unwrap()
-            .posts
-            .remove(0);
+        let discovered = normalize_gallery(
+            &request(None, 10),
+            "Example_Artist",
+            CursorState { page: 1, index: 0 },
+            GALLERY,
+        )
+        .unwrap()
+        .posts
+        .remove(0);
         let post = resolve_html(discovered, "<html><body>System Message</body></html>").unwrap();
         assert!(post.media.is_empty());
     }
 
     #[test]
     fn rejects_invalid_or_out_of_range_cursors() {
-        assert!(current_offset(&request(Some("-1"), 1)).is_err());
-        assert!(current_offset(&request(Some("1000001"), 1)).is_err());
+        assert!(current_cursor(&request(Some("-1"), 1)).is_err());
+        assert!(current_cursor(&request(Some(r#"{"page":0,"index":0}"#), 1)).is_err());
+        assert!(current_cursor(&request(Some(r#"{"page":1000001,"index":0}"#), 1)).is_err());
+    }
+
+    fn decode_test_cursor(raw: &str) -> CursorState {
+        serde_json::from_str(CURSOR.validate(raw).unwrap()).unwrap()
     }
 }

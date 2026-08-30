@@ -13,24 +13,7 @@ use crate::{
 };
 
 const PAGE_LENGTH: u32 = 50;
-const MAX_CURSOR_BYTES: usize = 512;
-
-const KEMONO: ArchiveProvider = ArchiveProvider {
-    id: "kemono",
-    display_name: "Kemono",
-    domain: "kemono.cr",
-    query_domains: &["kemono.cr", "www.kemono.cr"],
-    site_root: "https://kemono.cr",
-    api_root: "https://kemono.cr/api/v1",
-    media_root: "https://kemono.cr",
-    creator_posts_suffix: "/posts",
-    accept: "text/css",
-    file_first: false,
-};
-
-pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    archive_adapter(KEMONO)
-}
+const MAX_CURSOR_BYTES: usize = 1_024;
 
 #[derive(Clone, Copy)]
 pub(super) struct ArchiveProvider {
@@ -100,14 +83,24 @@ impl NativeSourceAdapter for ArchiveSource {
             let locator = locator_from_post(self.0, &post)?;
             let credentials = api_credentials(self.0, credentials);
             let detail_url = detail_url(self.0, &locator, &post.stable_id)?;
+            let detail = http
+                .get_optional_json::<Value>(detail_url, &credentials, cancel)
+                .await?;
+            let Some(detail) = detail else {
+                return Ok(post_without_detail(post));
+            };
             let profile_url = profile_url(self.0, &locator)?;
-            let (detail, profile) = futures_util::try_join!(
-                http.get_json::<Value>(detail_url, &credentials, cancel),
-                http.get_json::<Value>(profile_url, &credentials, cancel),
-            )?;
+            let profile = http
+                .get_optional_json::<Value>(profile_url, &credentials, cancel)
+                .await?;
             normalize_detail(self.0, post, &locator, detail, profile)
         })
     }
+}
+
+fn post_without_detail(mut post: SourcePost) -> SourcePost {
+    post.media.clear();
+    post
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +113,12 @@ pub(super) struct CreatorLocator {
 pub(super) struct CursorState {
     pub offset: u32,
     pub index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CursorAnchor {
+    after_id: String,
+    next_id: String,
 }
 
 fn api_credentials(
@@ -316,22 +315,51 @@ fn canonical_post_url(
     Ok(url.to_string())
 }
 
-fn encode_cursor(
+fn encode_anchored_cursor(
     provider: ArchiveProvider,
     creator: &CreatorLocator,
     cursor: CursorState,
+    after_id: &str,
+    next_id: &str,
 ) -> Result<String, SourceError> {
-    if !cursor.offset.is_multiple_of(PAGE_LENGTH) || cursor.index >= PAGE_LENGTH {
+    if cursor.index >= PAGE_LENGTH
+        || !valid_component(after_id, 256)
+        || (!next_id.is_empty() && !valid_component(next_id, 256))
+    {
         return Err(invalid_cursor(provider));
     }
     let value = format!(
-        "v1|{}|{}|{}|{}",
-        creator.service, creator.creator_id, cursor.offset, cursor.index
+        "v1|{}|{}|{}|{}|{}|{}",
+        creator.service, creator.creator_id, cursor.offset, cursor.index, after_id, next_id
     );
     if value.len() > MAX_CURSOR_BYTES {
         return Err(invalid_cursor(provider));
     }
     Ok(value)
+}
+
+fn decode_cursor_anchor(
+    provider: ArchiveProvider,
+    creator: &CreatorLocator,
+    raw: Option<&str>,
+) -> Result<Option<CursorAnchor>, SourceError> {
+    let Some(raw) = raw.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parts = raw.split('|').collect::<Vec<_>>();
+    if parts.len() != 7
+        || parts[0] != "v1"
+        || parts[1] != creator.service
+        || parts[2] != creator.creator_id
+        || !valid_component(parts[5], 256)
+        || (!parts[6].is_empty() && !valid_component(parts[6], 256))
+    {
+        return Err(invalid_cursor(provider));
+    }
+    Ok(Some(CursorAnchor {
+        after_id: parts[5].to_string(),
+        next_id: parts[6].to_string(),
+    }))
 }
 
 pub(super) fn decode_cursor(
@@ -349,7 +377,7 @@ pub(super) fn decode_cursor(
         return Err(invalid_cursor(provider));
     }
     let parts = raw.split('|').collect::<Vec<_>>();
-    if parts.len() != 5
+    if parts.len() != 7
         || parts[0] != "v1"
         || parts[1] != creator.service
         || parts[2] != creator.creator_id
@@ -363,7 +391,7 @@ pub(super) fn decode_cursor(
         .parse::<u32>()
         .map_err(|_| invalid_cursor(provider))?;
     let cursor = CursorState { offset, index };
-    encode_cursor(provider, creator, cursor)?;
+    encode_anchored_cursor(provider, creator, cursor, parts[5], parts[6])?;
     Ok(cursor)
 }
 
@@ -374,6 +402,7 @@ pub(super) fn normalize_page(
     cursor: CursorState,
     response: Value,
 ) -> Result<DiscoveryBatch, SourceError> {
+    let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?;
     let posts = response
         .as_array()
         .or_else(|| response.get("posts").and_then(Value::as_array))
@@ -385,7 +414,11 @@ pub(super) fn normalize_page(
         ));
     }
     if posts.is_empty() {
-        if cursor.index != 0 {
+        if anchor
+            .as_ref()
+            .is_some_and(|anchor| !anchor.next_id.is_empty())
+            || (cursor.index != 0 && anchor.is_none())
+        {
             return Err(invalid_response(
                 provider,
                 "persisted cursor no longer identifies a page item",
@@ -396,7 +429,39 @@ pub(super) fn normalize_page(
             exhausted: true,
         });
     }
-    let summary = posts.get(cursor.index as usize).ok_or_else(|| {
+    let summary_index = if let Some(anchor) = anchor.as_ref() {
+        let after_index = posts
+            .iter()
+            .position(|post| text(post, "id") == Some(anchor.after_id.as_str()));
+        if after_index == Some(posts.len() - 1) && posts.len() < PAGE_LENGTH as usize {
+            return Ok(DiscoveryBatch {
+                posts: Vec::new(),
+                exhausted: true,
+            });
+        }
+        (!anchor.next_id.is_empty())
+            .then(|| {
+                posts
+                    .iter()
+                    .position(|post| text(post, "id") == Some(anchor.next_id.as_str()))
+            })
+            .flatten()
+            .or_else(|| {
+                after_index
+                    .and_then(|index| index.checked_add(1))
+                    .filter(|index| *index < posts.len())
+            })
+            .or_else(|| anchor.next_id.is_empty().then_some(0))
+            .ok_or_else(|| {
+                invalid_response(
+                    provider,
+                    "persisted cursor anchors no longer identify the next page item",
+                )
+            })?
+    } else {
+        cursor.index as usize
+    };
+    let summary = posts.get(summary_index).ok_or_else(|| {
         invalid_response(
             provider,
             "persisted cursor no longer identifies a page item",
@@ -404,25 +469,35 @@ pub(super) fn normalize_page(
     })?;
     validate_post_owner(provider, summary, creator)?;
     let stable_id = required_component(provider, summary, "id", 256, "post")?;
-    let next = if cursor.index + 1 < posts.len() as u32 {
+    let next = if summary_index + 1 < posts.len() {
         Some(CursorState {
             offset: cursor.offset,
-            index: cursor.index + 1,
+            index: (summary_index + 1) as u32,
         })
     } else if posts.len() == PAGE_LENGTH as usize {
         Some(CursorState {
             offset: cursor
                 .offset
-                .checked_add(PAGE_LENGTH)
+                .checked_add(PAGE_LENGTH - 1)
                 .ok_or_else(|| invalid_cursor(provider))?,
-            index: 0,
+            index: 1,
         })
     } else {
         None
     };
-    let resume_cursor_after = next
-        .map(|next| encode_cursor(provider, creator, next))
-        .transpose()?;
+    let resume_cursor_after = match next {
+        Some(next) if next.offset == cursor.offset => {
+            let next_id =
+                required_component(provider, &posts[summary_index + 1], "id", 256, "post")?;
+            Some(encode_anchored_cursor(
+                provider, creator, next, stable_id, next_id,
+            )?)
+        }
+        Some(next) => Some(encode_anchored_cursor(
+            provider, creator, next, stable_id, "",
+        )?),
+        None => None,
+    };
     let canonical_url = canonical_post_url(provider, creator, stable_id)?;
     let post = SourcePost {
         site_id: provider.id.to_string(),
@@ -486,7 +561,7 @@ pub(super) fn normalize_detail(
     mut source_post: SourcePost,
     creator: &CreatorLocator,
     response: Value,
-    profile: Value,
+    profile: impl Into<Option<Value>>,
 ) -> Result<SourcePost, SourceError> {
     let post = response.get("post").unwrap_or(&response);
     validate_post_owner(provider, post, creator)?;
@@ -496,18 +571,26 @@ pub(super) fn normalize_detail(
             "detail response resolved a different post",
         ));
     }
-    let profile = profile.get("profile").unwrap_or(&profile);
-    let profile_id = required_component(provider, profile, "id", 160, "creator profile")?;
-    let profile_service = required_component(provider, profile, "service", 32, "creator profile")?;
-    if profile_id != creator.creator_id || !profile_service.eq_ignore_ascii_case(&creator.service) {
-        return Err(invalid_response(
-            provider,
-            "profile response resolved a different creator",
-        ));
-    }
-    let creator_name = text(profile, "name")
-        .unwrap_or(&creator.creator_id)
-        .to_string();
+    let profile = profile.into();
+    let creator_name = if let Some(profile) = profile.as_ref() {
+        let profile = profile.get("profile").unwrap_or(profile);
+        let profile_id = required_component(provider, profile, "id", 160, "creator profile")?;
+        let profile_service =
+            required_component(provider, profile, "service", 32, "creator profile")?;
+        if profile_id != creator.creator_id
+            || !profile_service.eq_ignore_ascii_case(&creator.service)
+        {
+            return Err(invalid_response(
+                provider,
+                "profile response resolved a different creator",
+            ));
+        }
+        text(profile, "name")
+            .unwrap_or(&creator.creator_id)
+            .to_string()
+    } else {
+        creator.creator_id.clone()
+    };
     let canonical_url = canonical_post_url(provider, creator, &source_post.stable_id)?;
 
     source_post.canonical_url = Some(canonical_url.clone());
@@ -662,6 +745,9 @@ fn post_media(
     let mut seen = BTreeSet::new();
     let mut media = Vec::new();
     for candidate in candidates {
+        if is_preview_candidate(&candidate) {
+            continue;
+        }
         let url = media_url(provider, &candidate)?;
         let identity = content_hash(&candidate.path)
             .map(|hash| format!("hash:{hash}"))
@@ -675,7 +761,9 @@ fn post_media(
             .and_then(safe_file_name)
             .or_else(|| file_name_from_path(&candidate.path))
             .unwrap_or_else(|| format!("{}_{}_{}", provider.id, post_id, media.len()));
-        if is_archive(&file_name) || is_archive(&url) {
+        if crate::media::is_unsupported_archive(&file_name)
+            || crate::media::is_unsupported_archive(&url)
+        {
             continue;
         }
         let stable_tail = content_hash(&candidate.path)
@@ -694,6 +782,21 @@ fn post_media(
         );
     }
     Ok(media)
+}
+
+fn is_preview_candidate(candidate: &MediaCandidate) -> bool {
+    let path = candidate.path.to_ascii_lowercase();
+    if path.contains("/thumbnail/") || path.contains("/preview/") {
+        return true;
+    }
+    [
+        &candidate.path,
+        candidate.server.as_deref().unwrap_or_default(),
+    ]
+    .into_iter()
+    .filter_map(|raw| Url::parse(raw).ok())
+    .filter_map(|url| url.host_str().map(ToOwned::to_owned))
+    .any(|host| host.starts_with("img."))
 }
 
 fn push_candidates(
@@ -776,7 +879,7 @@ fn inline_paths(content: &str) -> Vec<String> {
     INLINE
         .get_or_init(|| {
             Regex::new(
-                r#"(?i)src\s*=\s*[\"'](?:https?://(?:[a-z0-9-]+\.)?(?:kemono\.cr|coomer\.st|pawchive\.pw))?((?:/data)?/(?:inline/|[0-9a-f]{2}/[0-9a-f]{2}/)[^\"'?#\s]+)"#,
+                r#"(?i)src\s*=\s*[\"'](?:https?://(?:[a-z0-9-]+\.)?pawchive\.(?:pw|st))?((?:/data)?/(?:inline/|[0-9a-f]{2}/[0-9a-f]{2}/)[^\"'?#\s]+)"#,
             )
             .expect("valid archive inline-media regex")
         })
@@ -808,17 +911,6 @@ fn safe_file_name(name: &str) -> Option<String> {
 fn file_name_from_path(path: &str) -> Option<String> {
     let path = path.split(['?', '#']).next().unwrap_or(path);
     safe_file_name(path)
-}
-
-fn is_archive(value: &str) -> bool {
-    let value = value
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(value)
-        .to_ascii_lowercase();
-    ["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "cbz", "cbr"]
-        .iter()
-        .any(|extension| value.ends_with(&format!(".{extension}")))
 }
 
 fn required_component<'a>(
@@ -867,6 +959,19 @@ mod tests {
     use super::*;
     use crate::{CanonicalTag, SourcePartition};
 
+    const ARCHIVE_FIXTURE: ArchiveProvider = ArchiveProvider {
+        id: "archive_fixture",
+        display_name: "Archive fixture",
+        domain: "pawchive.pw",
+        query_domains: &["pawchive.pw", "www.pawchive.pw"],
+        site_root: "https://pawchive.pw",
+        api_root: "https://pawchive.pw/api/v1",
+        media_root: "https://file.pawchive.pw",
+        creator_posts_suffix: "",
+        accept: "application/json",
+        file_first: true,
+    };
+
     fn request(cursor: Option<String>) -> DiscoveryRequest {
         DiscoveryRequest {
             query: "patreon:90822862".to_string(),
@@ -877,33 +982,39 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_kemono_creator_queries() {
+    fn accepts_only_first_party_archive_creator_queries() {
         assert_eq!(
-            normalize_creator_query(KEMONO, "patreon:90822862").unwrap(),
+            normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap(),
             CreatorLocator {
                 service: "patreon".to_string(),
                 creator_id: "90822862".to_string(),
             }
         );
-        assert!(
-            normalize_creator_query(KEMONO, "https://kemono.cr/patreon/user/90822862/").is_ok()
-        );
-        assert!(
-            normalize_creator_query(KEMONO, "https://coomer.st/patreon/user/90822862").is_err()
-        );
-        assert!(
-            normalize_creator_query(KEMONO, "https://kemono.cr/patreon/user/90822862/post/1")
-                .is_err()
-        );
+        assert!(normalize_creator_query(
+            ARCHIVE_FIXTURE,
+            "https://pawchive.pw/patreon/user/90822862/"
+        )
+        .is_ok());
+        assert!(normalize_creator_query(
+            ARCHIVE_FIXTURE,
+            "https://example.invalid/patreon/user/90822862"
+        )
+        .is_err());
+        assert!(normalize_creator_query(
+            ARCHIVE_FIXTURE,
+            "https://pawchive.pw/patreon/user/90822862/post/1"
+        )
+        .is_err());
     }
 
     #[test]
     fn exposes_one_post_at_a_time_with_a_query_bound_cursor() {
-        let creator = normalize_creator_query(KEMONO, "patreon:90822862").unwrap();
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
         let fixture: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/kemono/page.json")).unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
         let first = normalize_page(
-            KEMONO,
+            ARCHIVE_FIXTURE,
             &request(None),
             &creator,
             CursorState {
@@ -916,15 +1027,21 @@ mod tests {
         assert_eq!(first.posts.len(), 1);
         assert_eq!(first.posts[0].stable_id, "147648418");
         let cursor = first.posts[0].resume_cursor_after.clone().unwrap();
-        let state = decode_cursor(KEMONO, &creator, Some(&cursor)).unwrap();
-        let second =
-            normalize_page(KEMONO, &request(Some(cursor)), &creator, state, fixture).unwrap();
+        let state = decode_cursor(ARCHIVE_FIXTURE, &creator, Some(&cursor)).unwrap();
+        let second = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(cursor)),
+            &creator,
+            state,
+            fixture,
+        )
+        .unwrap();
         assert_eq!(second.posts.len(), 1);
         assert_eq!(second.posts[0].stable_id, "139274914");
         assert!(second.exhausted);
-        let other = normalize_creator_query(KEMONO, "patreon:44096704").unwrap();
+        let other = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:44096704").unwrap();
         assert!(decode_cursor(
-            KEMONO,
+            ARCHIVE_FIXTURE,
             &other,
             first.posts[0].resume_cursor_after.as_deref()
         )
@@ -932,12 +1049,156 @@ mod tests {
     }
 
     #[test]
+    fn anchored_cursor_survives_first_page_inserts_and_deletes() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
+        let first = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(None),
+            &creator,
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
+            fixture.clone(),
+        )
+        .unwrap();
+        let cursor = first.posts[0].resume_cursor_after.clone().unwrap();
+        assert!(cursor.starts_with("v1|"));
+        let state = decode_cursor(ARCHIVE_FIXTURE, &creator, Some(&cursor)).unwrap();
+
+        let mut inserted = fixture.clone();
+        let posts = inserted.as_array_mut().unwrap();
+        let mut new_post = posts[0].clone();
+        new_post["id"] = Value::String("150000000".into());
+        posts.insert(0, new_post);
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(cursor.clone())),
+            &creator,
+            state,
+            inserted,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "139274914");
+
+        let mut deleted = fixture.clone();
+        deleted.as_array_mut().unwrap().remove(0);
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(cursor.clone())),
+            &creator,
+            state,
+            deleted,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "139274914");
+
+        let mut next_deleted = fixture;
+        let posts = next_deleted.as_array_mut().unwrap();
+        let mut older = posts[1].clone();
+        older["id"] = Value::String("130000000".into());
+        posts.push(older);
+        posts.remove(1);
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(cursor)),
+            &creator,
+            state,
+            next_deleted,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "130000000");
+    }
+
+    #[test]
+    fn anchored_cursor_survives_mutation_at_the_first_page_boundary() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        let template: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
+        let template = template.as_array().unwrap()[0].clone();
+        let all = (0..52)
+            .map(|index| {
+                let mut post = template.clone();
+                post["id"] = Value::String(format!("post-{index:03}"));
+                post
+            })
+            .collect::<Vec<_>>();
+        let first_page = Value::Array(all[..PAGE_LENGTH as usize].to_vec());
+
+        let mut cursor = None;
+        let mut state = CursorState {
+            offset: 0,
+            index: 0,
+        };
+        for index in 0..PAGE_LENGTH as usize {
+            let batch = normalize_page(
+                ARCHIVE_FIXTURE,
+                &request(cursor.clone()),
+                &creator,
+                state,
+                first_page.clone(),
+            )
+            .unwrap();
+            assert_eq!(batch.posts[0].stable_id, format!("post-{index:03}"));
+            assert!(batch.posts[0].media.is_empty());
+            cursor = batch.posts[0].resume_cursor_after.clone();
+            state = decode_cursor(ARCHIVE_FIXTURE, &creator, cursor.as_deref()).unwrap();
+        }
+        let boundary_cursor = cursor.unwrap();
+        assert_eq!(state.offset, PAGE_LENGTH - 1);
+
+        let unchanged = Value::Array(all[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(boundary_cursor.clone())),
+            &creator,
+            state,
+            unchanged,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "post-050");
+
+        let mut inserted = all.clone();
+        let mut new_post = template.clone();
+        new_post["id"] = Value::String("post-new".into());
+        inserted.insert(0, new_post);
+        let inserted_page = Value::Array(inserted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(boundary_cursor.clone())),
+            &creator,
+            state,
+            inserted_page,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "post-050");
+
+        let mut deleted = all;
+        deleted.remove(0);
+        let deleted_page = Value::Array(deleted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let resumed = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(Some(boundary_cursor)),
+            &creator,
+            state,
+            deleted_page,
+        )
+        .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "post-050");
+    }
+
+    #[test]
     fn maps_complete_detail_media_and_only_canonical_namespaces() {
-        let creator = normalize_creator_query(KEMONO, "patreon:90822862").unwrap();
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
         let page: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/kemono/page.json")).unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
         let discovered = normalize_page(
-            KEMONO,
+            ARCHIVE_FIXTURE,
             &request(None),
             &creator,
             CursorState {
@@ -950,16 +1211,20 @@ mod tests {
         .posts
         .remove(0);
         let detail: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/kemono/post.json")).unwrap();
-        let profile: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/kemono/profile.json")).unwrap();
-        let post = normalize_detail(KEMONO, discovered, &creator, detail, profile).unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/post.json"))
+                .unwrap();
+        let profile: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/archive_feed/profile.json"
+        ))
+        .unwrap();
+        let post =
+            normalize_detail(ARCHIVE_FIXTURE, discovered, &creator, detail, profile).unwrap();
 
         assert_eq!(post.creator.as_deref(), Some("Rehab Room"));
-        assert_eq!(post.media.len(), 3);
-        assert!(post.media.iter().all(|media| !media.url.ends_with(".zip")));
+        assert_eq!(post.media.len(), 4);
+        assert!(post.media.iter().any(|media| media.url.ends_with(".zip")));
         assert_eq!(post.media[0].position, 0);
-        assert_eq!(post.media[2].position, 2);
+        assert_eq!(post.media[3].position, 3);
         assert!(post.tags.contains(&CanonicalTag::new("creator", "Alice")));
         assert!(post.tags.contains(&CanonicalTag::new("character", "Hero")));
         assert!(post.tags.contains(&CanonicalTag::new("series", "Saga")));
@@ -970,5 +1235,66 @@ mod tests {
             tag.namespace.as_str(),
             "" | "creator" | "character" | "series" | "species" | "rating"
         )));
+    }
+
+    #[test]
+    fn missing_profile_uses_the_stable_creator_identity() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        let page: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
+        let discovered = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(None),
+            &creator,
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
+            page,
+        )
+        .unwrap()
+        .posts
+        .remove(0);
+        let detail: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/post.json"))
+                .unwrap();
+
+        let post = normalize_detail(ARCHIVE_FIXTURE, discovered, &creator, detail, None).unwrap();
+
+        assert_eq!(post.creator.as_deref(), Some("90822862"));
+        assert!(!post.media.is_empty());
+    }
+
+    #[test]
+    fn missing_detail_settles_only_that_post_without_media() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        let page: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/archive_feed/page.json"))
+                .unwrap();
+        let mut discovered = normalize_page(
+            ARCHIVE_FIXTURE,
+            &request(None),
+            &creator,
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
+            page,
+        )
+        .unwrap()
+        .posts
+        .remove(0);
+        let resume_cursor = discovered.resume_cursor_after.clone();
+        discovered.media.push(
+            MediaDescriptorBuilder::new("fixture", 0, "https://pawchive.pw/data/fixture.jpg")
+                .build(),
+        );
+
+        let unavailable = post_without_detail(discovered);
+
+        assert_eq!(unavailable.stable_id, "147648418");
+        assert_eq!(unavailable.resume_cursor_after, resume_cursor);
+        assert!(unavailable.media.is_empty());
     }
 }

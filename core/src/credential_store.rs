@@ -1,7 +1,6 @@
 //! OS keychain-backed credential storage for Picto's supported sources.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -58,88 +57,6 @@ pub struct SiteCredential {
     pub oauth_token: Option<String>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct DevelopmentCredentialCache {
-    credentials: HashMap<String, SiteCredential>,
-}
-
-struct DevelopmentCredentialStore {
-    path: PathBuf,
-    cache: DevelopmentCredentialCache,
-}
-
-/// Development Electron is ad-hoc signed, so macOS cannot retain the same
-/// Keychain trust across runtime upgrades. Keep a user-private cache after the
-/// first authorized read; packaged builds never set this path.
-fn development_store(
-) -> Result<Option<&'static std::sync::Mutex<DevelopmentCredentialStore>>, String> {
-    static STORE: std::sync::OnceLock<
-        Result<Option<std::sync::Mutex<DevelopmentCredentialStore>>, String>,
-    > = std::sync::OnceLock::new();
-    match STORE.get_or_init(|| {
-        let Some(path) = std::env::var_os("PICTO_DEVELOPMENT_CREDENTIAL_CACHE") else {
-            return Ok(None);
-        };
-        let path = PathBuf::from(path);
-        let cache = load_development_cache(&path)?;
-        Ok(Some(std::sync::Mutex::new(DevelopmentCredentialStore {
-            path,
-            cache,
-        })))
-    }) {
-        Ok(Some(store)) => Ok(Some(store)),
-        Ok(None) => Ok(None),
-        Err(error) => Err(error.clone()),
-    }
-}
-
-fn load_development_cache(path: &Path) -> Result<DevelopmentCredentialCache, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|error| format!("Development credential cache is invalid: {error}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(DevelopmentCredentialCache::default())
-        }
-        Err(error) => Err(format!("Development credential cache read error: {error}")),
-    }
-}
-
-fn save_development_cache(store: &DevelopmentCredentialStore) -> Result<(), String> {
-    use std::io::Write;
-
-    if let Some(parent) = store.path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Development credential cache directory error: {error}"))?;
-    }
-    let temporary_path = store.path.with_extension("tmp");
-    match std::fs::remove_file(&temporary_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "Development credential cache cleanup error: {error}"
-            ));
-        }
-    }
-    let bytes = serde_json::to_vec(&store.cache)
-        .map_err(|error| format!("Development credential cache serialization error: {error}"))?;
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary_path)
-        .map_err(|error| format!("Development credential cache write error: {error}"))?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("Development credential cache write error: {error}"))?;
-    std::fs::rename(&temporary_path, &store.path)
-        .map_err(|error| format!("Development credential cache replace error: {error}"))
-}
-
 /// Process-local ephemeral credential store, enabled by setting
 /// `PICTO_EPHEMERAL_CREDENTIALS=1` before the first credential access.
 /// Certification and other automated runs use it so they can never read,
@@ -176,16 +93,6 @@ pub fn set_credential(cred: &SiteCredential) -> Result<(), String> {
         return Ok(());
     }
     set_platform_credential(&cred.site_category, &json)?;
-    if let Some(store) = development_store()? {
-        let mut store = store
-            .lock()
-            .map_err(|_| "development credential cache poisoned".to_string())?;
-        store
-            .cache
-            .credentials
-            .insert(cred.site_category.clone(), cred.clone());
-        save_development_cache(&store)?;
-    }
     unlocked_credential_cache()
         .lock()
         .map_err(|_| "credential cache poisoned".to_string())?
@@ -260,22 +167,6 @@ pub fn get_credential(site_category: &str) -> Result<Option<SiteCredential>, Str
     {
         return Ok(credential);
     }
-    if let Some(store) = development_store()? {
-        if let Some(credential) = store
-            .lock()
-            .map_err(|_| "development credential cache poisoned".to_string())?
-            .cache
-            .credentials
-            .get(site_category)
-            .cloned()
-        {
-            unlocked_credential_cache()
-                .lock()
-                .map_err(|_| "credential cache poisoned".to_string())?
-                .insert(site_category.to_string(), Some(credential.clone()));
-            return Ok(Some(credential));
-        }
-    }
     let Some(json) = get_platform_credential(site_category)? else {
         unlocked_credential_cache()
             .lock()
@@ -285,16 +176,6 @@ pub fn get_credential(site_category: &str) -> Result<Option<SiteCredential>, Str
     };
     let credential: SiteCredential = serde_json::from_str(&json)
         .map_err(|error| format!("Credential deserialization error: {error}"))?;
-    if let Some(store) = development_store()? {
-        let mut store = store
-            .lock()
-            .map_err(|_| "development credential cache poisoned".to_string())?;
-        store
-            .cache
-            .credentials
-            .insert(site_category.to_string(), credential.clone());
-        save_development_cache(&store)?;
-    }
     unlocked_credential_cache()
         .lock()
         .map_err(|_| "credential cache poisoned".to_string())?
@@ -335,13 +216,6 @@ pub fn delete_credential(site_category: &str) -> Result<(), String> {
         return Ok(());
     }
     delete_platform_credential(site_category)?;
-    if let Some(store) = development_store()? {
-        let mut store = store
-            .lock()
-            .map_err(|_| "development credential cache poisoned".to_string())?;
-        store.cache.credentials.remove(site_category);
-        save_development_cache(&store)?;
-    }
     unlocked_credential_cache()
         .lock()
         .map_err(|_| "credential cache poisoned".to_string())?
@@ -380,37 +254,4 @@ fn delete_matching_credentials(entry: &keyring::Entry) -> Result<(), String> {
         }
     }
     Err("Keyring delete error: too many matching credentials".to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn development_cache_round_trips_credentials() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("credentials.json");
-        let credential = SiteCredential {
-            site_category: "example".to_string(),
-            credential_type: CredentialType::Cookies,
-            username: None,
-            password: None,
-            cookies: Some(HashMap::from([(
-                "session".to_string(),
-                "secret".to_string(),
-            )])),
-            headers: None,
-            oauth_token: None,
-        };
-        let store = DevelopmentCredentialStore {
-            path: path.clone(),
-            cache: DevelopmentCredentialCache {
-                credentials: HashMap::from([("example".to_string(), credential.clone())]),
-            },
-        };
-
-        save_development_cache(&store).unwrap();
-        let loaded = load_development_cache(&path).unwrap();
-        assert_eq!(loaded.credentials.get("example"), Some(&credential));
-    }
 }

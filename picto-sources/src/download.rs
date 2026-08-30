@@ -7,8 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::segmented::{FfmpegMuxer, MediaMuxer, SegmentedDownloader};
 use crate::{
-    DownloadedMedia, HttpRuntime, MediaDelivery, MediaDescriptor, RequestCredentials, SourceError,
-    SourceErrorKind, SourcePost,
+    DownloadedMedia, HttpRuntime, MediaDelivery, MediaDescriptor, NativeSourceAdapter,
+    RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +144,48 @@ impl PostDownloader {
             .buffer_unordered(self.maximum_concurrency),
         ))
     }
+
+    pub async fn stream_resolving<'a>(
+        &'a self,
+        post: &'a SourcePost,
+        credentials: &'a RequestCredentials,
+        staging_directory: &'a Path,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+        adapter: Arc<dyn NativeSourceAdapter>,
+    ) -> Result<DownloadStream<'a>, SourceError> {
+        tokio::fs::create_dir_all(staging_directory)
+            .await
+            .map_err(|error| {
+                SourceError::new(SourceErrorKind::Download, error.to_string(), true)
+            })?;
+        let media_concurrency = self
+            .maximum_concurrency
+            .min(adapter.media_concurrency())
+            .max(1);
+        Ok(Box::pin(
+            stream::iter(post.media.iter().cloned().map(move |descriptor| {
+                let adapter = Arc::clone(&adapter);
+                async move {
+                    let unresolved = descriptor.clone();
+                    let descriptor = match adapter
+                        .resolve_media(descriptor, credentials, http, cancel)
+                        .await
+                    {
+                        Ok(descriptor) => descriptor,
+                        Err(error) => return (unresolved, Err(error)),
+                    };
+                    let destination = destination_path(staging_directory, &descriptor);
+                    let result = self
+                        .segmented
+                        .download(&descriptor, credentials, &destination, http, cancel)
+                        .await;
+                    (descriptor, result)
+                }
+            }))
+            .buffer_unordered(media_concurrency),
+        ))
+    }
 }
 
 pub type DownloadStream<'a> =
@@ -184,6 +226,8 @@ mod tests {
             mime_hint: None,
             expected_size: None,
             headers: Default::default(),
+            fallbacks: Vec::new(),
+            rejected_final_paths: Vec::new(),
         };
         assert_eq!(
             destination_path(directory, &descriptor),

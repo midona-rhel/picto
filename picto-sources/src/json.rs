@@ -11,6 +11,9 @@ pub trait JsonPageSource: Send + Sync + 'static {
     type Response: DeserializeOwned + Send;
 
     fn descriptor(&self) -> ProviderDescriptor;
+    fn user_agent(&self) -> Option<&'static str> {
+        None
+    }
     fn validate_query(&self, query: &str) -> Result<(), SourceError>;
     fn request_url(&self, request: &DiscoveryRequest) -> Result<Url, SourceError>;
     fn normalize(
@@ -31,6 +34,10 @@ impl<S> JsonSourceAdapter<S> {
 impl<S: JsonPageSource> NativeSourceAdapter for JsonSourceAdapter<S> {
     fn descriptor(&self) -> ProviderDescriptor {
         self.0.descriptor()
+    }
+
+    fn user_agent(&self) -> Option<&'static str> {
+        self.0.user_agent()
     }
 
     fn validate_query(&self, query: &str) -> Result<(), SourceError> {

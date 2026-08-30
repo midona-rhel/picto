@@ -21,6 +21,20 @@ pub struct PreparedSourcePost {
     pub rejected_media: Vec<RejectedSourceMedia>,
 }
 
+struct PrepareContext<'a> {
+    post: &'a SourcePost,
+    source_key: &'a str,
+    source_text: &'a str,
+    tags: &'a [String],
+    imported_at_ms: i64,
+}
+
+struct MemberKeys<'a> {
+    stable: &'a str,
+    source_item: &'a str,
+    descriptor: &'a str,
+}
+
 pub async fn prepare_source_post(
     post: &SourcePost,
     download: PostDownload,
@@ -39,21 +53,18 @@ pub async fn prepare_source_post(
             message: failure.message,
         })
         .collect::<Vec<_>>();
+    let context = PrepareContext {
+        post,
+        source_key: &source_key,
+        source_text: &source_text,
+        tags: &tags,
+        imported_at_ms,
+    };
 
     for media in download.downloaded {
         cleanup_paths.push(media.path.clone());
-        match prepare_member(
-            post,
-            &media.descriptor.stable_id,
-            &media.path,
-            &source_key,
-            &source_text,
-            &tags,
-            imported_at_ms,
-        )
-        .await
-        {
-            Ok(member) => members.push(member),
+        match prepare_downloaded_media(&context, &media.descriptor.stable_id, &media.path).await {
+            Ok(mut prepared) => members.append(&mut prepared),
             Err(message) => rejected_media.push(RejectedSourceMedia {
                 media_id: media.descriptor.stable_id,
                 message,
@@ -69,14 +80,78 @@ pub async fn prepare_source_post(
     })
 }
 
-async fn prepare_member(
-    post: &SourcePost,
+async fn prepare_downloaded_media(
+    context: &PrepareContext<'_>,
     source_item_key: &str,
     path: &Path,
-    source_key: &str,
-    source_text: &str,
-    tags: &[String],
-    imported_at_ms: i64,
+) -> Result<Vec<PreparedImport>, String> {
+    let inspected = PreparedMediaSource::prepare_ingest(path)
+        .await
+        .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
+    if inspected.mime_type != "application/zip" {
+        return prepare_member(
+            context,
+            MemberKeys {
+                stable: source_item_key,
+                source_item: source_item_key,
+                descriptor: source_item_key,
+            },
+            path,
+        )
+        .await
+        .map(|member| vec![member]);
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Downloaded ZIP has no staging directory: {}",
+            path.display()
+        )
+    })?;
+    let entries = crate::media_processing::archive::extract_library_files(
+        path,
+        &parent.join("expanded-archives"),
+    )
+    .map_err(|error| format!("Failed to extract {}: {error}", path.display()))?;
+    if entries.is_empty() {
+        return Err(format!(
+            "Downloaded ZIP contains no accepted media: {}",
+            path.display()
+        ));
+    }
+
+    let mut members = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let member_source_key = if index == 0 {
+            source_item_key.to_owned()
+        } else {
+            format!("{source_item_key}:zip:{index}")
+        };
+        let mut member = prepare_member(
+            context,
+            MemberKeys {
+                stable: &member_source_key,
+                source_item: &member_source_key,
+                descriptor: source_item_key,
+            },
+            &entry.path,
+        )
+        .await?;
+        member.media_name = Path::new(&entry.archive_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&member.media_name)
+            .to_owned();
+        members.push(member);
+    }
+    Ok(members)
+}
+
+async fn prepare_member(
+    context: &PrepareContext<'_>,
+    keys: MemberKeys<'_>,
+    path: &Path,
 ) -> Result<PreparedImport, String> {
     let prepared = PreparedMediaSource::prepare_ingest(path)
         .await
@@ -92,21 +167,27 @@ async fn prepare_member(
         .size_bytes
         .or_else(|| std::fs::metadata(path).ok().map(|metadata| metadata.len()))
         .unwrap_or_default();
-    let mut source_urls = post.canonical_url.iter().cloned().collect::<Vec<_>>();
-    if let Some(url) = post
+    let mut source_urls = context
+        .post
+        .canonical_url
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(url) = context
+        .post
         .media
         .iter()
-        .find(|media| media.stable_id == source_item_key)
+        .find(|media| media.stable_id == keys.descriptor)
         .and_then(|media| media.canonical_url.clone())
     {
         if !source_urls.contains(&url) {
             source_urls.push(url);
         }
     }
-    let media_name = member_name(post, source_item_key, path);
+    let media_name = member_name(context.post, keys.descriptor, path);
 
     Ok(PreparedImport {
-        stable_key: format!("source:{source_key}:{source_item_key}"),
+        stable_key: format!("source:{}:{}", context.source_key, keys.stable),
         media_name,
         file_path: path.to_string_lossy().into_owned(),
         facts: ImmutableMediaFacts {
@@ -122,18 +203,22 @@ async fn prepare_member(
         },
         lifecycle: Lifecycle::Inbox,
         rating: Rating::Unrated,
-        notes: post.notes.clone(),
-        tags: tags.to_vec(),
+        notes: context.post.notes.clone(),
+        tags: context.tags.to_vec(),
         folders: Vec::new(),
         source_urls,
         source_identity: Some(SourceIdentity {
-            source_key: source_key.to_string(),
-            source_item_key: source_item_key.to_string(),
-            source_text: (!source_text.is_empty()).then(|| source_text.to_string()),
+            source_key: context.source_key.to_string(),
+            source_item_key: keys.source_item.to_string(),
+            source_text: (!context.source_text.is_empty()).then(|| context.source_text.to_string()),
             source_attempt_id: None,
         }),
-        imported_at_ms,
-        captured_at_ms: post.created_at.as_deref().and_then(parse_source_time_ms),
+        imported_at_ms: context.imported_at_ms,
+        captured_at_ms: context
+            .post
+            .created_at
+            .as_deref()
+            .and_then(parse_source_time_ms),
     })
 }
 
@@ -198,7 +283,9 @@ fn source_search_text(post: &SourcePost) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use picto_sources::{CanonicalTag, MediaDescriptor, SourcePartition};
+    use picto_sources::{
+        CanonicalTag, DownloadedMedia, MediaDescriptor, PostDownload, SourcePartition,
+    };
 
     use super::*;
 
@@ -223,6 +310,8 @@ mod tests {
                     mime_hint: Some("image/png".into()),
                     expected_size: None,
                     headers: BTreeMap::new(),
+                    fallbacks: Vec::new(),
+                    rejected_final_paths: Vec::new(),
                 })
                 .collect(),
             resume_cursor_after: None,
@@ -256,5 +345,68 @@ mod tests {
     #[test]
     fn unsupported_source_namespaces_fall_back_to_general() {
         assert_eq!(canonical_tags(&post(1)), vec!["highres"]);
+    }
+
+    #[tokio::test]
+    async fn provider_zip_expands_into_canonical_collection_members() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([10, 20, 30]))
+            .save(&first)
+            .unwrap();
+        image::RgbImage::from_pixel(2, 2, image::Rgb([30, 20, 10]))
+            .save(&second)
+            .unwrap();
+        let archive = directory.path().join("attachment.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("pages/first.png", options).unwrap();
+        std::io::copy(&mut std::fs::File::open(&first).unwrap(), &mut zip).unwrap();
+        zip.start_file("second.png", options).unwrap();
+        std::io::copy(&mut std::fs::File::open(&second).unwrap(), &mut zip).unwrap();
+        zip.finish().unwrap();
+
+        let mut source_post = post(1);
+        source_post.media[0].url = "https://example.test/attachment.zip".into();
+        source_post.media[0].file_name = Some("attachment.zip".into());
+        source_post.media[0].mime_hint = Some("application/zip".into());
+        let prepared = prepare_source_post(
+            &source_post,
+            PostDownload {
+                downloaded: vec![DownloadedMedia {
+                    descriptor: source_post.media[0].clone(),
+                    path: archive.clone(),
+                    size_bytes: std::fs::metadata(&archive).unwrap().len(),
+                }],
+                failures: Vec::new(),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(prepared.members.len(), 2);
+        assert_eq!(prepared.collection_name.as_deref(), Some("Post title"));
+        assert_eq!(prepared.members[0].media_name, "first");
+        assert_eq!(prepared.members[1].media_name, "second");
+        assert_ne!(
+            prepared.members[0].stable_key,
+            prepared.members[1].stable_key
+        );
+        assert_eq!(
+            prepared.members[0]
+                .source_identity
+                .as_ref()
+                .map(|source| source.source_item_key.as_str()),
+            Some("media-0")
+        );
+        assert_eq!(
+            prepared.members[1]
+                .source_identity
+                .as_ref()
+                .map(|source| source.source_item_key.as_str()),
+            Some("media-0:zip:1")
+        );
     }
 }

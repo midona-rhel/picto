@@ -201,6 +201,7 @@ struct SubscriptionCoverSource {
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionList {
     pub subscriptions: Vec<SubscriptionView>,
+    pub global_paused: bool,
     #[ts(type = "number")]
     pub revision: u64,
 }
@@ -236,6 +237,7 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
                 }
                 Ok(SubscriptionList {
                     subscriptions,
+                    global_paused: subscriptions_globally_paused(connection)?,
                     revision: projection.revision,
                 })
             },
@@ -305,7 +307,7 @@ fn query_subscription_views(
                     active.run_id,
                     CASE
                         WHEN active.status = 'pending'
-                         AND active.failure_kind IN ('paused', 'inbox_full')
+                         AND active.failure_kind IS NOT NULL
                         THEN active.failure_kind
                         ELSE COALESCE(active.status, latest.status)
                     END,
@@ -602,6 +604,7 @@ impl LibraryApplication {
                     "subscriptions.queries.pause",
                     serde_json::json!({"query_id": query_id, "paused": paused}),
                     |transaction, _| {
+                        reject_active_query_edit(transaction, query_id)?;
                         let changed = transaction.execute(
                             "UPDATE subscription_query SET paused = ?1
                              WHERE query_id = ?2 AND paused != ?1",
@@ -611,7 +614,6 @@ impl LibraryApplication {
                             require_query(transaction, query_id)?;
                             return Ok(None);
                         }
-                        set_active_query_pause_state(transaction, query_id, paused)?;
                         Ok(Some(()))
                     },
                 )
@@ -716,10 +718,10 @@ impl LibraryApplication {
         )
     }
 
-    pub fn pause_subscription_library(
+    pub fn set_subscription_hold_library(
         &self,
         subscription_id: i64,
-        paused: bool,
+        held: bool,
     ) -> Result<picto_library::MutationReceipt, String> {
         finish_subscription_mutation(
             self,
@@ -728,20 +730,77 @@ impl LibraryApplication {
                     picto_library::database::WorkPriority::ForegroundMutation,
                     subscription_resources(),
                     [],
-                    "subscriptions.pause",
-                    serde_json::json!({"subscription_id": subscription_id, "paused": paused}),
+                    "subscriptions.hold",
+                    serde_json::json!({"subscription_id": subscription_id, "held": held}),
                     |transaction, _| {
+                        reject_active_subscription_hold(transaction, subscription_id)?;
                         let changed = transaction.execute(
                             "UPDATE subscription SET paused = ?1
                              WHERE subscription_id = ?2 AND paused != ?1",
-                            params![paused, subscription_id],
+                            params![held, subscription_id],
                         )?;
                         if changed == 0 {
                             require_subscription(transaction, subscription_id)?;
                             return Ok(None);
                         }
-                        set_active_subscription_pause_state(transaction, subscription_id, paused)?;
                         Ok(Some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn pause_subscription_run_library(
+        &self,
+        subscription_id: i64,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.run.pause",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        require_active_subscription_run(transaction, subscription_id)?;
+                        let changed = set_active_subscription_pause_state(
+                            transaction,
+                            subscription_id,
+                            true,
+                            None,
+                        )?;
+                        Ok((changed != 0).then_some(()))
+                    },
+                )
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    pub fn resume_subscription_run_library(
+        &self,
+        subscription_id: i64,
+        now: &str,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        finish_subscription_mutation(
+            self,
+            self.library()
+                .auxiliary_semantic_write_if_changed(
+                    picto_library::database::WorkPriority::ForegroundMutation,
+                    subscription_resources(),
+                    [],
+                    "subscriptions.run.resume",
+                    serde_json::json!({"subscription_id": subscription_id}),
+                    |transaction, _| {
+                        require_active_subscription_run(transaction, subscription_id)?;
+                        let changed = set_active_subscription_pause_state(
+                            transaction,
+                            subscription_id,
+                            false,
+                            Some(now),
+                        )?;
+                        Ok((changed != 0).then_some(()))
                     },
                 )
                 .map_err(|error| error.to_string())?,
@@ -762,11 +821,14 @@ impl LibraryApplication {
                     "subscriptions.pause_all",
                     serde_json::json!({"paused": paused}),
                     |transaction, _| {
-                        let mut changed = transaction.execute(
-                            "UPDATE subscription SET paused = ?1 WHERE paused != ?1",
-                            [paused],
+                        let value = if paused { "true" } else { "false" };
+                        let changed = transaction.execute(
+                            "INSERT INTO setting(key, value_json)
+                             VALUES ('subscriptions.global_paused', ?1)
+                             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+                             WHERE setting.value_json != excluded.value_json",
+                            [value],
                         )?;
-                        changed += set_all_subscription_pause_state(transaction, paused)?;
                         Ok((changed != 0).then_some(()))
                     },
                 )
@@ -1625,13 +1687,25 @@ fn query_views_by_subscription(
     connection: &rusqlite::Connection,
 ) -> rusqlite::Result<HashMap<i64, Vec<SubscriptionQueryView>>> {
     let mut statement = connection.prepare(
-        "WITH source_counts AS (
+        "WITH added_source_posts AS (
+             SELECT run_query.query_id, attempt.source_post_id
+             FROM subscription_run_query run_query
+             JOIN source_post_attempt attempt USING(run_query_id)
+             WHERE attempt.state = 'added'
+             GROUP BY run_query.query_id, attempt.source_post_id
+         ),
+         source_counts AS (
              SELECT ssp.query_id,
-                    COUNT(DISTINCT post.root_item_id) AS post_count,
+                    COUNT(DISTINCT post.source_post_id) AS post_count,
                     COUNT(DISTINCT si.media_item_id) AS media_count
              FROM subscription_source_post ssp
+             JOIN added_source_posts added
+               ON added.query_id = ssp.query_id
+              AND added.source_post_id = ssp.source_post_id
              JOIN source_post post ON post.source_post_id = ssp.source_post_id
-             LEFT JOIN source_item si ON si.source_post_id = ssp.source_post_id
+             LEFT JOIN source_item si
+               ON si.source_post_id = ssp.source_post_id
+              AND si.state = 'ingested'
              WHERE post.root_item_id IS NOT NULL
              GROUP BY ssp.query_id
          ),
@@ -1767,9 +1841,10 @@ fn set_active_subscription_pause_state(
     transaction: &rusqlite::Transaction<'_>,
     subscription_id: i64,
     paused: bool,
-) -> rusqlite::Result<()> {
+    now: Option<&str>,
+) -> rusqlite::Result<usize> {
     if paused {
-        transaction.execute(
+        let query_count = transaction.execute(
             "UPDATE subscription_run_query
              SET status = 'pending', started_at = NULL, finished_at = NULL,
                  attempt_count = CASE WHEN status = 'running'
@@ -1783,147 +1858,49 @@ fn set_active_subscription_pause_state(
                )",
             [subscription_id],
         )?;
-        transaction.execute(
+        let run_count = transaction.execute(
             "UPDATE subscription_run
-             SET status = 'pending', finished_at = NULL,
+             SET status = 'pending', started_at = NULL, finished_at = NULL,
                  failure_kind = 'paused', error_message = 'Paused by user.'
              WHERE subscription_id = ?1 AND status IN ('pending', 'running')",
             [subscription_id],
-        )?;
-    } else {
-        transaction.execute(
-            "UPDATE subscription_run_query
-             SET failure_kind = NULL, error_message = NULL
-             WHERE status = 'pending' AND failure_kind = 'paused'
-               AND run_id IN (
-                   SELECT run_id FROM subscription_run
-                   WHERE subscription_id = ?1 AND status = 'pending'
-               )",
-            [subscription_id],
-        )?;
-        transaction.execute(
-            "UPDATE subscription_run
-             SET failure_kind = NULL, error_message = NULL
-             WHERE subscription_id = ?1 AND status = 'pending'
-               AND failure_kind = 'paused'",
-            [subscription_id],
-        )?;
-    }
-    Ok(())
-}
-
-fn set_all_subscription_pause_state(
-    transaction: &rusqlite::Transaction<'_>,
-    paused: bool,
-) -> rusqlite::Result<usize> {
-    if paused {
-        let query_count = transaction.execute(
-            "UPDATE subscription_run_query
-             SET status = 'pending', started_at = NULL, finished_at = NULL,
-                 attempt_count = CASE WHEN status = 'running'
-                                      THEN MAX(attempt_count - 1, 0)
-                                      ELSE attempt_count END,
-                 failure_kind = 'paused', error_message = 'Paused by user.'
-             WHERE status IN ('pending', 'running')",
-            [],
-        )?;
-        let run_count = transaction.execute(
-            "UPDATE subscription_run
-             SET status = 'pending', finished_at = NULL,
-                 failure_kind = 'paused', error_message = 'Paused by user.'
-             WHERE status IN ('pending', 'running')",
-            [],
         )?;
         return Ok(query_count + run_count);
     }
 
     let query_count = transaction.execute(
         "UPDATE subscription_run_query
-         SET failure_kind = NULL, error_message = NULL
-         WHERE status = 'pending' AND failure_kind = 'paused'
-           AND EXISTS (
-               SELECT 1
-               FROM subscription_run run
-               JOIN subscription subscription
-                 ON subscription.subscription_id = run.subscription_id
-               JOIN subscription_query query
-                 ON query.query_id = subscription_run_query.query_id
-               WHERE run.run_id = subscription_run_query.run_id
-                 AND query.query_id = subscription_run_query.query_id
-                 AND subscription.paused = 0
-                 AND query.paused = 0
+         SET available_at = COALESCE(?1, available_at),
+             failure_kind = NULL, error_message = NULL
+         WHERE status = 'pending' AND failure_kind IS NOT NULL
+           AND run_id IN (
+               SELECT run_id FROM subscription_run
+               WHERE subscription_id = ?2 AND status = 'pending'
            )",
-        [],
+        params![now, subscription_id],
     )?;
     let run_count = transaction.execute(
         "UPDATE subscription_run
          SET failure_kind = NULL, error_message = NULL
-         WHERE status = 'pending' AND failure_kind = 'paused'
-           AND EXISTS (
-               SELECT 1 FROM subscription
-               WHERE subscription.subscription_id = subscription_run.subscription_id
-                 AND subscription.paused = 0
-           )
-           AND NOT EXISTS (
-               SELECT 1 FROM subscription_run_query pending
-               WHERE pending.run_id = subscription_run.run_id
-                 AND pending.status = 'pending'
-                 AND pending.failure_kind = 'paused'
-           )",
-        [],
+         WHERE subscription_id = ?1 AND status = 'pending'
+           AND failure_kind IS NOT NULL",
+        [subscription_id],
     )?;
     Ok(query_count + run_count)
 }
 
-fn set_active_query_pause_state(
-    transaction: &rusqlite::Transaction<'_>,
-    query_id: i64,
-    paused: bool,
-) -> rusqlite::Result<()> {
-    if paused {
-        transaction.execute(
-            "UPDATE subscription_run_query
-             SET status = 'pending', started_at = NULL, finished_at = NULL,
-                 attempt_count = CASE WHEN status = 'running'
-                                      THEN MAX(attempt_count - 1, 0)
-                                      ELSE attempt_count END,
-                 failure_kind = 'paused', error_message = 'Paused by user.'
-             WHERE query_id = ?1 AND status IN ('pending', 'running')",
-            [query_id],
-        )?;
-        transaction.execute(
-            "UPDATE subscription_run
-             SET failure_kind = 'paused', error_message = 'Paused by user.'
-             WHERE run_id IN (
-                 SELECT run_id FROM subscription_run_query
-                 WHERE query_id = ?1 AND status = 'pending'
-             ) AND status IN ('pending', 'running')",
-            [query_id],
-        )?;
-    } else {
-        transaction.execute(
-            "UPDATE subscription_run_query
-             SET failure_kind = NULL, error_message = NULL
-             WHERE query_id = ?1 AND status = 'pending' AND failure_kind = 'paused'",
-            [query_id],
-        )?;
-        transaction.execute(
-            "UPDATE subscription_run
-             SET failure_kind = NULL, error_message = NULL
-             WHERE status = 'pending' AND failure_kind = 'paused'
-               AND run_id IN (
-                   SELECT run_id FROM subscription_run_query WHERE query_id = ?1
-               )
-               AND NOT EXISTS (
-                   SELECT 1 FROM subscription_run_query pending
-                   WHERE pending.run_id = subscription_run.run_id
-                     AND pending.status = 'pending'
-                     AND pending.failure_kind = 'paused'
-               )",
-            [query_id],
-        )?;
-    }
-    Ok(())
+pub(crate) fn subscriptions_globally_paused(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<bool> {
+    connection
+        .query_row(
+            "SELECT value_json = 'true' FROM setting
+             WHERE key = 'subscriptions.global_paused'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|value| value.unwrap_or(false))
 }
 
 fn require_subscription(
@@ -1992,6 +1969,47 @@ fn reject_active_subscription_edit(
     Ok(())
 }
 
+fn reject_active_subscription_hold(
+    connection: &rusqlite::Connection,
+    subscription_id: i64,
+) -> picto_library::Result<()> {
+    let active: bool = connection.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM subscription_run
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+         )",
+        [subscription_id],
+        |row| row.get(0),
+    )?;
+    if active {
+        return Err(picto_library::LibraryError::InvalidState(
+            "stop the active run before putting this subscription on hold".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_active_subscription_run(
+    connection: &rusqlite::Connection,
+    subscription_id: i64,
+) -> picto_library::Result<()> {
+    require_subscription(connection, subscription_id)?;
+    let active: bool = connection.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM subscription_run
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+         )",
+        [subscription_id],
+        |row| row.get(0),
+    )?;
+    if !active {
+        return Err(picto_library::LibraryError::InvalidState(
+            "subscription has no active run".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn reject_running_subscription_reset(
     connection: &rusqlite::Connection,
     subscription_id: i64,
@@ -2026,6 +2044,138 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
 mod tests {
     use super::{LibraryApplication, NewSubscription, NewSubscriptionQuery};
     use rusqlite::params;
+
+    #[test]
+    fn query_counts_exclude_skipped_posts_linked_by_duplicate_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Canonical source counts".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "konachan".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-30T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:00:01Z")
+            .unwrap();
+
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _revision| {
+                    let (query_id, run_id, run_query_id): (i64, i64, i64) = transaction.query_row(
+                        "SELECT query.query_id, run.run_id, run_query.run_query_id
+                         FROM subscription_query query
+                         JOIN subscription_run run USING(subscription_id)
+                         JOIN subscription_run_query run_query
+                           ON run_query.run_id = run.run_id
+                          AND run_query.query_id = query.query_id
+                         WHERE query.subscription_id = ?1",
+                        [subscription_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+
+                    for offset in 0_i64..2 {
+                        let item_id = 5000 + offset;
+                        let file_id = 5100 + offset;
+                        transaction.execute(
+                            "INSERT INTO library_item(local_id, stable_key, item_kind)
+                             VALUES (?1, ?2, 1)",
+                            params![item_id, format!("source-count-root-{offset}")],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO media_file
+                                 (file_id, content_hash, file_path, mime, size_bytes)
+                             VALUES (?1, ?2, ?3, 'image/png', 1)",
+                            params![
+                                file_id,
+                                format!("source-count-hash-{offset}"),
+                                format!("/source-count-{offset}.png"),
+                            ],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO media_item(media_id, media_name, file_id)
+                             VALUES (?1, ?2, ?3)",
+                            params![item_id, format!("media-{offset}"), file_id],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO library_root
+                                 (root_id, name, cover_media_id, imported_at_ms, modified_at_ms,
+                                  media_count, total_size_bytes)
+                             VALUES (?1, ?2, ?1, 1, 1, 1, 1)",
+                            params![item_id, format!("root-{offset}")],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO source_post
+                                 (site_id, post_key, root_item_id, created_at, updated_at)
+                             VALUES ('konachan', ?1, ?2, '2026-08-30T00:00:02Z',
+                                     '2026-08-30T00:00:02Z')",
+                            params![format!("post-{offset}"), item_id],
+                        )?;
+                        let source_post_id = transaction.last_insert_rowid();
+                        transaction.execute(
+                            "INSERT INTO source_item
+                                 (source_post_id, item_key, position, media_item_id, state,
+                                  created_at, updated_at)
+                             VALUES (?1, ?2, 0, ?3, 'ingested', '2026-08-30T00:00:02Z',
+                                     '2026-08-30T00:00:02Z')",
+                            params![source_post_id, format!("media-{offset}"), item_id],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO subscription_source_post
+                                 (subscription_id, query_id, source_post_id, last_seen_run_id)
+                             VALUES (?1, ?2, ?3, ?4)",
+                            params![subscription_id, query_id, source_post_id, run_id],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO source_post_attempt
+                                 (run_query_id, source_post_id, state, terminal_reason,
+                                  started_at, settled_at)
+                             VALUES (?1, ?2, ?3, ?4, '2026-08-30T00:00:02Z',
+                                     '2026-08-30T00:00:03Z')",
+                            params![
+                                run_query_id,
+                                source_post_id,
+                                if offset == 0 { "added" } else { "skipped" },
+                                if offset == 0 {
+                                    None
+                                } else {
+                                    Some("exact_duplicate")
+                                },
+                            ],
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let query = super::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.subscription_id == subscription_id)
+            .unwrap()
+            .queries
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(query.post_count, 1);
+        assert_eq!(query.media_count, 1);
+    }
 
     #[test]
     fn completed_subscription_keeps_the_latest_run_progress_visible() {
@@ -2130,7 +2280,7 @@ mod tests {
             .request_subscription_run_library(subscription_id, "2026-08-29T00:00:01Z")
             .unwrap();
         application
-            .pause_subscription_library(subscription_id, true)
+            .pause_subscription_run_library(subscription_id)
             .unwrap();
 
         let native_state = application

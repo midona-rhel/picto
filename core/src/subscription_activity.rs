@@ -300,7 +300,7 @@ fn current_progress_from_connection(
             "SELECT run_id,
                     CASE
                         WHEN status = 'pending'
-                         AND failure_kind IN ('paused', 'inbox_full')
+                         AND failure_kind IS NOT NULL
                         THEN failure_kind
                         ELSE status
                     END,
@@ -321,9 +321,11 @@ fn current_progress_from_connection(
     let Some((run_id, status, requested_by)) = active_run else {
         return Ok(None);
     };
-    let summary = connection.query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)?;
+    let mut summary =
+        connection.query_row(RUN_SUMMARY_BY_ID_SQL, [run_id], run_summary_from_row)?;
     let gallery_total_items = connection.query_row(
         "SELECT MAX(CAST(COALESCE(
+                    json_array_length(post.metadata_json, '$.media'),
                     json_extract(post.metadata_json, '$.filecount'),
                     json_extract(post.metadata_json, '$.count')
                 ) AS INTEGER))
@@ -336,11 +338,22 @@ fn current_progress_from_connection(
         [run_id],
         |row| row.get::<_, Option<i64>>(0),
     )?;
-    // A gallery adapter can initially report the current item count as its
-    // total. Do not publish that provisional 1/1, 2/2 value; a real total is
-    // useful once it is ahead of download progress.
-    let gallery_total_items = gallery_total_items
-        .filter(|total| summary.counts.downloaded == 0 || *total > summary.counts.downloaded);
+    if gallery_total_items.is_some() {
+        // Exact-hash duplicates still reached the gallery download boundary.
+        // Count them here so a gallery rerun cannot leave visible progress at
+        // zero while every downloaded file settles as a duplicate.
+        summary.counts.downloaded = connection.query_row(
+            "SELECT COUNT(DISTINCT file.file_attempt_id)
+             FROM subscription_run_query query_run
+             JOIN subscription_query query ON query.query_id = query_run.query_id
+             JOIN source_post_attempt attempt ON attempt.run_query_id = query_run.run_query_id
+             JOIN source_file_attempt file ON file.attempt_id = attempt.attempt_id
+             WHERE query_run.run_id = ?1 AND query.site_id = 'ehentai'
+               AND file.state IN ('staged', 'retained', 'duplicate')",
+            [run_id],
+            |row| row.get(0),
+        )?;
+    }
     Ok(Some(CurrentSubscriptionProgress {
         subscription_id,
         run_id,
@@ -748,7 +761,14 @@ mod tests {
                 title: Some("Gallery".into()),
                 description: None,
                 captured_at: None,
-                metadata_json: Some(r#"{"filecount":"37"}"#.into()),
+                metadata_json: Some(
+                    serde_json::json!({
+                        "media": (0..37).map(|position| serde_json::json!({
+                            "stable_id": format!("page-{position}"),
+                        })).collect::<Vec<_>>()
+                    })
+                    .to_string(),
+                ),
                 items: vec![NormalizedItem {
                     item_key: "page-1".into(),
                     position: 1,
@@ -759,6 +779,23 @@ mod tests {
             "2026-08-29T00:00:02Z",
         )
         .unwrap();
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::CanonicalIngest,
+                ["items".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (3701, 'gallery-page-1-hash', '/tmp/existing-gallery-page', 'image/jpeg', 1)",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
         crate::library_subscription_state::mark_source_item_staged(
             &application,
             query.run_query_id,
@@ -773,8 +810,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(progress.gallery_total_items, Some(37));
+        // Gallery progress describes completed downloads, including bytes that
+        // canonical ingest immediately recognizes as an exact duplicate.
         assert_eq!(progress.counts.downloaded, 1);
         assert_eq!(progress.counts.posts_added, 0);
+
+        application
+            .pause_subscription_run_library(subscription_id)
+            .unwrap();
+        crate::library_subscription_state::interrupt_query(
+            &application,
+            &query,
+            "2026-08-29T00:00:04Z",
+        )
+        .unwrap();
+        let paused = current_progress_library(&application, subscription_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused.gallery_total_items, Some(37));
+        assert_eq!(paused.counts.downloaded, 1);
+
+        application
+            .resume_subscription_run_library(subscription_id, "2026-08-29T00:00:05Z")
+            .unwrap();
+        assert!(crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:06Z",
+        )
+        .unwrap()
+        .is_some());
     }
 
     #[test]

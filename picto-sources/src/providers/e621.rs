@@ -45,6 +45,10 @@ impl JsonPageSource for E621Source {
         }
     }
 
+    fn user_agent(&self) -> Option<&'static str> {
+        Some(crate::http::APPLICATION_USER_AGENT)
+    }
+
     fn validate_query(&self, query: &str) -> Result<(), SourceError> {
         QUERY.validate(query)
     }

@@ -1,8 +1,8 @@
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AdapterFuture, DiscoveryRequest, HttpRuntime, NativeSourceAdapter, ProviderDescriptor,
-    RequestCredentials, SourceError,
+    AdapterFuture, DiscoveryRequest, HttpRuntime, MediaDescriptor, MediaFuture,
+    NativeSourceAdapter, ProviderDescriptor, RequestCredentials, SourceError,
 };
 
 use super::pixiv::{api_url, current_offset, validate_numeric_user, PixivApi};
@@ -47,6 +47,20 @@ impl NativeSourceAdapter for PixivUserSource {
                 .append_pair("offset", &offset.to_string());
             self.api
                 .discover_one("pixivuser", request, offset, url, credentials, http, cancel)
+                .await
+        })
+    }
+
+    fn resolve_media<'a>(
+        &'a self,
+        media: MediaDescriptor,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> MediaFuture<'a> {
+        Box::pin(async move {
+            self.api
+                .resolve_ugoira(media, credentials, http, cancel)
                 .await
         })
     }

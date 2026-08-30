@@ -16,13 +16,12 @@ use crate::subscription_runtime::{
 };
 use crate::subscriptions::{ClaimedQueryRun, NormalizedItem, NormalizedPost};
 use picto_sources::{
-    DomainPolicy, HttpPolicy, HttpRuntime, NextPost, PartitionedSourceSession, PostDownloader,
-    ProviderRegistry, RequestCredentials, SourceError, SourceErrorKind, SourcePartition,
-    SourcePost, SourcePostOutcome,
+    DomainPolicy, DownloadedMedia, HttpPolicy, HttpRuntime, MediaDescriptor, NextPost,
+    PartitionedSourceSession, PostDownloader, ProviderRegistry, RequestCredentials, SourceError,
+    SourceErrorKind, SourcePartition, SourcePost, SourcePostOutcome,
 };
 
 const CURRENT_POST_DOWNLOAD_CONCURRENCY: usize = 4;
-const MAX_TRAVERSED_PER_ADDED_TARGET: u32 = 10;
 const SOURCE_POST_PULL_SIZE: u32 = 1;
 const PERIODIC_RECHECK_POSTS_PER_PARTITION: u32 = 25;
 
@@ -63,7 +62,28 @@ impl NativeSourceRunner {
             )
         })?;
         let descriptor = adapter.descriptor();
-        let credentials = load_credentials(&query.site_id, descriptor.domain)?;
+        let media_adapter = Arc::clone(&adapter);
+        let mut credentials = load_credentials(&query.site_id, descriptor.domain)?;
+        credentials.allowed_domains.extend(
+            adapter
+                .credential_domains()
+                .iter()
+                .map(|domain| domain.to_ascii_lowercase()),
+        );
+        if let Some(user_agent) = adapter.user_agent() {
+            set_provider_header(&mut credentials, "User-Agent", user_agent);
+        }
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            target: "picto_core::native_source",
+            run_id = query.run_id,
+            run_query_id = query.run_query_id,
+            subscription_id = query.subscription_id,
+            site_id = %query.site_id,
+            attempt = query.attempt_count,
+            post_limit = query.source_post_batch_size(),
+            "Native source query started"
+        );
         if !descriptor.anonymous && credentials.is_empty() {
             return Err(RunnerFailure::terminal(
                 RunnerFailureKind::Authentication,
@@ -86,7 +106,7 @@ impl NativeSourceRunner {
                 "Native source has no stream partition",
             ));
         }
-        let refresh_from_newest = query.initial_run_complete && query.attempt_count == 1;
+        let refresh_from_newest = should_refresh_from_newest(query);
         let cursors = decode_runtime_cursor(
             &partitions,
             (!refresh_from_newest)
@@ -109,11 +129,6 @@ impl NativeSourceRunner {
                 RunnerFailure::retryable(RunnerFailureKind::Download, error.to_string())
             })?;
 
-        let traversal_budget = query
-            .configured_post_limit()
-            .saturating_mul(MAX_TRAVERSED_PER_ADDED_TARGET)
-            .max(MAX_TRAVERSED_PER_ADDED_TARGET);
-        let mut traversed = 0_u32;
         let mut stop_after_current_execution = false;
         let mut rechecked_by_partition = BTreeMap::<SourcePartition, u32>::new();
         let mut bounded_refresh = false;
@@ -123,12 +138,37 @@ impl NativeSourceRunner {
                 .await
                 .map_err(map_source_error)?
             {
-                NextPost::AddedBudgetReached => {
+                NextPost::PostBudgetReached => {
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        run_query_id = query.run_query_id,
+                        added_posts = session.added_count(),
+                        "Native source query reached its post budget"
+                    );
                     break Some(encode_runtime_cursor(&partitions, session.cursors())?);
                 }
-                NextPost::SourceExhausted => break Some(String::new()),
+                NextPost::SourceExhausted => {
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        run_query_id = query.run_query_id,
+                        added_posts = session.added_count(),
+                        "Native source query reached the end of the source"
+                    );
+                    break Some(String::new());
+                }
                 NextPost::Post(post) => {
                     let mut post = *post;
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        run_query_id = query.run_query_id,
+                        post_key = %post.stable_id,
+                        partition = %post.partition.0,
+                        advertised_media = post.media.len(),
+                        "Source post resolved"
+                    );
                     let plan = self.revisit_plan(query, &post)?;
                     let normalized = normalize_post(&post)?;
                     send_event(
@@ -143,76 +183,153 @@ impl NativeSourceRunner {
                             .or_default();
                         *checked = checked.saturating_add(1);
                     }
+                    let resumed_downloads = post
+                        .media
+                        .iter()
+                        .filter_map(|descriptor| {
+                            plan.preserved_media
+                                .get(&descriptor.stable_id)
+                                .map(|path| (descriptor.clone(), path.clone()))
+                        })
+                        .map(|(descriptor, path)| {
+                            let size_bytes = std::fs::metadata(&path)
+                                .map(|metadata| metadata.len())
+                                .map_err(|error| {
+                                    RunnerFailure::retryable(
+                                        RunnerFailureKind::Download,
+                                        format!(
+                                            "Persisted gallery media is unavailable at {}: {error}",
+                                            path.display()
+                                        ),
+                                    )
+                                })?;
+                            Ok(DownloadedMedia {
+                                descriptor,
+                                path,
+                                size_bytes,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, RunnerFailure>>()?;
                     post.media
                         .retain(|media| plan.download_media.contains(&media.stable_id));
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        run_query_id = query.run_query_id,
+                        post_key = %post.stable_id,
+                        known_post = plan.known,
+                        media_to_download = post.media.len(),
+                        "Source post download plan ready"
+                    );
                     let post_staging = run_staging.join(staging_name(&post));
                     let mut downloads = self
                         .downloader
-                        .stream(&post, &credentials, &post_staging, &self.http, &cancel)
+                        .stream_resolving(
+                            &post,
+                            &credentials,
+                            &post_staging,
+                            &self.http,
+                            &cancel,
+                            Arc::clone(&media_adapter),
+                        )
                         .await
                         .map_err(map_source_error)?;
-                    while let Some((descriptor, result)) = downloads.next().await {
-                        let download = match result {
-                            Ok(media) => picto_sources::PostDownload {
+                    let mut downloaded_files = resumed_downloads.len() as u32;
+                    let mut failed_files = 0_u32;
+                    for media in resumed_downloads {
+                        let source_descriptor = media.descriptor.clone();
+                        publish_post_download(
+                            &output,
+                            &cancel,
+                            &post,
+                            &normalized,
+                            &source_descriptor,
+                            picto_sources::PostDownload {
                                 downloaded: vec![media],
                                 failures: Vec::new(),
                             },
+                        )
+                        .await?;
+                    }
+                    while let Some((descriptor, result)) = downloads.next().await {
+                        let source_descriptor = descriptor.clone();
+                        let download = match result {
+                            Ok(media) => {
+                                downloaded_files = downloaded_files.saturating_add(1);
+                                #[cfg(debug_assertions)]
+                                tracing::debug!(
+                                    target: "picto_core::native_source",
+                                    run_query_id = query.run_query_id,
+                                    post_key = %post.stable_id,
+                                    downloaded_files,
+                                    total_files = post.media.len(),
+                                    size_bytes = media.size_bytes,
+                                    "Source media downloaded"
+                                );
+                                picto_sources::PostDownload {
+                                    downloaded: vec![media],
+                                    failures: Vec::new(),
+                                }
+                            }
                             Err(error)
                                 if error.kind == picto_sources::SourceErrorKind::Cancelled =>
                             {
                                 return Err(map_source_error(error));
                             }
-                            Err(error) => picto_sources::PostDownload {
-                                downloaded: Vec::new(),
-                                failures: vec![picto_sources::MediaDownloadFailure {
-                                    descriptor,
-                                    message: error.message,
-                                    retryable: error.retryable,
-                                }],
-                            },
+                            Err(error) => {
+                                failed_files = failed_files.saturating_add(1);
+                                #[cfg(debug_assertions)]
+                                tracing::debug!(
+                                    target: "picto_core::native_source",
+                                    run_query_id = query.run_query_id,
+                                    post_key = %post.stable_id,
+                                    failed_files,
+                                    total_files = post.media.len(),
+                                    error_kind = ?error.kind,
+                                    retryable = error.retryable,
+                                    "Source media download failed"
+                                );
+                                picto_sources::PostDownload {
+                                    downloaded: Vec::new(),
+                                    failures: vec![picto_sources::MediaDownloadFailure {
+                                        descriptor,
+                                        message: error.message,
+                                        retryable: error.retryable,
+                                    }],
+                                }
+                            }
                         };
-                        let prepared = crate::native_source_import::prepare_source_post(
+                        publish_post_download(
+                            &output,
+                            &cancel,
                             &post,
+                            &normalized,
+                            &source_descriptor,
                             download,
-                            chrono::Utc::now().timestamp_millis(),
                         )
-                        .await
-                        .map_err(|error| {
-                            RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error)
-                        })?;
-                        for rejected in prepared.rejected_media {
-                            send_event(
-                                &output,
-                                SourceEvent::MediaFailed(FailedMediaItem {
-                                    post: normalized.clone(),
-                                    item_key: rejected.media_id,
-                                    error_message: rejected.message,
-                                }),
-                                &cancel,
-                            )
-                            .await?;
-                        }
-                        for input in prepared.members {
-                            send_event(
-                                &output,
-                                SourceEvent::MediaDownloaded(DownloadedItem {
-                                    post: normalized.clone(),
-                                    input,
-                                    post_complete: false,
-                                    force_collection: false,
-                                    delete_after_ingest: true,
-                                }),
-                                &cancel,
-                            )
-                            .await?;
-                        }
+                        .await?;
                     }
                     let outcome = complete_post(&output, &post.stable_id, &cancel).await?;
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "picto_core::native_source",
+                        run_query_id = query.run_query_id,
+                        post_key = %post.stable_id,
+                        downloaded_files,
+                        failed_files,
+                        outcome = ?outcome,
+                        "Source post settled"
+                    );
                     session
                         .settle(&post.stable_id, outcome)
                         .map_err(map_source_error)?;
+                    checkpoint_cursor(
+                        &output,
+                        encode_runtime_cursor(&partitions, session.cursors())?,
+                        &cancel,
+                    )
+                    .await?;
                     cleanup_staging(&post_staging).await;
-                    traversed = traversed.saturating_add(1);
                     if refresh_from_newest
                         && rechecked_by_partition
                             .get(&post.partition)
@@ -224,12 +341,6 @@ impl NativeSourceRunner {
                             .finish_current_partition()
                             .map_err(map_source_error)?;
                         bounded_refresh = true;
-                    }
-                    if traversed >= traversal_budget
-                        && session.added_count() < query.source_post_batch_size()
-                    {
-                        stop_after_current_execution = true;
-                        break Some(encode_runtime_cursor(&partitions, session.cursors())?);
                     }
                 }
             }
@@ -287,14 +398,32 @@ impl NativeSourceRunner {
                                     FROM media_item media
                                     JOIN media_file file ON file.file_id = media.file_id
                                     WHERE media.media_id = item.media_item_id
+                                ),
+                                (
+                                    SELECT file.staged_path
+                                    FROM source_post_attempt attempt
+                                    JOIN source_file_attempt file USING(attempt_id)
+                                    WHERE attempt.run_query_id = ?2
+                                      AND attempt.source_post_id = item.source_post_id
+                                      AND file.source_item_id = item.source_item_id
+                                      AND file.state IN ('staged', 'duplicate')
+                                      AND file.staged_path IS NOT NULL
+                                    LIMIT 1
                                 )
                          FROM source_item item
                          WHERE item.source_post_id = ?1",
                     )?;
                     let items = statement
-                        .query_map([source_post_id], |row| {
-                            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
-                        })?
+                        .query_map(
+                            rusqlite::params![source_post_id, query.run_query_id],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, bool>(1)?,
+                                    row.get::<_, Option<String>>(2)?,
+                                ))
+                            },
+                        )?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     Ok(Some(items))
                 },
@@ -306,9 +435,19 @@ impl NativeSourceRunner {
             return Ok(PostRevisitPlan {
                 known: false,
                 download_media: remote_media,
+                preserved_media: BTreeMap::new(),
             });
         };
-        let states = known.into_iter().collect::<BTreeMap<_, _>>();
+        let mut states = BTreeMap::new();
+        let mut preserved_media = BTreeMap::new();
+        for (item_key, ingested, staged_path) in known {
+            let staged_path = staged_path.map(PathBuf::from).filter(|path| path.is_file());
+            if let Some(path) = staged_path {
+                preserved_media.insert(item_key.clone(), path);
+            }
+            let available = ingested || preserved_media.contains_key(&item_key);
+            states.insert(item_key, available);
+        }
         let download_media = remote_media
             .into_iter()
             .filter(|media_id| match states.get(media_id) {
@@ -319,13 +458,66 @@ impl NativeSourceRunner {
         Ok(PostRevisitPlan {
             known: true,
             download_media,
+            preserved_media,
         })
     }
+}
+
+async fn publish_post_download(
+    output: &mpsc::Sender<SourceEvent>,
+    cancel: &CancellationToken,
+    post: &SourcePost,
+    normalized: &NormalizedPost,
+    source_descriptor: &MediaDescriptor,
+    download: picto_sources::PostDownload,
+) -> Result<(), RunnerFailure> {
+    let prepared = crate::native_source_import::prepare_source_post(
+        post,
+        download,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::InvalidOutput, error))?;
+    for rejected in prepared.rejected_media {
+        send_event(
+            output,
+            SourceEvent::MediaFailed(FailedMediaItem {
+                post: normalized.clone(),
+                item_key: rejected.media_id,
+                error_message: rejected.message,
+            }),
+            cancel,
+        )
+        .await?;
+    }
+    for input in prepared.members {
+        let event_post = post_with_prepared_source_item(normalized, source_descriptor, &input)?;
+        send_event(
+            output,
+            SourceEvent::MediaDownloaded(DownloadedItem {
+                post: event_post,
+                input,
+                post_complete: false,
+                force_collection: false,
+                delete_after_ingest: true,
+            }),
+            cancel,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn should_refresh_from_newest(query: &ClaimedQueryRun) -> bool {
+    query.initial_run_complete
+        && query.resume_cursor.as_deref() == Some("")
+        && query.attempt_count == 1
 }
 
 struct PostRevisitPlan {
     known: bool,
     download_media: std::collections::BTreeSet<String>,
+    preserved_media: BTreeMap<String, PathBuf>,
 }
 
 fn decode_runtime_cursor(
@@ -437,10 +629,18 @@ fn shared_http_runtime() -> Arc<HttpRuntime> {
             retries: 10,
         };
         let deviantart = DomainPolicy {
-            minimum_interval: std::time::Duration::from_secs(2),
-            maximum_interval: std::time::Duration::from_secs(3),
+            minimum_interval: std::time::Duration::ZERO,
+            maximum_interval: std::time::Duration::ZERO,
             media_minimum_interval: std::time::Duration::ZERO,
             media_maximum_interval: std::time::Duration::ZERO,
+            request_timeout: std::time::Duration::from_secs(45),
+            retries: 4,
+        };
+        let ehentai = DomainPolicy {
+            minimum_interval: std::time::Duration::from_secs(3),
+            maximum_interval: std::time::Duration::from_secs(6),
+            media_minimum_interval: std::time::Duration::from_secs(1),
+            media_maximum_interval: std::time::Duration::from_secs(2),
             request_timeout: std::time::Duration::from_secs(45),
             retries: 3,
         };
@@ -450,11 +650,22 @@ fn shared_http_runtime() -> Arc<HttpRuntime> {
                 BTreeMap::from([
                     ("onlyfans.com".to_string(), onlyfans),
                     ("deviantart.com".to_string(), deviantart),
+                    ("e-hentai.org".to_string(), ehentai.clone()),
+                    ("exhentai.org".to_string(), ehentai),
                 ]),
             )
             .expect("default native HTTP policy"),
         )
     }))
+}
+
+fn set_provider_header(credentials: &mut RequestCredentials, name: &str, value: &str) {
+    credentials
+        .headers
+        .retain(|existing, _| !existing.eq_ignore_ascii_case(name));
+    credentials
+        .headers
+        .insert(name.to_string(), value.to_string());
 }
 
 fn load_credentials(site_id: &str, domain: &str) -> Result<RequestCredentials, RunnerFailure> {
@@ -466,13 +677,15 @@ fn load_credentials(site_id: &str, domain: &str) -> Result<RequestCredentials, R
     let Some(credential) = credential else {
         return Ok(RequestCredentials::default());
     };
-    Ok(stored_request_credentials(credential, domain))
+    Ok(stored_request_credentials(credential, owner, domain))
 }
 
 fn stored_request_credentials(
     credential: crate::credential_store::SiteCredential,
+    owner: &str,
     domain: &str,
 ) -> RequestCredentials {
+    let credential_for_update = credential.clone();
     let mut credentials = RequestCredentials {
         headers: credential.headers.unwrap_or_default().into_iter().collect(),
         cookies: credential.cookies.unwrap_or_default().into_iter().collect(),
@@ -488,6 +701,13 @@ fn stored_request_credentials(
         crate::credential_store::CredentialType::OAuthToken => {
             credentials.oauth_token = credential.oauth_token;
             credentials.oauth_token_secret = credential.password;
+            let owner = owner.to_string();
+            credentials.oauth_token_update = Some(Arc::new(move |token| {
+                let mut rotated = credential_for_update.clone();
+                rotated.oauth_token = Some(token);
+                crate::credential_store::set_credential(&rotated)
+                    .map_err(|error| format!("Could not save rotated {owner} login: {error}"))
+            }));
         }
     }
     credentials
@@ -519,6 +739,41 @@ fn normalize_post(post: &SourcePost) -> Result<NormalizedPost, RunnerFailure> {
     })
 }
 
+pub(crate) fn post_with_prepared_source_item(
+    post: &NormalizedPost,
+    descriptor: &MediaDescriptor,
+    input: &picto_library::PreparedImport,
+) -> Result<NormalizedPost, RunnerFailure> {
+    let item_key = input
+        .source_identity
+        .as_ref()
+        .map(|source| source.source_item_key.clone())
+        .ok_or_else(|| {
+            RunnerFailure::terminal(
+                RunnerFailureKind::InvalidOutput,
+                "Prepared source media has no source identity",
+            )
+        })?;
+    if post.items.iter().any(|item| item.item_key == item_key) {
+        return Ok(post.clone());
+    }
+    let mut expanded = post.clone();
+    let position = expanded
+        .items
+        .iter()
+        .map(|item| item.position)
+        .max()
+        .unwrap_or(-1)
+        .saturating_add(1);
+    expanded.items.push(NormalizedItem {
+        item_key,
+        position,
+        media_url: Some(descriptor.url.clone()),
+        canonical_url: descriptor.canonical_url.clone(),
+    });
+    Ok(expanded)
+}
+
 async fn complete_post(
     output: &mpsc::Sender<SourceEvent>,
     post_key: &str,
@@ -542,6 +797,33 @@ async fn complete_post(
         outcome = acknowledged => outcome.map_err(|_| RunnerFailure::terminal(
             RunnerFailureKind::Runtime,
             "Native source post settlement was not acknowledged",
+        )),
+    }
+}
+
+async fn checkpoint_cursor(
+    output: &mpsc::Sender<SourceEvent>,
+    resume_cursor: String,
+    cancel: &CancellationToken,
+) -> Result<(), RunnerFailure> {
+    let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
+    send_event(
+        output,
+        SourceEvent::CursorCheckpoint {
+            resume_cursor,
+            acknowledge,
+        },
+        cancel,
+    )
+    .await?;
+    tokio::select! {
+        _ = cancel.cancelled() => Err(RunnerFailure::retryable(
+            RunnerFailureKind::Interrupted,
+            "Native source stopped while saving its cursor",
+        )),
+        result = acknowledged => result.map_err(|_| RunnerFailure::terminal(
+            RunnerFailureKind::Runtime,
+            "Native source cursor checkpoint was not acknowledged",
         )),
     }
 }
@@ -612,6 +894,27 @@ mod tests {
     use crate::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
     use picto_sources::{MediaDescriptorBuilder, SourcePartition};
 
+    fn claimed_query() -> ClaimedQueryRun {
+        ClaimedQueryRun {
+            run_query_id: 1,
+            run_id: 1,
+            query_id: 1,
+            subscription_id: 1,
+            site_id: "furaffinity".into(),
+            domain_key: "furaffinity.net".into(),
+            query_kind: "creator".into(),
+            query_text: "example".into(),
+            group_posts: true,
+            requested_by: "manual".into(),
+            initial_post_limit: Some(20),
+            periodic_post_limit: Some(20),
+            run_post_limit: Some(20),
+            initial_run_complete: false,
+            resume_cursor: None,
+            attempt_count: 1,
+        }
+    }
+
     #[test]
     fn every_product_source_has_exactly_one_native_adapter() {
         let catalog = crate::subscriptions::sites::SITES
@@ -681,6 +984,7 @@ mod tests {
                 headers: None,
                 oauth_token: None,
             },
+            "gelbooru",
             "gelbooru.com",
         );
         assert_eq!(api.username.as_deref(), Some("123"));
@@ -704,13 +1008,30 @@ mod tests {
                 )])),
                 oauth_token: Some("access-token".into()),
             },
+            "baraag",
             "baraag.net",
         );
         assert_eq!(oauth.oauth_token.as_deref(), Some("access-token"));
         assert_eq!(oauth.oauth_token_secret.as_deref(), Some("token-secret"));
+        assert!(oauth.oauth_token_update.is_some());
         assert_eq!(
             oauth.headers.get("User-Agent").map(String::as_str),
             Some("captured-agent")
+        );
+
+        let mut provider = oauth;
+        set_provider_header(&mut provider, "User-Agent", "provider-agent");
+        assert_eq!(
+            provider.headers.get("User-Agent").map(String::as_str),
+            Some("provider-agent")
+        );
+        assert_eq!(
+            provider
+                .headers
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("User-Agent"))
+                .count(),
+            1
         );
     }
 
@@ -887,16 +1208,146 @@ mod tests {
         let owned = runner.revisit_plan(&claimed, &post).unwrap();
         assert!(owned.known);
         assert!(owned.download_media.is_empty());
+
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "UPDATE source_item
+                         SET state = 'deleted', media_item_id = NULL
+                         WHERE source_post_id = ?1 AND item_key = 'shared-media'",
+                        [source_post_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
+                         VALUES ('source:twitter:shared-post:shared-media', 1, 1)",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let deleted_without_blob = runner.revisit_plan(&claimed, &post).unwrap();
+        assert!(deleted_without_blob.known);
+        assert!(deleted_without_blob.download_media.contains("shared-media"));
         assert_ne!(first_query, second_query);
     }
 
     #[test]
-    fn traversal_safety_budget_scales_with_the_added_post_target() {
-        assert_eq!(1_u32.saturating_mul(MAX_TRAVERSED_PER_ADDED_TARGET), 10);
-        assert_eq!(
-            100_u32.saturating_mul(MAX_TRAVERSED_PER_ADDED_TARGET),
-            1_000
-        );
+    fn paused_gallery_reuses_persisted_media_instead_of_downloading_it_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = crate::library_application::LibraryApplication::create(
+            directory.path().join("library"),
+        )
+        .unwrap();
+        let definition = NewSubscription {
+            name: "Gallery".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "ehentai".into(),
+                query_text: "https://e-hentai.org/g/123/0123456789/".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-30T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:00:00Z")
+            .unwrap();
+        let query = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut crate::subscriptions::DomainSchedule::new(),
+            "2026-08-30T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let post = SourcePost {
+            site_id: "ehentai".into(),
+            partition: SourcePartition::new("gallery"),
+            stable_id: "123".into(),
+            canonical_url: Some("https://e-hentai.org/g/123/0123456789/".into()),
+            creator: None,
+            name: Some("Gallery".into()),
+            notes: None,
+            created_at: None,
+            tags: Vec::new(),
+            media: vec![MediaDescriptorBuilder::new(
+                "ehentai:123:1",
+                0,
+                "https://example.test/1.png",
+            )
+            .build()],
+            resume_cursor_after: None,
+        };
+        let normalized = normalize_post(&post).unwrap();
+        let ids = crate::library_subscription_state::record_post(
+            &application,
+            query.run_query_id,
+            &normalized,
+            "2026-08-30T00:00:02Z",
+        )
+        .unwrap();
+        let persisted = directory.path().join("persisted-gallery-page.png");
+        std::fs::write(&persisted, b"persisted").unwrap();
+        crate::library_subscription_state::mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["ehentai:123:1"],
+            "persisted-gallery-hash",
+            persisted.to_str().unwrap(),
+            9,
+            "2026-08-30T00:00:03Z",
+        )
+        .unwrap();
+        application
+            .pause_subscription_run_library(subscription_id)
+            .unwrap();
+        crate::library_subscription_state::interrupt_query(
+            &application,
+            &query,
+            "2026-08-30T00:00:04Z",
+        )
+        .unwrap();
+
+        application
+            .resume_subscription_run_library(subscription_id, "2026-08-30T00:00:05Z")
+            .unwrap();
+        let resumed = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut crate::subscriptions::DomainSchedule::new(),
+            "2026-08-30T00:00:06Z",
+        )
+        .unwrap()
+        .unwrap();
+        let plan = NativeSourceRunner::open(&application)
+            .revisit_plan(&resumed, &post)
+            .unwrap();
+        assert!(plan.download_media.is_empty());
+        assert_eq!(plan.preserved_media.get("ehentai:123:1"), Some(&persisted));
+    }
+
+    #[test]
+    fn refreshes_from_newest_only_after_source_exhaustion() {
+        let mut query = claimed_query();
+        query.initial_run_complete = true;
+        query.resume_cursor = Some("20".into());
+        query.attempt_count = 1;
+        assert!(!should_refresh_from_newest(&query));
+
+        query.resume_cursor = Some(String::new());
+        assert!(should_refresh_from_newest(&query));
+
+        query.attempt_count = 2;
+        assert!(!should_refresh_from_newest(&query));
     }
 
     #[test]

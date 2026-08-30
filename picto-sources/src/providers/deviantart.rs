@@ -1,6 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -9,12 +11,13 @@ use url::Url;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, PageCursor, PostFuture,
-    ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
+    HttpRuntime, MediaDescriptorBuilder, MediaFallback, NativeSourceAdapter, OpaqueCursor,
+    PostFuture, ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
 const DOMAIN: &str = "deviantart.com";
-const CURSOR: PageCursor = PageCursor::new(1_000_000_000);
+const CURSOR: OpaqueCursor = OpaqueCursor::new(64);
+const GALLERY_PAGE_SIZE: u32 = 24;
 const CLIENT_AUTHORIZATION: &str = "Basic NTM4ODo3NmIwOGM2OWNmYjI3ZjI2ZDYxNjFmOWFiNmQwNjFhMQ==";
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
@@ -23,13 +26,30 @@ pub(crate) fn adapter() -> impl NativeSourceAdapter {
 
 #[derive(Default)]
 struct DeviantArtSource {
-    access_token: Mutex<Option<CachedAccessToken>>,
+    gallery_pages: Mutex<HashMap<GalleryPageKey, GalleryResponse>>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct GalleryPageKey {
+    username: String,
+    offset: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GalleryCursor {
+    offset: u32,
+    item: usize,
 }
 
 struct CachedAccessToken {
     credential_key: Option<String>,
     value: String,
     valid_until: Instant,
+}
+
+fn access_token_cache() -> &'static Mutex<Option<CachedAccessToken>> {
+    static CACHE: OnceLock<Mutex<Option<CachedAccessToken>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
 }
 
 impl NativeSourceAdapter for DeviantArtSource {
@@ -56,16 +76,56 @@ impl NativeSourceAdapter for DeviantArtSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
-            let offset = current_offset(request)?;
+            let mut cursor = decode_cursor(request.cursor.as_deref())?;
             let access_token = self.access_token(credentials, http, cancel).await?;
-            let response = http
-                .get_json::<GalleryResponse>(
-                    gallery_url(&username, offset),
-                    &api_credentials(credentials, &access_token),
-                    cancel,
-                )
-                .await?;
-            normalize_gallery(request, offset, response)
+            loop {
+                let key = GalleryPageKey {
+                    username: username.clone(),
+                    offset: cursor.offset,
+                };
+                let cached = self.gallery_pages.lock().await.get(&key).cloned();
+                let response = match cached {
+                    Some(response) => response,
+                    None => {
+                        let mut response = http
+                            .get_json::<GalleryResponse>(
+                                gallery_url(&username, cursor.offset),
+                                &api_credentials(credentials, &access_token),
+                                cancel,
+                            )
+                            .await?;
+                        let mut seen = BTreeSet::new();
+                        response
+                            .results
+                            .retain(|item| seen.insert(item.deviationid.clone()));
+                        self.gallery_pages
+                            .lock()
+                            .await
+                            .insert(key.clone(), response.clone());
+                        response
+                    }
+                };
+                if let Some(index) = next_accessible_index(&response.results, cursor.item) {
+                    let finishes_page =
+                        next_accessible_index(&response.results, index.saturating_add(1)).is_none();
+                    let batch = normalize_gallery(request, cursor, response)?;
+                    if finishes_page {
+                        self.gallery_pages.lock().await.remove(&key);
+                    }
+                    return Ok(batch);
+                }
+                self.gallery_pages.lock().await.remove(&key);
+                if !response.has_more {
+                    return Ok(DiscoveryBatch {
+                        posts: Vec::new(),
+                        exhausted: true,
+                    });
+                }
+                cursor = GalleryCursor {
+                    offset: next_page_offset(cursor.offset, &response),
+                    item: 0,
+                };
+            }
         })
     }
 
@@ -78,28 +138,29 @@ impl NativeSourceAdapter for DeviantArtSource {
     ) -> PostFuture<'a> {
         Box::pin(async move {
             let access_token = self.access_token(credentials, http, cancel).await?;
-            let response = http
-                .get_json::<MetadataResponse>(
-                    metadata_url(&post.stable_id)?,
-                    &api_credentials(credentials, &access_token),
-                    cancel,
-                )
-                .await?;
-            apply_metadata(&mut post, response)?;
             if post
                 .media
                 .iter()
                 .any(|media| media.stable_id.ends_with(":download"))
             {
-                if let Some(original) = http
+                match http
                     .get_optional_json::<ApiContent>(
                         download_url(&post.stable_id)?,
                         &api_credentials(credentials, &access_token),
                         cancel,
                     )
-                    .await?
+                    .await
                 {
-                    apply_original_media(&mut post, original);
+                    Ok(Some(original)) => apply_original_media(&mut post, original),
+                    Ok(None) => remove_unresolved_download_placeholder(&mut post),
+                    Err(error) if error.kind == SourceErrorKind::InvalidResponse => {
+                        // DeviantArt occasionally advertises a downloadable
+                        // deviation but rejects its original-file endpoint.
+                        // Keep the gallery image when one exists instead of
+                        // failing or repeatedly importing the same post.
+                        remove_unresolved_download_placeholder(&mut post);
+                    }
+                    Err(error) => return Err(error),
                 }
             }
             Ok(post)
@@ -120,34 +181,37 @@ impl DeviantArtSource {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        {
-            let token = self.access_token.lock().await;
-            if let Some(token) = token.as_ref() {
-                if token.credential_key == credential_key
-                    && token.valid_until > Instant::now() + Duration::from_secs(30)
-                {
-                    return Ok(token.value.clone());
-                }
+        let mut token_cache = access_token_cache().lock().await;
+        if let Some(token) = token_cache.as_ref() {
+            if token.credential_key == credential_key
+                && token.valid_until > Instant::now() + Duration::from_secs(30)
+            {
+                return Ok(token.value.clone());
             }
         }
 
         let response = match credential_key.as_deref() {
-            Some(refresh_token) => request_access_token(
-                http,
-                credentials,
-                Some(refresh_token),
-                cancel,
-            )
-            .await
-            .map_err(map_refresh_error)?,
+            Some(refresh_token) => {
+                request_access_token(http, credentials, Some(refresh_token), cancel)
+                    .await
+                    .map_err(map_refresh_error)?
+            }
             None => request_access_token(http, credentials, None, cancel).await?,
         };
+        if let Some(refresh_token) = response
+            .refresh_token
+            .filter(|value| !value.trim().is_empty())
+        {
+            if let Some(update) = credentials.oauth_token_update.as_ref() {
+                update(refresh_token).map_err(invalid_response)?;
+            }
+        }
         let access_token = response
             .access_token
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(authentication_required)?;
         let lifetime = Duration::from_secs(response.expires_in.unwrap_or(3_600).max(60));
-        *self.access_token.lock().await = Some(CachedAccessToken {
+        *token_cache = Some(CachedAccessToken {
             credential_key,
             value: access_token.clone(),
             valid_until: Instant::now() + lifetime,
@@ -185,14 +249,40 @@ async fn request_access_token(
         .map_err(|error| invalid_response(format!("invalid DeviantArt token: {error}")))
 }
 
-fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
-    request
-        .cursor
-        .as_deref()
-        .filter(|cursor| !cursor.is_empty())
-        .map(|cursor| CURSOR.validate(cursor))
-        .transpose()
-        .map(|offset| offset.unwrap_or(0))
+fn decode_cursor(raw: Option<&str>) -> Result<GalleryCursor, SourceError> {
+    let Some(raw) = raw.filter(|value| !value.is_empty()) else {
+        return Ok(GalleryCursor::default());
+    };
+    let raw = CURSOR.validate(raw)?;
+    if let Ok(offset) = raw.parse::<u32>() {
+        return Ok(GalleryCursor { offset, item: 0 });
+    }
+    let Some((offset, item)) = raw.strip_prefix('o').and_then(|raw| raw.split_once('i')) else {
+        return Err(invalid_query("invalid DeviantArt source cursor"));
+    };
+    let cursor = GalleryCursor {
+        offset: offset
+            .parse()
+            .map_err(|_| invalid_query("invalid DeviantArt source cursor"))?,
+        item: item
+            .parse()
+            .map_err(|_| invalid_query("invalid DeviantArt source cursor"))?,
+    };
+    validate_cursor(cursor)
+}
+
+fn encode_cursor(cursor: GalleryCursor) -> Result<String, SourceError> {
+    let cursor = validate_cursor(cursor)?;
+    let encoded = format!("o{}i{}", cursor.offset, cursor.item);
+    CURSOR.validate(&encoded)?;
+    Ok(encoded)
+}
+
+fn validate_cursor(cursor: GalleryCursor) -> Result<GalleryCursor, SourceError> {
+    if cursor.offset > 1_000_000_000 || cursor.item >= GALLERY_PAGE_SIZE as usize {
+        return Err(invalid_query("invalid DeviantArt source cursor"));
+    }
+    Ok(cursor)
 }
 
 fn token_url() -> Url {
@@ -205,19 +295,9 @@ fn gallery_url(username: &str, offset: u32) -> Url {
     url.query_pairs_mut()
         .append_pair("username", username)
         .append_pair("offset", &offset.to_string())
-        .append_pair("limit", "1")
+        .append_pair("limit", &GALLERY_PAGE_SIZE.to_string())
         .append_pair("mature_content", "true");
     url
-}
-
-fn metadata_url(deviation_id: &str) -> Result<Url, SourceError> {
-    validate_deviation_id(deviation_id)?;
-    let mut url = Url::parse("https://www.deviantart.com/api/v1/oauth2/deviation/metadata")
-        .expect("static DeviantArt metadata URL");
-    url.query_pairs_mut()
-        .append_pair("deviationids[0]", deviation_id)
-        .append_pair("mature_content", "true");
-    Ok(url)
 }
 
 fn download_url(deviation_id: &str) -> Result<Url, SourceError> {
@@ -245,33 +325,79 @@ fn api_credentials(credentials: &RequestCredentials, access_token: &str) -> Requ
 
 fn normalize_gallery(
     request: &DiscoveryRequest,
-    offset: u32,
+    cursor: GalleryCursor,
     response: GalleryResponse,
 ) -> Result<DiscoveryBatch, SourceError> {
-    if response.results.len() > 1 {
-        return Err(invalid_response(
-            "DeviantArt returned more than one deviation for a one-deviation request",
-        ));
-    }
-    let exhausted = response.results.is_empty() || !response.has_more;
-    let next_offset = response
-        .next_offset
-        .unwrap_or_else(|| offset.saturating_add(1));
-    let posts = response
+    let Some(index) = next_accessible_index(&response.results, cursor.item) else {
+        return Ok(DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: !response.has_more,
+        });
+    };
+    let next_accessible = next_accessible_index(&response.results, index + 1);
+    let exhausted = next_accessible.is_none() && !response.has_more;
+    let next = if let Some(item) = next_accessible {
+        GalleryCursor {
+            offset: cursor.offset,
+            item,
+        }
+    } else {
+        GalleryCursor {
+            offset: next_page_offset(cursor.offset, &response),
+            item: 0,
+        }
+    };
+    let deviation = response
         .results
         .into_iter()
-        .map(|deviation| normalize_deviation(request, next_offset, deviation))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(DiscoveryBatch { posts, exhausted })
+        .nth(index)
+        .expect("validated gallery cursor");
+    let post = normalize_deviation(request, encode_cursor(next)?, deviation)?;
+    Ok(DiscoveryBatch {
+        posts: vec![post],
+        exhausted,
+    })
+}
+
+fn next_accessible_index(deviations: &[ApiDeviation], start: usize) -> Option<usize> {
+    deviations
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, deviation)| deviation_is_accessible(deviation).then_some(index))
+}
+
+fn deviation_is_accessible(deviation: &ApiDeviation) -> bool {
+    !deviation.is_deleted
+        && deviation.author.is_some()
+        && !deviation
+            .tier_access
+            .as_deref()
+            .is_some_and(|access| access.eq_ignore_ascii_case("locked"))
+        // Premium-folder placeholders require a separate entitlement endpoint.
+        // Never publish their gallery preview as if it were the paid original.
+        && deviation.premium_folder_data.is_none()
+}
+
+fn next_page_offset(offset: u32, response: &GalleryResponse) -> u32 {
+    response
+        .next_offset
+        .unwrap_or_else(|| offset.saturating_add(response.results.len().max(1) as u32))
 }
 
 fn normalize_deviation(
     request: &DiscoveryRequest,
-    next_offset: u32,
+    resume_cursor_after: String,
     deviation: ApiDeviation,
 ) -> Result<SourcePost, SourceError> {
     let stable_id = validate_deviation_id(&deviation.deviationid)?.to_string();
-    let creator = normalize_creator(&deviation.author.username)?;
+    let creator = normalize_creator(
+        &deviation
+            .author
+            .as_ref()
+            .ok_or_else(|| invalid_response("DeviantArt deviation is missing its creator"))?
+            .username,
+    )?;
     let canonical_url = canonical_deviation_url(&deviation.url, &creator, &stable_id);
     let mut tags = CanonicalTagSet::default();
     tags.insert("creator", &creator);
@@ -279,12 +405,15 @@ fn normalize_deviation(
 
     let mut media = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(content) = deviation.content {
+    if let Some(mut content) = deviation.content {
         let role = if deviation.is_downloadable {
             "download"
         } else {
             "content"
         };
+        let fallback = content.clone();
+        let (url, transformed) = transformed_content_url(&content.src, &stable_id);
+        content.src = url;
         push_media(
             &mut media,
             &mut seen,
@@ -292,6 +421,7 @@ fn normalize_deviation(
             role,
             &canonical_url,
             content,
+            transformed.then_some(fallback),
         );
     }
     if let Some(video) = deviation
@@ -307,6 +437,26 @@ fn normalize_deviation(
             "video",
             &canonical_url,
             video.into_content(),
+            None,
+        );
+    }
+    if deviation.is_downloadable
+        && !media.iter().any(|item| {
+            item.stable_id.ends_with(":content") || item.stable_id.ends_with(":download")
+        })
+    {
+        push_media(
+            &mut media,
+            &mut seen,
+            &stable_id,
+            "download",
+            &canonical_url,
+            ApiContent {
+                src: download_url(&stable_id)?.to_string(),
+                filename: None,
+                filesize: None,
+            },
+            None,
         );
     }
 
@@ -324,8 +474,46 @@ fn normalize_deviation(
         created_at: deviation.published_time.and_then(scalar_string),
         tags: tags.into_vec(),
         media,
-        resume_cursor_after: Some(CURSOR.encode(next_offset)?),
+        resume_cursor_after: Some(resume_cursor_after),
     })
+}
+
+fn transformed_content_url(raw: &str, deviation_id: &str) -> (String, bool) {
+    let Ok(mut url) = Url::parse(raw) else {
+        return (raw.to_string(), false);
+    };
+    if !url
+        .host_str()
+        .is_some_and(|host| host.starts_with("images-wixmp-"))
+    {
+        return (raw.to_string(), false);
+    }
+    static INTERMEDIARY: OnceLock<Regex> = OnceLock::new();
+    static QUALITY: OnceLock<Regex> = OnceLock::new();
+    static BLUR: OnceLock<Regex> = OnceLock::new();
+    let mut uses_intermediary = false;
+    if deviation_id
+        .parse::<u64>()
+        .is_ok_and(|id| id <= 790_677_560)
+    {
+        let original_path = url.path().to_string();
+        let path = INTERMEDIARY
+            .get_or_init(|| Regex::new(r"^(/f/[^/]+/[^/]+)/v[0-9]+/.*$").expect("valid Wix path"))
+            .replace(url.path(), "/intermediary$1")
+            .into_owned();
+        uses_intermediary = path != original_path;
+        url.set_path(&path);
+    }
+    let value = QUALITY
+        .get_or_init(|| Regex::new(r",q_[0-9]+").expect("valid Wix quality"))
+        .replace(url.as_str(), ",q_100")
+        .into_owned();
+    (
+        BLUR.get_or_init(|| Regex::new(r",blur_[0-9]+").expect("valid Wix blur"))
+            .replace(&value, "")
+            .into_owned(),
+        uses_intermediary,
+    )
 }
 
 fn push_media(
@@ -335,6 +523,7 @@ fn push_media(
     role: &str,
     canonical_url: &str,
     content: ApiContent,
+    fallback: Option<ApiContent>,
 ) {
     let url = content.src.trim();
     if url.is_empty() || !seen.insert(url.to_string()) {
@@ -346,13 +535,24 @@ fn push_media(
         .filter(|name| !name.trim().is_empty())
         .or_else(|| file_name_from_url(url))
         .unwrap_or_else(|| format!("deviantart_{deviation_id}_{position}.media"));
-    media.push(
+    let mut descriptor =
         MediaDescriptorBuilder::new(format!("deviantart:{deviation_id}:{role}"), position, url)
             .canonical_url(canonical_url)
             .file_name(file_name)
-            .expected_size(content.filesize)
-            .build(),
-    );
+            .expected_size(content.filesize);
+    if let Some(fallback) = fallback.filter(|fallback| fallback.src.trim() != url) {
+        descriptor = descriptor.fallback(MediaFallback {
+            file_name: fallback
+                .filename
+                .filter(|name| !name.trim().is_empty())
+                .or_else(|| file_name_from_url(&fallback.src)),
+            url: fallback.src,
+            mime_hint: None,
+            expected_size: fallback.filesize,
+            html_marker: None,
+        });
+    }
+    media.push(descriptor.build());
 }
 
 fn apply_original_media(post: &mut SourcePost, original: ApiContent) {
@@ -365,6 +565,7 @@ fn apply_original_media(post: &mut SourcePost, original: ApiContent) {
         "content",
         post.canonical_url.as_deref().unwrap_or_default(),
         original,
+        None,
     );
     let Some(mut original) = replacement.pop() else {
         return;
@@ -384,36 +585,10 @@ fn apply_original_media(post: &mut SourcePost, original: ApiContent) {
     }
 }
 
-fn apply_metadata(post: &mut SourcePost, response: MetadataResponse) -> Result<(), SourceError> {
-    if response.metadata.len() > 1 {
-        return Err(invalid_response(
-            "DeviantArt returned metadata for more than one deviation",
-        ));
-    }
-    let Some(metadata) = response.metadata.into_iter().next() else {
-        return Ok(());
-    };
-    if metadata.deviationid.as_deref() != Some(post.stable_id.as_str()) {
-        return Err(invalid_response(
-            "DeviantArt metadata did not match the active deviation",
-        ));
-    }
-    let mut tags = CanonicalTagSet::default();
-    if let Some(creator) = post.creator.as_deref() {
-        tags.insert("creator", creator);
-    }
-    add_general_tags(&mut tags, metadata.tags);
-    for tag in std::mem::take(&mut post.tags) {
-        tags.insert(tag.namespace, tag.value);
-    }
-    post.tags = tags.into_vec();
-    if post.notes.is_none() {
-        post.notes = metadata
-            .description
-            .as_deref()
-            .and_then(normalize_source_text);
-    }
-    Ok(())
+fn remove_unresolved_download_placeholder(post: &mut SourcePost) {
+    post.media.retain(|media| {
+        !(media.stable_id.ends_with(":download") && media.url.contains("/deviation/download/"))
+    });
 }
 
 fn add_general_tags(tags: &mut CanonicalTagSet, values: Vec<ApiTag>) {
@@ -566,10 +741,12 @@ struct AccessTokenResponse {
     #[serde(default)]
     access_token: Option<String>,
     #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
     expires_in: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct GalleryResponse {
     #[serde(default)]
     results: Vec<ApiDeviation>,
@@ -579,7 +756,7 @@ struct GalleryResponse {
     next_offset: Option<u32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ApiDeviation {
     deviationid: String,
     #[serde(default)]
@@ -590,7 +767,14 @@ struct ApiDeviation {
     description: Option<String>,
     #[serde(default)]
     published_time: Option<Value>,
-    author: ApiAuthor,
+    #[serde(default)]
+    author: Option<ApiAuthor>,
+    #[serde(default)]
+    is_deleted: bool,
+    #[serde(default)]
+    tier_access: Option<String>,
+    #[serde(default)]
+    premium_folder_data: Option<Value>,
     #[serde(default)]
     is_downloadable: bool,
     #[serde(default)]
@@ -601,12 +785,12 @@ struct ApiDeviation {
     tags: Option<Vec<ApiTag>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ApiAuthor {
     username: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ApiContent {
     src: String,
     #[serde(default)]
@@ -615,7 +799,7 @@ struct ApiContent {
     filesize: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ApiVideo {
     src: String,
     #[serde(default)]
@@ -641,7 +825,7 @@ impl ApiVideo {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 enum ApiTag {
     Name(String),
@@ -664,29 +848,12 @@ impl ApiTag {
     }
 }
 
-#[derive(Deserialize)]
-struct MetadataResponse {
-    #[serde(default)]
-    metadata: Vec<ApiMetadata>,
-}
-
-#[derive(Deserialize)]
-struct ApiMetadata {
-    #[serde(default)]
-    deviationid: Option<String>,
-    #[serde(default)]
-    tags: Vec<ApiTag>,
-    #[serde(default)]
-    description: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{CanonicalTag, SourcePartition};
 
     const GALLERY: &str = include_str!("../../tests/fixtures/deviantart/gallery.json");
-    const METADATA: &str = include_str!("../../tests/fixtures/deviantart/metadata.json");
 
     fn request(cursor: Option<&str>) -> DiscoveryRequest {
         DiscoveryRequest {
@@ -713,11 +880,11 @@ mod tests {
     #[test]
     fn maps_one_deviation_and_all_current_media() {
         let response: GalleryResponse = serde_json::from_str(GALLERY).unwrap();
-        let batch = normalize_gallery(&request(None), 0, response).unwrap();
+        let batch = normalize_gallery(&request(None), GalleryCursor::default(), response).unwrap();
         assert_eq!(batch.posts.len(), 1);
         let post = &batch.posts[0];
         assert_eq!(post.stable_id, "123456789");
-        assert_eq!(post.resume_cursor_after.as_deref(), Some("1"));
+        assert_eq!(post.resume_cursor_after.as_deref(), Some("o1i0"));
         assert_eq!(post.media.len(), 2);
         assert!(post
             .tags
@@ -727,22 +894,9 @@ mod tests {
     }
 
     #[test]
-    fn metadata_is_bounded_to_and_merged_into_the_active_deviation() {
-        let response: GalleryResponse = serde_json::from_str(GALLERY).unwrap();
-        let mut post = normalize_gallery(&request(None), 0, response)
-            .unwrap()
-            .posts
-            .remove(0);
-        let metadata: MetadataResponse = serde_json::from_str(METADATA).unwrap();
-        apply_metadata(&mut post, metadata).unwrap();
-        assert!(post.tags.contains(&CanonicalTag::new("", "concept-art")));
-        assert_eq!(post.notes.as_deref(), Some("Rendered study & notes"));
-    }
-
-    #[test]
     fn replaces_the_gallery_preview_with_the_downloadable_original() {
         let response: GalleryResponse = serde_json::from_str(GALLERY).unwrap();
-        let mut post = normalize_gallery(&request(None), 0, response)
+        let mut post = normalize_gallery(&request(None), GalleryCursor::default(), response)
             .unwrap()
             .posts
             .remove(0);
@@ -781,6 +935,136 @@ mod tests {
     }
 
     #[test]
+    fn downloadable_without_gallery_content_still_requests_the_original() {
+        let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
+            "deviationid": "123456789",
+            "url": "https://www.deviantart.com/artist/art/work-123456789",
+            "title": "Work",
+            "is_downloadable": true,
+            "author": { "username": "artist" }
+        }))
+        .unwrap();
+        let post = normalize_deviation(&request(None), "o1i0".into(), deviation).unwrap();
+        assert_eq!(post.media.len(), 1);
+        assert_eq!(post.media[0].stable_id, "deviantart:123456789:download");
+        assert_eq!(
+            post.media[0].url,
+            "https://www.deviantart.com/api/v1/oauth2/deviation/download/123456789?mature_content=true"
+        );
+    }
+
+    #[test]
+    fn rejected_original_keeps_gallery_media_but_removes_an_api_placeholder() {
+        let response: GalleryResponse = serde_json::from_str(GALLERY).unwrap();
+        let mut gallery_post =
+            normalize_gallery(&request(None), GalleryCursor::default(), response)
+                .unwrap()
+                .posts
+                .remove(0);
+        remove_unresolved_download_placeholder(&mut gallery_post);
+        assert!(!gallery_post.media.is_empty());
+
+        let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
+            "deviationid": "123456789",
+            "url": "https://www.deviantart.com/artist/art/work-123456789",
+            "title": "Work",
+            "is_downloadable": true,
+            "author": { "username": "artist" }
+        }))
+        .unwrap();
+        let mut placeholder =
+            normalize_deviation(&request(None), "o1i0".into(), deviation).unwrap();
+        remove_unresolved_download_placeholder(&mut placeholder);
+        assert!(placeholder.media.is_empty());
+    }
+
+    #[test]
+    fn non_downloadable_wix_content_uses_gallery_dl_intermediary_quality() {
+        assert_eq!(
+            transformed_content_url(
+                "https://images-wixmp-ed30.example/f/uuid/file.png/v1/fill/w_800,h_600,q_70,blur_5/file.png?token=x",
+                "790677560",
+            ).0,
+            "https://images-wixmp-ed30.example/intermediary/f/uuid/file.png?token=x"
+        );
+        assert_eq!(
+            transformed_content_url(
+                "https://images-wixmp-ed30.example/f/uuid/file.png,q_70,blur_5?token=x",
+                "123456789",
+            )
+            .0,
+            "https://images-wixmp-ed30.example/f/uuid/file.png,q_100?token=x"
+        );
+        assert_eq!(
+            transformed_content_url(
+                "https://images-wixmp-ed30.example/f/uuid/file.png/v1/fill/w_800,h_600,q_70,blur_5/file.png?token=x",
+                "790677561",
+            ).0,
+            "https://images-wixmp-ed30.example/f/uuid/file.png/v1/fill/w_800,h_600,q_100/file.png?token=x"
+        );
+    }
+
+    #[test]
+    fn skips_deleted_locked_and_premium_gallery_placeholders() {
+        let response: GalleryResponse = serde_json::from_value(serde_json::json!({
+            "results": [
+                { "deviationid": "1", "is_deleted": true },
+                {
+                    "deviationid": "2",
+                    "tier_access": "locked",
+                    "author": { "username": "artist" },
+                    "content": { "src": "https://images-wixmp.example/preview-2.jpg" }
+                },
+                {
+                    "deviationid": "3",
+                    "premium_folder_data": { "has_access": false },
+                    "author": { "username": "artist" },
+                    "content": { "src": "https://images-wixmp.example/preview-3.jpg" }
+                },
+                {
+                    "deviationid": "4",
+                    "author": { "username": "artist" },
+                    "content": { "src": "https://images-wixmp.example/original-4.jpg" }
+                }
+            ],
+            "has_more": false
+        }))
+        .unwrap();
+
+        let batch = normalize_gallery(&request(None), GalleryCursor::default(), response).unwrap();
+        assert_eq!(batch.posts[0].stable_id, "4");
+        assert!(batch.exhausted);
+    }
+
+    #[test]
+    fn intermediary_keeps_only_the_same_post_original_as_fallback() {
+        let original = "https://images-wixmp-ed30.example/f/uuid/file.png/v1/fill/w_800,h_600,q_70/file.png?token=x";
+        let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
+            "deviationid": "790677560",
+            "author": { "username": "artist" },
+            "content": { "src": original, "filesize": 4000 }
+        }))
+        .unwrap();
+
+        let post = normalize_deviation(&request(None), "o1i0".into(), deviation).unwrap();
+        assert_eq!(post.media.len(), 1);
+        assert_eq!(post.media[0].fallbacks.len(), 1);
+        assert_eq!(post.media[0].fallbacks[0].url, original);
+        assert_eq!(post.media[0].fallbacks[0].expected_size, Some(4000));
+
+        let quality_only: ApiDeviation = serde_json::from_value(serde_json::json!({
+            "deviationid": "790677561",
+            "author": { "username": "artist" },
+            "content": {
+                "src": "https://images-wixmp-ed30.example/f/uuid/file.png,q_70?token=x"
+            }
+        }))
+        .unwrap();
+        let post = normalize_deviation(&request(None), "o1i0".into(), quality_only).unwrap();
+        assert!(post.media[0].fallbacks.is_empty());
+    }
+
+    #[test]
     fn rejected_refresh_is_auth_but_transport_failures_remain_retryable() {
         let rejected = map_refresh_error(SourceError::new(
             SourceErrorKind::InvalidResponse,
@@ -788,19 +1072,41 @@ mod tests {
             false,
         ));
         assert_eq!(rejected.kind, SourceErrorKind::Authentication);
-        let network = map_refresh_error(SourceError::new(
-            SourceErrorKind::Network,
-            "offline",
-            true,
-        ));
+        let network =
+            map_refresh_error(SourceError::new(SourceErrorKind::Network, "offline", true));
         assert_eq!(network.kind, SourceErrorKind::Network);
         assert!(network.retryable);
     }
 
     #[test]
     fn cursor_is_bounded_and_applied_only_after_the_post() {
-        assert_eq!(current_offset(&request(Some("42"))).unwrap(), 42);
-        assert!(current_offset(&request(Some("1000000001"))).is_err());
-        assert!(current_offset(&request(Some("next"))).is_err());
+        assert_eq!(
+            decode_cursor(Some("42")).unwrap(),
+            GalleryCursor {
+                offset: 42,
+                item: 0
+            }
+        );
+        assert_eq!(
+            decode_cursor(Some("o42i7")).unwrap(),
+            GalleryCursor {
+                offset: 42,
+                item: 7
+            }
+        );
+        assert!(decode_cursor(Some("o1000000001i0")).is_err());
+        assert!(decode_cursor(Some("o0i24")).is_err());
+        assert!(decode_cursor(Some("next")).is_err());
+    }
+
+    #[test]
+    fn gallery_requests_full_pages_instead_of_one_item_per_request() {
+        let url = gallery_url("artist", 48);
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "limit" && value == "24"));
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "offset" && value == "48"));
     }
 }

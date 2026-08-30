@@ -1,8 +1,9 @@
 //! Archive-backed media handling (CBZ and EPUB) — cover page extraction for
 //! resolution detection and thumbnail generation.
 
-use std::io::{Cursor, Read};
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::{Cursor, Read, Write};
+use std::path::{Path, PathBuf};
 
 use image::GenericImageView;
 
@@ -12,6 +13,143 @@ use super::{FileError, FileResult};
 const IMAGE_FILE_EXTS: &[&str] = &[
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".ico",
 ];
+
+const MAX_ZIP_ENTRIES: usize = 4_096;
+const MAX_ZIP_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_ZIP_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_ZIP_COMPRESSION_RATIO: u64 = 200;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedArchiveEntry {
+    pub path: PathBuf,
+    pub archive_name: String,
+}
+
+/// Extract accepted members from a ZIP into Picto-owned staging. Nested archives
+/// are ignored so every expansion remains bounded by this container's limits.
+pub fn extract_library_files(
+    archive_path: &Path,
+    staging_root: &Path,
+) -> FileResult<Vec<ExtractedArchiveEntry>> {
+    let archive_bytes = std::fs::metadata(archive_path)
+        .map_err(FileError::Io)?
+        .len();
+    if archive_bytes > MAX_ZIP_ARCHIVE_BYTES {
+        return Err(unsafe_zip(format!(
+            "file exceeds the {MAX_ZIP_ARCHIVE_BYTES}-byte limit"
+        )));
+    }
+    let file = std::fs::File::open(archive_path).map_err(FileError::Io)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|error| FileError::UnsupportedFile(format!("Invalid ZIP archive: {error}")))?;
+    if zip.len() > MAX_ZIP_ENTRIES {
+        return Err(unsafe_zip(format!(
+            "contains {} entries; limit is {MAX_ZIP_ENTRIES}",
+            zip.len()
+        )));
+    }
+
+    let output_dir = staging_root.join(format!("{:016x}", rand::random::<u64>()));
+    std::fs::create_dir_all(&output_dir).map_err(FileError::Io)?;
+    match extract_zip_members(&mut zip, &output_dir) {
+        Ok(entries) if entries.is_empty() => {
+            let _ = std::fs::remove_dir(&output_dir);
+            Ok(entries)
+        }
+        Ok(entries) => Ok(entries),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&output_dir);
+            Err(error)
+        }
+    }
+}
+
+fn extract_zip_members(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    output_dir: &Path,
+) -> FileResult<Vec<ExtractedArchiveEntry>> {
+    let mut total_bytes = 0_u64;
+    let mut extracted = Vec::new();
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).map_err(|error| {
+            FileError::UnsupportedFile(format!("Could not read ZIP entry: {error}"))
+        })?;
+        if entry.is_dir() {
+            continue;
+        }
+        let enclosed = entry
+            .enclosed_name()
+            .ok_or_else(|| unsafe_zip(format!("entry {:?} has an unsafe path", entry.name())))?;
+        let extension = enclosed
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        let accepted = extension
+            .as_deref()
+            .and_then(super::formats::format_for_extension);
+        if !accepted.is_some_and(|format| {
+            !matches!(
+                format.mime_type,
+                "application/zip" | "application/vnd.rar" | "application/x-7z-compressed"
+            )
+        }) {
+            continue;
+        }
+
+        let declared_size = entry.size();
+        let compressed_size = entry.compressed_size();
+        if declared_size > MAX_ZIP_ENTRY_BYTES {
+            return Err(unsafe_zip(format!(
+                "entry {:?} exceeds the {MAX_ZIP_ENTRY_BYTES}-byte limit",
+                entry.name()
+            )));
+        }
+        if compressed_size > 0 && declared_size / compressed_size > MAX_ZIP_COMPRESSION_RATIO {
+            return Err(unsafe_zip(format!(
+                "entry {:?} exceeds the {MAX_ZIP_COMPRESSION_RATIO}:1 compression-ratio limit",
+                entry.name()
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(declared_size)
+            .ok_or_else(|| unsafe_zip("declared size overflowed".into()))?;
+        if total_bytes > MAX_ZIP_TOTAL_BYTES {
+            return Err(unsafe_zip(format!(
+                "accepted entries exceed the {MAX_ZIP_TOTAL_BYTES}-byte total limit"
+            )));
+        }
+
+        let extension = extension.expect("accepted member has an extension");
+        let output_path = output_dir.join(format!("{index:04}.{extension}"));
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)
+            .map_err(FileError::Io)?;
+        let copied = std::io::copy(
+            &mut entry.by_ref().take(MAX_ZIP_ENTRY_BYTES + 1),
+            &mut output,
+        )
+        .map_err(FileError::Io)?;
+        output.flush().map_err(FileError::Io)?;
+        if copied > MAX_ZIP_ENTRY_BYTES {
+            return Err(unsafe_zip(format!(
+                "entry {:?} exceeded its extraction limit",
+                entry.name()
+            )));
+        }
+        extracted.push(ExtractedArchiveEntry {
+            path: output_path,
+            archive_name: enclosed.to_string_lossy().into_owned(),
+        });
+    }
+    Ok(extracted)
+}
+
+fn unsafe_zip(reason: String) -> FileError {
+    FileError::UnsupportedFile(format!("Unsafe ZIP archive: {reason}"))
+}
 
 /// Get the path to the cover page (first image) inside a ZIP archive.
 ///
@@ -256,6 +394,24 @@ fn read_zip_entry_string(
     entry.read_to_string(&mut buf).map_err(FileError::Io)?;
 
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_extraction_rejects_zip_larger_than_one_gib_before_opening_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("oversized.zip");
+        let file = std::fs::File::create(&archive).unwrap();
+        file.set_len(MAX_ZIP_ARCHIVE_BYTES + 1).unwrap();
+
+        let error = extract_library_files(&archive, &directory.path().join("staging")).unwrap_err();
+
+        assert!(error.to_string().contains("1073741824-byte limit"));
+        assert!(!directory.path().join("staging").exists());
+    }
 }
 
 // Note: ZipLooksLikeCBZ and ZipLooksLikeUgoira are MIME detection functions

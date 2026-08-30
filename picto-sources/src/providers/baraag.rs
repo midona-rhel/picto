@@ -50,12 +50,7 @@ impl NativeSourceAdapter for BaraagSource {
                 .transpose()?;
             let account_id = match cursor.as_ref() {
                 Some(cursor) => cursor.account_id.clone(),
-                None => {
-                    let account = http
-                        .get_json::<ApiAccount>(lookup_url(&username), &credentials, cancel)
-                        .await?;
-                    validate_id(&account.id, "Baraag account")?.to_string()
-                }
+                None => account_id_by_username(&username, &credentials, http, cancel).await?,
             };
             let statuses = http
                 .get_json::<Vec<ApiStatus>>(
@@ -98,6 +93,49 @@ fn lookup_url(username: &str) -> Url {
     url
 }
 
+fn search_url(username: &str) -> Url {
+    let query = if username.contains('@') {
+        format!("@{username}")
+    } else {
+        format!("@{username}@{DOMAIN}")
+    };
+    let mut url = Url::parse("https://baraag.net/api/v1/accounts/search")
+        .expect("static Baraag account search URL");
+    url.query_pairs_mut()
+        .append_pair("q", &query)
+        .append_pair("limit", "1");
+    url
+}
+
+async fn account_id_by_username(
+    username: &str,
+    credentials: &RequestCredentials,
+    http: &HttpRuntime,
+    cancel: &CancellationToken,
+) -> Result<String, SourceError> {
+    if let Ok(account) = http
+        .get_json::<ApiAccount>(lookup_url(username), credentials, cancel)
+        .await
+    {
+        return validate_id(&account.id, "Baraag account").map(ToOwned::to_owned);
+    }
+
+    let accounts = http
+        .get_json::<Vec<ApiAccount>>(search_url(username), credentials, cancel)
+        .await?;
+    accounts
+        .into_iter()
+        .find(|account| account.acct.eq_ignore_ascii_case(username))
+        .ok_or_else(|| {
+            SourceError::new(
+                SourceErrorKind::InvalidQuery,
+                "Baraag account was not found",
+                false,
+            )
+        })
+        .and_then(|account| validate_id(&account.id, "Baraag account").map(ToOwned::to_owned))
+}
+
 fn statuses_url(account_id: &str, cursor: Option<&CursorState>) -> Result<Url, SourceError> {
     validate_id(account_id, "Baraag account")?;
     let mut url = Url::parse("https://baraag.net").expect("static Baraag URL");
@@ -109,7 +147,7 @@ fn statuses_url(account_id: &str, cursor: Option<&CursorState>) -> Result<Url, S
         // The worker must settle this status before it can persist and use max_id.
         query.append_pair("limit", "1");
         query.append_pair("only_media", "true");
-        query.append_pair("exclude_replies", "true");
+        query.append_pair("exclude_replies", "false");
         query.append_pair("exclude_reblogs", "true");
         if let Some(cursor) = cursor {
             query.append_pair("max_id", &cursor.status_id);
@@ -237,17 +275,42 @@ fn normalize_account(raw: &str) -> Result<String, SourceError> {
     } else {
         trimmed.strip_prefix('@').unwrap_or(trimmed).to_string()
     };
-    if username.is_empty()
+    if !valid_account_name(&username) {
+        return Err(invalid_query(
+            "Baraag subscriptions require a safe account handle",
+        ));
+    }
+    Ok(username)
+}
+
+fn valid_account_name(value: &str) -> bool {
+    let mut parts = value.split('@');
+    let username = parts.next().unwrap_or_default();
+    let domain = parts.next();
+    if parts.next().is_some()
+        || username.is_empty()
         || username.len() > 64
         || !username
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     {
-        return Err(invalid_query(
-            "Baraag subscriptions require a safe local username",
-        ));
+        return false;
     }
-    Ok(username)
+    domain.is_none_or(valid_remote_domain)
+}
+
+fn valid_remote_domain(domain: &str) -> bool {
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn insert_source_tag(tags: &mut CanonicalTagSet, raw: &str) {
@@ -339,6 +402,8 @@ fn invalid_cursor() -> SourceError {
 #[derive(Debug, Deserialize)]
 struct ApiAccount {
     id: String,
+    #[serde(default)]
+    acct: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,19 +498,27 @@ mod tests {
         for query in [
             "Blue_",
             "@Blue_",
+            "Blue_@remote.example",
             "https://baraag.net/@Blue_",
+            "https://baraag.net/@Blue_@remote.example",
             "https://baraag.net/@Blue_/media",
             "https://baraag.net/users/Blue_",
         ] {
-            assert_eq!(normalize_account(query).unwrap(), "Blue_");
+            let expected = if query.contains("remote.example") {
+                "Blue_@remote.example"
+            } else {
+                "Blue_"
+            };
+            assert_eq!(normalize_account(query).unwrap(), expected);
         }
         for query in [
             "",
-            "Blue_@baraag.net",
             "https://example.com/@Blue_",
             "https://baraag.net/@Blue_/123",
             "https://baraag.net/@Blue_?page=2",
             "bad-name",
+            "Blue_@bad_domain.example",
+            "Blue_@@remote.example",
         ] {
             assert!(normalize_account(query).is_err(), "accepted {query}");
         }
@@ -492,7 +565,28 @@ mod tests {
             query.get("max_id").map(|value| value.as_ref()),
             Some("117023587543794517")
         );
+        assert_eq!(
+            query.get("exclude_replies").map(|value| value.as_ref()),
+            Some("false")
+        );
         assert_eq!(url.path(), "/api/v1/accounts/109876543210/statuses");
+    }
+
+    #[test]
+    fn account_search_fallback_uses_federated_handles() {
+        let local = search_url("Blue_");
+        let local_query = local.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            local_query.get("q").map(|value| value.as_ref()),
+            Some("@Blue_@baraag.net")
+        );
+
+        let remote = search_url("Blue_@remote.example");
+        let remote_query = remote.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            remote_query.get("q").map(|value| value.as_ref()),
+            Some("@Blue_@remote.example")
+        );
     }
 
     #[test]

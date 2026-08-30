@@ -8,8 +8,8 @@ use url::Url;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, PostFuture, ProviderDescriptor,
-    RatingMap, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
+    HttpRuntime, MediaDescriptorBuilder, MediaFallback, NativeSourceAdapter, PostFuture,
+    ProviderDescriptor, RatingMap, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
 const MAX_PAGE: u32 = 1_000_000;
@@ -139,7 +139,7 @@ fn normalize_username(raw: &str) -> Result<String, SourceError> {
             || url.port().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
-            || url.path() != "/"
+            || !matches!(url.path().trim_end_matches('/'), "" | "/art")
         {
             return Err(invalid_query(
                 "Newgrounds subscriptions require a canonical profile URL",
@@ -387,19 +387,32 @@ fn resolve_html(mut post: SourcePost, html: &str) -> Result<SourcePost, SourceEr
     let media = media_urls
         .into_iter()
         .enumerate()
-        .map(|(position, url)| {
+        .map(|(position, selected)| {
             let position = u32::try_from(position)
                 .map_err(|_| invalid_response("Newgrounds post contains too many media files"))?;
-            let file_name = file_name_from_url(&url)
+            let file_name = file_name_from_url(&selected.url)
                 .unwrap_or_else(|| format!("newgrounds_{}_{}.media", post.stable_id, position));
-            Ok(MediaDescriptorBuilder::new(
+            let mut builder = MediaDescriptorBuilder::new(
                 format!("newgrounds:{}:{position}", post.stable_id),
                 position,
-                url,
+                selected.url,
             )
             .canonical_url(canonical_url)
-            .file_name(file_name)
-            .build())
+            .file_name(&file_name);
+            for fallback in selected.fallbacks {
+                let fallback_name =
+                    file_name_from_url(&fallback).unwrap_or_else(|| file_name.clone());
+                builder = builder.fallback(MediaFallback {
+                    url: fallback,
+                    mime_hint: mime_guess::from_path(&fallback_name)
+                        .first_raw()
+                        .map(ToOwned::to_owned),
+                    file_name: Some(fallback_name),
+                    expected_size: None,
+                    html_marker: None,
+                });
+            }
+            Ok(builder.build())
         })
         .collect::<Result<Vec<_>, SourceError>>()?;
 
@@ -412,39 +425,91 @@ fn resolve_html(mut post: SourcePost, html: &str) -> Result<SourcePost, SourceEr
     Ok(post)
 }
 
-fn parse_media_urls(html: &str) -> Result<Vec<String>, SourceError> {
+#[derive(Debug, PartialEq, Eq)]
+struct MediaUrl {
+    url: String,
+    fallbacks: Vec<String>,
+}
+
+fn parse_media_urls(html: &str) -> Result<Vec<MediaUrl>, SourceError> {
     let mut urls = Vec::new();
     if let Some(encoded) = capture(
         regex(&FULL_IMAGE, r#"(?s)"full_image_text":"((?:\\.|[^"\\])*)""#),
         html,
     ) {
-        let decoded = serde_json::from_str::<String>(&format!("\"{encoded}\""))
-            .map_err(|_| invalid_response("Newgrounds returned invalid full-image metadata"))?;
+        if let Ok(decoded) = serde_json::from_str::<String>(&format!("\"{encoded}\"")) {
+            if let Some(url) = capture(
+                regex(&IMAGE_SRC, r#"(?is)<img\s+[^>]*src="([^"]+)""#),
+                &decoded,
+            )
+            .or_else(|| {
+                capture(
+                    regex(&IMAGE_HREF, r#"(?is)<a\s+[^>]*href="([^"]+)""#),
+                    &decoded,
+                )
+            }) {
+                push_media_url(&mut urls, &url, Vec::new())?;
+            }
+        }
+    }
+    if urls.is_empty() {
         if let Some(url) = capture(
-            regex(&IMAGE_SRC, r#"(?is)<img\s+[^>]*src="([^"]+)""#),
-            &decoded,
+            regex(
+                &DIRECT_ART_LINK,
+                r#"(?is)<a\s+[^>]*href="(https?://(?:art|audio)\.ngfiles\.com/[^"]+)""#,
+            ),
+            html,
         ) {
-            push_media_url(&mut urls, &url)?;
+            push_media_url(&mut urls, &url, Vec::new())?;
         }
     }
 
+    let mut parsed_image_data = false;
     if let Some(raw) = between(html, "let imageData =", "\n];") {
-        let values = serde_json::from_str::<Vec<serde_json::Value>>(&format!("{}]", raw.trim()))
-            .map_err(|_| invalid_response("Newgrounds returned invalid multi-image metadata"))?;
-        for value in values.into_iter().skip(1) {
-            if let Some(url) = value.get("image").and_then(serde_json::Value::as_str) {
-                push_media_url(&mut urls, url)?;
+        if let Ok(values) =
+            serde_json::from_str::<Vec<serde_json::Value>>(&format!("{}]", raw.trim()))
+        {
+            parsed_image_data = true;
+            let skip_primary = usize::from(!urls.is_empty());
+            for value in values.into_iter().skip(skip_primary) {
+                if let Some(url) = value.get("image").and_then(serde_json::Value::as_str) {
+                    push_media_url(&mut urls, url, Vec::new())?;
+                }
             }
         }
-    } else if let Some(container) = between(
-        html,
-        "<div class=\"art-images",
-        "</div>\n\n        <script>",
-    ) {
+    }
+    let art_images = (!parsed_image_data)
+        .then(|| {
+            between(
+                html,
+                "<div class=\"art-images",
+                "</div>\n\n        <script>",
+            )
+        })
+        .flatten();
+    if let Some(container) = art_images {
+        let primary_extension = urls
+            .first()
+            .and_then(|media| media_extension(&media.url))
+            .map(ToOwned::to_owned);
         let lazy = regex(&LAZY_IMAGE, r#"(?is)data-smartload-src="([^"]+)""#);
         for captures in lazy.captures_iter(container) {
-            let url = captures[1].replace("/medium_views/", "/images/");
-            push_media_url(&mut urls, &url)?;
+            let mut url = captures[1].replace("/medium_views/", "/images/");
+            let mut fallbacks = Vec::new();
+            if media_extension(&url) == Some("webp") {
+                if let Some(extension) = primary_extension.as_deref() {
+                    let webp = url.clone();
+                    url = replace_extension(&webp, extension);
+                    fallbacks.extend(
+                        ["jpg", "png", "gif"]
+                            .into_iter()
+                            .filter(|candidate| *candidate != extension)
+                            .map(|candidate| replace_extension(&webp, candidate)),
+                    );
+                    fallbacks.push(webp);
+                }
+            }
+            push_media_url(&mut urls, &url, fallbacks)?;
         }
     }
 
@@ -454,21 +519,43 @@ fn parse_media_urls(html: &str) -> Result<Vec<String>, SourceError> {
             r#"(?is)(?:data-smartload-)?src="(https?://[^"]+)""#,
         );
         for captures in comment_media.captures_iter(comments) {
-            push_media_url(&mut urls, &captures[1])?;
+            push_media_url(&mut urls, &captures[1], Vec::new())?;
         }
     }
     Ok(urls)
 }
 
-fn push_media_url(urls: &mut Vec<String>, raw: &str) -> Result<(), SourceError> {
+fn media_extension(raw: &str) -> Option<&str> {
+    raw.split(['?', '#'])
+        .next()?
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| !extension.is_empty())
+}
+
+fn replace_extension(raw: &str, extension: &str) -> String {
+    let suffix_at = raw.find(['?', '#']).unwrap_or(raw.len());
+    let (path, suffix) = raw.split_at(suffix_at);
+    let stem = path.rsplit_once('.').map_or(path, |(stem, _)| stem);
+    format!("{stem}.{extension}{suffix}")
+}
+
+fn push_media_url(
+    urls: &mut Vec<MediaUrl>,
+    raw: &str,
+    fallbacks: Vec<String>,
+) -> Result<(), SourceError> {
     let url = Url::parse(&decode_json_html(raw))
         .map_err(|_| invalid_response("Newgrounds returned an invalid media URL"))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(invalid_response("Newgrounds returned an invalid media URL"));
     }
     let value = url.to_string();
-    if !urls.contains(&value) {
-        urls.push(value);
+    if !urls.iter().any(|media| media.url == value) {
+        urls.push(MediaUrl {
+            url: value,
+            fallbacks,
+        });
     }
     Ok(())
 }
@@ -563,6 +650,8 @@ static DATE_PUBLISHED: OnceLock<Regex> = OnceLock::new();
 static RATING: OnceLock<Regex> = OnceLock::new();
 static FULL_IMAGE: OnceLock<Regex> = OnceLock::new();
 static IMAGE_SRC: OnceLock<Regex> = OnceLock::new();
+static IMAGE_HREF: OnceLock<Regex> = OnceLock::new();
+static DIRECT_ART_LINK: OnceLock<Regex> = OnceLock::new();
 static LAZY_IMAGE: OnceLock<Regex> = OnceLock::new();
 static COMMENT_MEDIA: OnceLock<Regex> = OnceLock::new();
 static TAG_LINK: OnceLock<Regex> = OnceLock::new();
@@ -583,6 +672,8 @@ mod tests {
             "Artist_Name",
             "@Artist_Name",
             "https://Artist_Name.newgrounds.com/",
+            "https://Artist_Name.newgrounds.com/art",
+            "https://Artist_Name.newgrounds.com/art/",
         ] {
             assert_eq!(normalize_username(input).unwrap(), "artist_name");
         }
@@ -590,7 +681,6 @@ mod tests {
             "",
             "artist/name",
             "https://www.newgrounds.com/",
-            "https://artist.newgrounds.com/art",
             "https://artist.newgrounds.com/?page=2",
             "https://newgrounds.com.evil.example/",
         ] {
@@ -682,6 +772,62 @@ mod tests {
         };
         let resolved = resolve_html(post, "<html><div id=\"adults_only\"></div></html>").unwrap();
         assert!(resolved.media.is_empty());
+    }
+
+    #[test]
+    fn falls_back_to_the_direct_anchor_and_restores_multi_image_extensions() {
+        let urls = parse_media_urls(
+            r#"
+            <script>PHP.merge({"full_image_text":"<a href=\"https:\/\/art.ngfiles.com\/images\/1\/primary.png\">full<\/a>"});</script>
+            <div class="art-images">
+              <img data-smartload-src="https://art.ngfiles.com/medium_views/1/secondary.webp">
+            </div>
+
+        <script>"#,
+        )
+        .unwrap();
+        assert_eq!(urls[0].url, "https://art.ngfiles.com/images/1/primary.png");
+        assert_eq!(
+            urls[1].url,
+            "https://art.ngfiles.com/images/1/secondary.png"
+        );
+        assert_eq!(
+            urls[1].fallbacks,
+            [
+                "https://art.ngfiles.com/images/1/secondary.jpg",
+                "https://art.ngfiles.com/images/1/secondary.gif",
+                "https://art.ngfiles.com/images/1/secondary.webp",
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_the_first_image_when_full_image_metadata_is_missing() {
+        let urls = parse_media_urls(
+            "<script>let imageData = [{\"image\":\"https://art.ngfiles.com/images/1/first.png\"},{\"image\":\"https://art.ngfiles.com/images/1/second.png\"}\n];</script>",
+        )
+        .unwrap();
+        assert_eq!(
+            urls.into_iter().map(|media| media.url).collect::<Vec<_>>(),
+            [
+                "https://art.ngfiles.com/images/1/first.png",
+                "https://art.ngfiles.com/images/1/second.png",
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_optional_image_data_keeps_the_valid_primary() {
+        let urls = parse_media_urls(
+            r#"
+            <script>PHP.merge({"full_image_text":"<img src=\"https:\/\/art.ngfiles.com\/images\/1\/primary.png\">"});</script>
+            <script>let imageData = [{not valid json}
+];</script>
+            "#,
+        )
+        .unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "https://art.ngfiles.com/images/1/primary.png");
     }
 
     #[test]

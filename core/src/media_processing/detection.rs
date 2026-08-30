@@ -258,7 +258,14 @@ pub async fn get_mime(path: &Path) -> FileResult<MimeType> {
     for &(rule, mime) in HEADERS_AND_MIME {
         if passes_header_rule(rule, header) {
             match mime {
-                MimeType::ApplicationZip => return Ok(MimeType::ApplicationZip),
+                MimeType::ApplicationZip => {
+                    if super::formats::format_for_path(path)
+                        .is_some_and(|format| format.mime_type == "application/x-ugoira")
+                    {
+                        return Ok(MimeType::AnimationUgoira);
+                    }
+                    return Ok(MimeType::ApplicationZip);
+                }
                 MimeType::UndeterminedPng => {
                     let mut extended = vec![0u8; 8192];
                     use std::io::Seek;
@@ -416,4 +423,62 @@ pub fn is_allowed_mime(mime: MimeType) -> bool {
             | MimeType::ApplicationPaintDotNet
             | MimeType::ApplicationRtf
     )
+}
+
+#[cfg(test)]
+mod ugoira_tests {
+    use std::io::Write;
+
+    use super::{get_mime, MimeType};
+    use crate::media_processing::PreparedMediaSource;
+
+    fn empty_zip(path: &std::path::Path) {
+        let file = std::fs::File::create(path).unwrap();
+        zip::ZipWriter::new(file).finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn typed_ugoira_zip_is_not_a_generic_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("animation.ugoira");
+        empty_zip(&path);
+        assert_eq!(get_mime(&path).await.unwrap(), MimeType::AnimationUgoira);
+    }
+
+    #[tokio::test]
+    async fn ordinary_zip_remains_an_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("files.zip");
+        empty_zip(&path);
+        assert_eq!(get_mime(&path).await.unwrap(), MimeType::ApplicationZip);
+    }
+
+    #[tokio::test]
+    async fn ugoira_uses_the_animation_inspector_and_thumbnail_adapter() {
+        let directory = tempfile::tempdir().unwrap();
+        let frame = directory.path().join("000000.png");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([10, 20, 30]))
+            .save(&frame)
+            .unwrap();
+        let path = directory.path().join("animation.ugoira");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file("000000.png", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&std::fs::read(frame).unwrap()).unwrap();
+        zip.finish().unwrap();
+
+        let mut prepared = PreparedMediaSource::prepare_ingest(&path).await.unwrap();
+        assert_eq!(prepared.mime_type, "application/x-ugoira");
+        assert_eq!(prepared.pixel_width, Some(4));
+        assert_eq!(prepared.pixel_height, Some(3));
+        assert_eq!(prepared.num_frames, Some(1));
+        assert!(prepared.caps.can_thumbnail());
+        assert!(!prepared
+            .render_thumbnail_bytes((64, 64), 0)
+            .await
+            .unwrap()
+            .0
+            .is_empty());
+    }
 }

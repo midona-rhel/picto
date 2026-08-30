@@ -337,32 +337,6 @@ pub static SITES: &[SiteEntry] = &[
         credential_types: NO_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
-    SiteEntry {
-        id: "coomer",
-        domain: "coomer.st",
-        credential_owner_site_id: "coomer",
-        name: "Coomer",
-        example_query: "https://coomer.st/onlyfans/user/12345",
-        supports_query: false,
-        supports_account: true,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        credential_types: NO_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
-        id: "kemono",
-        domain: "kemono.cr",
-        credential_owner_site_id: "kemono",
-        name: "Kemono",
-        example_query: "https://kemono.cr/patreon/user/12345",
-        supports_query: false,
-        supports_account: true,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        credential_types: NO_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
 ];
 
 /// Look up a supported site by its exact ID.
@@ -419,8 +393,6 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "e621" => build_booru_url("https://e621.net/posts", query),
         "ehentai" => normalize_ehentai_gallery_url(query).ok(),
         "pawchive" => normalize_archive_creator_url(query, "pawchive.pw").ok(),
-        "coomer" => normalize_archive_creator_url(query, "coomer.st").ok(),
-        "kemono" => normalize_archive_creator_url(query, "kemono.cr").ok(),
         _ => None,
     }
 }
@@ -479,12 +451,8 @@ pub fn normalize_ehentai_gallery_url(raw: &str) -> Result<String, String> {
         || url.username() != ""
         || url.password().is_some()
         || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
     {
-        return Err(
-            "Gallery imports require an e-hentai.org or exhentai.org gallery URL".to_string(),
-        );
+        return Err("Enter an E-Hentai or ExHentai gallery URL".to_string());
     }
     let segments: Vec<_> = url
         .path_segments()
@@ -512,6 +480,8 @@ pub fn normalize_ehentai_gallery_url(raw: &str) -> Result<String, String> {
     url.set_host(Some(host))
         .map_err(|_| "Invalid E-Hentai URL".to_string())?;
     url.set_path(&format!("/g/{gallery_id}/{token}/"));
+    url.set_query(None);
+    url.set_fragment(None);
     Ok(url.to_string())
 }
 
@@ -583,7 +553,7 @@ pub fn normalize_newgrounds_username(raw: &str) -> Result<String, String> {
             || url.port().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
-            || url.path() != "/"
+            || !matches!(url.path().trim_end_matches('/'), "" | "/art")
         {
             return Err("Newgrounds subscriptions require a canonical profile URL".to_string());
         }
@@ -648,15 +618,38 @@ fn normalize_mastodon_username(raw: &str, host: &str) -> Result<String, String> 
         trimmed.strip_prefix('@').unwrap_or(trimmed).to_string()
     };
 
-    if username.is_empty()
+    if !valid_mastodon_account(&username) {
+        return Err("Mastodon subscriptions require a safe account handle".to_string());
+    }
+    Ok(username)
+}
+
+fn valid_mastodon_account(value: &str) -> bool {
+    let mut parts = value.split('@');
+    let username = parts.next().unwrap_or_default();
+    let domain = parts.next();
+    if parts.next().is_some()
+        || username.is_empty()
         || username.len() > 64
         || !username
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     {
-        return Err("Mastodon subscriptions require a safe local username".to_string());
+        return false;
     }
-    Ok(username)
+    domain.is_none_or(|domain| {
+        !domain.is_empty()
+            && domain.len() <= 253
+            && domain.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+    })
 }
 
 fn build_mastodon_user_url(host: &str, username: &str) -> Option<String> {
@@ -1180,11 +1173,9 @@ mod tests {
                 "e621",
                 "ehentai",
                 "pawchive",
-                "coomer",
-                "kemono",
             ])
         );
-        assert_eq!(SITES.len(), 25);
+        assert_eq!(SITES.len(), 23);
     }
 
     #[test]
@@ -1199,44 +1190,32 @@ mod tests {
                 .as_deref(),
             Ok("https://exhentai.org/g/12345/67890abcde/")
         );
+        assert_eq!(
+            normalize_ehentai_gallery_url("https://exhentai.org/g/1449482/9051983a03/?p=1#page")
+                .as_deref(),
+            Ok("https://exhentai.org/g/1449482/9051983a03/")
+        );
     }
 
     #[test]
     fn archive_mirrors_accept_only_concrete_first_party_creator_urls() {
-        for (site, host, input) in [
-            (
-                "pawchive",
-                "pawchive.pw",
-                "https://pawchive.pw/patreon/user/12345",
-            ),
-            (
-                "coomer",
-                "coomer.st",
-                "https://coomer.st/onlyfans/user/12345",
-            ),
-            (
-                "kemono",
-                "kemono.cr",
-                "https://kemono.cr/fanbox/user/creator-name",
-            ),
-        ] {
-            assert_eq!(build_url(site, input).as_deref(), Some(input));
-            assert!(normalize_archive_creator_url(
-                &format!("https://{host}.evil.example/patreon/user/12345"),
-                host
-            )
-            .is_err());
-            assert!(normalize_archive_creator_url(
-                &format!("https://{host}/patreon/user/12345/post/9"),
-                host
-            )
-            .is_err());
-            assert!(normalize_archive_creator_url(
-                &format!("https://{host}/patreon/user/12345?o=50"),
-                host
-            )
-            .is_err());
-        }
+        let input = "https://pawchive.pw/patreon/user/12345";
+        assert_eq!(build_url("pawchive", input).as_deref(), Some(input));
+        assert!(normalize_archive_creator_url(
+            "https://pawchive.pw.evil.example/patreon/user/12345",
+            "pawchive.pw"
+        )
+        .is_err());
+        assert!(normalize_archive_creator_url(
+            "https://pawchive.pw/patreon/user/12345/post/9",
+            "pawchive.pw"
+        )
+        .is_err());
+        assert!(normalize_archive_creator_url(
+            "https://pawchive.pw/patreon/user/12345?o=50",
+            "pawchive.pw"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1398,6 +1377,7 @@ mod tests {
             "Artist_Name",
             "@Artist_Name",
             "https://Artist_Name.newgrounds.com/",
+            "https://Artist_Name.newgrounds.com/art",
         ] {
             assert_eq!(
                 normalize_newgrounds_username(input).as_deref(),
@@ -1413,7 +1393,6 @@ mod tests {
             "",
             "artist/name",
             "https://www.newgrounds.com/",
-            "https://artist.newgrounds.com/art",
             "https://artist.newgrounds.com/?page=2",
             "https://newgrounds.com.evil.example/",
         ] {
@@ -1543,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn baraag_accepts_only_local_profile_inputs() {
+    fn baraag_accepts_local_profiles_and_safe_federated_handles() {
         for value in [
             "Blue_",
             "@Blue_",
@@ -1557,8 +1536,14 @@ mod tests {
                 "accepted input should normalize: {value}"
             );
         }
+        assert_eq!(
+            normalize_baraag_username("Remote_User@example.social").as_deref(),
+            Ok("Remote_User@example.social")
+        );
         for value in [
             "artist/name",
+            "artist@-example.social",
+            "artist@example..social",
             "https://example.com/@Blue_",
             "https://baraag.net/@Blue_/12345",
             "https://user:pass@baraag.net/@Blue_",

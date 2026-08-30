@@ -97,6 +97,8 @@ describe('direct-site authentication', () => {
     expect(resolveAuthSite('subscribestar')).toMatchObject({
       loginUrl: 'https://subscribestar.art/login',
       cookieUrl: 'https://subscribestar.art',
+      cookieNames: ['_personalization_id', '18_plus_agreement_generic'],
+      authenticatedCookieNames: ['_personalization_id'],
     });
   });
 
@@ -166,6 +168,31 @@ describe('direct-site authentication', () => {
     });
   });
 
+  it('accepts an existing ExHentai session when the optional igneous cookie is absent', async () => {
+    const browser = createBrowserWindowMock({
+      cookies: [
+        { name: 'ipb_member_id', value: 'member' },
+        { name: 'ipb_pass_hash', value: 'hash' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('ehentai');
+    const popup = browser.instances[0];
+    await popup.webContents.listeners.get('did-finish-load')();
+    await settle();
+    await popup.webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'ehentai',
+      cookies: {
+        ipb_member_id: 'member',
+        ipb_pass_hash: 'hash',
+      },
+    }));
+  });
+
   it('opens Newgrounds and DeviantArt at desktop width without changing other login windows', async () => {
     const newgroundsBrowser = createBrowserWindowMock();
     const { sessions: newgroundsSessions } = createHarness(newgroundsBrowser);
@@ -187,9 +214,7 @@ describe('direct-site authentication', () => {
       minWidth: 760,
       minHeight: 640,
     });
-    expect(deviantartBrowser.instances[0].userAgent).toBe(
-      'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
-    );
+    expect(deviantartBrowser.instances[0].userAgent).toBeUndefined();
     await deviantartSessions.cancelAuthSession();
 
     const patreonBrowser = createBrowserWindowMock();
@@ -282,9 +307,7 @@ describe('direct-site authentication', () => {
       await sessions.startAuthSession(siteId);
 
       const popup = browser.instances[0];
-      expect(popup.userAgent).toBe(
-        'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36',
-      );
+      expect(popup.userAgent).toBeUndefined();
       expect(popup.webContents.session.clearCache).toHaveBeenCalledOnce();
       expect(popup.webContents.session.clearStorageData).toHaveBeenCalledOnce();
       expect(popup.permissionCheckHandler(null, 'storage-access')).toBe(true);
@@ -401,6 +424,14 @@ describe('direct-site authentication', () => {
     const { sessions, persistCredential } = createHarness(browser);
 
     await sessions.startAuthSession('fanbox');
+    browser.instances[0].beforeSendHeaders?.({
+      requestHeaders: {
+        accept: 'application/json',
+        'user-agent': 'Chrome browser',
+        'sec-ch-ua': '"Chromium";v="138"',
+        cookie: 'must-not-be-copied',
+      },
+    }, vi.fn());
     browser.instances[0].loadedUrl = 'https://www.fanbox.cc/';
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
     await settle();
@@ -409,7 +440,11 @@ describe('direct-site authentication', () => {
       site_id: 'fanbox',
       credential_type: 'cookies',
       cookies: { FANBOXSESSID: 'valid', __cf_bm: 'browser-session' },
-      headers: { 'user-agent': 'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36' },
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'Chrome browser',
+        'sec-ch-ua': '"Chromium";v="138"',
+      },
     }));
     expect(sessions.getAuthSessionState().status).toBe('completed');
   });

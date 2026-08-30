@@ -23,6 +23,7 @@ const RATINGS: RatingMap = RatingMap::new(&[
     ("e", "explicit"),
     ("explicit", "explicit"),
 ]);
+const EMPTY_PAGE_ATTEMPTS: usize = 2;
 
 pub(super) const CONFIG: GelbooruFamilyConfig = GelbooruFamilyConfig {
     id: "gelbooru",
@@ -82,14 +83,30 @@ impl NativeSourceAdapter for GelbooruFamilyAdapter {
         Box::pin(async move {
             self.validate_query(&request.query)?;
             let page_size = page_size(request);
-            let response = http
-                .get_json::<ApiResponse>(
-                    request_url(self.config, request, credentials)?,
-                    credentials,
-                    cancel,
-                )
-                .await?;
-            normalize(self.config, request, page_size, response)
+            for attempt in 0..EMPTY_PAGE_ATTEMPTS {
+                let response = match http
+                    .get_json::<ApiResponse>(
+                        request_url(self.config, request, credentials)?,
+                        credentials,
+                        cancel,
+                    )
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error)
+                        if error.kind == SourceErrorKind::InvalidResponse
+                            && attempt + 1 < EMPTY_PAGE_ATTEMPTS =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let batch = normalize(self.config, request, page_size, response)?;
+                if !batch.posts.is_empty() || attempt + 1 == EMPTY_PAGE_ATTEMPTS {
+                    return Ok(batch);
+                }
+            }
+            unreachable!("bounded Gelbooru-family retry always returns")
         })
     }
 }
@@ -155,7 +172,7 @@ fn normalize(
         ApiResponse::List(posts) => posts,
         ApiResponse::Wrapped { post } => (*post).into_vec(),
         ApiResponse::Error { message, .. } => {
-            let authentication = message.to_ascii_lowercase().contains("authentication");
+            let authentication = is_authentication_error(&message);
             return Err(SourceError::new(
                 if authentication {
                     SourceErrorKind::Authentication
@@ -220,6 +237,38 @@ fn media_descriptor(
     let mut url = Url::parse(raw_url).map_err(|error| {
         SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
     })?;
+    let path = url.path().to_ascii_lowercase();
+    if config.id == "gelbooru" && (path.ends_with(".webm") || path.ends_with(".mp4")) {
+        if let (Some(md5), Some(preview_url)) = (
+            post.md5
+                .as_deref()
+                .filter(|md5| md5.len() == 32 && md5.bytes().all(|byte| byte.is_ascii_hexdigit())),
+            post.preview_url.as_deref(),
+        ) {
+            let mut original = Url::parse(preview_url).map_err(|error| {
+                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+            })?;
+            let host = original.host_str().unwrap_or_default();
+            if original.scheme() != "https"
+                || !(host == "gelbooru.com" || host.ends_with(".gelbooru.com"))
+            {
+                return Err(SourceError::new(
+                    SourceErrorKind::InvalidResponse,
+                    "invalid Gelbooru preview host for original video resolution",
+                    false,
+                ));
+            }
+            original.set_path(&format!(
+                "/images/{}/{}/{}.webm",
+                &md5[0..2],
+                &md5[2..4],
+                md5
+            ));
+            original.set_query(None);
+            original.set_fragment(None);
+            url = original;
+        }
+    }
     if let Some(image_host) = config.rule34_image_host {
         let path = url.path().to_ascii_lowercase();
         if !path.ends_with(".webm") && !path.ends_with(".mp4") {
@@ -262,6 +311,15 @@ fn media_descriptor(
             .headers(headers)
             .build(),
     )
+}
+
+fn is_authentication_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("authentication")
+        || message.contains("api key")
+        || message.contains("api_key")
+        || message.contains("user id")
+        || message.contains("user_id")
 }
 
 fn canonical_tags(post: &ApiPost) -> (Vec<crate::CanonicalTag>, Option<String>) {
@@ -379,6 +437,8 @@ struct ApiPost {
     rating: Option<String>,
     #[serde(default)]
     file_url: Option<String>,
+    #[serde(default)]
+    preview_url: Option<String>,
     #[serde(default)]
     md5: Option<String>,
     #[serde(default)]
@@ -533,5 +593,41 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(!keys.contains("api_key"));
         assert!(!keys.contains("user_id"));
+    }
+
+    #[test]
+    fn resolves_gelbooru_videos_to_the_original_webm() {
+        let post: ApiPost = serde_json::from_value(serde_json::json!({
+            "id": 42,
+            "file_url": "https://img3.gelbooru.com/samples/aa/bb/sample.mp4",
+            "preview_url": "https://img3.gelbooru.com/thumbnail/aa/bb/thumbnail.jpg",
+            "md5": "aabbccddeeff00112233445566778899"
+        }))
+        .unwrap();
+        let media = media_descriptor(
+            CONFIG,
+            &post,
+            "42",
+            "https://gelbooru.com/index.php?page=post&s=view&id=42",
+            post.file_url.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            media.url,
+            "https://img3.gelbooru.com/images/aa/bb/aabbccddeeff00112233445566778899.webm"
+        );
+        assert!(media.fallbacks.is_empty());
+    }
+
+    #[test]
+    fn classifies_api_credential_errors_as_authentication_failures() {
+        for message in [
+            "Missing authentication",
+            "Invalid API key",
+            "Unknown user_id",
+        ] {
+            assert!(is_authentication_error(message), "{message}");
+        }
+        assert!(!is_authentication_error("Invalid tags"));
     }
 }

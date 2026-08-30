@@ -196,9 +196,30 @@ async function hasAuthenticatedFanboxSession(webContents) {
 
 function createCookieAdapter(site) {
   let navigatingToVerification = false;
+  let fanboxHeaders = null;
+  let webRequest = null;
   return {
     async prepare() {
       return { url: site.loginUrl, message: `Log in with ${site.label} in the popup window.` };
+    },
+    bind(contents) {
+      if (site.id !== 'fanbox') return;
+      webRequest = contents.session.webRequest;
+      webRequest.onBeforeSendHeaders({ urls: ['https://api.fanbox.cc/*'] }, (details, callback) => {
+        const allowed = new Set([
+          'accept', 'accept-language', 'origin', 'referer', 'user-agent',
+          'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+          'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
+        ]);
+        fanboxHeaders = Object.fromEntries(Object.entries(details.requestHeaders ?? {})
+          .filter(([name, value]) => allowed.has(name.toLowerCase()) && String(value || '').trim())
+          .map(([name, value]) => [name.toLowerCase(), String(value)]));
+        callback({ requestHeaders: details.requestHeaders });
+      });
+    },
+    dispose() {
+      webRequest?.onBeforeSendHeaders(null);
+      webRequest = null;
     },
     async inspect(contents) {
       const currentUrl = contents.getURL();
@@ -257,7 +278,7 @@ function createCookieAdapter(site) {
       const cookies = Object.fromEntries(names
         .map((name) => [name, (values.get(name) || '').trim()])
         .filter(([, value]) => value));
-      if ((site.cookieNames ?? []).some((name) => !cookies[name]) || Object.keys(cookies).length === 0) {
+      if (Object.keys(cookies).length === 0) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
       }
       if (site.id === 'fanbox') {
@@ -270,13 +291,12 @@ function createCookieAdapter(site) {
           return { status: 'active', message: `Log in with ${site.label} to continue.` };
         }
       }
-      const userAgent = sanitizeUserAgent(contents.getUserAgent?.());
       return {
         credential: {
           site_category: site.id,
           credential_type: 'cookies',
           cookies,
-          ...(site.id === 'fanbox' && userAgent ? { headers: { 'user-agent': userAgent } } : {}),
+          ...(site.id === 'fanbox' && fanboxHeaders ? { headers: fanboxHeaders } : {}),
         },
         message: `${site.label} session captured.`,
       };
@@ -669,8 +689,6 @@ export function createAuthSessions({
         partition: site.sessionPartition ?? `persist:picto-auth-v1-${site.id}`,
       },
     });
-    const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());
-    if (userAgent) authWindow.webContents.setUserAgent(userAgent);
     configureAuthPermissions(authWindow.webContents.session);
     authWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) queueMicrotask(() => {

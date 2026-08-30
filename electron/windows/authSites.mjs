@@ -129,7 +129,10 @@ export const AUTH_SITES = Object.freeze({
     'SubscribeStar',
     'https://subscribestar.art/login',
     'https://subscribestar.art',
-    { cookieNames: Object.freeze(['_personalization_id']), authenticatedCookieNames: Object.freeze(['_personalization_id']) },
+    {
+      cookieNames: Object.freeze(['_personalization_id', '18_plus_agreement_generic']),
+      authenticatedCookieNames: Object.freeze(['_personalization_id']),
+    },
   ),
   onlyfans: Object.freeze({
     id: 'onlyfans',

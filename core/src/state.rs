@@ -63,12 +63,21 @@ pub fn init_tracing() {
 
     static TRACING_INIT: Once = Once::new();
     TRACING_INIT.call_once(|| {
-        let env_filter =
+        let mut env_filter =
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 "picto=info,picto::ipc=info"
                     .parse()
-                    .expect("valid default tracing filter")
+                    .expect("valid log filter")
             });
+        #[cfg(debug_assertions)]
+        for directive in [
+            "picto_core::native_source=debug",
+            "picto_sources::http=debug",
+            "picto_sources::providers::ehentai=debug",
+        ] {
+            env_filter =
+                env_filter.add_directive(directive.parse().expect("valid debug directive"));
+        }
         let _ = tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer())

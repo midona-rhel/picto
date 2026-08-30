@@ -10,7 +10,7 @@ Every provider is assembled from the same layers:
 1. `NativeSourceAdapter` validates a query and maps one bounded source page into `SourcePost`
    values.
 2. `SourceSession` exposes one post and refuses to advance until that exact post is settled.
-3. `PartitionedSourceSession` applies the same rule across independent feeds under one added-post
+3. `PartitionedSourceSession` applies the same rule across independent feeds under one settled-post
    budget.
 4. `PostDownloader` downloads only the active post, optionally in parallel within that post, and
    reports every completed file.
@@ -36,7 +36,7 @@ path, or ingest implementation is a design defect.
 - Canonical tag namespace mapping with unknown source groups falling back to general.
 - Shared HTML, BBCode, and DText cleanup.
 - Standalone versus collection assembly through one canonical ingest mapper.
-- Independent partition cursors with one query-level added-post budget.
+- Independent partition cursors with one query-level settled-post budget.
 
 The crate is integrated with Picto's durable worker, reset/recovery path, and exact product
 registry. Provider fixture tests and live certification use that production path.
@@ -49,7 +49,7 @@ registry. Provider fixture tests and live certification use that production path
 | Creator APIs | Pixiv search, Pixiv user, FANBOX | JSON pagination, multi-media post mapping, creator/general tags |
 | Paid creator feeds | Patreon, SubscribeStar, OnlyFans | Opaque cursors, access warnings, multi-media posts; OnlyFans adds purchases/messages/feed partitions and DRM media resolution |
 | Social/account feeds | Baraag, DeviantArt, Twitter/X, Newgrounds, Fur Affinity, Hentai Foundry | Account/query normalization, HTML or JSON discovery, post-detail mapping |
-| Gallery/archive feeds | E-Hentai/ExHentai, Kemono, Coomer, Pawchive | Paged gallery/archive discovery, atomic collection assembly, bounded media downloads |
+| Gallery/archive feeds | E-Hentai/ExHentai, Pawchive | Paged gallery/archive discovery, atomic collection assembly, bounded media downloads |
 
 Family fixtures prove shared composition; every provider also owns focused parser and cursor tests.
 

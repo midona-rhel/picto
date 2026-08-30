@@ -214,6 +214,11 @@ fn normalize_post(
         .and_then(Value::as_object)
         .ok_or_else(|| invalid_response("Patreon post is missing its attributes"))?;
     let canonical_url = canonical_post_url(attributes, stable_id);
+    let current_user_can_view = attributes
+        .get("current_user_can_view")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let content = post_content(attributes);
     let creator = relationship(post, "user")
         .and_then(|reference| included.get(reference.kind, reference.id))
         .and_then(|user| user.get("attributes"))
@@ -242,12 +247,21 @@ fn normalize_post(
         canonical_url: Some(canonical_url.clone()),
         creator: Some(creator),
         name: object_text(attributes, "title").and_then(normalize_source_text),
-        notes: object_text(attributes, "content")
-            .or_else(|| object_text(attributes, "teaser_text"))
-            .and_then(normalize_source_text),
+        notes: content.notes,
         created_at: object_text(attributes, "published_at").map(ToOwned::to_owned),
         tags: tags.into_vec(),
-        media: post_media(post, attributes, included, stable_id, &canonical_url)?,
+        media: if current_user_can_view {
+            post_media(
+                post,
+                attributes,
+                included,
+                stable_id,
+                &canonical_url,
+                &content.inline_media,
+            )?
+        } else {
+            Vec::new()
+        },
         resume_cursor_after: next,
     })
 }
@@ -282,6 +296,7 @@ fn post_media(
     included: &Included<'_>,
     post_id: &str,
     canonical_url: &str,
+    inline_media: &[String],
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
     let mut candidates = Vec::new();
     for relationship_name in ["images", "attachments", "attachments_media", "media"] {
@@ -298,12 +313,8 @@ fn post_media(
             push_media_candidate(&mut candidates, value, None);
         }
     }
-    if let Some(content) = object_text(attributes, "content") {
-        for captures in content_media_regex().captures_iter(content) {
-            if let Some(url) = captures.get(1) {
-                candidates.push((None, decode_html(url.as_str()), None, None));
-            }
-        }
+    for url in inline_media {
+        candidates.push((None, url.clone(), None, None));
     }
 
     let mut media = Vec::new();
@@ -316,14 +327,24 @@ fn post_media(
         let Some(url) = canonical_media_url(&raw_url) else {
             continue;
         };
-        if !seen.insert(url.clone()) {
+        let dedup_key = patreon_file_hash(&url)
+            .map(|hash| format!("hash:{hash}"))
+            .unwrap_or_else(|| format!("url:{url}"));
+        if !seen.insert(dedup_key) {
             continue;
         }
-        let file_name = raw_name
-            .filter(|name| !name.trim().is_empty())
-            .or_else(|| file_name_from_url(&url))
-            .unwrap_or_else(|| format!("patreon_{post_id}_{}", media.len()));
-        if is_archive(&file_name) || is_archive(&url) || url.ends_with(".m3u8") {
+        let manifest = url.to_ascii_lowercase().ends_with(".m3u8");
+        let file_name = if manifest {
+            format!("patreon_{post_id}_{}.mp4", media.len())
+        } else {
+            raw_name
+                .filter(|name| !name.trim().is_empty())
+                .or_else(|| file_name_from_url(&url))
+                .unwrap_or_else(|| format!("patreon_{post_id}_{}", media.len()))
+        };
+        if crate::media::is_unsupported_archive(&file_name)
+            || crate::media::is_unsupported_archive(&url)
+        {
             continue;
         }
         let stable_id = source_id
@@ -342,18 +363,105 @@ fn post_media(
     Ok(media)
 }
 
+#[derive(Default)]
+struct PostContent {
+    notes: Option<String>,
+    inline_media: Vec<String>,
+}
+
+fn post_content(attributes: &serde_json::Map<String, Value>) -> PostContent {
+    if let Some(content) = object_text(attributes, "content") {
+        let inline_media = content_media_regex()
+            .captures_iter(content)
+            .filter_map(|captures| captures.get(1))
+            .map(|url| decode_html(url.as_str()))
+            .collect();
+        return PostContent {
+            notes: normalize_source_text(content),
+            inline_media,
+        };
+    }
+    if let Some(raw) = object_text(attributes, "content_json_string") {
+        if let Some(content) = parse_tiptap_content(raw) {
+            return content;
+        }
+    }
+    PostContent {
+        notes: object_text(attributes, "teaser_text").and_then(normalize_source_text),
+        inline_media: Vec::new(),
+    }
+}
+
+fn parse_tiptap_content(raw: &str) -> Option<PostContent> {
+    let root: Value = serde_json::from_str(raw).ok()?;
+    let mut text = String::new();
+    let mut inline_media = Vec::new();
+    let mut nodes = 0_usize;
+    tiptap_node(&root, 0, &mut nodes, &mut text, &mut inline_media);
+    Some(PostContent {
+        notes: normalize_source_text(&text),
+        inline_media,
+    })
+}
+
+fn tiptap_node(
+    node: &Value,
+    depth: usize,
+    nodes: &mut usize,
+    text: &mut String,
+    inline_media: &mut Vec<String>,
+) {
+    if depth >= 64 || *nodes >= 4_096 {
+        return;
+    }
+    *nodes += 1;
+    let kind = node.get("type").and_then(Value::as_str).unwrap_or("doc");
+    match kind {
+        "text" => {
+            if let Some(value) = node.get("text").and_then(Value::as_str) {
+                text.push_str(value);
+            }
+        }
+        "image" => {
+            if let Some(url) = node.pointer("/attrs/src").and_then(Value::as_str) {
+                inline_media.push(url.to_string());
+            }
+        }
+        "hardBreak" => text.push('\n'),
+        "horizontalRule" => text.push('\n'),
+        "doc" | "paragraph" | "heading" | "listItem" | "bulletList" | "orderedList"
+        | "blockquote" | "link" => {
+            if let Some(children) = node.get("content").and_then(Value::as_array) {
+                for child in children {
+                    tiptap_node(child, depth + 1, nodes, text, inline_media);
+                }
+            }
+            if matches!(
+                kind,
+                "paragraph" | "heading" | "listItem" | "bulletList" | "orderedList" | "blockquote"
+            ) {
+                text.push('\n');
+            }
+        }
+        _ => {}
+    }
+}
+
+fn patreon_file_hash(raw: &str) -> Option<&str> {
+    let path = raw.split('?').next().unwrap_or(raw);
+    path.rsplit('/').find(|component| component.len() == 32)
+}
+
 fn push_media_candidate(
     candidates: &mut Vec<MediaCandidate>,
     value: &Value,
     fallback_id: Option<&str>,
 ) {
     let attributes = value.get("attributes").unwrap_or(value);
-    let url = value_text(attributes, "download_url")
-        .or_else(|| {
-            attributes
-                .pointer("/image_urls/original")
-                .and_then(Value::as_str)
-        })
+    let url = attributes
+        .pointer("/image_urls/original")
+        .and_then(Value::as_str)
+        .or_else(|| value_text(attributes, "download_url"))
         .or_else(|| value_text(attributes, "url"))
         .or_else(|| value_text(attributes, "large_url"))
         .or_else(|| {
@@ -499,13 +607,6 @@ fn file_name_from_url(raw: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn is_archive(raw: &str) -> bool {
-    let path = raw.split('?').next().unwrap_or(raw).to_ascii_lowercase();
-    [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
-}
-
 fn decode_html(raw: &str) -> String {
     raw.replace("&amp;", "&")
         .replace("&quot;", "\"")
@@ -597,6 +698,7 @@ mod tests {
     fn original_image_beats_generic_and_large_urls() {
         let value = serde_json::json!({
             "attributes": {
+                "download_url": "https://cdn.example/download.jpg",
                 "url": "https://cdn.example/preview.jpg",
                 "large_url": "https://cdn.example/large.jpg",
                 "image_urls": {
@@ -611,10 +713,145 @@ mod tests {
     }
 
     #[test]
+    fn locked_post_metadata_never_publishes_preview_media() {
+        let post = serde_json::json!({
+            "id": "42",
+            "attributes": {
+                "title": "Locked post",
+                "current_user_can_view": false,
+                "image": { "url": "https://cdn.example/teaser.jpg" },
+                "post_file": { "download_url": "https://cdn.example/locked.bin" }
+            }
+        });
+        let included = Included::new(None);
+        let post = normalize_post(&request(), "creator-name", &post, &included, None).unwrap();
+        assert!(post.media.is_empty());
+    }
+
+    #[test]
+    fn deduplicates_relationship_variants_by_patreon_file_hash() {
+        let hash = "0123456789abcdef0123456789abcdef";
+        let post = serde_json::json!({});
+        let attributes = serde_json::json!({
+            "content": format!(
+                "<img src=\"https://c1.patreonusercontent.com/a/{hash}/first.jpg\"><img src=\"https://c2.patreonusercontent.com/b/{hash}/second.jpg\">"
+            )
+        });
+        let content = post_content(attributes.as_object().unwrap());
+        let media = post_media(
+            &post,
+            attributes.as_object().unwrap(),
+            &Included::new(None),
+            "42",
+            "https://www.patreon.com/posts/42",
+            &content.inline_media,
+        )
+        .unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(patreon_file_hash(&media[0].url), Some(hash));
+    }
+
+    #[test]
+    fn retains_hls_video_for_the_segmented_downloader() {
+        let post = serde_json::json!({});
+        let attributes = serde_json::json!({
+            "post_file": {
+                "url": "https://c10.patreonusercontent.com/video/master.m3u8",
+                "name": "video"
+            }
+        });
+        let attributes = attributes.as_object().unwrap();
+        let included = Included::new(None);
+        let media = post_media(
+            &post,
+            attributes,
+            &included,
+            "42",
+            "https://www.patreon.com/posts/42",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].delivery(), crate::MediaDelivery::Hls);
+        assert_eq!(media[0].file_name.as_deref(), Some("patreon_42_0.mp4"));
+    }
+
+    #[test]
     fn rejects_cross_domain_or_non_post_cursors() {
         assert!(validate_cursor("https://evil.test/api/posts?filter%5Bcampaign_id%5D=1").is_err());
         assert!(
             validate_cursor("https://www.patreon.com/api/users?filter%5Bcampaign_id%5D=1").is_err()
         );
+    }
+
+    #[test]
+    fn content_json_string_preserves_tiptap_notes_and_inline_images() {
+        let tiptap = serde_json::json!({
+            "type": "doc",
+            "content": [
+                { "type": "heading", "attrs": { "level": 2 }, "content": [
+                    { "type": "text", "text": "Structured title" }
+                ]},
+                { "type": "paragraph", "content": [
+                    { "type": "text", "text": "First line" },
+                    { "type": "hardBreak" },
+                    { "type": "text", "text": "second line" }
+                ]},
+                { "type": "image", "attrs": {
+                    "src": "https://c10.patreonusercontent.com/full/original.png",
+                    "media_id": "media-1"
+                }},
+                { "type": "bulletList", "content": [
+                    { "type": "listItem", "content": [
+                        { "type": "paragraph", "content": [
+                            { "type": "text", "text": "List item" }
+                        ]}
+                    ]}
+                ]},
+                { "type": "blockquote", "content": [
+                    { "type": "paragraph", "content": [
+                        { "type": "text", "text": "Quote" }
+                    ]}
+                ]},
+                { "type": "link", "attrs": { "href": "https://example.test" }, "content": [
+                    { "type": "text", "text": " linked" }
+                ]}
+            ]
+        });
+        let post = serde_json::json!({
+            "id": "42",
+            "attributes": {
+                "content_json_string": tiptap.to_string(),
+                "current_user_can_view": true
+            }
+        });
+        let normalized = normalize_post(
+            &request(),
+            "creator-name",
+            &post,
+            &Included::new(None),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            normalized.notes.as_deref(),
+            Some("Structured title First line second line List item Quote linked")
+        );
+        assert_eq!(normalized.media.len(), 1);
+        assert_eq!(
+            normalized.media[0].url,
+            "https://c10.patreonusercontent.com/full/original.png"
+        );
+    }
+
+    #[test]
+    fn malformed_tiptap_falls_back_to_the_teaser() {
+        let attributes = serde_json::json!({
+            "content_json_string": "{not-json",
+            "teaser_text": "Visible teaser"
+        });
+        let content = post_content(attributes.as_object().unwrap());
+        assert_eq!(content.notes.as_deref(), Some("Visible teaser"));
+        assert!(content.inline_media.is_empty());
     }
 }

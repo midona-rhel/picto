@@ -32,6 +32,7 @@ const RATINGS: RatingMap = RatingMap::new(&[
     ("explicit", "explicit"),
 ]);
 const MAX_TAG_PAGES: u32 = 10;
+const TAG_PAGE_SIZE: usize = 80;
 const MAX_EMPTY_KEYSET_PAGES: u32 = 16;
 
 #[derive(Clone, Copy)]
@@ -202,12 +203,10 @@ pub(super) fn normalize_page(
     response: ApiPage,
 ) -> Result<DiscoveryBatch, SourceError> {
     if response.success == Some(false) {
-        return Err(SourceError::new(
-            SourceErrorKind::InvalidResponse,
-            response
-                .code
-                .unwrap_or_else(|| format!("{} rejected the search", config.display_name)),
-            false,
+        return Err(api_error(
+            config,
+            response.code.as_deref(),
+            "rejected the search",
         ));
     }
     if response.data.len() > 1 {
@@ -273,10 +272,23 @@ fn normalize_post(
     }
     RATINGS.add(&mut tags, post.rating.as_deref());
 
-    let media = post
-        .file_url
-        .as_deref()
-        .and_then(normalize_media_url)
+    let media_url = post.file_url.as_deref().and_then(normalize_media_url);
+    if media_url.is_none()
+        && post
+            .status
+            .as_deref()
+            .is_some_and(|status| status.eq_ignore_ascii_case("active"))
+    {
+        return Err(SourceError::new(
+            SourceErrorKind::AccessDenied,
+            format!(
+                "{} requires a connected account with access to post {post_id}",
+                config.display_name
+            ),
+            false,
+        ));
+    }
+    let media = media_url
         .map(|url| {
             let file_name = file_name(config.id, &post_id, &post, &url);
             MediaDescriptorBuilder::new(format!("{}:{post_id}:0", config.id), 0, url)
@@ -284,6 +296,7 @@ fn normalize_post(
                 .file_name(file_name)
                 .expected_size(post.file_size)
                 .headers(BTreeMap::from([("Referer".into(), canonical_url.clone())]))
+                .reject_final_path("/expired.png")
                 .build()
         })
         .into_iter()
@@ -319,23 +332,21 @@ async fn fetch_tags(
             let mut query = url.query_pairs_mut();
             query.append_pair("lang", "en");
             query.append_pair("page", &page.to_string());
-            query.append_pair("limit", "100");
+            query.append_pair("limit", &TAG_PAGE_SIZE.to_string());
         }
         let response = http
             .get_json::<ApiTagPage>(url, credentials, cancel)
             .await?;
         if response.success == Some(false) {
-            return Err(SourceError::new(
-                SourceErrorKind::InvalidResponse,
-                response
-                    .code
-                    .unwrap_or_else(|| format!("{} rejected tag metadata", config.display_name)),
-                false,
+            return Err(api_error(
+                config,
+                response.code.as_deref(),
+                "rejected tag metadata",
             ));
         }
         let count = response.data.len();
         records.extend(response.data);
-        if count == 0 || records.len() >= response.total.unwrap_or(records.len()) || count < 100 {
+        if tag_page_complete(count, records.len(), response.total) {
             return Ok(records);
         }
     }
@@ -344,10 +355,33 @@ async fn fetch_tags(
         format!(
             "{} returned more than {} tags for one post",
             config.display_name,
-            MAX_TAG_PAGES * 100
+            MAX_TAG_PAGES * TAG_PAGE_SIZE as u32
         ),
         false,
     ))
+}
+
+fn api_error(config: SankakuConfig, code: Option<&str>, fallback: &str) -> SourceError {
+    let message = code
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{} {fallback}", config.display_name));
+    let normalized = message.to_ascii_lowercase();
+    let authentication = normalized.ends_with("unauthorized")
+        || normalized.ends_with("invalid-token")
+        || normalized.ends_with("invalid_token");
+    SourceError::new(
+        if authentication {
+            SourceErrorKind::Authentication
+        } else {
+            SourceErrorKind::InvalidResponse
+        },
+        message,
+        false,
+    )
+}
+
+fn tag_page_complete(page_count: usize, accumulated: usize, total: Option<usize>) -> bool {
+    page_count == 0 || total.is_some_and(|total| accumulated >= total) || page_count < TAG_PAGE_SIZE
 }
 
 fn canonical_tags(records: &[ApiTag], rating: Option<&str>) -> (Vec<CanonicalTag>, Option<String>) {
@@ -464,6 +498,8 @@ struct ApiPost {
     created_at: Option<TimeValue>,
     #[serde(default)]
     rating: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
     #[serde(default)]
     file_url: Option<String>,
     #[serde(default)]
@@ -631,6 +667,10 @@ mod tests {
             batch.posts[0].media[0].file_name.as_deref(),
             Some("0123456789abcdef0123456789abcdef.jpg")
         );
+        assert_eq!(
+            batch.posts[0].media[0].rejected_final_paths,
+            ["/expired.png"]
+        );
     }
 
     #[test]
@@ -653,6 +693,33 @@ mod tests {
         let batch = normalize_page(config(), &request(), response).unwrap();
         assert_eq!(batch.posts.len(), 1);
         assert!(batch.posts[0].media.is_empty());
+    }
+
+    #[test]
+    fn active_inaccessible_post_is_not_misreported_as_no_media() {
+        let response: ApiPage = serde_json::from_value(json!({
+            "data": [{"id": 40001233, "status": "active", "file_url": null}],
+            "meta": {"next": "next-page"}
+        }))
+        .unwrap();
+        let error = normalize_page(config(), &request(), response).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::AccessDenied);
+    }
+
+    #[test]
+    fn expired_api_tokens_are_reported_as_authentication_failures() {
+        for code in ["unauthorized", "invalid-token", "api__invalid_token"] {
+            let error = api_error(config(), Some(code), "rejected the search");
+            assert_eq!(error.kind, SourceErrorKind::Authentication);
+        }
+    }
+
+    #[test]
+    fn eighty_tag_pages_continue_until_the_reported_total() {
+        assert!(!tag_page_complete(80, 80, Some(160)));
+        assert!(tag_page_complete(80, 160, Some(160)));
+        assert!(!tag_page_complete(80, 80, None));
+        assert!(tag_page_complete(79, 79, None));
     }
 
     #[test]

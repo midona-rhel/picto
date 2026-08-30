@@ -641,9 +641,7 @@ fn downloadable_media(raw: &Value, credentials: &RequestCredentials) -> Vec<Medi
             }
             // Keep protected manifests visible to the shared downloader so it
             // reports the exact CDM boundary instead of silently skipping media.
-            let url = direct_media_url(media)
-                .or_else(|| clear_manifest_url(media))
-                .or_else(|| protected_manifest_url(media))?;
+            let url = primary_media_url(media).or_else(|| protected_manifest_url(media))?;
             let stable_id = scalar(media.get("id")?)?;
             let mut builder =
                 MediaDescriptorBuilder::new(stable_id.clone(), position as u32, url.as_str())
@@ -686,18 +684,6 @@ fn main_post_is_locked(raw: &Value) -> bool {
             .all(|item| item.get("canView").and_then(Value::as_bool) == Some(false))
 }
 
-fn clear_manifest_url(media: &Value) -> Option<Url> {
-    [
-        media.pointer("/files/full/url").and_then(Value::as_str),
-        media.pointer("/source/source").and_then(Value::as_str),
-        media.get("source").and_then(Value::as_str),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|candidate| Url::parse(candidate).ok())
-    .find(is_manifest_url)
-}
-
 fn protected_manifest_url(media: &Value) -> Option<Url> {
     [
         media
@@ -713,35 +699,38 @@ fn protected_manifest_url(media: &Value) -> Option<Url> {
     .find(is_manifest_url)
 }
 
-fn direct_media_url(media: &Value) -> Option<Url> {
-    let candidates = [
+fn primary_media_url(media: &Value) -> Option<Url> {
+    for candidate in [
         media.pointer("/files/full/url").and_then(Value::as_str),
         media.pointer("/source/source").and_then(Value::as_str),
         media.get("source").and_then(Value::as_str),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .filter_map(|candidate| Url::parse(candidate).ok())
-        .find(is_direct_file_url)
-        .or_else(|| {
-            media
-                .get("videoSources")
-                .and_then(Value::as_object)
-                .and_then(|sources| {
-                    sources
-                        .iter()
-                        .filter_map(|(quality, value)| {
-                            let url = value.as_str().and_then(|value| Url::parse(value).ok())?;
-                            if !is_direct_file_url(&url) {
-                                return None;
-                            }
-                            let rank = quality.trim_end_matches('p').parse::<u32>().unwrap_or(0);
-                            Some((rank, url))
-                        })
-                        .max_by_key(|(rank, _)| *rank)
-                        .map(|(_, url)| url)
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let Ok(url) = Url::parse(candidate) else {
+            continue;
+        };
+        if is_direct_file_url(&url) || is_manifest_url(&url) {
+            return Some(url);
+        }
+    }
+    media
+        .get("videoSources")
+        .and_then(Value::as_object)
+        .and_then(|sources| {
+            sources
+                .iter()
+                .filter_map(|(quality, value)| {
+                    let url = value.as_str().and_then(|value| Url::parse(value).ok())?;
+                    if !is_direct_file_url(&url) {
+                        return None;
+                    }
+                    let rank = quality.trim_end_matches('p').parse::<u32>().unwrap_or(0);
+                    Some((rank, url))
                 })
+                .max_by_key(|(rank, _)| *rank)
+                .map(|(_, url)| url)
         })
 }
 
@@ -750,11 +739,9 @@ fn is_direct_file_url(url: &Url) -> bool {
         return false;
     }
     let path = url.path().to_ascii_lowercase();
-    ![
-        ".m3u8", ".mpd", ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz",
-    ]
-    .iter()
-    .any(|suffix| path.ends_with(suffix))
+    ![".m3u8", ".mpd", ".rar", ".7z", ".tar", ".tar.gz", ".tgz"]
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
 }
 
 fn is_manifest_url(url: &Url) -> bool {
@@ -1109,11 +1096,12 @@ mod tests {
                 ("502", 1),
                 ("503", 2),
                 ("504", 3),
+                ("505", 4),
                 ("506", 5),
                 ("508", 7),
             ]
         );
-        assert!(post.media.iter().all(|media| !media.url.ends_with(".zip")));
+        assert!(post.media.iter().any(|media| media.url.ends_with(".zip")));
     }
 
     #[test]
@@ -1191,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_and_protected_manifests_are_reported_but_archives_are_not() {
+    fn clear_protected_and_zip_media_are_reported() {
         let raw = fixture("purchased")["list"][0].clone();
         let media = downloadable_media(&raw, &RequestCredentials::default());
         let ids = media
@@ -1200,7 +1188,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(ids.contains(&"503"));
         assert!(ids.contains(&"504"));
-        assert!(!ids.contains(&"505"));
+        assert!(ids.contains(&"505"));
         assert!(ids.contains(&"508"));
         let hls = media.iter().find(|media| media.stable_id == "504").unwrap();
         assert_eq!(hls.file_name.as_deref(), Some("504.mp4"));
@@ -1208,5 +1196,8 @@ mod tests {
         let protected = media.iter().find(|media| media.stable_id == "503").unwrap();
         assert_eq!(protected.file_name.as_deref(), Some("503.mp4"));
         assert_eq!(protected.delivery(), crate::MediaDelivery::Dash);
+        let full_manifest = media.iter().find(|media| media.stable_id == "508").unwrap();
+        assert_eq!(full_manifest.url, "https://cdn.example.test/media/508.m3u8");
+        assert_eq!(full_manifest.delivery(), crate::MediaDelivery::Hls);
     }
 }

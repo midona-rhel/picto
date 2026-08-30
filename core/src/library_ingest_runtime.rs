@@ -438,7 +438,9 @@ fn prepare_import(
         .blobs()
         .original_path_with_ext(&input.facts.content_hash, Some(extension))
         .map_err(|error| format!("Failed to resolve original blob: {error}"))?;
-    if delete_after_ingest && !same_path(&source, &stored) {
+    let archive_staging = application.root().join("temp/archive-import");
+    if (delete_after_ingest || source.starts_with(archive_staging)) && !same_path(&source, &stored)
+    {
         cleanup.push(source);
     }
     input.file_path = stored.to_string_lossy().into_owned();
@@ -446,10 +448,16 @@ fn prepare_import(
 }
 
 fn cleanup_sources(paths: Vec<PathBuf>) -> usize {
-    paths
-        .into_iter()
-        .filter(|path| fs::remove_file(path).is_err())
-        .count()
+    let mut failures = 0;
+    for path in paths {
+        let parent = path.parent().map(Path::to_path_buf);
+        if fs::remove_file(&path).is_err() {
+            failures += 1;
+        } else if let Some(parent) = parent {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+    failures
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

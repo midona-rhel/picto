@@ -20,7 +20,8 @@ mod tags;
 mod text;
 
 pub use adapter::{
-    AdapterFuture, NativeSourceAdapter, PostFuture, ProviderDescriptor, ProviderRegistry,
+    AdapterFuture, MediaFuture, NativeSourceAdapter, PostFuture, ProviderDescriptor,
+    ProviderRegistry,
 };
 pub use cursor::{BeforeIdCursor, OpaqueCursor, PageCursor};
 pub use download::{
@@ -33,8 +34,8 @@ pub use json::{JsonPageSource, JsonSourceAdapter};
 pub use media::MediaDescriptorBuilder;
 pub use model::{
     CanonicalTag, DiscoveryBatch, DiscoveryRequest, DownloadedMedia, MediaDelivery,
-    MediaDescriptor, RequestCredentials, SkipReason, SourcePartition, SourcePost,
-    SourcePostOutcome,
+    MediaDescriptor, MediaFallback, OAuthTokenUpdater, RequestCredentials, SkipReason,
+    SourcePartition, SourcePost, SourcePostOutcome,
 };
 pub use query::SearchQueryPolicy;
 pub use segmented::{FfmpegMuxer, MediaMuxer, MuxFuture, MuxInput, MuxInputKind};

@@ -1,7 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::OnceLock;
 
 use regex::Regex;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -13,14 +15,37 @@ use crate::{
 
 const API_DOMAIN: &str = "api.fanbox.cc";
 const FIREFOX_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0";
+    "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
 const CURSOR: OpaqueCursor = OpaqueCursor::new(2_048);
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    FanboxSource
+    FanboxSource::default()
 }
 
-struct FanboxSource;
+#[derive(Default)]
+struct FanboxSource {
+    creator_pages: Mutex<HashMap<String, CreatorPages>>,
+}
+
+#[derive(Default)]
+struct CreatorPages {
+    urls: Vec<String>,
+    posts: HashMap<usize, Vec<Value>>,
+}
+
+struct CreatorPageRequest<'a> {
+    cache_key: &'a str,
+    creator: &'a str,
+    credentials: &'a RequestCredentials,
+    http: &'a HttpRuntime,
+    cancel: &'a CancellationToken,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CreatorCursor {
+    page: usize,
+    item: usize,
+}
 
 impl NativeSourceAdapter for FanboxSource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -47,15 +72,18 @@ impl NativeSourceAdapter for FanboxSource {
         Box::pin(async move {
             let creator = normalize_creator(&request.query)?;
             let credentials = api_credentials(credentials);
-            let url = listing_url(request.cursor.as_deref(), &creator)?;
-            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
-            normalize_listing(request, &creator, response)
+            let cache_key = creator_cache_key(&creator, &credentials);
+            self.reset_fresh_creator_pages(&cache_key, request.cursor.as_deref())
+                .await;
+            let cursor = decode_cursor(request.cursor.as_deref())?;
+            self.discover_creator_post(request, &creator, cursor, &credentials, http, cancel)
+                .await
         })
     }
 
     fn resolve_post<'a>(
         &'a self,
-        post: SourcePost,
+        mut post: SourcePost,
         credentials: &'a RequestCredentials,
         http: &'a HttpRuntime,
         cancel: &'a CancellationToken,
@@ -65,23 +93,152 @@ impl NativeSourceAdapter for FanboxSource {
             let mut url =
                 Url::parse("https://api.fanbox.cc/post.info").expect("static FANBOX post endpoint");
             url.query_pairs_mut().append_pair("postId", &post.stable_id);
-            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
+            let Some(response) = http
+                .get_browser_optional_json(url, &credentials, cancel)
+                .await?
+            else {
+                // A creator feed can advertise posts outside the account's
+                // current support tier. gallery-dl skips those individual
+                // post.info failures and continues traversing the feed; doing
+                // the same prevents one inaccessible post from aborting every
+                // accessible post behind it.
+                post.media.clear();
+                return Ok(post);
+            };
             normalize_post(post, response)
         })
+    }
+}
+
+impl FanboxSource {
+    async fn reset_fresh_creator_pages(&self, cache_key: &str, cursor: Option<&str>) {
+        if cursor.is_none_or(str::is_empty) {
+            self.creator_pages.lock().await.remove(cache_key);
+        }
+    }
+
+    async fn discover_creator_post(
+        &self,
+        request: &DiscoveryRequest,
+        creator: &str,
+        mut cursor: CreatorCursor,
+        credentials: &RequestCredentials,
+        http: &HttpRuntime,
+        cancel: &CancellationToken,
+    ) -> Result<DiscoveryBatch, SourceError> {
+        let cache_key = creator_cache_key(creator, credentials);
+        let page_urls = self
+            .creator_page_urls(&cache_key, creator, credentials, http, cancel)
+            .await?;
+        let page_request = CreatorPageRequest {
+            cache_key: &cache_key,
+            creator,
+            credentials,
+            http,
+            cancel,
+        };
+        while cursor.page < page_urls.len() {
+            let posts = self
+                .creator_page(cursor.page, &page_urls[cursor.page], &page_request)
+                .await?;
+            if cursor.item < posts.len() {
+                let next = if cursor.item + 1 < posts.len() {
+                    Some(CreatorCursor {
+                        page: cursor.page,
+                        item: cursor.item + 1,
+                    })
+                } else if cursor.page + 1 < page_urls.len() {
+                    Some(CreatorCursor {
+                        page: cursor.page + 1,
+                        item: 0,
+                    })
+                } else {
+                    None
+                };
+                return normalize_listing_post(request, creator, &posts[cursor.item], next);
+            }
+            cursor = CreatorCursor {
+                page: cursor.page + 1,
+                item: 0,
+            };
+        }
+        Ok(DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: true,
+        })
+    }
+
+    async fn creator_page_urls(
+        &self,
+        cache_key: &str,
+        creator: &str,
+        credentials: &RequestCredentials,
+        http: &HttpRuntime,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<String>, SourceError> {
+        let cached_urls = {
+            let pages = self.creator_pages.lock().await;
+            pages
+                .get(cache_key)
+                .filter(|pages| !pages.urls.is_empty())
+                .map(|pages| pages.urls.clone())
+        };
+        if let Some(urls) = cached_urls {
+            return Ok(urls);
+        }
+        let mut url = Url::parse("https://api.fanbox.cc/post.paginateCreator")
+            .expect("static FANBOX pagination endpoint");
+        url.query_pairs_mut().append_pair("creatorId", creator);
+        let response = http.get_json::<Value>(url, credentials, cancel).await?;
+        let urls = normalize_page_urls(&response, creator)?;
+        self.creator_pages
+            .lock()
+            .await
+            .entry(cache_key.to_string())
+            .or_default()
+            .urls = urls.clone();
+        Ok(urls)
+    }
+
+    async fn creator_page(
+        &self,
+        page_index: usize,
+        raw_url: &str,
+        request: &CreatorPageRequest<'_>,
+    ) -> Result<Vec<Value>, SourceError> {
+        let cached_posts = {
+            let pages = self.creator_pages.lock().await;
+            pages
+                .get(request.cache_key)
+                .and_then(|pages| pages.posts.get(&page_index))
+                .cloned()
+        };
+        if let Some(posts) = cached_posts {
+            return Ok(posts);
+        }
+        let url = validate_listing_url(raw_url, request.creator)?;
+        let response = request
+            .http
+            .get_json::<Value>(url, request.credentials, request.cancel)
+            .await?;
+        let posts = normalize_page_posts(&response)?;
+        self.creator_pages
+            .lock()
+            .await
+            .entry(request.cache_key.to_string())
+            .or_default()
+            .posts
+            .insert(page_index, posts.clone());
+        Ok(posts)
     }
 }
 
 fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
     let mut credentials = credentials.clone();
     credentials.allowed_domains.insert("fanbox.cc".to_string());
-    credentials
-        .headers
-        .entry("Accept".to_string())
-        .or_insert_with(|| "application/json, text/plain, */*".to_string());
-    credentials
-        .headers
-        .entry("Origin".to_string())
-        .or_insert_with(|| "https://www.fanbox.cc".to_string());
+    // A captured Chromium session retains the exact request identity that
+    // FANBOX already verified. Anonymous/fallback requests use gallery-dl's
+    // provider-owned Firefox profile.
     if !credentials
         .headers
         .keys()
@@ -91,6 +248,18 @@ fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
             .headers
             .insert("User-Agent".to_string(), FIREFOX_USER_AGENT.to_string());
     }
+    credentials
+        .headers
+        .entry("Accept".to_string())
+        .or_insert_with(|| "application/json, text/plain, */*".to_string());
+    credentials
+        .headers
+        .entry("Accept-Language".to_string())
+        .or_insert_with(|| "en-US,en;q=0.5".to_string());
+    credentials
+        .headers
+        .entry("Origin".to_string())
+        .or_insert_with(|| "https://www.fanbox.cc".to_string());
     for (name, value) in [
         ("Referer", "https://www.fanbox.cc/"),
         ("Sec-Fetch-Dest", "empty"),
@@ -105,55 +274,89 @@ fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
     credentials
 }
 
-fn listing_url(cursor: Option<&str>, creator: &str) -> Result<Url, SourceError> {
-    if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
-        CURSOR.validate(cursor)?;
-        let url = Url::parse(cursor).map_err(|_| invalid_cursor())?;
-        if url.scheme() != "https"
-            || url.host_str() != Some(API_DOMAIN)
-            || url.path() != "/post.listCreator"
-            || url
-                .query_pairs()
-                .find(|(key, _)| key == "creatorId")
-                .is_none_or(|(_, value)| value != creator)
-        {
-            return Err(invalid_cursor());
-        }
-        return Ok(url);
-    }
+fn creator_cache_key(creator: &str, credentials: &RequestCredentials) -> String {
+    format!(
+        "{creator}\0{}",
+        credentials
+            .cookies
+            .get("FANBOXSESSID")
+            .map(String::as_str)
+            .unwrap_or("anonymous")
+    )
+}
 
-    let mut url = Url::parse("https://api.fanbox.cc/post.listCreator")
-        .expect("static FANBOX listing endpoint");
-    url.query_pairs_mut()
-        .append_pair("creatorId", creator)
-        .append_pair("limit", "1");
+fn decode_cursor(raw: Option<&str>) -> Result<CreatorCursor, SourceError> {
+    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+        return Ok(CreatorCursor::default());
+    };
+    CURSOR.validate(raw)?;
+    let Some((page, item)) = raw.strip_prefix('p').and_then(|raw| raw.split_once('i')) else {
+        return Err(invalid_cursor());
+    };
+    let page = page.parse::<usize>().map_err(|_| invalid_cursor())?;
+    let item = item.parse::<usize>().map_err(|_| invalid_cursor())?;
+    if page > 1_000_000 || item > 10_000 {
+        return Err(invalid_cursor());
+    }
+    Ok(CreatorCursor { page, item })
+}
+
+fn encode_cursor(cursor: CreatorCursor) -> Result<String, SourceError> {
+    let value = format!("p{}i{}", cursor.page, cursor.item);
+    CURSOR.validate(&value)?;
+    Ok(value)
+}
+
+fn normalize_page_urls(response: &Value, creator: &str) -> Result<Vec<String>, SourceError> {
+    response
+        .pointer("/body/pageUrls")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_response("FANBOX pagination response is missing its pages"))?
+        .iter()
+        .map(|value| {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| invalid_response("FANBOX returned an invalid page URL"))?;
+            validate_listing_url(raw, creator).map(|url| url.to_string())
+        })
+        .collect()
+}
+
+fn validate_listing_url(raw: &str, creator: &str) -> Result<Url, SourceError> {
+    let raw = if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        raw.to_string()
+    };
+    let url =
+        Url::parse(&raw).map_err(|_| invalid_response("FANBOX returned an invalid page URL"))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some(API_DOMAIN)
+        || url.path() != "/post.listCreator"
+        || url
+            .query_pairs()
+            .find(|(key, _)| key == "creatorId")
+            .is_none_or(|(_, value)| value != creator)
+    {
+        return Err(invalid_response("FANBOX returned an unsafe page URL"));
+    }
     Ok(url)
 }
 
-fn normalize_listing(
+fn normalize_page_posts(response: &Value) -> Result<Vec<Value>, SourceError> {
+    response
+        .pointer("/body/posts")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| invalid_response("FANBOX page response is missing its posts"))
+}
+
+fn normalize_listing_post(
     request: &DiscoveryRequest,
     creator: &str,
-    response: Value,
+    summary: &Value,
+    next: Option<CreatorCursor>,
 ) -> Result<DiscoveryBatch, SourceError> {
-    let body = response
-        .get("body")
-        .ok_or_else(|| invalid_response("FANBOX response is missing its body"))?;
-    let posts = body
-        .get("items")
-        .or_else(|| body.get("posts"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_response("FANBOX response is missing its posts"))?;
-    if posts.len() > 1 {
-        return Err(invalid_response(
-            "FANBOX returned more than one post for a one-post request",
-        ));
-    }
-    let Some(summary) = posts.first() else {
-        return Ok(DiscoveryBatch {
-            posts: Vec::new(),
-            exhausted: true,
-        });
-    };
     let stable_id = required_id(summary, "FANBOX post")?;
     let response_creator = text(summary, "creatorId").unwrap_or(creator);
     if response_creator != creator {
@@ -161,12 +364,6 @@ fn normalize_listing(
             "FANBOX returned a post for a different creator",
         ));
     }
-    let next_url = body
-        .get("nextUrl")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| canonical_next_url(value, creator))
-        .transpose()?;
     let canonical_url = format!("https://{creator}.fanbox.cc/posts/{stable_id}");
     let post = SourcePost {
         site_id: "fanbox".to_string(),
@@ -179,36 +376,12 @@ fn normalize_listing(
         created_at: text(summary, "publishedDatetime").map(ToOwned::to_owned),
         tags: Vec::new(),
         media: Vec::new(),
-        resume_cursor_after: next_url,
+        resume_cursor_after: next.map(encode_cursor).transpose()?,
     };
     Ok(DiscoveryBatch {
         posts: vec![post],
-        exhausted: body
-            .get("nextUrl")
-            .is_none_or(|value| value.as_str().is_none_or(|value| value.trim().is_empty())),
+        exhausted: next.is_none(),
     })
-}
-
-fn canonical_next_url(raw: &str, creator: &str) -> Result<String, SourceError> {
-    let raw = if raw.starts_with("//") {
-        format!("https:{raw}")
-    } else {
-        raw.to_string()
-    };
-    let url =
-        Url::parse(&raw).map_err(|_| invalid_response("FANBOX returned an invalid cursor"))?;
-    if url.scheme() != "https"
-        || url.host_str() != Some(API_DOMAIN)
-        || url.path() != "/post.listCreator"
-        || url
-            .query_pairs()
-            .find(|(key, _)| key == "creatorId")
-            .is_none_or(|(_, value)| value != creator)
-    {
-        return Err(invalid_response("FANBOX returned an unsafe cursor"));
-    }
-    CURSOR.validate(url.as_str())?;
-    Ok(url.to_string())
 }
 
 fn normalize_post(mut post: SourcePost, response: Value) -> Result<SourcePost, SourceError> {
@@ -295,7 +468,7 @@ fn post_media(
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
     let mut candidates = Vec::new();
     if let Some(url) = text(post, "coverImageUrl") {
-        candidates.push((None, url.to_string(), None));
+        candidates.push((None, original_cover_url(url), None));
     }
     let body = post.get("body");
     for key in ["images", "files"] {
@@ -308,14 +481,9 @@ fn post_media(
             }
         }
     }
-    for key in ["imageMap", "fileMap"] {
-        if let Some(values) = body
-            .and_then(|body| body.get(key))
-            .and_then(Value::as_object)
-        {
-            for value in values.values() {
-                push_media_candidate(&mut candidates, value);
-            }
+    for (key, block_id) in [("imageMap", "imageId"), ("fileMap", "fileId")] {
+        for value in ordered_map_values(body, key, block_id) {
+            push_media_candidate(&mut candidates, value);
         }
     }
     if let Some(html) = body
@@ -325,8 +493,12 @@ fn post_media(
         for captures in html_media_regex().captures_iter(html) {
             let url = captures
                 .get(1)
-                .or_else(|| captures.get(2))
-                .map(|value| decode_html(value.as_str()));
+                .and_then(|value| safe_html_media_url(value.as_str(), HtmlMediaKind::Href))
+                .or_else(|| {
+                    captures.get(2).and_then(|value| {
+                        safe_html_media_url(value.as_str(), HtmlMediaKind::OriginalImage)
+                    })
+                });
             if let Some(url) = url {
                 candidates.push((None, url, None));
             }
@@ -345,7 +517,9 @@ fn post_media(
             .filter(|name| !name.trim().is_empty())
             .or_else(|| file_name_from_url(&url))
             .unwrap_or_else(|| format!("fanbox_{post_id}_{}", media.len()));
-        if is_archive(&file_name) || is_archive(&url) {
+        if crate::media::is_unsupported_archive(&file_name)
+            || crate::media::is_unsupported_archive(&url)
+        {
             continue;
         }
         let stable_id = source_id
@@ -361,6 +535,63 @@ fn post_media(
         );
     }
     Ok(media)
+}
+
+fn ordered_map_values<'a>(body: Option<&'a Value>, key: &str, block_id: &str) -> Vec<&'a Value> {
+    let Some(body) = body else { return Vec::new() };
+    let Some(values) = body.get(key).and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let Some(blocks) = body.get("blocks").and_then(Value::as_array) else {
+        return values.values().collect();
+    };
+    blocks
+        .iter()
+        .filter_map(|block| block.get(block_id).and_then(Value::as_str))
+        .filter_map(|id| values.get(id))
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum HtmlMediaKind {
+    Href,
+    OriginalImage,
+}
+
+fn safe_html_media_url(raw: &str, kind: HtmlMediaKind) -> Option<String> {
+    let raw = decode_html(raw);
+    let raw = if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        raw
+    };
+    let url = Url::parse(&raw).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    let trusted = match kind {
+        HtmlMediaKind::Href => {
+            host == "downloads.fanbox.cc"
+                || (host == "fanbox.pixiv.net" && url.path().starts_with("/images/entry"))
+        }
+        HtmlMediaKind::OriginalImage => ["fanbox.cc", "pixiv.net", "pximg.net"]
+            .iter()
+            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}"))),
+    };
+    trusted.then(|| url.to_string())
+}
+
+fn original_cover_url(raw: &str) -> String {
+    static TRANSFORM: OnceLock<Regex> = OnceLock::new();
+    TRANSFORM
+        .get_or_init(|| Regex::new(r"/c/[0-9A-Za-z_]+/").expect("valid FANBOX transform regex"))
+        .replace(raw, "/")
+        .into_owned()
 }
 
 fn push_media_candidate(
@@ -466,13 +697,6 @@ fn file_name_from_url(raw: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn is_archive(raw: &str) -> bool {
-    let path = raw.split('?').next().unwrap_or(raw).to_ascii_lowercase();
-    [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
-}
-
 fn html_media_regex() -> &'static Regex {
     static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     REGEX.get_or_init(|| {
@@ -550,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_the_user_agent_captured_with_the_session() {
+    fn preserves_the_browser_identity_captured_with_the_session() {
         let mut credentials = RequestCredentials::default();
         credentials
             .headers
@@ -586,25 +810,38 @@ mod tests {
     }
 
     #[test]
-    fn listing_exposes_one_post_and_validates_the_provider_cursor() {
+    fn listing_exposes_one_post_and_advances_the_compact_cursor() {
         let fixture: Value =
             serde_json::from_str(include_str!("../../tests/fixtures/fanbox/listing.json")).unwrap();
-        let batch = normalize_listing(&request(), "creator-name", fixture).unwrap();
+        let summary = fixture.pointer("/body/items/0").unwrap();
+        let batch = normalize_listing_post(
+            &request(),
+            "creator-name",
+            summary,
+            Some(CreatorCursor { page: 2, item: 3 }),
+        )
+        .unwrap();
         assert_eq!(batch.posts.len(), 1);
         assert!(!batch.exhausted);
         let cursor = batch.posts[0].resume_cursor_after.as_deref().unwrap();
-        assert!(listing_url(Some(cursor), "creator-name").is_ok());
-        assert!(listing_url(Some(cursor), "other-creator").is_err());
+        assert_eq!(
+            decode_cursor(Some(cursor)).unwrap(),
+            CreatorCursor { page: 2, item: 3 }
+        );
+        assert!(decode_cursor(Some("https://api.fanbox.cc/post.listCreator")).is_err());
     }
 
     #[test]
     fn maps_all_direct_media_and_canonical_tags_for_one_post() {
         let fixture: Value =
             serde_json::from_str(include_str!("../../tests/fixtures/fanbox/post.json")).unwrap();
-        let discovered = normalize_listing(
+        let listing: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/fanbox/listing.json")).unwrap();
+        let discovered = normalize_listing_post(
             &request(),
             "creator-name",
-            serde_json::from_str(include_str!("../../tests/fixtures/fanbox/listing.json")).unwrap(),
+            listing.pointer("/body/items/0").unwrap(),
+            None,
         )
         .unwrap()
         .posts
@@ -614,11 +851,13 @@ mod tests {
         let post = normalize_post(discovered, fixture).unwrap();
         assert_eq!(post.media.len(), 4);
         assert_eq!(post.media[0].position, 0);
+        assert_eq!(
+            post.media[0].url,
+            "https://downloads.fanbox.cc/images/cover.jpg"
+        );
         assert_eq!(post.media[3].position, 3);
-        assert!(!post
-            .media
-            .iter()
-            .any(|media| media.url.ends_with("archive.zip")));
+        assert!(!crate::media::is_unsupported_archive("attachment.zip"));
+        assert!(crate::media::is_unsupported_archive("attachment.rar"));
         assert!(post
             .tags
             .contains(&CanonicalTag::new("creator", "creator-name")));
@@ -627,5 +866,61 @@ mod tests {
             post.notes.as_deref(),
             Some("Opening prose bonus Second block https://example.test")
         );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_traversal_invalidates_only_its_creator_cache() {
+        let source = FanboxSource::default();
+        let credentials = api_credentials(&RequestCredentials::default());
+        let key = creator_cache_key("creator-name", &credentials);
+        source
+            .creator_pages
+            .lock()
+            .await
+            .insert(key.clone(), CreatorPages::default());
+
+        source.reset_fresh_creator_pages(&key, Some("p0i1")).await;
+        assert!(source.creator_pages.lock().await.contains_key(&key));
+        source.reset_fresh_creator_pages(&key, None).await;
+        assert!(!source.creator_pages.lock().await.contains_key(&key));
+    }
+
+    #[test]
+    fn article_maps_follow_block_order() {
+        let post = serde_json::json!({
+            "body": {
+                "blocks": [
+                    { "imageId": "second" },
+                    { "imageId": "first" }
+                ],
+                "imageMap": {
+                    "first": { "id": "first", "originalUrl": "https://downloads.fanbox.cc/first.jpg" },
+                    "second": { "id": "second", "originalUrl": "https://downloads.fanbox.cc/second.jpg" },
+                    "unused": { "id": "unused", "originalUrl": "https://downloads.fanbox.cc/unused.jpg" }
+                }
+            }
+        });
+        let media = post_media(&post, "42", "https://creator.fanbox.cc/posts/42").unwrap();
+        assert_eq!(media.len(), 2);
+        assert!(media[0].url.ends_with("/second.jpg"));
+        assert!(media[1].url.ends_with("/first.jpg"));
+    }
+
+    #[test]
+    fn html_media_is_restricted_to_first_party_hosts() {
+        let post = serde_json::json!({
+            "body": {
+                "html": concat!(
+                    "<a href=\"https://evil.test/file.jpg\">bad</a>",
+                    "<a href=\"https://downloads.fanbox.cc/file.jpg\">good</a>",
+                    "<img data-src-original=\"https://localhost/private.jpg\">",
+                    "<img data-src-original=\"https://i.pximg.net/original.jpg\">"
+                )
+            }
+        });
+        let media = post_media(&post, "42", "https://creator.fanbox.cc/posts/42").unwrap();
+        assert_eq!(media.len(), 2);
+        assert!(media.iter().all(|item| !item.url.contains("evil.test")));
+        assert!(media.iter().all(|item| !item.url.contains("localhost")));
     }
 }

@@ -299,6 +299,8 @@ async fn download_track(
             mime_hint: None,
             expected_size: None,
             headers: descriptor.headers.clone(),
+            fallbacks: Vec::new(),
+            rejected_final_paths: descriptor.rejected_final_paths.clone(),
         };
         if let Some(range) = &segment.range {
             segment_descriptor
@@ -349,6 +351,8 @@ async fn fetch_manifest(
         mime_hint: None,
         expected_size: None,
         headers: descriptor.headers.clone(),
+        fallbacks: Vec::new(),
+        rejected_final_paths: descriptor.rejected_final_paths.clone(),
     };
     let downloaded = http.download(&request, credentials, path, cancel).await?;
     if downloaded.size_bytes > MAX_MANIFEST_BYTES {
@@ -1045,6 +1049,8 @@ mod tests {
             mime_hint: Some("application/vnd.apple.mpegurl".into()),
             expected_size: None,
             headers: BTreeMap::from([("x-media-auth".into(), "allowed".into())]),
+            fallbacks: Vec::new(),
+            rejected_final_paths: Vec::new(),
         };
         let runtime = HttpRuntime::new(HttpPolicy {
             maximum_concurrency: 1,

@@ -9,6 +9,7 @@ use crate::{
 };
 
 const CURSOR: PageCursor = PageCursor::new(1_000_000);
+const EMPTY_PAGE_ATTEMPTS: usize = 2;
 const QUERY: SearchQueryPolicy =
     SearchQueryPolicy::new("Safebooru", &["id:", "limit:", "order:", "page:", "pid:"]);
 const RATINGS: RatingMap = RatingMap::new(&[
@@ -52,10 +53,26 @@ impl NativeSourceAdapter for SafebooruSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             self.validate_query(&request.query)?;
-            let posts = http
-                .get_json::<Vec<ApiPost>>(request_url(request)?, credentials, cancel)
-                .await?;
-            normalize(request, posts)
+            for attempt in 0..EMPTY_PAGE_ATTEMPTS {
+                let posts = match http
+                    .get_json::<Vec<ApiPost>>(request_url(request)?, credentials, cancel)
+                    .await
+                {
+                    Ok(posts) => posts,
+                    Err(error)
+                        if error.kind == SourceErrorKind::InvalidResponse
+                            && attempt + 1 < EMPTY_PAGE_ATTEMPTS =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let batch = normalize(request, posts)?;
+                if !batch.posts.is_empty() || attempt + 1 == EMPTY_PAGE_ATTEMPTS {
+                    return Ok(batch);
+                }
+            }
+            unreachable!("bounded Safebooru retry always returns")
         })
     }
 
@@ -151,7 +168,8 @@ fn normalize_post(
 
     let media = post
         .file_url
-        .filter(|url| !url.trim().is_empty())
+        .as_deref()
+        .and_then(normalize_media_url)
         .map(|url| {
             let file_name = post
                 .image
@@ -179,6 +197,19 @@ fn normalize_post(
         media,
         resume_cursor_after: Some(resume_cursor_after),
     }
+}
+
+fn normalize_media_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Url::parse("https://safebooru.org")
+        .expect("static Safebooru root")
+        .join(value)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.to_string())
 }
 
 fn parse_canonical_tags(html: &str) -> Result<Vec<CanonicalTag>, SourceError> {
@@ -332,6 +363,14 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_relative_original_media_urls() {
+        assert_eq!(
+            normalize_media_url("/images/1101/hash.jpg").as_deref(),
+            Some("https://safebooru.org/images/1101/hash.jpg")
+        );
+    }
+
+    #[test]
     fn maps_sidebar_categories_to_canonical_namespaces() {
         let html = r#"
             <ul id="tag-sidebar">
@@ -367,5 +406,10 @@ mod tests {
         let batch = normalize(&request(Some("4")), Vec::new()).unwrap();
         assert!(batch.exhausted);
         assert!(batch.posts.is_empty());
+    }
+
+    #[test]
+    fn empty_page_retry_is_bounded() {
+        assert_eq!(EMPTY_PAGE_ATTEMPTS, 2);
     }
 }

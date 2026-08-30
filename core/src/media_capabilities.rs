@@ -102,6 +102,16 @@ pub fn capabilities_for_stored_media(
     mime_type: &str,
     frame_count: Option<i64>,
 ) -> MediaCapabilities {
+    if mime_type == "application/x-ugoira" {
+        return MediaCapabilities {
+            ingest_supported: true,
+            thumbnail_backend: Some(ThumbnailBackend::GenericAdapter),
+            can_preview_image: true,
+            can_dominant_colors: true,
+            can_perceptual_hash: false,
+        };
+    }
+
     if mime_type.starts_with("video/") {
         return MediaCapabilities {
             ingest_supported: true,
@@ -261,6 +271,17 @@ mod tests {
         assert_eq!(caps.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg));
         assert!(caps.can_dominant_colors);
         assert!(!caps.can_perceptual_hash);
+    }
+
+    #[test]
+    fn stored_ugoira_keeps_its_animation_adapter() {
+        let caps = capabilities_for_stored_media("application/x-ugoira", Some(3));
+        assert!(caps.ingest_supported);
+        assert_eq!(
+            caps.thumbnail_backend,
+            Some(ThumbnailBackend::GenericAdapter)
+        );
+        assert!(caps.can_preview_image);
     }
 
     #[test]

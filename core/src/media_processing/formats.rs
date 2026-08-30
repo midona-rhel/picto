@@ -42,6 +42,8 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     format("avifs", "image/avif-sequence"),
     format("jxl", "image/jxl"),
     format("qoi", "image/qoi"),
+    // A Pixiv ugoira is a ZIP container with ordered animation frames.
+    format("ugoira", "application/x-ugoira"),
     format("base64", "text/x-base64"),
     format("insp", "application/x-insp"),
     format("svga", "image/x-svga"),
@@ -185,6 +187,8 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     format("htm", "text/html"),
     format("mhtml", "multipart/related"),
     format("url", "application/internet-shortcut"),
+    // Archive containers are expanded and discarded during import.
+    format("zip", "application/zip"),
     // Visualization and production formats accepted for preservation or preview.
     format("cube", "application/x-cube-lut"),
     format("3dl", "application/x-3dl-lut"),
@@ -254,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_formats_are_accepted_but_generic_zip_is_not() {
+    fn preservation_formats_and_expandable_zip_are_accepted() {
         for path in [
             "document.pdf",
             "photo.jxl",
@@ -269,10 +273,10 @@ mod tests {
             "grade.cube",
             "light.ies",
             "readme.md",
+            "pack.zip",
         ] {
             assert!(has_supported_extension(Path::new(path)), "{path}");
         }
-        assert!(!has_supported_extension(Path::new("pack.zip")));
     }
 
     #[test]

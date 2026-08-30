@@ -1,6 +1,17 @@
 use std::collections::BTreeMap;
 
-use crate::MediaDescriptor;
+use crate::{MediaDescriptor, MediaFallback};
+
+pub(crate) fn is_unsupported_archive(raw: &str) -> bool {
+    let path = raw
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw)
+        .to_ascii_lowercase();
+    [".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".cbr"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+}
 
 #[derive(Debug, Clone)]
 pub struct MediaDescriptorBuilder {
@@ -19,6 +30,8 @@ impl MediaDescriptorBuilder {
                 mime_hint: None,
                 expected_size: None,
                 headers: BTreeMap::new(),
+                fallbacks: Vec::new(),
+                rejected_final_paths: Vec::new(),
             },
         }
     }
@@ -47,7 +60,32 @@ impl MediaDescriptorBuilder {
         self
     }
 
+    pub fn fallback(mut self, value: MediaFallback) -> Self {
+        self.descriptor.fallbacks.push(value);
+        self
+    }
+
+    pub fn reject_final_path(mut self, value: impl Into<String>) -> Self {
+        self.descriptor.rejected_final_paths.push(value.into());
+        self
+    }
+
     pub fn build(self) -> MediaDescriptor {
         self.descriptor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_unsupported_archive;
+
+    #[test]
+    fn provider_archive_policy_allows_zip_and_rejects_unhandled_containers() {
+        assert!(!is_unsupported_archive(
+            "https://cdn.test/files/post.ZIP?token=1"
+        ));
+        assert!(!is_unsupported_archive("comic.cbz"));
+        assert!(is_unsupported_archive("bundle.rar"));
+        assert!(is_unsupported_archive("bundle.7z#download"));
     }
 }

@@ -86,13 +86,8 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     if site_id == "onlyfans" && query_kind == "user" {
         return normalize_onlyfans_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
-    if matches!(site_id, "pawchive" | "coomer" | "kemono") && query_kind == "user" {
-        let host = match site_id {
-            "pawchive" => "pawchive.pw",
-            "coomer" => "coomer.st",
-            _ => "kemono.cr",
-        };
-        return normalize_archive_creator_url(trimmed, host)
+    if site_id == "pawchive" && query_kind == "user" {
+        return normalize_archive_creator_url(trimmed, "pawchive.pw")
             .unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "pixivuser" && query_kind == "user" {
@@ -175,13 +170,8 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     if site_id == "onlyfans" {
         normalize_onlyfans_creator(query_text)?;
     }
-    if matches!(site_id, "pawchive" | "coomer" | "kemono") {
-        let host = match site_id {
-            "pawchive" => "pawchive.pw",
-            "coomer" => "coomer.st",
-            _ => "kemono.cr",
-        };
-        normalize_archive_creator_url(query_text, host)?;
+    if site_id == "pawchive" {
+        normalize_archive_creator_url(query_text, "pawchive.pw")?;
     }
     if matches!(
         site_id,
@@ -401,7 +391,7 @@ mod tests {
         assert!(validate_query_text("newgrounds", "artist-name").is_ok());
         assert!(validate_query_text("newgrounds", "https://artist-name.newgrounds.com/").is_ok());
         assert!(
-            validate_query_text("newgrounds", "https://artist-name.newgrounds.com/art").is_err()
+            validate_query_text("newgrounds", "https://artist-name.newgrounds.com/art").is_ok()
         );
         assert!(validate_query_text("patreon", "creator-name").is_ok());
         assert!(validate_query_text("patreon", "https://www.patreon.com/c/creator-name").is_ok());

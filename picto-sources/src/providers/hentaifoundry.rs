@@ -7,12 +7,12 @@ use url::Url;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, PageCursor, PostFuture,
+    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, OpaqueCursor, PostFuture,
     ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
-const CURSOR: PageCursor = PageCursor::new(1_000_000);
-const POSTS_PER_PAGE: u32 = 25;
+const CURSOR: OpaqueCursor = OpaqueCursor::new(21);
+const MAX_GALLERY_PAGES: u32 = 40_000;
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     HentaiFoundrySource
@@ -44,10 +44,30 @@ impl NativeSourceAdapter for HentaiFoundrySource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
-            let offset = current_offset(request)?;
-            let html =
-                visible_text(gallery_url(&username, offset)?, credentials, http, cancel).await?;
-            normalize_gallery(request, &username, offset, &html)
+            let anchor = decode_cursor(request.cursor.as_deref())?;
+            let mut page = 1;
+            for _ in 0..MAX_GALLERY_PAGES {
+                let html =
+                    visible_text(gallery_url(&username, page)?, credentials, http, cancel).await?;
+                match normalize_gallery_page(request, &username, anchor, page, &html)? {
+                    GalleryScan::Post(post, exhausted) => {
+                        return Ok(DiscoveryBatch {
+                            posts: vec![*post],
+                            exhausted,
+                        });
+                    }
+                    GalleryScan::Next(next) => page = next,
+                    GalleryScan::Exhausted => {
+                        return Ok(DiscoveryBatch {
+                            posts: Vec::new(),
+                            exhausted: true,
+                        });
+                    }
+                }
+            }
+            Err(invalid_response(
+                "Hentai Foundry gallery exceeded the supported page range",
+            ))
         })
     }
 
@@ -185,8 +205,12 @@ fn decode_cookie_value(value: &str) -> String {
         .to_string()
 }
 
-fn gallery_url(username: &str, offset: u32) -> Result<Url, SourceError> {
-    let page = offset / POSTS_PER_PAGE + 1;
+fn gallery_url(username: &str, page: u32) -> Result<Url, SourceError> {
+    if !(1..=MAX_GALLERY_PAGES).contains(&page) {
+        return Err(invalid_response(
+            "Hentai Foundry returned an invalid gallery page",
+        ));
+    }
     let mut url = Url::parse("https://www.hentai-foundry.com").expect("static Hentai Foundry URL");
     url.path_segments_mut()
         .map_err(|_| invalid_response("invalid Hentai Foundry gallery URL"))?
@@ -195,51 +219,40 @@ fn gallery_url(username: &str, offset: u32) -> Result<Url, SourceError> {
     Ok(url)
 }
 
-fn normalize_gallery(
+enum GalleryScan {
+    Post(Box<SourcePost>, bool),
+    Next(u32),
+    Exhausted,
+}
+
+fn normalize_gallery_page(
     request: &DiscoveryRequest,
     username: &str,
-    offset: u32,
+    anchor: Option<u64>,
+    page: u32,
     html: &str,
-) -> Result<DiscoveryBatch, SourceError> {
-    let page_index = (offset % POSTS_PER_PAGE) as usize;
-    let mut paths = gallery_paths(html, username);
-    if paths.is_empty() {
-        return Ok(DiscoveryBatch {
-            posts: Vec::new(),
-            exhausted: true,
-        });
+) -> Result<GalleryScan, SourceError> {
+    let paths = gallery_paths(html, username);
+    let next = next_gallery_page(html, username, page)?;
+    for (index, path) in paths.iter().enumerate() {
+        let post_id = post_id_from_path(path)
+            .and_then(|id| id.parse::<u64>().ok())
+            .ok_or_else(|| invalid_response("invalid Hentai Foundry post path"))?;
+        if anchor.is_none_or(|anchor| post_id < anchor) {
+            let exhausted = index + 1 == paths.len() && next.is_none();
+            return Ok(GalleryScan::Post(
+                Box::new(discovered_post(request, username, path.clone())?),
+                exhausted,
+            ));
+        }
     }
-    if page_index >= paths.len() {
-        return Err(invalid_response(
-            "Hentai Foundry gallery changed before its persisted cursor",
-        ));
-    }
-
-    let page_len = paths.len();
-    let available = page_len - page_index;
-    let take = available.min(request.page_size.max(1) as usize);
-    let posts = paths
-        .drain(page_index..page_index + take)
-        .enumerate()
-        .map(|(index, path)| {
-            discovered_post(
-                request,
-                username,
-                path,
-                offset.saturating_add(index as u32).saturating_add(1),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let page_is_last = page_len < POSTS_PER_PAGE as usize;
-    let exhausted = page_is_last && page_index + take >= page_len;
-    Ok(DiscoveryBatch { posts, exhausted })
+    Ok(next.map_or(GalleryScan::Exhausted, GalleryScan::Next))
 }
 
 fn discovered_post(
     request: &DiscoveryRequest,
     username: &str,
     path: String,
-    next_offset: u32,
 ) -> Result<SourcePost, SourceError> {
     let stable_id = post_id_from_path(&path)
         .ok_or_else(|| invalid_response("invalid Hentai Foundry post path"))?;
@@ -248,6 +261,7 @@ fn discovered_post(
         .join(&path)
         .map_err(|error| invalid_response(error.to_string()))?
         .to_string();
+    let resume_cursor_after = Some(encode_cursor(&stable_id)?);
     Ok(SourcePost {
         site_id: "hentaifoundry".to_string(),
         partition: request.partition.clone(),
@@ -259,7 +273,7 @@ fn discovered_post(
         created_at: None,
         tags: Vec::new(),
         media: Vec::new(),
-        resume_cursor_after: Some(CURSOR.encode(next_offset)?),
+        resume_cursor_after,
     })
 }
 
@@ -342,6 +356,27 @@ fn gallery_paths(html: &str, username: &str) -> Vec<String> {
         .collect()
 }
 
+fn next_gallery_page(
+    html: &str,
+    username: &str,
+    current_page: u32,
+) -> Result<Option<u32>, SourceError> {
+    let next = gallery_page_regex()
+        .captures_iter(html)
+        .filter_map(|captures| {
+            let path_user = captures.get(1)?.as_str();
+            let page = captures.get(2)?.as_str().parse::<u32>().ok()?;
+            (path_user.eq_ignore_ascii_case(username) && page > current_page).then_some(page)
+        })
+        .min();
+    if next.is_some_and(|page| page > MAX_GALLERY_PAGES) {
+        return Err(invalid_response(
+            "Hentai Foundry returned an invalid next gallery page",
+        ));
+    }
+    Ok(next)
+}
+
 fn normalize_username(raw: &str) -> Result<String, SourceError> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -396,13 +431,26 @@ fn normalize_username(raw: &str) -> Result<String, SourceError> {
     Ok(username)
 }
 
-fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
-    request
-        .cursor
-        .as_deref()
-        .filter(|cursor| !cursor.is_empty())
-        .map(|cursor| CURSOR.validate(cursor))
-        .unwrap_or(Ok(0))
+fn encode_cursor(post_id: &str) -> Result<String, SourceError> {
+    let cursor = format!("b{post_id}");
+    CURSOR.validate(&cursor)?;
+    post_id.parse::<u64>().map_err(|_| invalid_cursor())?;
+    Ok(cursor)
+}
+
+fn decode_cursor(raw: Option<&str>) -> Result<Option<u64>, SourceError> {
+    let Some(raw) = raw.filter(|cursor| !cursor.is_empty()) else {
+        return Ok(None);
+    };
+    let raw = CURSOR.validate(raw)?;
+    let post_id = raw.strip_prefix('b').ok_or_else(invalid_cursor)?;
+    if post_id.is_empty() || !post_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid_cursor());
+    }
+    post_id
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| invalid_cursor())
 }
 
 fn post_id_from_path(path: &str) -> Option<String> {
@@ -459,6 +507,10 @@ regex_fn!(
     r#"thumbTitle\"><a href=\"((?:/pictures/user/([^/\"]+)/\d+/)[^\"]*)\""#
 );
 regex_fn!(
+    gallery_page_regex,
+    r#"href=\"/pictures/user/([^/\"]+)/page/(\d+)[^\"]*\""#
+);
+regex_fn!(
     picture_regex,
     r#"(?s)<section[^>]+id=\"picBox\"[^>]*>(.*?)</section>"#
 );
@@ -493,6 +545,14 @@ fn invalid_query(message: impl Into<String>) -> SourceError {
     SourceError::new(SourceErrorKind::InvalidQuery, message, false)
 }
 
+fn invalid_cursor() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidQuery,
+        "invalid source cursor",
+        false,
+    )
+}
+
 fn invalid_response(message: impl Into<String>) -> SourceError {
     SourceError::new(SourceErrorKind::InvalidResponse, message, true)
 }
@@ -522,6 +582,13 @@ mod tests {
         }
     }
 
+    fn post(scan: GalleryScan) -> (SourcePost, bool) {
+        match scan {
+            GalleryScan::Post(post, exhausted) => (*post, exhausted),
+            GalleryScan::Next(_) | GalleryScan::Exhausted => panic!("expected gallery post"),
+        }
+    }
+
     #[test]
     fn accepts_only_safe_usernames_and_canonical_urls() {
         assert_eq!(
@@ -541,25 +608,91 @@ mod tests {
     }
 
     #[test]
-    fn maps_bounded_gallery_pages_to_settlement_cursors() {
-        let batch =
-            normalize_gallery(&request(Some("1"), 1), "Example-Artist", 1, GALLERY).unwrap();
-        assert_eq!(batch.posts.len(), 1);
-        assert!(batch.exhausted);
-        assert_eq!(batch.posts[0].stable_id, "1200001");
-        assert_eq!(batch.posts[0].resume_cursor_after.as_deref(), Some("2"));
+    fn publishes_one_post_and_persists_a_bounded_id_anchor() {
+        let (first, first_exhausted) = post(
+            normalize_gallery_page(&request(None, 50), "Example-Artist", None, 1, GALLERY).unwrap(),
+        );
+        assert_eq!(first.stable_id, "1200002");
+        assert_eq!(first.resume_cursor_after.as_deref(), Some("b1200002"));
+        assert!(!first_exhausted);
+
+        let anchor = decode_cursor(first.resume_cursor_after.as_deref()).unwrap();
+        let (second, second_exhausted) = post(
+            normalize_gallery_page(&request(None, 50), "Example-Artist", anchor, 1, GALLERY)
+                .unwrap(),
+        );
+        assert_eq!(second.stable_id, "1200001");
+        assert_eq!(second.resume_cursor_after.as_deref(), Some("b1200001"));
+        assert!(!second_exhausted);
         assert_eq!(
-            gallery_url("Example-Artist", 25).unwrap().path(),
+            gallery_url("Example-Artist", 2).unwrap().path(),
             "/pictures/user/Example-Artist/page/2"
         );
     }
 
     #[test]
+    fn id_anchor_survives_first_page_insertion_and_anchor_deletion() {
+        let changed = r#"
+            <div class="thumbTitle"><a href="/pictures/user/Example-Artist/1200004/New">New</a></div>
+            <div class="thumbTitle"><a href="/pictures/user/Example-Artist/1200003/Newer">Newer</a></div>
+            <div class="thumbTitle"><a href="/pictures/user/Example-Artist/1200001/Older">Older</a></div>
+        "#;
+        let (resumed, exhausted) = post(
+            normalize_gallery_page(
+                &request(Some("b1200002"), 1),
+                "Example-Artist",
+                decode_cursor(Some("b1200002")).unwrap(),
+                1,
+                changed,
+            )
+            .unwrap(),
+        );
+        assert_eq!(resumed.stable_id, "1200001");
+        assert!(exhausted);
+    }
+
+    #[test]
+    fn id_anchor_follows_pages_until_an_older_post_exists() {
+        let first_page = r#"
+            <div class="thumbTitle"><a href="/pictures/user/Example-Artist/1200004/New">New</a></div>
+            <a href="/pictures/user/Example-Artist/page/2">Next &gt;</a>
+        "#;
+        let anchor = decode_cursor(Some("b1200002")).unwrap();
+        match normalize_gallery_page(
+            &request(Some("b1200002"), 1),
+            "Example-Artist",
+            anchor,
+            1,
+            first_page,
+        )
+        .unwrap()
+        {
+            GalleryScan::Next(2) => {}
+            _ => panic!("expected next gallery page"),
+        }
+
+        let second_page = r#"
+            <div class="thumbTitle"><a href="/pictures/user/Example-Artist/1200001/Older">Older</a></div>
+        "#;
+        let (resumed, exhausted) = post(
+            normalize_gallery_page(
+                &request(Some("b1200002"), 1),
+                "Example-Artist",
+                anchor,
+                2,
+                second_page,
+            )
+            .unwrap(),
+        );
+        assert_eq!(resumed.stable_id, "1200001");
+        assert!(exhausted);
+    }
+
+    #[test]
     fn maps_post_media_and_canonical_groups() {
-        let discovered = normalize_gallery(&request(None, 10), "Example-Artist", 0, GALLERY)
-            .unwrap()
-            .posts
-            .remove(0);
+        let (discovered, _) = post(
+            normalize_gallery_page(&request(None, 10), "Example-Artist", None, 1, GALLERY).unwrap(),
+        );
         let post = resolve_html(discovered, POST).unwrap();
         assert_eq!(post.name.as_deref(), Some("Picture title"));
         assert_eq!(post.creator.as_deref(), Some("Example-Artist"));
@@ -616,8 +749,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_or_out_of_range_cursors() {
-        assert!(current_offset(&request(Some("-1"), 1)).is_err());
-        assert!(current_offset(&request(Some("1000001"), 1)).is_err());
+    fn cursor_round_trips_across_restart_and_rejects_legacy_offsets() {
+        let encoded = encode_cursor("1200002").unwrap();
+        assert_eq!(decode_cursor(Some(&encoded)).unwrap(), Some(1_200_002));
+        assert_eq!(decode_cursor(None).unwrap(), None);
+        assert!(decode_cursor(Some("1")).is_err());
+        assert!(decode_cursor(Some("b")).is_err());
+        assert!(decode_cursor(Some("bnot-a-post")).is_err());
+        assert!(decode_cursor(Some("b123456789012345678901")).is_err());
     }
 }

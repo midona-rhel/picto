@@ -1,27 +1,107 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use xitter_txid::ClientTransaction;
 
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
-    HttpRuntime, MediaDescriptorBuilder, NativeSourceAdapter, OpaqueCursor, ProviderDescriptor,
-    RequestCredentials, SourceError, SourceErrorKind, SourcePost,
+    HttpRuntime, MediaDescriptorBuilder, MediaFallback, NativeSourceAdapter, OpaqueCursor,
+    ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
 const DOMAIN: &str = "x.com";
 const CURSOR: OpaqueCursor = OpaqueCursor::new(2_048);
+const MAX_EMPTY_TIMELINE_PAGES: usize = 8;
+const TRANSACTION_CACHE_TTL: Duration = Duration::from_secs(10_800);
 const PUBLIC_BEARER: &str = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 const USER_LOOKUP_OPERATION: &str = "ck5KkZ8t5cOmoLssopN99Q/UserByScreenName";
 const USER_MEDIA_OPERATION: &str = "jCRhbOzdgOHp6u9H4g2tEg/UserMedia";
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    TwitterSource
+    TwitterSource::default()
 }
 
-struct TwitterSource;
+#[derive(Default)]
+struct TwitterSource {
+    transaction: Mutex<Option<CachedClientTransaction>>,
+}
+
+struct CachedClientTransaction {
+    client: ClientTransaction,
+    expires_at: Instant,
+}
+
+impl TwitterSource {
+    async fn graphql_credentials(
+        &self,
+        credentials: &RequestCredentials,
+        http: &HttpRuntime,
+        url: &Url,
+        cancel: &CancellationToken,
+    ) -> Result<RequestCredentials, SourceError> {
+        // Match the website flow: bootstrap transaction keys with the normal
+        // cookie session, then attach GraphQL headers only to the API call.
+        api_credentials(credentials, http)?;
+        let path = transaction_path(url);
+        let transaction_id = self
+            .transaction_id(http, credentials, &path, cancel)
+            .await?;
+
+        // Bootstrap responses can rotate ct0. Re-read the runtime jar before
+        // binding CSRF and transaction headers to the actual API request.
+        let mut api = api_credentials(credentials, http)?;
+        api.headers
+            .insert("x-client-transaction-id".to_string(), transaction_id);
+        Ok(api)
+    }
+
+    async fn transaction_id(
+        &self,
+        http: &HttpRuntime,
+        credentials: &RequestCredentials,
+        path: &str,
+        cancel: &CancellationToken,
+    ) -> Result<String, SourceError> {
+        let mut cached = self.transaction.lock().await;
+        if cached
+            .as_ref()
+            .is_none_or(|cached| cached.expires_at <= Instant::now())
+        {
+            let home = http
+                .get_browser_text(twitter_home_url(), credentials, cancel)
+                .await?;
+            let script_url = transaction_script_url(&home)?;
+            let script_url = Url::parse(&script_url).map_err(|error| {
+                SourceError::new(
+                    SourceErrorKind::InvalidResponse,
+                    format!("Twitter / X returned an invalid transaction script URL: {error}"),
+                    false,
+                )
+            })?;
+            let script = http
+                .get_browser_text(script_url, credentials, cancel)
+                .await?;
+            let client =
+                ClientTransaction::new(&home, &script).map_err(transaction_response_error)?;
+            *cached = Some(CachedClientTransaction {
+                client,
+                expires_at: Instant::now() + TRANSACTION_CACHE_TTL,
+            });
+        }
+
+        Ok(cached
+            .as_ref()
+            .expect("transaction client was initialized")
+            .client
+            .generate_transaction_id("GET", path))
+    }
+}
 
 impl NativeSourceAdapter for TwitterSource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -47,7 +127,7 @@ impl NativeSourceAdapter for TwitterSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
-            let state = request
+            let mut state = request
                 .cursor
                 .as_deref()
                 .filter(|cursor| !cursor.is_empty())
@@ -63,41 +143,86 @@ impl NativeSourceAdapter for TwitterSource {
                 });
             }
 
-            let api_credentials = api_credentials(credentials)?;
             let user_id = match state.as_ref() {
                 Some(state) => state.user_id.clone(),
                 None => {
+                    let url = user_lookup_url(&username);
+                    let api_credentials = self
+                        .graphql_credentials(credentials, http, &url, cancel)
+                        .await?;
                     let response = http
-                        .get_json::<Value>(user_lookup_url(&username), &api_credentials, cancel)
+                        .get_browser_json::<Value>(url, &api_credentials, cancel)
                         .await?;
                     parse_user_id(&response)?
                 }
             };
-            let response = http
-                .get_json::<Value>(
-                    user_timeline_url(
-                        &user_id,
+            for _ in 0..MAX_EMPTY_TIMELINE_PAGES {
+                let url = user_timeline_url(
+                    &user_id,
+                    state
+                        .as_ref()
+                        .and_then(|state| state.timeline_cursor.as_deref()),
+                );
+                let api_credentials = self
+                    .graphql_credentials(credentials, http, &url, cancel)
+                    .await?;
+                let response = http
+                    .get_browser_json::<Value>(url, &api_credentials, cancel)
+                    .await?;
+                let page = parse_timeline(&response)?;
+                if page.tweets.is_empty() && page.continue_on_empty {
+                    if let Some(cursor) = page.bottom_cursor.as_ref().filter(|cursor| {
                         state
                             .as_ref()
-                            .and_then(|state| state.timeline_cursor.as_deref()),
-                    ),
-                    &api_credentials,
-                    cancel,
-                )
-                .await?;
-            normalize_timeline(request, &username, &user_id, state.as_ref(), &response)
+                            .and_then(|state| state.timeline_cursor.as_ref())
+                            != Some(*cursor)
+                    }) {
+                        state = Some(CursorState {
+                            user_id: user_id.clone(),
+                            timeline_cursor: Some(cursor.clone()),
+                            page_index: 0,
+                        });
+                        continue;
+                    }
+                }
+                return normalize_timeline_page(request, &username, &user_id, state.as_ref(), page);
+            }
+            Err(SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "Twitter / X returned too many empty continuation pages",
+                true,
+            ))
         })
     }
 }
 
-fn api_credentials(credentials: &RequestCredentials) -> Result<RequestCredentials, SourceError> {
+fn api_credentials(
+    credentials: &RequestCredentials,
+    http: &HttpRuntime,
+) -> Result<RequestCredentials, SourceError> {
+    let runtime_csrf = http.cookie_value(&twitter_home_url(), "ct0");
+    api_credentials_with_csrf(credentials, runtime_csrf.as_deref())
+}
+
+fn api_credentials_with_csrf(
+    credentials: &RequestCredentials,
+    runtime_csrf: Option<&str>,
+) -> Result<RequestCredentials, SourceError> {
     let mut api = credentials.clone();
     api.allowed_domains.insert(DOMAIN.to_string());
     api.headers
         .insert("Authorization".to_string(), PUBLIC_BEARER.to_string());
     api.headers.insert("Accept".to_string(), "*/*".to_string());
     api.headers
+        .insert("content-type".to_string(), "application/json".to_string());
+    api.headers
         .insert("Referer".to_string(), "https://x.com/".to_string());
+    api.headers
+        .insert("Sec-Fetch-Dest".to_string(), "empty".to_string());
+    api.headers
+        .insert("Sec-Fetch-Mode".to_string(), "cors".to_string());
+    api.headers
+        .insert("Sec-Fetch-Site".to_string(), "same-origin".to_string());
     api.headers
         .insert("x-twitter-active-user".to_string(), "yes".to_string());
     api.headers
@@ -110,26 +235,103 @@ fn api_credentials(credentials: &RequestCredentials) -> Result<RequestCredential
             false,
         ));
     }
-    let csrf = api
-        .cookies
-        .get("ct0")
-        .map(String::as_str)
+    let csrf = runtime_csrf
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            SourceError::new(
-                SourceErrorKind::Authentication,
-                "Twitter / X session is missing its CSRF cookie",
-                false,
-            )
-        })?;
-    api.headers
-        .insert("x-csrf-token".to_string(), csrf.to_string());
+        .map(str::to_string)
+        .or_else(|| api.cookies.get("ct0").map(|value| value.trim().to_string()))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(generate_csrf_token);
+    api.cookies.insert("ct0".to_string(), csrf.clone());
+    api.headers.insert("x-csrf-token".to_string(), csrf);
     api.headers.insert(
         "x-twitter-auth-type".to_string(),
         "OAuth2Session".to_string(),
     );
     Ok(api)
+}
+
+fn twitter_home_url() -> Url {
+    Url::parse("https://x.com/").expect("static Twitter home URL")
+}
+
+fn transaction_path(url: &Url) -> String {
+    let mut path = url.path().to_string();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    path
+}
+
+fn transaction_script_url(home: &str) -> Result<String, SourceError> {
+    if let Ok(url) = ClientTransaction::extract_ondemand_url(home) {
+        return Ok(url);
+    }
+
+    let marker_position = home.find("\"ondemand.s\"").ok_or_else(|| {
+        SourceError::new(
+            SourceErrorKind::InvalidResponse,
+            "Twitter / X transaction bootstrap did not advertise its request script",
+            false,
+        )
+    })?;
+    let key_start = home[..marker_position]
+        .rfind(',')
+        .map(|position| position + 1)
+        .ok_or_else(|| invalid_transaction_bootstrap("bundle key"))?;
+    let key_end = home[key_start..]
+        .find(':')
+        .map(|position| key_start + position)
+        .ok_or_else(|| invalid_transaction_bootstrap("bundle key"))?;
+    let key = home[key_start..key_end].trim();
+    if key.is_empty() {
+        return Err(invalid_transaction_bootstrap("bundle key"));
+    }
+    let hash_marker = format!("{key}:\"");
+    let hash_start = home[marker_position..]
+        .find(&hash_marker)
+        .map(|position| marker_position + position + hash_marker.len())
+        .ok_or_else(|| invalid_transaction_bootstrap("script hash"))?;
+    let hash_end = home[hash_start..]
+        .find('"')
+        .map(|position| hash_start + position)
+        .ok_or_else(|| invalid_transaction_bootstrap("script hash"))?;
+    let hash = &home[hash_start..hash_end];
+    if hash.is_empty()
+        || !hash
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+    {
+        return Err(invalid_transaction_bootstrap("script hash"));
+    }
+    Ok(format!(
+        "https://abs.twimg.com/responsive-web/client-web/ondemand.s.{hash}a.js"
+    ))
+}
+
+fn invalid_transaction_bootstrap(component: &str) -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidResponse,
+        format!("Twitter / X transaction bootstrap returned an invalid {component}"),
+        false,
+    )
+}
+
+fn transaction_response_error(error: xitter_txid::Error) -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidResponse,
+        format!("Twitter / X transaction bootstrap failed: {error}"),
+        false,
+    )
+}
+
+fn generate_csrf_token() -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut random = rand::thread_rng();
+    (0..32)
+        .map(|_| HEX[random.gen_range(0..HEX.len())] as char)
+        .collect()
 }
 
 fn user_lookup_url(username: &str) -> Url {
@@ -246,6 +448,7 @@ fn timeline_features() -> Value {
     })
 }
 
+#[cfg(test)]
 fn normalize_timeline(
     request: &DiscoveryRequest,
     query_username: &str,
@@ -253,34 +456,42 @@ fn normalize_timeline(
     state: Option<&CursorState>,
     response: &Value,
 ) -> Result<DiscoveryBatch, SourceError> {
-    reject_api_errors(response)?;
-    let entries = find_entries(response).ok_or_else(|| {
-        invalid_response("Twitter / X media response is missing timeline entries")
-    })?;
-    let tweets = entries
-        .iter()
-        .filter_map(direct_tweet_result)
-        .cloned()
-        .collect::<Vec<_>>();
+    normalize_timeline_page(
+        request,
+        query_username,
+        user_id,
+        state,
+        parse_timeline(response)?,
+    )
+}
+
+fn normalize_timeline_page(
+    request: &DiscoveryRequest,
+    query_username: &str,
+    user_id: &str,
+    state: Option<&CursorState>,
+    page: TimelinePage,
+) -> Result<DiscoveryBatch, SourceError> {
     let page_index = state.map_or(0, |state| state.page_index as usize);
-    if page_index >= tweets.len() && (page_index != 0 || !tweets.is_empty()) {
+    if page_index >= page.tweets.len() && (page_index != 0 || !page.tweets.is_empty()) {
         return Err(invalid_response(
             "Twitter / X timeline changed before its persisted page index",
         ));
     }
-    let bottom_cursor = entries.iter().find_map(bottom_cursor);
-    let exhausted = tweets.is_empty();
-    let posts = tweets
+    let exhausted = page.tweets.is_empty()
+        && (!page.continue_on_empty || page.bottom_cursor.as_deref().is_none());
+    let posts = page
+        .tweets
         .get(page_index)
         .cloned()
         .map(|tweet| {
-            let (timeline_cursor, page_index) = if page_index + 1 < tweets.len() {
+            let (timeline_cursor, page_index) = if page_index + 1 < page.tweets.len() {
                 (
                     state.and_then(|state| state.timeline_cursor.clone()),
                     (page_index + 1) as u16,
                 )
             } else {
-                (bottom_cursor, 0)
+                (page.bottom_cursor, 0)
             };
             normalize_tweet(
                 request,
@@ -297,6 +508,58 @@ fn normalize_timeline(
         .into_iter()
         .collect();
     Ok(DiscoveryBatch { posts, exhausted })
+}
+
+#[derive(Debug)]
+struct TimelinePage {
+    tweets: Vec<Value>,
+    bottom_cursor: Option<String>,
+    continue_on_empty: bool,
+}
+
+fn parse_timeline(response: &Value) -> Result<TimelinePage, SourceError> {
+    reject_api_errors(response)?;
+    let instructions = find_instructions(response).ok_or_else(|| {
+        invalid_response("Twitter / X media response is missing timeline instructions")
+    })?;
+    let mut entries = Vec::new();
+    for instruction in instructions {
+        match instruction.get("type").and_then(Value::as_str) {
+            Some("TimelineAddEntries") => {
+                if let Some(values) = instruction.get("entries").and_then(Value::as_array) {
+                    entries.extend(values);
+                }
+            }
+            Some("TimelineAddToModule") => {
+                if let Some(values) = instruction.get("moduleItems").and_then(Value::as_array) {
+                    entries.extend(values);
+                }
+            }
+            Some("TimelineReplaceEntry") => {
+                if let Some(entry) = instruction.get("entry") {
+                    entries.push(entry);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut tweets = Vec::new();
+    let mut bottom = None;
+    for entry in entries {
+        if let Some(cursor) = bottom_cursor(entry) {
+            bottom = Some(cursor);
+        }
+        tweet_results(entry, &mut tweets);
+    }
+    let (bottom_cursor, continue_on_empty) = bottom
+        .map(|cursor: TimelineCursor| (Some(cursor.value), !cursor.stop_on_empty))
+        .unwrap_or((None, false));
+    Ok(TimelinePage {
+        tweets,
+        bottom_cursor,
+        continue_on_empty,
+    })
 }
 
 fn normalize_tweet(
@@ -393,11 +656,11 @@ fn normalize_media(
             .and_then(Value::as_str)
             .unwrap_or("media");
         let selected = if entity.get("video_info").is_some() {
-            best_video(&entity)
+            best_video(&entity).map(|(url, extension)| (url, extension, Vec::new()))
         } else {
             image_media(&entity)
         };
-        let Some((url, extension)) = selected else {
+        let Some((url, extension, fallbacks)) = selected else {
             continue;
         };
         if !seen.insert(url.clone()) {
@@ -405,18 +668,29 @@ fn normalize_media(
         }
         let mut headers = BTreeMap::new();
         headers.insert("Referer".to_string(), canonical_url.to_string());
-        media.push(
+        let file_name = format!("twitter_{tweet_id}_{position}.{extension}");
+        let mut builder =
             MediaDescriptorBuilder::new(format!("twitter:{tweet_id}:{media_id}"), position, url)
                 .canonical_url(canonical_url)
-                .file_name(format!("twitter_{tweet_id}_{position}.{extension}"))
-                .headers(headers)
-                .build(),
-        );
+                .file_name(&file_name)
+                .headers(headers);
+        for fallback in fallbacks {
+            builder = builder.fallback(MediaFallback {
+                url: fallback,
+                file_name: Some(file_name.clone()),
+                mime_hint: mime_guess::from_path(&file_name)
+                    .first_raw()
+                    .map(ToOwned::to_owned),
+                expected_size: None,
+                html_marker: None,
+            });
+        }
+        media.push(builder.build());
     }
     Ok(media)
 }
 
-fn image_media(entity: &Value) -> Option<(String, String)> {
+fn image_media(entity: &Value) -> Option<(String, String, Vec<String>)> {
     let raw = entity.get("media_url_https")?.as_str()?.trim();
     if raw.is_empty() {
         return None;
@@ -429,7 +703,12 @@ fn image_media(entity: &Value) -> Option<(String, String)> {
         .1
         .to_ascii_lowercase();
     let base = raw.strip_suffix(&format!(".{extension}")).unwrap_or(raw);
-    Some((format!("{base}?format={extension}&name=orig"), extension))
+    let original = format!("{base}?format={extension}&name=orig");
+    let fallbacks = ["4096x4096", "large", "medium", "small"]
+        .into_iter()
+        .map(|size| format!("{base}?format={extension}&name={size}"))
+        .collect();
+    Some((original, extension, fallbacks))
 }
 
 fn best_video(entity: &Value) -> Option<(String, String)> {
@@ -466,62 +745,124 @@ fn reject_api_errors(response: &Value) -> Result<(), SourceError> {
     let Some(errors) = response.get("errors").and_then(Value::as_array) else {
         return Ok(());
     };
-    let message = errors
+    let messages = errors
+        .iter()
+        .filter_map(|error| error.get("message").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let message = messages
         .first()
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
+        .copied()
         .unwrap_or("Twitter / X API rejected the request");
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("rate limit") || lower.contains("too many requests") {
+        return Err(SourceError::new(
+            SourceErrorKind::RateLimited,
+            message,
+            true,
+        ));
+    }
+    if lower.contains("authenticate")
+        || lower.contains("authorization")
+        || lower.contains("not authorized")
+        || lower.contains("login required")
+        || lower.contains("temporarily locked")
+    {
+        return Err(SourceError::new(
+            SourceErrorKind::Authentication,
+            message,
+            false,
+        ));
+    }
+    let server_error = errors.iter().any(|error| {
+        error.get("source").and_then(Value::as_str) == Some("Server")
+            || error
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.to_ascii_lowercase().starts_with("timeout"))
+    });
     Err(SourceError::new(
-        SourceErrorKind::Authentication,
+        if server_error {
+            SourceErrorKind::Network
+        } else {
+            SourceErrorKind::InvalidResponse
+        },
         message,
-        false,
+        true,
     ))
 }
 
-fn find_entries(value: &Value) -> Option<&Vec<Value>> {
+fn find_instructions(value: &Value) -> Option<&Vec<Value>> {
     match value {
         Value::Object(object) => {
-            if let Some(entries) = object.get("entries").and_then(Value::as_array) {
-                return Some(entries);
+            if let Some(instructions) = object.get("instructions").and_then(Value::as_array) {
+                return Some(instructions);
             }
-            object.values().find_map(find_entries)
+            object.values().find_map(find_instructions)
         }
-        Value::Array(values) => values.iter().find_map(find_entries),
+        Value::Array(values) => values.iter().find_map(find_instructions),
         _ => None,
     }
 }
 
-fn direct_tweet_result(entry: &Value) -> Option<&Value> {
-    entry
+fn tweet_results(entry: &Value, tweets: &mut Vec<Value>) {
+    if let Some(tweet) = entry
         .pointer("/content/itemContent/tweet_results/result")
         .or_else(|| entry.pointer("/content/itemContent/tweet_results"))
-        .or_else(|| {
-            entry
-                .pointer("/content/items")?
-                .as_array()?
-                .iter()
-                .find_map(|item| {
-                    item.pointer("/item/itemContent/tweet_results/result")
-                        .or_else(|| item.pointer("/item/itemContent/tweet_results"))
-                })
-        })
+        .or_else(|| entry.pointer("/item/itemContent/tweet_results/result"))
+        .or_else(|| entry.pointer("/item/itemContent/tweet_results"))
+    {
+        push_tweet_result(tweets, tweet);
+    }
+    if let Some(items) = entry.pointer("/content/items").and_then(Value::as_array) {
+        for item in items {
+            if let Some(tweet) = item
+                .pointer("/item/itemContent/tweet_results/result")
+                .or_else(|| item.pointer("/item/itemContent/tweet_results"))
+            {
+                push_tweet_result(tweets, tweet);
+            }
+        }
+    }
 }
 
-fn bottom_cursor(entry: &Value) -> Option<String> {
-    let content = entry.get("content")?;
+fn push_tweet_result(tweets: &mut Vec<Value>, tweet: &Value) {
+    if unwrap_tweet(tweet).get("legacy").is_some() {
+        tweets.push(tweet.clone());
+    }
+}
+
+struct TimelineCursor {
+    value: String,
+    stop_on_empty: bool,
+}
+
+fn bottom_cursor(entry: &Value) -> Option<TimelineCursor> {
+    let content = entry.get("content").or_else(|| entry.get("item"))?;
+    let content = content.get("itemContent").unwrap_or(content);
     let cursor_type = content
         .get("cursorType")
-        .or_else(|| content.get("cursor_type"))?
-        .as_str()?;
-    if cursor_type != "Bottom" {
+        .or_else(|| content.get("cursor_type"))
+        .and_then(Value::as_str);
+    let entry_is_bottom = entry
+        .get("entryId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id.starts_with("cursor-bottom-"));
+    if cursor_type != Some("Bottom") && !entry_is_bottom {
         return None;
     }
-    content
+    let value = content
         .get("value")?
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+        .map(ToOwned::to_owned)?;
+    Some(TimelineCursor {
+        value,
+        stop_on_empty: content
+            .get("stopOnEmptyResponse")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
 }
 
 fn unwrap_tweet(mut value: &Value) -> &Value {
@@ -666,27 +1007,72 @@ mod tests {
     }
 
     #[test]
-    fn requires_a_complete_direct_site_session_before_network_access() {
-        let missing = api_credentials(&RequestCredentials::default()).unwrap_err();
+    fn requires_authentication_and_uses_the_freshest_csrf_cookie() {
+        let missing = api_credentials_with_csrf(&RequestCredentials::default(), None).unwrap_err();
         assert_eq!(missing.kind, SourceErrorKind::Authentication);
 
         let mut incomplete = RequestCredentials::default();
         incomplete
             .cookies
             .insert("auth_token".to_string(), "session".to_string());
-        let missing_csrf = api_credentials(&incomplete).unwrap_err();
-        assert_eq!(missing_csrf.kind, SourceErrorKind::Authentication);
+        let generated = api_credentials_with_csrf(&incomplete, None).unwrap();
+        let generated_csrf = generated.cookies.get("ct0").unwrap();
+        assert_eq!(generated_csrf.len(), 32);
+        assert_eq!(generated.headers.get("x-csrf-token"), Some(generated_csrf));
 
         incomplete
             .cookies
-            .insert("ct0".to_string(), "csrf".to_string());
-        let complete = api_credentials(&incomplete).unwrap();
+            .insert("ct0".to_string(), "stale".to_string());
+        let complete = api_credentials_with_csrf(&incomplete, Some("rotated")).unwrap();
+        assert_eq!(
+            complete.cookies.get("ct0").map(String::as_str),
+            Some("rotated")
+        );
+        assert_eq!(
+            complete.headers.get("x-csrf-token").map(String::as_str),
+            Some("rotated")
+        );
         assert_eq!(
             complete
                 .headers
                 .get("x-twitter-auth-type")
                 .map(String::as_str),
             Some("OAuth2Session")
+        );
+        assert_eq!(
+            complete.headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(
+            complete.headers.get("Sec-Fetch-Dest").map(String::as_str),
+            Some("empty")
+        );
+        assert_eq!(
+            complete.headers.get("Sec-Fetch-Mode").map(String::as_str),
+            Some("cors")
+        );
+        assert_eq!(
+            complete.headers.get("Sec-Fetch-Site").map(String::as_str),
+            Some("same-origin")
+        );
+    }
+
+    #[test]
+    fn transaction_input_includes_the_exact_graphql_path_and_query() {
+        let url = user_lookup_url("OpenAI");
+        let path = transaction_path(&url);
+        assert!(path.starts_with("/i/api/graphql/"));
+        assert!(path.contains("?variables="));
+        assert!(path.contains("&features="));
+        assert!(!path.contains("x.com"));
+    }
+
+    #[test]
+    fn transaction_script_supports_the_current_indirect_bundle_mapping() {
+        let home = r#"before,"bundleKey":"ondemand.s",after "bundleKey":"abc123" after"#;
+        assert_eq!(
+            transaction_script_url(home).unwrap(),
+            "https://abs.twimg.com/responsive-web/client-web/ondemand.s.abc123a.js"
         );
     }
 
@@ -716,6 +1102,10 @@ mod tests {
         assert_eq!(post.media.len(), 2);
         assert!(post.tags.contains(&CanonicalTag::new("creator", "OpenAI")));
         assert!(post.tags.contains(&CanonicalTag::new("", "Picto")));
+        assert_eq!(post.media[0].fallbacks.len(), 4);
+        assert!(post.media[0].fallbacks[0]
+            .url
+            .ends_with("?format=jpg&name=4096x4096"));
         assert_eq!(post.media[1].mime_hint.as_deref(), Some("video/mp4"));
     }
 
@@ -746,5 +1136,96 @@ mod tests {
         let state = decode_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
         assert_eq!(state.page_index, 1);
         assert!(state.timeline_cursor.is_none());
+    }
+
+    #[test]
+    fn flattens_every_tweet_from_add_entries_and_module_instructions() {
+        let mut response: Value = serde_json::from_str(MEDIA).unwrap();
+        let instructions = response
+            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        let result = instructions[0]
+            .pointer("/entries/0/content/itemContent/tweet_results/result")
+            .unwrap()
+            .clone();
+        let mut second = result.clone();
+        second["rest_id"] = Value::String("1960123456789012346".into());
+        second["legacy"]["id_str"] = Value::String("1960123456789012346".into());
+        let mut third = result;
+        third["rest_id"] = Value::String("1960123456789012347".into());
+        third["legacy"]["id_str"] = Value::String("1960123456789012347".into());
+        instructions.push(json!({
+            "type": "TimelineAddToModule",
+            "moduleItems": [
+                {"item": {"itemContent": {"tweet_results": {"result": second}}}},
+                {"item": {"itemContent": {"tweet_results": {"result": third}}}},
+                {"item": {"itemContent": {"tweet_results": {"result": {
+                    "__typename": "TweetTombstone",
+                    "tombstone": {"text": {"text": "Unavailable"}}
+                }}}}}
+            ]
+        }));
+
+        let page = parse_timeline(&response).unwrap();
+        assert_eq!(page.tweets.len(), 3);
+        let state = CursorState {
+            user_id: "783214".into(),
+            timeline_cursor: None,
+            page_index: 2,
+        };
+        let batch = normalize_timeline_page(&request(None), "OpenAI", "783214", Some(&state), page)
+            .unwrap();
+        assert_eq!(batch.posts[0].stable_id, "1960123456789012347");
+    }
+
+    #[test]
+    fn empty_page_continues_only_when_the_bottom_cursor_requires_it() {
+        let response = json!({
+            "data": {"timeline": {"instructions": [{
+                "type": "TimelineAddEntries",
+                "entries": [{
+                    "entryId": "cursor-bottom-1",
+                    "content": {
+                        "cursorType": "Bottom",
+                        "value": "NEXT",
+                        "stopOnEmptyResponse": false
+                    }
+                }]
+            }]}}
+        });
+        let page = parse_timeline(&response).unwrap();
+        assert!(page.tweets.is_empty());
+        assert!(page.continue_on_empty);
+        assert_eq!(page.bottom_cursor.as_deref(), Some("NEXT"));
+        let batch =
+            normalize_timeline(&request(None), "OpenAI", "783214", None, &response).unwrap();
+        assert!(batch.posts.is_empty());
+        assert!(!batch.exhausted);
+    }
+
+    #[test]
+    fn classifies_graphql_errors_without_turning_transients_into_auth_failures() {
+        let timeout = reject_api_errors(&json!({
+            "errors": [{"message": "Timeout while fetching timeline"}]
+        }))
+        .unwrap_err();
+        assert_eq!(timeout.kind, SourceErrorKind::Network);
+        assert!(timeout.retryable);
+
+        let server = reject_api_errors(&json!({
+            "errors": [{"message": "Backend unavailable", "source": "Server"}]
+        }))
+        .unwrap_err();
+        assert_eq!(server.kind, SourceErrorKind::Network);
+        assert!(server.retryable);
+
+        let auth = reject_api_errors(&json!({
+            "errors": [{"message": "Could not authenticate you"}]
+        }))
+        .unwrap_err();
+        assert_eq!(auth.kind, SourceErrorKind::Authentication);
+        assert!(!auth.retryable);
     }
 }

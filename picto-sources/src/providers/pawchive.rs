@@ -1,6 +1,6 @@
 use crate::NativeSourceAdapter;
 
-use super::kemono::{archive_adapter, ArchiveProvider};
+use super::archive_feed::{archive_adapter, ArchiveProvider};
 
 const PAWCHIVE: ArchiveProvider = ArchiveProvider {
     id: "pawchive",
@@ -29,7 +29,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::providers::kemono::{
+    use crate::providers::archive_feed::{
         decode_cursor, normalize_creator_query, normalize_detail, normalize_page, CursorState,
     };
     use crate::{CanonicalTag, DiscoveryRequest, SourcePartition};
@@ -56,7 +56,8 @@ mod tests {
             normalize_creator_query(PAWCHIVE, "https://pawchive.st/patreon/user/90730375/").is_ok()
         );
         assert!(
-            normalize_creator_query(PAWCHIVE, "https://kemono.cr/patreon/user/90730375").is_err()
+            normalize_creator_query(PAWCHIVE, "https://example.invalid/patreon/user/90730375")
+                .is_err()
         );
     }
 
@@ -98,7 +99,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(post.creator.as_deref(), Some("Marinerx Art"));
-        assert_eq!(post.media.len(), 3);
+        assert_eq!(post.media.len(), 4);
+        assert!(post.media.iter().any(|media| media.url.ends_with(".zip")));
         assert!(post
             .media
             .iter()
@@ -107,5 +109,63 @@ mod tests {
             .tags
             .contains(&CanonicalTag::new("series", "Example Series")));
         assert!(post.tags.contains(&CanonicalTag::new("", "sketch")));
+    }
+
+    #[test]
+    fn keeps_available_originals_when_the_full_archive_is_pending_and_rejects_previews() {
+        let creator = normalize_creator_query(PAWCHIVE, &request(None).query).unwrap();
+        let page: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pawchive/page.json")).unwrap();
+        let source_post = normalize_page(
+            PAWCHIVE,
+            &request(None),
+            &creator,
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
+            page,
+        )
+        .unwrap()
+        .posts
+        .into_iter()
+        .next()
+        .unwrap();
+        let profile: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pawchive/profile.json"))
+                .unwrap();
+
+        let mut unavailable: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pawchive/post.json")).unwrap();
+        unavailable["has_full"] = Value::Bool(false);
+        unavailable["preview_state"] = Value::String("pending".into());
+        let post = normalize_detail(
+            PAWCHIVE,
+            source_post.clone(),
+            &creator,
+            unavailable,
+            profile.clone(),
+        )
+        .unwrap();
+        assert!(!post.media.is_empty());
+        assert!(post
+            .media
+            .iter()
+            .all(|media| media.url.starts_with("https://file.pawchive.pw/data/")));
+
+        let mut preview: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pawchive/post.json")).unwrap();
+        preview["file"] = serde_json::json!({
+            "name": "preview.jpg",
+            "path": "/aa/bb/preview.jpg",
+            "server": "https://img.pawchive.pw"
+        });
+        let post = normalize_detail(PAWCHIVE, source_post, &creator, preview, profile).unwrap();
+        assert!(
+            post.media
+                .iter()
+                .all(|media| !media.url.contains("/thumbnail/")
+                    && !media.url.contains("img.pawchive"))
+        );
     }
 }

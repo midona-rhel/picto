@@ -15,7 +15,7 @@
     "predev": "npm run prepare:viewer-assets",
     "dev": "vite",
     "predev:electron": "npm run prepare:viewer-assets",
-    "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"CARGO_PROFILE_DEV_DEBUG=0 cargo watch -w core/src -w core/Cargo.toml -w picto-library/src -w picto-library/Cargo.toml -w native/picto-node/src -w native/picto-node/Cargo.toml -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --signal SIGTERM --watch electron --watch native/picto-node/index.node --ext mjs,cjs,node --delay 1 --exec 'electron electron/main.mjs'\"",
+    "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"CARGO_PROFILE_DEV_DEBUG=0 cargo watch -w core/src -w core/Cargo.toml -w picto-library/src -w picto-library/Cargo.toml -w picto-sources/src -w picto-sources/Cargo.toml -w native/picto-node/src -w native/picto-node/Cargo.toml -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --signal SIGTERM --watch electron --watch native/picto-node/index.node --ext mjs,cjs,node --delay 1 --exec 'electron electron/main.mjs'\"",
     "start:electron": "npm run rebuild:native && electron electron/main.mjs",
     "rebuild:native": "npm --prefix native/picto-node run build:local",
     "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",

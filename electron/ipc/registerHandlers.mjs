@@ -346,7 +346,7 @@ export function registerIpcHandlers({
     try {
       serialized = await invokeSerialized(command, args || {});
     } catch (error) {
-      throw new Error(`${command}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(error instanceof Error ? error.message : String(error));
     }
     if (command === 'settings.get') {
       try {

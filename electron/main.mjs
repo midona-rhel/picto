@@ -44,12 +44,6 @@ if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
 }
 
 const isDev = !app.isPackaged;
-if (isDev && !isAutomation && process.platform === 'darwin') {
-  process.env.PICTO_DEVELOPMENT_CREDENTIAL_CACHE = path.join(
-    app.getPath('userData'),
-    'development-credentials.json',
-  );
-}
 if (isDev && process.platform === 'darwin') {
   app.setActivationPolicy('accessory');
 }
