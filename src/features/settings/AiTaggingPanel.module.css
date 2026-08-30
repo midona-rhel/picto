@@ -78,13 +78,14 @@
 
 .operationStatus {
   min-width: 0;
+  min-height: 18px;
   margin-right: auto;
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  line-height: 1;
+  line-height: 18px;
 }
 
 .operationLabel {
@@ -94,8 +95,8 @@
 }
 
 .operationPercent {
-  width: 34px;
-  flex: 0 0 34px;
+  width: 40px;
+  flex: 0 0 40px;
   color: var(--color-text-primary);
   font-family: var(--font-family-mono);
   text-align: right;
