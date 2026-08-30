@@ -2,8 +2,15 @@
 
 This directory contains executable work only. Git history retains completed and superseded work.
 
-There are no active alpha PBIs. Platform packaging and smoke results are release-workflow gates,
-not unfinished product implementation.
+Active post-release implementation work:
+
+- [`PBI-618-native-onlyfans-coverage.md`](PBI-618-native-onlyfans-coverage.md)
+- [`PBI-619-duplicate-review-selection-stability.md`](PBI-619-duplicate-review-selection-stability.md)
+- [`PBI-620-restore-missing-subscription-providers.md`](PBI-620-restore-missing-subscription-providers.md)
+- [`PBI-621-subscription-merge-smart-names.md`](PBI-621-subscription-merge-smart-names.md)
+- [`PBI-622-minimum-text-search-length.md`](PBI-622-minimum-text-search-length.md)
+
+Platform packaging and smoke results remain release-workflow gates rather than product PBIs.
 
 ## Backlog policy
 
