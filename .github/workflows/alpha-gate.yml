@@ -194,12 +194,19 @@ jobs:
           pattern: picto-*
           merge-multiple: true
 
+      - name: Select versioned release notes
+        shell: bash
+        run: |
+          notes="docs/${GITHUB_REF_NAME#v}-release-notes.md"
+          test -f "$notes"
+          cp "$notes" release-notes.md
+
       - name: Attach assets to GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: true
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             release-artifacts/*.dmg
             release-artifacts/*.zip
