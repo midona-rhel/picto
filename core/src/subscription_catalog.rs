@@ -395,17 +395,6 @@ impl LibraryApplication {
                         require_subscription(transaction, subscription_id)?;
                         reject_running_subscription_reset(transaction, subscription_id)?;
                         transaction.execute(
-                            "DELETE FROM deletion_tombstone
-                             WHERE stable_key IN (
-                                 SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
-                                 FROM subscription_source_post linked
-                                 JOIN source_post post USING(source_post_id)
-                                 JOIN source_item item USING(source_post_id)
-                                 WHERE linked.subscription_id = ?1
-                             )",
-                            [subscription_id],
-                        )?;
-                        transaction.execute(
                             "DELETE FROM ingest_job
                              WHERE source_item_id IN (
                                  SELECT si.source_item_id
@@ -424,26 +413,6 @@ impl LibraryApplication {
                                    ON si.source_item_id = rsi.source_item_id
                                  WHERE sr.subscription_id = ?1
                                    AND si.media_item_id IS NULL
-                             )",
-                            [subscription_id],
-                        )?;
-                        transaction.execute(
-                            "UPDATE source_item
-                             SET state = 'pending', last_error = NULL,
-                                 updated_at = datetime('now')
-                             WHERE source_item_id IN (
-                                 SELECT si.source_item_id
-                                 FROM subscription_source_post ssp
-                                 JOIN source_item si
-                                   ON si.source_post_id = ssp.source_post_id
-                                 WHERE ssp.subscription_id = ?1
-                                 UNION
-                                 SELECT rsi.source_item_id
-                                 FROM subscription_run_source_item rsi
-                                 JOIN subscription_run_query srq
-                                   ON srq.run_query_id = rsi.run_query_id
-                                 JOIN subscription_run sr ON sr.run_id = srq.run_id
-                                 WHERE sr.subscription_id = ?1
                              )",
                             [subscription_id],
                         )?;
@@ -467,6 +436,14 @@ impl LibraryApplication {
                         transaction.execute(
                             "DELETE FROM subscription_run WHERE subscription_id = ?1",
                             [subscription_id],
+                        )?;
+                        transaction.execute(
+                            "DELETE FROM source_post
+                             WHERE NOT EXISTS (
+                                 SELECT 1 FROM subscription_source_post linked
+                                 WHERE linked.source_post_id = source_post.source_post_id
+                             )",
+                            [],
                         )?;
                         Ok(Some(()))
                     },
@@ -2135,6 +2112,9 @@ mod tests {
         let (subscription_id, _) = application
             .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
             .unwrap();
+        let (other_subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
         application
             .request_subscription_run_library(subscription_id, "2026-08-29T00:00:01Z")
             .unwrap();
@@ -2172,6 +2152,11 @@ mod tests {
                              WHERE query.subscription_id = ?1",
                         [subscription_id],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                    let other_query_id: i64 = transaction.query_row(
+                        "SELECT query_id FROM subscription_query WHERE subscription_id = ?1",
+                        [other_subscription_id],
+                        |row| row.get(0),
                     )?;
                     transaction.execute(
                         "INSERT INTO library_item(local_id, stable_key, item_kind)
@@ -2211,6 +2196,12 @@ mod tests {
                              (subscription_id, query_id, source_post_id, last_seen_run_id)
                          VALUES (?1, ?2, ?3, ?4)",
                         params![subscription_id, query_id, source_post_id, run_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO subscription_source_post
+                             (subscription_id, query_id, source_post_id, last_seen_run_id)
+                         VALUES (?1, ?2, ?3, NULL)",
+                        params![other_subscription_id, other_query_id, source_post_id],
                     )?;
                     transaction.execute(
                         "INSERT INTO subscription_run_source_item(run_query_id, source_item_id)
@@ -2262,7 +2253,16 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )?;
-                    assert_eq!(state, "pending");
+                    assert_eq!(state, "ingested");
+                    assert_eq!(
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM subscription_source_post
+                             WHERE subscription_id = ?1",
+                            [other_subscription_id],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        1
+                    );
                     let source_tombstone: bool = connection.query_row(
                         "SELECT EXISTS(
                              SELECT 1 FROM deletion_tombstone
@@ -2279,7 +2279,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )?;
-                    assert!(!source_tombstone);
+                    assert!(source_tombstone);
                     assert!(unrelated_tombstone);
                     assert_eq!(
                         connection.query_row(

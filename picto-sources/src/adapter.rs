@@ -13,6 +13,7 @@ pub type AdapterFuture<'a> =
     Pin<Box<dyn Future<Output = Result<DiscoveryBatch, SourceError>> + Send + 'a>>;
 pub type PostFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SourcePost, SourceError>> + Send + 'a>>;
+pub type PreflightFuture<'a> = Pin<Box<dyn Future<Output = Result<(), SourceError>> + Send + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderDescriptor {
@@ -27,6 +28,16 @@ pub trait NativeSourceAdapter: Send + Sync {
     fn descriptor(&self) -> ProviderDescriptor;
 
     fn validate_query(&self, query: &str) -> Result<(), SourceError>;
+
+    fn preflight<'a>(
+        &'a self,
+        _query: &'a str,
+        _credentials: &'a RequestCredentials,
+        _http: &'a HttpRuntime,
+        _cancel: &'a CancellationToken,
+    ) -> PreflightFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
 
     fn discover<'a>(
         &'a self,

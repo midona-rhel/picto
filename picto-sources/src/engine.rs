@@ -136,6 +136,31 @@ impl PartitionedSourceSession {
         Ok(())
     }
 
+    /// Stop refreshing the active partition after its current post settled.
+    /// The next pull advances to the following provider-defined partition.
+    pub fn finish_current_partition(&mut self) -> Result<(), SourceError> {
+        let current = self.current.take().ok_or_else(|| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "no active source partition",
+                false,
+            )
+        })?;
+        if current.active.is_some() {
+            self.current = Some(current);
+            return Err(SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "source partition still has an unsettled post",
+                false,
+            ));
+        }
+        self.cursors.insert(
+            current.request.partition.clone(),
+            current.cursor().map(ToOwned::to_owned),
+        );
+        Ok(())
+    }
+
     pub fn cursors(&self) -> &BTreeMap<crate::SourcePartition, Option<String>> {
         &self.cursors
     }
@@ -291,7 +316,9 @@ mod tests {
         exhausted: bool,
     }
 
-    struct PartitionFixtureSource;
+    struct PartitionFixtureSource {
+        exhausted: bool,
+    }
     struct MultiPostSource;
 
     impl NativeSourceAdapter for MultiPostSource {
@@ -378,7 +405,7 @@ mod tests {
                         media: vec![],
                         resume_cursor_after: Some(format!("after-{id}")),
                     }],
-                    exhausted: true,
+                    exhausted: self.exhausted,
                 })
             })
         }
@@ -674,7 +701,7 @@ mod tests {
     async fn partitions_share_one_added_budget_and_keep_independent_cursors() {
         let runtime = runtime();
         let mut session = PartitionedSourceSession::new(
-            Arc::new(PartitionFixtureSource),
+            Arc::new(PartitionFixtureSource { exhausted: true }),
             RequestCredentials::default(),
             "creator",
             BTreeMap::new(),
@@ -762,5 +789,48 @@ mod tests {
                 .and_then(|cursor| cursor.as_deref()),
             Some("after-feed"),
         );
+    }
+
+    #[tokio::test]
+    async fn bounded_refresh_advances_a_partition_before_source_exhaustion() {
+        let runtime = runtime();
+        let mut session = PartitionedSourceSession::new(
+            Arc::new(PartitionFixtureSource { exhausted: false }),
+            RequestCredentials::default(),
+            "creator",
+            BTreeMap::new(),
+            1,
+            10,
+        )
+        .unwrap();
+
+        let first = match session
+            .next_post(&runtime, &CancellationToken::new())
+            .await
+            .unwrap()
+        {
+            NextPost::Post(post) => post,
+            other => panic!("expected post, got {other:?}"),
+        };
+        assert_eq!(first.partition.0, "purchases");
+        session
+            .settle(
+                &first.stable_id,
+                SourcePostOutcome::Skipped {
+                    reason: crate::SkipReason::ExactDuplicate,
+                },
+            )
+            .unwrap();
+        session.finish_current_partition().unwrap();
+
+        let second = match session
+            .next_post(&runtime, &CancellationToken::new())
+            .await
+            .unwrap()
+        {
+            NextPost::Post(post) => post,
+            other => panic!("expected post, got {other:?}"),
+        };
+        assert_eq!(second.partition.0, "messages");
     }
 }

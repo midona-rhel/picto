@@ -269,6 +269,7 @@ pub async fn enqueue_manual_import(
             payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
                 members: collection_members,
                 cover_index: 0,
+                existing_root_id: None,
                 name,
                 modified_at_ms: now.timestamp_millis(),
             }),

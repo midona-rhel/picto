@@ -618,6 +618,7 @@ mod tests {
                     payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
                         members: vec![cover, member],
                         cover_index: 0,
+                        existing_root_id: None,
                         name: Some("Collection".into()),
                         modified_at_ms: 1_700_000_000_000,
                     }),
@@ -669,6 +670,7 @@ mod tests {
                     payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
                         members: vec![cover, member],
                         cover_index: 0,
+                        existing_root_id: None,
                         name: Some("Auto-tag collection".into()),
                         modified_at_ms: 1_700_000_000_000,
                     }),

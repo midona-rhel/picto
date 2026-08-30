@@ -903,6 +903,16 @@ fn record_post_in(
                       AND source_item.media_item_id IS NULL
                       AND (SELECT root_item_id FROM source_post
                            WHERE source_post_id = source_item.source_post_id) IS NULL
+                      AND EXISTS (
+                          SELECT 1 FROM deletion_tombstone tombstone
+                          WHERE tombstone.stable_key =
+                              'source:' || ?7 || ':' || ?8 || ':' || source_item.item_key
+                      )
+                     THEN 'deleted'
+                     WHEN source_item.state = 'ingested'
+                      AND source_item.media_item_id IS NULL
+                      AND (SELECT root_item_id FROM source_post
+                           WHERE source_post_id = source_item.source_post_id) IS NULL
                      THEN 'pending'
                      ELSE source_item.state
                  END,
@@ -922,6 +932,8 @@ fn record_post_in(
                 item.media_url,
                 item.canonical_url,
                 now,
+                post.site_id,
+                post.post_key,
             ],
         )?;
         let source_item_id = transaction.query_row(

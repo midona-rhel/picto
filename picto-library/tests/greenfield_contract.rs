@@ -2013,6 +2013,7 @@ fn prepared_collection_import_never_publishes_standalone_members() {
                 imported("atomic-two", Lifecycle::Inbox, &["post:atomic"]),
             ],
             cover_index: 1,
+            existing_root_id: None,
             name: Some("Atomic post".into()),
             modified_at_ms: 1_700_000_004_000,
         })
@@ -2055,6 +2056,99 @@ fn prepared_collection_import_never_publishes_standalone_members() {
                         row.get::<_, i64>(0)
                     })?,
                     1
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn collection_refresh_appends_to_the_existing_root_in_one_publication() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (existing_root, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                imported(
+                    "refresh-existing-cover",
+                    Lifecycle::Inbox,
+                    &["creator:existing"],
+                ),
+                imported(
+                    "refresh-existing-member",
+                    Lifecycle::Inbox,
+                    &["creator:existing"],
+                ),
+            ],
+            cover_index: 0,
+            existing_root_id: None,
+            name: Some("Existing source post".into()),
+            modified_at_ms: 1_700_000_004_000,
+        })
+        .unwrap();
+    let original_cover = library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(connection.query_row(
+                    "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                    [existing_root.0],
+                    |row| row.get::<_, u32>(0),
+                )?)
+            },
+        )
+        .unwrap();
+    let before = library.database().revision().unwrap();
+
+    let (collection, receipt) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![imported(
+                "refresh-new",
+                Lifecycle::Inbox,
+                &["creator:existing"],
+            )],
+            cover_index: 0,
+            existing_root_id: Some(existing_root),
+            name: Some("Refreshed source post".into()),
+            modified_at_ms: 1_700_000_005_000,
+        })
+        .unwrap();
+
+    assert_eq!(receipt.revision, before + 1);
+    assert_eq!(collection, existing_root);
+    let inbox = library
+        .query(&query(ItemScope::Inbox), &PageRequest::default())
+        .unwrap();
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.items[0].root_id, collection);
+    assert_eq!(inbox.items[0].kind, RootKind::Collection);
+    assert_eq!(inbox.items[0].media_count, 3);
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT cover_media_id FROM library_root WHERE root_id = ?1",
+                        [collection.0],
+                        |row| row.get::<_, u32>(0),
+                    )?,
+                    original_cover
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    1
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    3
                 );
                 Ok(())
             },
@@ -2177,6 +2271,7 @@ fn repeated_collection_import_merges_new_members_without_replacing_its_name() {
                 imported("growing-two", Lifecycle::Inbox, &["post:growing"]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("A named subscription post".into()),
             modified_at_ms: 1_700_000_004_000,
         })
@@ -2190,6 +2285,7 @@ fn repeated_collection_import_merges_new_members_without_replacing_its_name() {
                 imported("growing-three", Lifecycle::Inbox, &["post:growing"]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("123456789".into()),
             modified_at_ms: 1_700_000_005_000,
         })
@@ -2226,6 +2322,7 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
         .ingest_collection(&picto_library::PreparedCollectionImport {
             members,
             cover_index: 1,
+            existing_root_id: None,
             name: Some("Filtered collection".into()),
             modified_at_ms: 1_700_000_003_000,
         })
@@ -2311,6 +2408,7 @@ fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
                 imported("collection-isolation-first-support", Lifecycle::Inbox, &[]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("First collection".into()),
             modified_at_ms: 1_700_000_004_000,
         })
@@ -2329,6 +2427,7 @@ fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
                 imported("collection-isolation-second-support", Lifecycle::Inbox, &[]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("Second collection".into()),
             modified_at_ms: 1_700_000_005_000,
         })
@@ -2360,6 +2459,7 @@ fn exact_hash_standalone_import_collapses_into_collection_and_donates_its_tags()
                 imported("collection-owner-support", Lifecycle::Inbox, &[]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("Owner collection".into()),
             modified_at_ms: 1_700_000_006_000,
         })
@@ -2421,6 +2521,7 @@ fn exact_hash_standalone_tags_fan_out_to_every_owner_across_lifecycles() {
                 imported("fan-out-collection-support", Lifecycle::Inbox, &[]),
             ],
             cover_index: 0,
+            existing_root_id: None,
             name: Some("Fan-out collection".into()),
             modified_at_ms: 1_700_000_007_000,
         })
@@ -2491,6 +2592,7 @@ fn large_prepared_collection_publishes_as_one_coherent_root() {
         .ingest_collection(&picto_library::PreparedCollectionImport {
             members,
             cover_index: 50,
+            existing_root_id: None,
             name: Some("Large atomic source".into()),
             modified_at_ms: 1_700_000_003_000,
         })

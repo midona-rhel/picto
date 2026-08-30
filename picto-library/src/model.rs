@@ -390,6 +390,8 @@ pub struct PreparedImport {
 pub struct PreparedCollectionImport {
     pub members: Vec<PreparedImport>,
     pub cover_index: usize,
+    #[serde(default)]
+    pub existing_root_id: Option<RootId>,
     pub name: Option<String>,
     pub modified_at_ms: i64,
 }

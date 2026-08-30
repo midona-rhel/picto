@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use futures_util::StreamExt;
+use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -23,18 +24,21 @@ use picto_sources::{
 const CURRENT_POST_DOWNLOAD_CONCURRENCY: usize = 4;
 const MAX_TRAVERSED_PER_ADDED_TARGET: u32 = 10;
 const SOURCE_POST_PULL_SIZE: u32 = 1;
+const PERIODIC_RECHECK_POSTS_PER_PARTITION: u32 = 25;
 
 pub struct NativeSourceRunner {
     library_root: PathBuf,
+    library: Arc<picto_library::Library>,
     registry: ProviderRegistry,
     http: Arc<HttpRuntime>,
     downloader: PostDownloader,
 }
 
 impl NativeSourceRunner {
-    pub fn open(library_root: &Path) -> Self {
+    pub fn open(application: &crate::library_application::LibraryApplication) -> Self {
         Self {
-            library_root: library_root.to_path_buf(),
+            library_root: application.root().to_path_buf(),
+            library: Arc::clone(application.library()),
             registry: ProviderRegistry::native(),
             http: shared_http_runtime(),
             downloader: PostDownloader::new(CURRENT_POST_DOWNLOAD_CONCURRENCY)
@@ -66,6 +70,15 @@ impl NativeSourceRunner {
                 format!("{} requires a connected account", descriptor.display_name),
             ));
         }
+        if !query.initial_run_complete
+            && query.resume_cursor.as_deref().is_none_or(str::is_empty)
+            && query.attempt_count == 1
+        {
+            adapter
+                .preflight(&query.query_text, &credentials, &self.http, &cancel)
+                .await
+                .map_err(map_source_error)?;
+        }
         let partitions = adapter.partition_order();
         if partitions.is_empty() {
             return Err(RunnerFailure::terminal(
@@ -73,7 +86,13 @@ impl NativeSourceRunner {
                 "Native source has no stream partition",
             ));
         }
-        let cursors = decode_runtime_cursor(&partitions, query.resume_cursor.as_deref())?;
+        let refresh_from_newest = query.initial_run_complete && query.attempt_count == 1;
+        let cursors = decode_runtime_cursor(
+            &partitions,
+            (!refresh_from_newest)
+                .then_some(query.resume_cursor.as_deref())
+                .flatten(),
+        )?;
         let mut session = PartitionedSourceSession::new(
             adapter,
             credentials.clone(),
@@ -96,6 +115,8 @@ impl NativeSourceRunner {
             .max(MAX_TRAVERSED_PER_ADDED_TARGET);
         let mut traversed = 0_u32;
         let mut stop_after_current_execution = false;
+        let mut rechecked_by_partition = BTreeMap::<SourcePartition, u32>::new();
+        let mut bounded_refresh = false;
         let resume_cursor = loop {
             match session
                 .next_post(&self.http, &cancel)
@@ -107,7 +128,8 @@ impl NativeSourceRunner {
                 }
                 NextPost::SourceExhausted => break Some(String::new()),
                 NextPost::Post(post) => {
-                    let post = *post;
+                    let mut post = *post;
+                    let plan = self.revisit_plan(query, &post)?;
                     let normalized = normalize_post(&post)?;
                     send_event(
                         &output,
@@ -115,6 +137,14 @@ impl NativeSourceRunner {
                         &cancel,
                     )
                     .await?;
+                    if plan.known {
+                        let checked = rechecked_by_partition
+                            .entry(post.partition.clone())
+                            .or_default();
+                        *checked = checked.saturating_add(1);
+                    }
+                    post.media
+                        .retain(|media| plan.download_media.contains(&media.stable_id));
                     let post_staging = run_staging.join(staging_name(&post));
                     let mut downloads = self
                         .downloader
@@ -183,6 +213,18 @@ impl NativeSourceRunner {
                         .map_err(map_source_error)?;
                     cleanup_staging(&post_staging).await;
                     traversed = traversed.saturating_add(1);
+                    if refresh_from_newest
+                        && rechecked_by_partition
+                            .get(&post.partition)
+                            .copied()
+                            .unwrap_or_default()
+                            >= PERIODIC_RECHECK_POSTS_PER_PARTITION
+                    {
+                        session
+                            .finish_current_partition()
+                            .map_err(map_source_error)?;
+                        bounded_refresh = true;
+                    }
                     if traversed >= traversal_budget
                         && session.added_count() < query.source_post_batch_size()
                     {
@@ -193,12 +235,113 @@ impl NativeSourceRunner {
             }
         };
 
+        if bounded_refresh {
+            stop_after_current_execution = true;
+        }
+
         Ok(RunnerSuccess {
             resume_cursor,
             cleanup_paths: vec![run_staging],
             stop_after_current_execution,
         })
     }
+
+    fn revisit_plan(
+        &self,
+        query: &ClaimedQueryRun,
+        post: &SourcePost,
+    ) -> Result<PostRevisitPlan, RunnerFailure> {
+        let remote_media = post
+            .media
+            .iter()
+            .map(|media| media.stable_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let known = self
+            .library
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    let source_post_id = connection
+                        .query_row(
+                            "SELECT linked.source_post_id
+                             FROM subscription_source_post linked
+                             JOIN source_post post USING(source_post_id)
+                             WHERE linked.subscription_id = ?1 AND linked.query_id = ?2
+                               AND post.site_id = ?3 AND post.post_key = ?4",
+                            rusqlite::params![
+                                query.subscription_id,
+                                query.query_id,
+                                post.site_id,
+                                post.stable_id
+                            ],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?;
+                    let Some(source_post_id) = source_post_id else {
+                        return Ok(None);
+                    };
+                    let mut statement = connection.prepare(
+                        "SELECT item.item_key, item.state, item.media_item_id,
+                                EXISTS(
+                                    SELECT 1 FROM deletion_tombstone tombstone
+                                    WHERE tombstone.stable_key =
+                                        'source:' || ?2 || ':' || ?3 || ':' || item.item_key
+                                )
+                         FROM source_item item
+                         WHERE item.source_post_id = ?1",
+                    )?;
+                    let items = statement
+                        .query_map(
+                            rusqlite::params![source_post_id, post.site_id, post.stable_id],
+                            |row| {
+                                Ok((
+                                    row.get::<_, String>(0)?,
+                                    row.get::<_, String>(1)?,
+                                    row.get::<_, Option<u32>>(2)?,
+                                    row.get::<_, bool>(3)?,
+                                ))
+                            },
+                        )?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(Some(items))
+                },
+            )
+            .map_err(|error| {
+                RunnerFailure::retryable(RunnerFailureKind::Runtime, error.to_string())
+            })?;
+        let Some(known) = known else {
+            return Ok(PostRevisitPlan {
+                known: false,
+                download_media: remote_media,
+            });
+        };
+        let states = known
+            .into_iter()
+            .map(|(item_key, state, media_item_id, deleted)| {
+                (item_key, (state, media_item_id, deleted))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let download_media = remote_media
+            .into_iter()
+            .filter(|media_id| match states.get(media_id) {
+                None => true,
+                Some((state, media_item_id, deleted)) => {
+                    !(*deleted
+                        || state == "deleted"
+                        || state == "ingested" && media_item_id.is_some())
+                }
+            })
+            .collect();
+        Ok(PostRevisitPlan {
+            known: true,
+            download_media,
+        })
+    }
+}
+
+struct PostRevisitPlan {
+    known: bool,
+    download_media: std::collections::BTreeSet<String>,
 }
 
 fn decode_runtime_cursor(
@@ -443,6 +586,9 @@ fn map_source_error(error: SourceError) -> RunnerFailure {
         SourceErrorKind::Authentication => {
             RunnerFailure::terminal(RunnerFailureKind::Authentication, error.message)
         }
+        SourceErrorKind::AccessDenied => {
+            RunnerFailure::terminal(RunnerFailureKind::AccessDenied, error.message)
+        }
         SourceErrorKind::InvalidQuery => {
             RunnerFailure::terminal(RunnerFailureKind::InvalidQuery, error.message)
         }
@@ -468,7 +614,8 @@ fn map_source_error(error: SourceError) -> RunnerFailure {
 mod tests {
     use super::*;
     use crate::credential_store::{CredentialType, SiteCredential};
-    use picto_sources::SourcePartition;
+    use crate::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
+    use picto_sources::{MediaDescriptorBuilder, SourcePartition};
 
     #[test]
     fn every_product_source_has_exactly_one_native_adapter() {
@@ -599,6 +746,156 @@ mod tests {
     }
 
     #[test]
+    fn revisit_history_is_scoped_to_the_subscription_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = crate::library_application::LibraryApplication::create(
+            directory.path().join("library"),
+        )
+        .unwrap();
+        let definition = |name: &str| NewSubscription {
+            name: name.into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(20),
+            periodic_post_limit: Some(20),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "twitter".into(),
+                query_text: "same_query".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (first_subscription, _) = application
+            .create_subscription_definition_library(&definition("First"), "2026-08-30T00:00:00Z")
+            .unwrap();
+        let (second_subscription, _) = application
+            .create_subscription_definition_library(&definition("Second"), "2026-08-30T00:00:00Z")
+            .unwrap();
+        let ((first_query, second_query, source_post_id), _) = application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    let first_query = transaction.query_row(
+                        "SELECT query_id FROM subscription_query WHERE subscription_id = ?1",
+                        [first_subscription],
+                        |row| row.get::<_, i64>(0),
+                    )?;
+                    let second_query = transaction.query_row(
+                        "SELECT query_id FROM subscription_query WHERE subscription_id = ?1",
+                        [second_subscription],
+                        |row| row.get::<_, i64>(0),
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (7000, 'revisit-existing-media', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (7001, 'revisit-existing-hash', '/existing', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (7000, 'existing.png', 7001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO source_post
+                             (site_id, post_key, created_at, updated_at)
+                         VALUES ('twitter', 'shared-post', '2026-08-30T00:00:00Z',
+                                 '2026-08-30T00:00:00Z')",
+                        [],
+                    )?;
+                    let source_post_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO source_item
+                             (source_post_id, item_key, position, media_item_id, state,
+                              created_at, updated_at)
+                         VALUES (?1, 'shared-media', 0, 7000, 'ingested',
+                                 '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z')",
+                        [source_post_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO subscription_source_post
+                             (subscription_id, query_id, source_post_id)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![second_subscription, second_query, source_post_id],
+                    )?;
+                    Ok((first_query, second_query, source_post_id))
+                },
+            )
+            .unwrap();
+        let claimed = ClaimedQueryRun {
+            run_query_id: 1,
+            run_id: 1,
+            query_id: first_query,
+            subscription_id: first_subscription,
+            site_id: "twitter".into(),
+            domain_key: "x.com".into(),
+            query_kind: "creator".into(),
+            query_text: "same_query".into(),
+            group_posts: true,
+            requested_by: "manual".into(),
+            initial_post_limit: Some(20),
+            periodic_post_limit: Some(20),
+            run_post_limit: Some(20),
+            initial_run_complete: true,
+            resume_cursor: None,
+            attempt_count: 1,
+        };
+        let post = SourcePost {
+            site_id: "twitter".into(),
+            partition: SourcePartition::new("posts"),
+            stable_id: "shared-post".into(),
+            canonical_url: None,
+            creator: None,
+            name: None,
+            notes: None,
+            created_at: None,
+            tags: Vec::new(),
+            media: vec![MediaDescriptorBuilder::new(
+                "shared-media",
+                0,
+                "https://example.test/shared.png",
+            )
+            .build()],
+            resume_cursor_after: None,
+        };
+        let runner = NativeSourceRunner::open(&application);
+
+        let unowned = runner.revisit_plan(&claimed, &post).unwrap();
+        assert!(!unowned.known);
+        assert!(unowned.download_media.contains("shared-media"));
+
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO subscription_source_post
+                             (subscription_id, query_id, source_post_id)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![first_subscription, first_query, source_post_id],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let owned = runner.revisit_plan(&claimed, &post).unwrap();
+        assert!(owned.known);
+        assert!(owned.download_media.is_empty());
+        assert_ne!(first_query, second_query);
+    }
+
+    #[test]
     fn traversal_safety_budget_scales_with_the_added_post_target() {
         assert_eq!(1_u32.saturating_mul(MAX_TRAVERSED_PER_ADDED_TARGET), 10);
         assert_eq!(
@@ -666,7 +963,7 @@ mod tests {
             .unwrap();
         let worker = crate::subscription_runtime::SubscriptionWorker::new(
             &application,
-            NativeSourceRunner::open(application.root()),
+            NativeSourceRunner::open(&application),
         );
         worker.tick(&chrono::Utc::now().to_rfc3339()).await.unwrap();
 

@@ -110,6 +110,47 @@ impl NativeSourceAdapter for OnlyFansAdapter {
         normalized_username(query).map(|_| ())
     }
 
+    fn preflight<'a>(
+        &'a self,
+        query: &'a str,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> crate::adapter::PreflightFuture<'a> {
+        Box::pin(async move {
+            let username = normalized_username(query)?;
+            validate_credentials(credentials)?;
+            let rules = self.dynamic_rules(http, cancel).await?;
+            let profile = self
+                .profile(&username, credentials, &rules, http, cancel)
+                .await?;
+            let cursor = Cursor {
+                version: 1,
+                partition: "feed".into(),
+                area: Some(FeedArea::Timeline),
+                anchor: None,
+                offset: 0,
+                seen: Vec::new(),
+            };
+            let page = signed_page(
+                http,
+                feed_url(&profile.id, FeedArea::Timeline, &cursor)?,
+                credentials,
+                &rules,
+                cancel,
+            )
+            .await?;
+            if page.posts.first().is_some_and(main_post_is_locked) {
+                return Err(SourceError::new(
+                    SourceErrorKind::AccessDenied,
+                    format!("The connected OnlyFans account does not have access to {username}"),
+                    false,
+                ));
+            }
+            Ok(())
+        })
+    }
+
     fn discover<'a>(
         &'a self,
         request: &'a DiscoveryRequest,
@@ -635,6 +676,16 @@ fn downloadable_media(raw: &Value, credentials: &RequestCredentials) -> Vec<Medi
         .collect()
 }
 
+fn main_post_is_locked(raw: &Value) -> bool {
+    let Some(media) = raw.get("media").and_then(Value::as_array) else {
+        return false;
+    };
+    !media.is_empty()
+        && media
+            .iter()
+            .all(|item| item.get("canView").and_then(Value::as_bool) == Some(false))
+}
+
 fn clear_manifest_url(media: &Value) -> Option<Url> {
     [
         media.pointer("/files/full/url").and_then(Value::as_str),
@@ -1063,6 +1114,21 @@ mod tests {
             ]
         );
         assert!(post.media.iter().all(|media| !media.url.ends_with(".zip")));
+    }
+
+    #[test]
+    fn access_probe_only_rejects_explicitly_locked_main_media() {
+        let mut locked = fixture("timeline")["list"][0].clone();
+        locked["media"][0]["canView"] = Value::Bool(false);
+        assert!(main_post_is_locked(&locked));
+        assert!(!main_post_is_locked(&fixture("timeline")["list"][0]));
+        assert!(!main_post_is_locked(&serde_json::json!({ "media": [] })));
+        assert!(!main_post_is_locked(
+            &serde_json::json!({ "text": "hello" })
+        ));
+        assert!(!main_post_is_locked(
+            &serde_json::json!({ "media": [{ "url": "https://example.test/file" }] })
+        ));
     }
 
     #[test]

@@ -1360,9 +1360,25 @@ impl Library {
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 let mut next = (*snapshot).clone();
-                let mut root_ids = Vec::with_capacity(input.members.len());
+                let mut root_ids = Vec::with_capacity(input.members.len() + 1);
                 let mut created_root_ids = Vec::with_capacity(input.members.len());
-                let mut requested_cover = None;
+                let mut requested_cover = input.existing_root_id;
+                if let Some(existing_root_id) = input.existing_root_id {
+                    if !next
+                        .root_kinds
+                        .get(&RootKind::Collection)
+                        .is_some_and(|roots| roots.contains(existing_root_id.0))
+                        && !next
+                            .root_kinds
+                            .get(&RootKind::Media)
+                            .is_some_and(|roots| roots.contains(existing_root_id.0))
+                    {
+                        return Err(LibraryError::NotFound(format!(
+                            "existing source root {existing_root_id}"
+                        )));
+                    }
+                    root_ids.push(existing_root_id);
+                }
                 let mut resources = BTreeSet::new();
                 let mut bitmap_keys = HashSet::new();
                 let mut folder_ids = HashSet::new();
@@ -1378,7 +1394,7 @@ impl Library {
                     )?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
-                    if index == input.cover_index {
+                    if input.existing_root_id.is_none() && index == input.cover_index {
                         requested_cover = Some(output.root_id);
                     }
                     if output.created_root {

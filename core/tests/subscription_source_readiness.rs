@@ -436,7 +436,7 @@ async fn execute_run(
     if !created.created {
         return Err("subscription already had an active run".into());
     }
-    let runner = NativeSourceRunner::open(application.root());
+    let runner = NativeSourceRunner::open(application);
     let cancel = CancellationToken::new();
     let worker = SubscriptionWorker::with_cancellation(application, runner, cancel.clone());
     // Batched-window providers settle one source window per tick and return

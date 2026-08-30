@@ -213,9 +213,13 @@ fn validate_job(job: &PreparedIngestJob) -> Result<()> {
         PreparedIngestPayload::Item(input) if input.stable_key.trim().is_empty() => Err(
             LibraryError::InvalidInput("ingest stable key is empty".into()),
         ),
-        PreparedIngestPayload::Collection(input) if input.members.len() < 2 => Err(
-            LibraryError::InvalidInput("collection ingest needs at least two members".into()),
-        ),
+        PreparedIngestPayload::Collection(input)
+            if input.members.len() + usize::from(input.existing_root_id.is_some()) < 2 =>
+        {
+            Err(LibraryError::InvalidInput(
+                "collection ingest needs at least two members".into(),
+            ))
+        }
         _ => Ok(()),
     }
 }

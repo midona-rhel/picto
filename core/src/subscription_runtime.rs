@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use tokio::sync::mpsc::{self, Sender};
 use tokio_util::sync::CancellationToken;
 
@@ -86,6 +87,7 @@ pub enum RunnerFailureKind {
     Network,
     RateLimited,
     Authentication,
+    AccessDenied,
     InvalidQuery,
     InvalidOutput,
     Download,
@@ -128,6 +130,7 @@ impl Display for RunnerFailureKind {
             Self::Network => "network",
             Self::RateLimited => "rate_limited",
             Self::Authentication => "auth",
+            Self::AccessDenied => "access",
             Self::InvalidQuery => "invalid_query",
             Self::InvalidOutput => "invalid_output",
             Self::Download => "download",
@@ -730,6 +733,7 @@ async fn enqueue_group(
     });
     ensure_subscription_thumbnails(application, &items).await?;
     let post = items[0].post.clone();
+    let existing_root = source_post_root(application, &post.site_id, &post.post_key)?;
     let folders = destination
         .target_folder_ids
         .iter()
@@ -755,6 +759,9 @@ async fn enqueue_group(
             return Err("Downloaded item identity does not match its normalized post".into());
         }
         item.input.folders = folders.clone();
+        if let Some((_, lifecycle)) = existing_root {
+            item.input.lifecycle = lifecycle;
+        }
         for tag in &destination.automatic_tags {
             if !item.input.tags.contains(tag) {
                 item.input.tags.push(tag.clone());
@@ -768,12 +775,13 @@ async fn enqueue_group(
         )?);
     }
     let source_path = items[0].input.file_path.clone();
-    let payload = if items.len() == 1 {
+    let payload = if items.len() == 1 && existing_root.is_none() {
         PreparedIngestPayload::Item(items.remove(0).input)
     } else {
         PreparedIngestPayload::Collection(PreparedCollectionImport {
             members: items.into_iter().map(|item| item.input).collect(),
             cover_index: 0,
+            existing_root_id: existing_root.map(|(root_id, _)| root_id),
             name: post.title.clone(),
             modified_at_ms: Utc::now().timestamp_millis(),
         })
@@ -796,6 +804,41 @@ async fn enqueue_group(
         )
         .map_err(|error| format!("enqueueing subscription media failed: {error}"))?;
     Ok(())
+}
+
+fn source_post_root(
+    application: &LibraryApplication,
+    site_id: &str,
+    post_key: &str,
+) -> Result<Option<(picto_library::RootId, picto_library::Lifecycle)>, String> {
+    let root_id = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT post.root_item_id
+                         FROM source_post post
+                         JOIN library_root root ON root.root_id = post.root_item_id
+                         WHERE post.site_id = ?1 AND post.post_key = ?2",
+                        rusqlite::params![site_id, post_key],
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .optional()
+                    .map_err(Into::into)
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let Some(root_id) = root_id else {
+        return Ok(None);
+    };
+    let snapshot = application.library().projections().snapshot();
+    let lifecycle = picto_library::Lifecycle::ALL
+        .into_iter()
+        .find(|lifecycle| snapshot.lifecycle(*lifecycle).contains(root_id))
+        .ok_or_else(|| format!("source post root {root_id} has no lifecycle"))?;
+    Ok(Some((picto_library::RootId(root_id), lifecycle)))
 }
 
 async fn ensure_subscription_thumbnails(
