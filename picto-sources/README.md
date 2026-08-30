@@ -56,6 +56,11 @@ Family fixtures prove shared composition; every provider also owns focused parse
 Tumblr is intentionally not part of the native registry. gallery-dl and OF-Scraper are behavioral
 references only and are not production or packaged dependencies.
 
+When a source changes or starts producing incorrect results, follow
+[`docs/SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](../docs/SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).
+It defines the reference-comparison, fixture, authentication, cursor, live-certification, and
+release-audit workflow without reintroducing a sidecar runtime.
+
 ## Cutover Rule
 
 The native registry and worker are the sole production authority. The system does not dual-write,
