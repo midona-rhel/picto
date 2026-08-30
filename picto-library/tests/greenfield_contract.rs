@@ -2166,6 +2166,47 @@ fn exact_hash_ingest_reuses_the_owner_and_transfers_only_tags() {
 }
 
 #[test]
+fn repeated_collection_import_merges_new_members_without_replacing_its_name() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (collection, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                imported("growing-one", Lifecycle::Inbox, &["post:growing"]),
+                imported("growing-two", Lifecycle::Inbox, &["post:growing"]),
+            ],
+            cover_index: 0,
+            name: Some("A named subscription post".into()),
+            modified_at_ms: 1_700_000_004_000,
+        })
+        .unwrap();
+
+    let (updated, _) = library
+        .ingest_collection(&picto_library::PreparedCollectionImport {
+            members: vec![
+                imported("growing-one", Lifecycle::Inbox, &["post:growing"]),
+                imported("growing-two", Lifecycle::Inbox, &["post:growing"]),
+                imported("growing-three", Lifecycle::Inbox, &["post:growing"]),
+            ],
+            cover_index: 0,
+            name: Some("123456789".into()),
+            modified_at_ms: 1_700_000_005_000,
+        })
+        .unwrap();
+
+    assert_eq!(updated, collection);
+    let details = library.details(collection).unwrap();
+    assert_eq!(details.root.name, "A named subscription post");
+    assert_eq!(details.root.media_count, 3);
+    assert_eq!(details.media.len(), 3);
+    let inbox = library
+        .query(&query(ItemScope::Inbox), &PageRequest::default())
+        .unwrap();
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.items[0].root_id, collection);
+}
+
+#[test]
 fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

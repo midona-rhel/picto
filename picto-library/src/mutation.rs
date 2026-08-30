@@ -1370,10 +1370,10 @@ impl Library {
                     )?;
                     next = output.snapshot;
                     root_ids.push(output.root_id);
+                    if index == input.cover_index {
+                        requested_cover = Some(output.root_id);
+                    }
                     if output.created_root {
-                        if index == input.cover_index {
-                            requested_cover = Some(output.root_id);
-                        }
                         created_root_ids.push(output.root_id);
                     }
                     resources.extend(output.resources);
@@ -1381,20 +1381,49 @@ impl Library {
                     folder_ids.extend(output.folder_ids);
                     ingest_affected |= &output.affected_roots;
                 }
-                let preserve_singleton_collection = !reuse_identity && created_root_ids.len() == 1;
+                let ordered_roots = root_ids
+                    .iter()
+                    .copied()
+                    .fold(Vec::new(), |mut roots, root| {
+                        if !roots.contains(&root) {
+                            roots.push(root);
+                        }
+                        roots
+                    });
+                let existing_collections = ordered_roots
+                    .iter()
+                    .copied()
+                    .filter(|root| {
+                        next.root_kinds
+                            .get(&RootKind::Collection)
+                            .is_some_and(|collections| collections.contains(root.0))
+                    })
+                    .collect::<Vec<_>>();
+                if existing_collections.len() > 1 {
+                    return Err(LibraryError::InvalidState(
+                        "one source collection resolved to multiple existing collections".into(),
+                    ));
+                }
+                let winning_collection_id = existing_collections.first().copied();
+                let preserve_singleton_collection = !reuse_identity && ordered_roots.len() == 1;
                 let (published_root, mut affected) =
-                    if created_root_ids.len() >= 2 || preserve_singleton_collection {
+                    if ordered_roots.len() >= 2 || preserve_singleton_collection {
                         let output = crate::group::organize(
                             transaction,
                             revision,
                             next,
                             &GroupRequest {
                                 target: SelectionTarget::Explicit {
-                                    root_ids: created_root_ids.clone(),
+                                    root_ids: ordered_roots.clone(),
                                 },
-                                cover_root_id: requested_cover.unwrap_or(created_root_ids[0]),
-                                winning_collection_id: None,
-                                name: input.name.clone(),
+                                cover_root_id: requested_cover.unwrap_or(ordered_roots[0]),
+                                winning_collection_id,
+                                // Existing collection titles are collection-owned. A later
+                                // member refresh must not replace one with a member/source name.
+                                name: winning_collection_id
+                                    .is_none()
+                                    .then(|| input.name.clone())
+                                    .flatten(),
                                 notes: input.members[input.cover_index].notes.clone(),
                                 modified_at_ms: input.modified_at_ms,
                             },
@@ -1404,10 +1433,7 @@ impl Library {
                         resources.insert("collections".to_owned());
                         (output.collection_id, output.affected)
                     } else {
-                        let published_root = created_root_ids
-                            .first()
-                            .copied()
-                            .unwrap_or(root_ids[input.cover_index]);
+                        let published_root = ordered_roots[0];
                         (
                             published_root,
                             root_ids
