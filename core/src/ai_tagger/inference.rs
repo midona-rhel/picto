@@ -119,8 +119,12 @@ impl TaggerSession {
             adapter,
             coreml_current,
         )?;
-        if let SessionRuntime::Ort(session) = &runtime {
-            validate_session_contract(session, input_size, labels.len(), adapter)?;
+        match &runtime {
+            SessionRuntime::Ort(session) => {
+                validate_session_contract(session, input_size, labels.len(), adapter)?
+            }
+            #[cfg(target_os = "macos")]
+            SessionRuntime::CoreMl { .. } => {}
         }
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
@@ -384,7 +388,9 @@ fn normalized_nchw(input: &PreparedInput, mean: [f32; 3], std: [f32; 3]) -> Vec<
         for channel in 0..3 {
             output.extend(
                 image
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|pixel| (pixel[channel] / 255.0 - mean[channel]) / std[channel]),
             );
         }

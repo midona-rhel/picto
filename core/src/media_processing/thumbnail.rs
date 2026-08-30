@@ -145,11 +145,15 @@ fn jpeg_pixels_to_rgb(pixels: Vec<u8>, format: jpeg_decoder::PixelFormat) -> Vec
             .flat_map(|value| [value, value, value])
             .collect(),
         jpeg_decoder::PixelFormat::L16 => pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|value| [value[0], value[0], value[0]])
             .collect(),
         jpeg_decoder::PixelFormat::CMYK32 => pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| {
                 let black = 1.0 - pixel[3] as f32 / 255.0;
                 [

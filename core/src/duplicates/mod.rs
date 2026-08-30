@@ -226,7 +226,9 @@ fn spatial_descriptor_at_side(bytes: &[u8], side: u32) -> Option<SpatialDescript
         .ok()?;
     let pixels = resized
         .buffer()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|rgb| {
             Srgb::new(
                 rgb[0] as f32 / 255.0,
