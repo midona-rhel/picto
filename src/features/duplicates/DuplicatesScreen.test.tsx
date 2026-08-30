@@ -330,6 +330,55 @@ describe('DuplicatesScreen', () => {
     expect(screen.queryByText('next-right')).not.toBeInTheDocument();
   });
 
+  it('keeps the active pair when a scan inserts another pair before it', async () => {
+    const activePair = pair('RightBetter');
+    activePair.file_id_a = 3;
+    activePair.file_id_b = 4;
+    activePair.left.file = file(3, 'active-left');
+    activePair.left.occurrences = [{ media_item_id: 33, root_item_id: 33, collection_id: null }];
+    activePair.right.file = file(4, 'active-right');
+    activePair.right.occurrences = [{ media_item_id: 44, root_item_id: 44, collection_id: null }];
+
+    const insertedPair = pair();
+    insertedPair.file_id_a = 5;
+    insertedPair.file_id_b = 6;
+    insertedPair.left.file = file(5, 'inserted-left');
+    insertedPair.left.occurrences = [{ media_item_id: 55, root_item_id: 55, collection_id: null }];
+    insertedPair.right.file = file(6, 'inserted-right');
+    insertedPair.right.occurrences = [{ media_item_id: 66, root_item_id: 66, collection_id: null }];
+
+    vi.mocked(getDuplicatePairs)
+      .mockResolvedValueOnce({ items: [pair(), activePair], next_cursor: null, has_more: false, total: 2 })
+      .mockResolvedValue({ items: [insertedPair, pair(), activePair], next_cursor: null, has_more: false, total: 3 });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      const names: Record<number, [string, string]> = {
+        11: ['left', 'Left image'],
+        22: ['right', 'Right image'],
+        33: ['active-left', 'Active left image'],
+        44: ['active-right', 'Active right image'],
+        55: ['inserted-left', 'Inserted left image'],
+        66: ['inserted-right', 'Inserted right image'],
+      };
+      const [hash, name] = names[itemId];
+      return details(itemId, hash, name);
+    });
+
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    fireEvent.load(screen.getByTestId('pending-left-thumbnail'));
+    fireEvent.load(screen.getByTestId('pending-right-thumbnail'));
+    expect(await screen.findByText('Active left image')).toBeInTheDocument();
+
+    await act(async () => duplicateInvalidation.callback?.());
+
+    await waitFor(() => expect(getDuplicatePairs).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Active left image')).toBeInTheDocument();
+    expect(screen.getByText('Active right image')).toBeInTheDocument();
+    expect(screen.queryByText('Inserted left image')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['z', 'keep_left'],
     ['x', 'keep_right'],

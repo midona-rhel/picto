@@ -477,7 +477,7 @@ export function DuplicatesScreen() {
   const rightPreviewRef = useRef<HTMLDivElement>(null);
 
   const currentPair = pairs[index] ?? null;
-  const pairKey = currentPair ? `${currentPair.file_id_a}:${currentPair.file_id_b}` : '';
+  const pairKey = currentPair ? duplicatePairKey(currentPair) : '';
   const currentPairRef = useRef(currentPair);
   currentPairRef.current = currentPair;
   const activePairKeyRef = useRef(pairKey);
@@ -551,10 +551,17 @@ export function DuplicatesScreen() {
     setError(null);
     try {
       const page = await getDuplicatePairs();
+      const activePairKey = activePairKeyRef.current;
       setPairs(page.items);
       setTotal(page.total);
       if (resetProgress) setInitialTotal(page.total);
-      setIndex((current) => resetProgress ? 0 : Math.min(current, Math.max(0, page.items.length - 1)));
+      setIndex((current) => {
+        const retainedIndex = activePairKey
+          ? page.items.findIndex((candidate) => duplicatePairKey(candidate) === activePairKey)
+          : -1;
+        if (retainedIndex >= 0) return retainedIndex;
+        return resetProgress ? 0 : Math.min(current, Math.max(0, page.items.length - 1));
+      });
     } catch (cause) {
       reportFailure(cause, 'Unable to load duplicate review');
     } finally {
@@ -848,4 +855,10 @@ export function DuplicatesScreen() {
       </footer>
     </section>
   );
+}
+
+function duplicatePairKey(pair: DuplicatePair): string {
+  const left = Math.min(pair.file_id_a, pair.file_id_b);
+  const right = Math.max(pair.file_id_a, pair.file_id_b);
+  return `${left}:${right}`;
 }
