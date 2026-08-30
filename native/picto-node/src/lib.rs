@@ -46,12 +46,12 @@ pub fn copy_files(file_paths: Vec<String>) -> Result<bool> {
     {
         use std::mem::size_of;
         use std::ptr::{copy_nonoverlapping, null_mut};
+        use windows_sys::Win32::Foundation::GlobalFree;
         use windows_sys::Win32::System::DataExchange::{
-            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData, CF_HDROP,
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
         };
-        use windows_sys::Win32::System::Memory::{
-            GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GHND,
-        };
+        use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GHND};
+        use windows_sys::Win32::System::Ole::CF_HDROP;
         use windows_sys::Win32::UI::Shell::DROPFILES;
 
         let mut names = Vec::<u16>::new();
