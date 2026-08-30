@@ -427,7 +427,7 @@ function ProgressiveDuplicateImage({
       {!layers.fullSettled && (
         <img
           key={`thumbnail:${layers.assetKey}`}
-          className={`${styles.thumbnailImage} ${layers.thumbnailReady && pairThumbnailsReady ? styles.thumbnailImageReady : ''}`}
+          className={`${styles.thumbnailImage} ${pairThumbnailsReady ? styles.thumbnailImageReady : ''}`}
           src={layers.thumbnailUrl}
           onLoad={markThumbnailReady}
           alt={alt}
@@ -507,10 +507,17 @@ export function DuplicatesScreen() {
   }, []);
   useLayoutEffect(() => {
     if (pendingIndex == null || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
+    const readyPair = pairs[pendingIndex];
+    if (!readyPair) return;
+    setThumbnailGate({
+      pairKey: duplicatePairKey(readyPair),
+      left: true,
+      right: true,
+    });
     setIndex(pendingIndex);
     setPendingIndex(null);
     setPendingThumbnailGate({ left: false, right: false });
-  }, [pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
+  }, [pairs, pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
   const resolvedCount = Math.max(0, initialTotal - total);
   const zoom = useLinkedComparisonZoom({
     leftContainerRef: leftPreviewRef,

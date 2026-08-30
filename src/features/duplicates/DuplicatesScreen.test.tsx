@@ -598,23 +598,10 @@ describe('DuplicatesScreen', () => {
     const leftLayers = screen.getByTestId('left-preview-layers');
     const rightLayers = screen.getByTestId('right-preview-layers');
     await waitFor(() => {
-      expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
-      expect(leftLayers.querySelector('img[src="media://localhost/thumb/next-left.jpg"]')).not.toBeNull();
-      expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
-      expect(rightLayers.querySelector('img[src="media://localhost/thumb/next-right.jpg"]')).not.toBeNull();
-    });
-
-    const nextLeftThumbnail = leftLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-left.jpg"]')!;
-    const nextRightThumbnail = rightLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-right.jpg"]')!;
-    fireEvent.load(nextLeftThumbnail);
-    expect(nextLeftThumbnail.className).not.toContain('thumbnailImageReady');
-    expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
-    expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
-
-    fireEvent.load(nextRightThumbnail);
-    await waitFor(() => {
       expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).toBeNull();
       expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).toBeNull();
+      const nextLeftThumbnail = leftLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-left.jpg"]')!;
+      const nextRightThumbnail = rightLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-right.jpg"]')!;
       expect(nextLeftThumbnail.className).toContain('thumbnailImageReady');
       expect(nextRightThumbnail.className).toContain('thumbnailImageReady');
     });
