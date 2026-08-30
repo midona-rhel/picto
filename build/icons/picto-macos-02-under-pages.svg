@@ -1,10 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <g fill="none" stroke="#292a2e" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M190 612Q350 604 512 674"/>
-    <path d="M834 612Q674 604 512 674"/>
-    <g stroke-linecap="butt">
-      <path d="M190 612L200 570"/>
-      <path d="M834 612L824 570"/>
-    </g>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><g fill="none" stroke="#292a2e" stroke-linecap="round" stroke-linejoin="round" stroke-width="48"><path d="M190 612Q350 604 512 674"/><path d="M834 612Q674 604 512 674"/><g stroke-linecap="butt"><path d="M190 612L200 570"/><path d="M834 612L824 570"/></g></g></svg>
