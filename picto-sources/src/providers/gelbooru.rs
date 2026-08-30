@@ -252,10 +252,14 @@ fn media_descriptor(
         })
         .unwrap_or_else(|| format!("{}_{post_id}.media", config.id));
 
+    let headers = [("Referer".to_string(), canonical_url.to_string())]
+        .into_iter()
+        .collect();
     Ok(
         MediaDescriptorBuilder::new(format!("{}:{post_id}:0", config.id), 0, url.to_string())
             .canonical_url(canonical_url)
             .file_name(file_name)
+            .headers(headers)
             .build(),
     )
 }
@@ -498,6 +502,10 @@ mod tests {
         assert!(post.tags.contains(&CanonicalTag::new("rating", "safe")));
         assert!(!post.tags.contains(&CanonicalTag::new("", "artist_name")));
         assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/jpeg"));
+        assert_eq!(
+            post.media[0].headers.get("Referer").map(String::as_str),
+            post.canonical_url.as_deref()
+        );
     }
 
     #[test]
