@@ -1,0 +1,33 @@
+{
+  "user": {
+    "id": 173530,
+    "name": "Aoi Artist",
+    "account": "aoi_artist"
+  },
+  "illusts": [
+    {
+      "id": 22334455,
+      "title": "Two pages",
+      "type": "manga",
+      "caption": "<p>Portfolio work</p>",
+      "create_date": "2026-07-01T08:00:00+09:00",
+      "x_restrict": 0,
+      "user": {
+        "id": 173530,
+        "name": "Aoi Artist",
+        "account": "aoi_artist"
+      },
+      "tags": [
+        { "name": "創作", "translated_name": "original" }
+      ],
+      "meta_single_page": {
+        "original_image_url": ""
+      },
+      "meta_pages": [
+        { "image_urls": { "original": "https://i.pximg.net/img-original/img/2026/07/01/08/00/00/22334455_p0.jpg" } },
+        { "image_urls": { "original": "https://i.pximg.net/img-original/img/2026/07/01/08/00/00/22334455_p1.jpg" } }
+      ]
+    }
+  ],
+  "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=173530&offset=30"
+}

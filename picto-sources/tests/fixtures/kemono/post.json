@@ -1,0 +1,34 @@
+{
+  "post": {
+    "id": "147648418",
+    "user": "90822862",
+    "service": "patreon",
+    "title": "Complete post",
+    "content": "<p>Full notes</p><img src=\"/dd/dd/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.jpg\">",
+    "published": "2026-01-07T17:20:52",
+    "tags": [
+      "artist:Alice",
+      "character:Hero",
+      "copyright:Saga",
+      "species:wolf",
+      "rating:explicit",
+      "meta:scan",
+      "plain"
+    ],
+    "file": {"name": "cover.png", "path": "/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"},
+    "attachments": [
+      {"name": "cover.png", "path": "/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"},
+      {"name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"},
+      {"name": "source.zip", "path": "/cc/cc/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.zip"}
+    ]
+  },
+  "attachments": [
+    {"server": "https://n3.kemono.cr", "name": "cover.png", "path": "/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"},
+    {"server": "https://n2.kemono.cr", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"},
+    {"server": "https://n1.kemono.cr", "name": "source.zip", "path": "/cc/cc/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.zip"}
+  ],
+  "videos": [
+    {"server": "https://n2.kemono.cr", "name": "clip.mp4", "path": "/bb/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4"}
+  ],
+  "previews": []
+}

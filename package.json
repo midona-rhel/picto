@@ -11,7 +11,6 @@
     "prepare:viewer-assets": "node scripts/prepare-viewer-assets.mjs",
     "generate:app-icons": "node scripts/generate-app-icons.mjs",
     "generate:license-notices": "node scripts/generate-license-notices.mjs",
-    "lock:onlyfans-sidecar": "uv pip compile scripts/onlyfans-bridge-requirements.in --universal --python-version 3.12 --output-file scripts/onlyfans-bridge-requirements.txt --no-annotate --no-header",
     "release:audit": "node scripts/release-audit.mjs",
     "predev": "npm run prepare:viewer-assets",
     "dev": "vite",
@@ -21,8 +20,6 @@
     "rebuild:native": "npm --prefix native/picto-node run build:local",
     "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",
     "build:native": "npm --prefix native/picto-node run build:local -- --release",
-    "build:gallery-dl-bridge": "node -e \"const {spawnSync}=require('node:child_process'); const python=process.platform==='win32'?'python':'python3'; const result=spawnSync(python,['scripts/build-gallery-dl-bridge.py',...process.argv.slice(1)],{stdio:'inherit'}); process.exit(result.status ?? 1)\" --",
-    "build:onlyfans-bridge": "node -e \"const {spawnSync}=require('node:child_process'); const python=process.platform==='win32'?'python':'python3'; const result=spawnSync(python,['scripts/build-onlyfans-bridge.py',...process.argv.slice(1)],{stdio:'inherit'}); process.exit(result.status ?? 1)\" --",
     "prebuild": "npm run prepare:viewer-assets",
     "build": "tsc && vite build && npm run generate:license-notices",
     "build:electron": "tsc && vite build && npm run generate:license-notices",
@@ -31,8 +28,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch",
-    "alpha:verify": "npm run release:audit && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --manifest-path core/Cargo.toml --quiet && npm run check:command-parity",
-    "alpha:package": "npm run generate:app-icons && npm run build:native && npm run build:electron && npm run build:gallery-dl-bridge && npm run build:onlyfans-bridge && npm run release:audit -- --artifacts && node scripts/build-alpha-package.mjs",
+    "alpha:verify": "npm run release:audit && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --workspace --lib --tests --quiet && cargo clippy --workspace --all-targets -- -D warnings && npm run check:command-parity",
+    "alpha:package": "npm run generate:app-icons && npm run build:native && npm run build:electron && npm run release:audit -- --artifacts && node scripts/build-alpha-package.mjs",
     "alpha:smoke": "node ./scripts/ci/alpha-smoke.mjs",
     "duplicate:smoke": "node ./scripts/ci/duplicate-review-smoke.mjs",
     "duplicate:benchmark": "node ./scripts/ci/duplicate-scan-benchmark.mjs",
@@ -41,7 +38,7 @@
     "test:subscriptions:verify-mcp": "node --test ./scripts/subscription-verifier-mcp.test.mjs",
     "gate:alpha": "npm run alpha:verify",
     "check:command-parity": "node ./scripts/check-command-parity.mjs",
-    "test:rust": "cargo test --manifest-path core/Cargo.toml"
+    "test:rust": "cargo test --workspace --lib --tests"
   },
   "main": "electron/main.mjs",
   "build": {
@@ -72,24 +69,6 @@
           "ffmpeg.exe",
           "ffprobe",
           "ffprobe.exe"
-        ]
-      },
-      {
-        "from": "vendor/gallery-dl/",
-        "to": "gallery-dl/",
-        "filter": [
-          "picto-gallery-dl-bridge",
-          "picto-gallery-dl-bridge.exe",
-          "THIRD_PARTY_LICENSES.txt"
-        ]
-      },
-      {
-        "from": "vendor/onlyfans/",
-        "to": "onlyfans/",
-        "filter": [
-          "picto-onlyfans-bridge",
-          "picto-onlyfans-bridge.exe",
-          "THIRD_PARTY_LICENSES.txt"
         ]
       }
     ],

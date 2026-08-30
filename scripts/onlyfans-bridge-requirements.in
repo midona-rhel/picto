@@ -1,4 +1,0 @@
-# Direct build inputs. Regenerate the frozen cross-platform lock with:
-# npm run lock:onlyfans-sidecar
-ofscraper @ https://github.com/datawhores/OF-Scraper/archive/d10ce94935fd2a6cd02a662e624b0081e976a0a6.zip
-pyinstaller==6.15.0

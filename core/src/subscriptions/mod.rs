@@ -1,7 +1,5 @@
-pub(crate) mod archive;
-pub mod gallery_dl_runner;
-pub mod import_policy;
 pub mod pixiv_oauth;
+pub mod sites;
 pub mod source_adapter;
 
 use std::collections::BTreeMap;

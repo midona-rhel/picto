@@ -14,7 +14,7 @@ use crate::subscription_catalog::{
     NewSubscription, NewSubscriptionQuery, SubscriptionCoverCandidateCursor,
     SubscriptionCoverSelection, SubscriptionDestinationPolicy,
 };
-use crate::subscriptions::gallery_dl_runner::normalize_ehentai_gallery_url;
+use crate::subscriptions::sites::normalize_ehentai_gallery_url;
 
 /// Greenfield command path. Commands return `None` until their complete
 /// product behavior has moved to `LibraryApplication`; production state only
@@ -622,15 +622,6 @@ pub async fn dispatch_library_async(
             let timestamp = now();
             let (subscription_id, _) =
                 application.create_subscription_definition_library(&definition, &timestamp)?;
-            if let Err(error) =
-                crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-                    application.root(),
-                    subscription_id,
-                )
-            {
-                let _ = application.delete_subscription_library(subscription_id);
-                return Err(error);
-            }
             let (run, receipt) = application
                 .request_subscription_run_library(subscription_id, &timestamp)
                 .inspect_err(|_| {
@@ -655,10 +646,6 @@ pub async fn dispatch_library_async(
             if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
                 return Err("Only transient E-Hentai gallery jobs can use gallery cleanup".into());
             }
-            crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-                application.root(),
-                input.subscription_id,
-            )?;
             let title = application
                 .library()
                 .auxiliary_read(

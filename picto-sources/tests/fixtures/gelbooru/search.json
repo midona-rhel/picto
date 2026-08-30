@@ -1,0 +1,18 @@
+{
+  "@attributes": { "count": 1, "offset": 0 },
+  "post": [
+    {
+      "id": 13753751,
+      "created_at": "Sun Mar 29 22:30:30 -0500 2026",
+      "rating": "s",
+      "file_url": "https://img2.gelbooru.com/images/12/34/example.jpg",
+      "md5": "0123456789abcdef0123456789abcdef",
+      "tags": "artist_name princess_peach mario dress highres",
+      "tags_artist": "artist_name",
+      "tags_character": "princess_peach",
+      "tags_copyright": "mario",
+      "tags_general": "dress",
+      "tags_metadata": "highres"
+    }
+  ]
+}

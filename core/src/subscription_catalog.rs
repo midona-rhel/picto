@@ -12,10 +12,8 @@ use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
 use crate::library_application::LibraryApplication;
-use crate::subscriptions::gallery_dl_runner::{build_url, site_by_id};
-use crate::subscriptions::source_adapter::{
-    infer_query_kind, normalize_query_text, validate_query_text,
-};
+use crate::subscriptions::sites::{build_url, site_by_id};
+use crate::subscriptions::source_adapter::{infer_query_kind, normalize_query_text};
 use crate::subscriptions::{self, CreatedRun};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -227,13 +225,13 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
                     subscription.destination = destinations
                         .remove(&subscription.subscription_id)
                         .unwrap_or_default();
-                    if let Some(cover) = covers.remove(&subscription.subscription_id) {
-                        if let Some((selection, file_hash)) = cover {
-                            subscription.cover_file_hash = Some(file_hash);
-                            subscription.cover_focus_x = selection.focus_x;
-                            subscription.cover_focus_y = selection.focus_y;
-                            subscription.cover_zoom_percent = selection.zoom_percent;
-                        }
+                    if let Some(Some((selection, file_hash))) =
+                        covers.remove(&subscription.subscription_id)
+                    {
+                        subscription.cover_file_hash = Some(file_hash);
+                        subscription.cover_focus_x = selection.focus_x;
+                        subscription.cover_focus_y = selection.focus_y;
+                        subscription.cover_zoom_percent = selection.zoom_percent;
                     }
                 }
                 Ok(SubscriptionList {
@@ -276,62 +274,30 @@ fn query_subscription_views(
              ),
              traversed_posts AS (
                  SELECT srq.run_id,
-                        COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
-                        COUNT(DISTINCT CASE
-                            WHEN (root.root_id IS NULL
-                                  OR root.imported_at_ms < unixepoch(active.created_at) * 1000)
-                             AND NOT EXISTS (
-                                 SELECT 1
-                                 FROM source_item candidate
-                                 LEFT JOIN ingest_job candidate_job
-                                   ON candidate_job.source_item_id = candidate.source_item_id
-                                 WHERE candidate.source_post_id = ssp.source_post_id
-                                   AND (candidate.state IN ('pending', 'downloaded', 'failed')
-                                        OR candidate_job.status IN ('pending', 'running', 'failed'))
-                             )
-                            THEN ssp.source_post_id END) AS posts_skipped
-                 FROM active_runs active
-                 JOIN subscription_run_query srq ON srq.run_id = active.run_id
-                 JOIN subscription_source_post ssp
-                   ON ssp.query_id = srq.query_id
-                  AND ssp.last_seen_run_id = srq.run_id
-                 LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
-                 LEFT JOIN library_root root ON root.root_id = post.root_item_id
+                        COUNT(DISTINCT attempt.attempt_id) AS posts_traversed,
+                        COUNT(DISTINCT CASE WHEN attempt.state = 'skipped'
+                                            THEN attempt.attempt_id END) AS posts_skipped
+                 FROM subscription_run_query srq
+                 LEFT JOIN source_post_attempt attempt
+                   ON attempt.run_query_id = srq.run_query_id
                  GROUP BY srq.run_id
              ),
              item_progress AS (
                  SELECT srq.run_id,
-                        COUNT(DISTINCT CASE
-                            WHEN si.state = 'ingested'
-                             AND root.imported_at_ms >= unixepoch(active.created_at) * 1000
-                            THEN post.root_item_id END) AS posts_added,
-                        COUNT(DISTINCT rsi.source_item_id) AS discovered,
-                        COUNT(DISTINCT CASE
-                            WHEN si.state = 'downloaded'
-                             AND si.updated_at >= active.created_at
-                            THEN rsi.source_item_id
-                            WHEN si.state IN ('ingested', 'deleted')
-                             AND (root.imported_at_ms >= unixepoch(active.created_at) * 1000
-                                  OR ij.updated_at >= active.created_at)
-                            THEN rsi.source_item_id END) AS downloaded,
-                        COUNT(DISTINCT CASE
-                            WHEN si.state = 'ingested'
-                             AND root.imported_at_ms >= unixepoch(active.created_at) * 1000
-                            THEN rsi.source_item_id END) AS ingested,
-                        COUNT(DISTINCT CASE WHEN si.state = 'failed'
-                                             AND si.updated_at >= active.created_at
-                                            THEN rsi.source_item_id END) AS failed,
-                        COUNT(DISTINCT CASE WHEN si.state = 'deleted'
-                                             AND si.updated_at >= active.created_at
-                                            THEN rsi.source_item_id END) AS deleted
-                 FROM active_runs active
-                 JOIN subscription_run_query srq ON srq.run_id = active.run_id
-                 LEFT JOIN subscription_run_source_item rsi
-                   ON rsi.run_query_id = srq.run_query_id
-                 LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
-                 LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
-                 LEFT JOIN library_root root ON root.root_id = post.root_item_id
-                 LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
+                        COUNT(DISTINCT CASE WHEN attempt.state = 'added'
+                                            THEN attempt.attempt_id END) AS posts_added,
+                        COUNT(DISTINCT file.file_attempt_id) AS discovered,
+                        COUNT(DISTINCT CASE WHEN file.state IN ('staged', 'retained')
+                                            THEN file.file_attempt_id END) AS downloaded,
+                        COUNT(DISTINCT CASE WHEN file.state = 'retained'
+                                            THEN file.file_attempt_id END) AS ingested,
+                        COUNT(DISTINCT CASE WHEN file.state = 'failed'
+                                            THEN file.file_attempt_id END) AS failed,
+                        0 AS deleted
+                 FROM subscription_run_query srq
+                 LEFT JOIN source_post_attempt attempt
+                   ON attempt.run_query_id = srq.run_query_id
+                 LEFT JOIN source_file_attempt file USING(attempt_id)
                  GROUP BY srq.run_id
              )
              SELECT s.subscription_id, s.name, s.schedule, s.paused,
@@ -361,8 +327,10 @@ fn query_subscription_views(
              LEFT JOIN subscription_run latest ON latest.run_id = latest_id.run_id
              LEFT JOIN root_totals USING (subscription_id)
              LEFT JOIN issue_totals USING (subscription_id)
-             LEFT JOIN traversed_posts ON traversed_posts.run_id = active.run_id
-             LEFT JOIN item_progress ON item_progress.run_id = active.run_id
+             LEFT JOIN traversed_posts
+               ON traversed_posts.run_id = COALESCE(active.run_id, latest.run_id)
+             LEFT JOIN item_progress
+               ON item_progress.run_id = COALESCE(active.run_id, latest.run_id)
              ORDER BY s.name, s.subscription_id",
         )?
         .query_map([], |row| {
@@ -505,11 +473,7 @@ impl LibraryApplication {
                 )
                 .map_err(|error| error.to_string())?,
         )?;
-        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-            self.root(),
-            subscription_id,
-        )?;
-        crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
+        crate::native_source::clear_subscription_state(self.root(), subscription_id)?;
         Ok(receipt)
     }
 
@@ -703,21 +667,6 @@ impl LibraryApplication {
         &self,
         query_id: i64,
     ) -> Result<picto_library::MutationReceipt, String> {
-        let subscription_id = self
-            .library()
-            .auxiliary_read(
-                picto_library::database::WorkPriority::VisibleRead,
-                |connection| {
-                    connection
-                        .query_row(
-                            "SELECT subscription_id FROM subscription_query WHERE query_id = ?1",
-                            [query_id],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .map_err(Into::into)
-                },
-            )
-            .map_err(|error| error.to_string())?;
         let receipt = finish_subscription_mutation(
             self,
             self.library()
@@ -740,11 +689,6 @@ impl LibraryApplication {
                     },
                 )
                 .map_err(|error| error.to_string())?,
-        )?;
-        crate::subscriptions::archive::clear_query_archive_at_root(
-            self.root(),
-            subscription_id,
-            query_id,
         )?;
         Ok(receipt)
     }
@@ -975,7 +919,7 @@ impl LibraryApplication {
         &self,
         subscription_id: i64,
     ) -> Result<picto_library::MutationReceipt, String> {
-        crate::onlyfans_source::clear_subscription_state(self.root(), subscription_id)?;
+        crate::native_source::clear_subscription_state(self.root(), subscription_id)?;
         let receipt = finish_subscription_mutation(
             self,
             self.library()
@@ -1004,10 +948,6 @@ impl LibraryApplication {
                     },
                 )
                 .map_err(|error| error.to_string())?,
-        )?;
-        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-            self.root(),
-            subscription_id,
         )?;
         Ok(receipt)
     }
@@ -1154,6 +1094,24 @@ impl LibraryApplication {
                             params![now, run_id],
                         )?;
                         transaction.execute(
+                            "UPDATE source_post_attempt
+                             SET state = 'cancelled', terminal_reason = 'user_cancelled', settled_at = ?1
+                             WHERE run_query_id IN (
+                                 SELECT run_query_id FROM subscription_run_query WHERE run_id = ?2
+                             ) AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                            params![now, run_id],
+                        )?;
+                        transaction.execute(
+                            "UPDATE source_file_attempt SET staged_path = NULL
+                             WHERE attempt_id IN (
+                                 SELECT attempt_id FROM source_post_attempt
+                                 WHERE run_query_id IN (
+                                     SELECT run_query_id FROM subscription_run_query WHERE run_id = ?1
+                                 ) AND state = 'cancelled'
+                             )",
+                            [run_id],
+                        )?;
+                        transaction.execute(
                             "UPDATE subscription_run
                              SET status = 'cancelled', finished_at = ?1
                              WHERE run_id = ?2",
@@ -1271,7 +1229,7 @@ fn finish_subscription_mutation(
     if let Some(((), receipt)) = published {
         return Ok(receipt);
     }
-    Ok(current_subscription_receipt(application)?)
+    current_subscription_receipt(application)
 }
 
 fn current_subscription_receipt(
@@ -1788,12 +1746,17 @@ fn validate_subscription(input: &NewSubscription) -> Result<(), String> {
 
 fn prepare_query(query: &NewSubscriptionQuery) -> Result<PreparedQuery, String> {
     let site_id = query.site_id.trim();
+    let site = site_by_id(site_id).ok_or_else(|| format!("Unknown site: {site_id}"))?;
     let query_kind = infer_query_kind(site_id);
     let query_text = normalize_query_text(site_id, query_kind, &query.query_text);
-    validate_query_text(site_id, &query_text)?;
+    let adapter = picto_sources::ProviderRegistry::native()
+        .get(site_id)
+        .ok_or_else(|| format!("No native source adapter exists for {site_id}"))?;
+    adapter
+        .validate_query(&query_text)
+        .map_err(|error| error.message)?;
     build_url(site_id, &query_text)
         .ok_or_else(|| format!("Invalid {site_id} subscription query"))?;
-    let site = site_by_id(site_id).ok_or_else(|| format!("Unknown site: {site_id}"))?;
     Ok(PreparedQuery {
         site_id: site.id.to_string(),
         domain_key: site.domain.to_string(),
@@ -2076,6 +2039,82 @@ mod tests {
     use super::{LibraryApplication, NewSubscription, NewSubscriptionQuery};
     use rusqlite::params;
 
+    #[test]
+    fn completed_subscription_keeps_the_latest_run_progress_visible() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Completed progress".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut crate::subscriptions::DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        crate::library_subscription_state::record_post(
+            &application,
+            query.run_query_id,
+            &crate::subscriptions::NormalizedPost {
+                site_id: "e621".into(),
+                post_key: "no-media".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: Vec::new(),
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        assert!(matches!(
+            crate::library_subscription_state::settled_post_outcome(
+                &application,
+                &query,
+                "no-media",
+            )
+            .unwrap(),
+            picto_sources::SourcePostOutcome::Skipped { .. }
+        ));
+        crate::library_subscription_state::complete_query(
+            &application,
+            &query,
+            Some(""),
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
+
+        let subscription = super::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .into_iter()
+            .find(|entry| entry.subscription_id == subscription_id)
+            .unwrap();
+        assert_eq!(subscription.status.as_deref(), Some("succeeded"));
+        assert_eq!(subscription.progress.posts_traversed, 1);
+        assert_eq!(subscription.progress.posts_skipped, 1);
+        assert_eq!(subscription.progress.posts_added, 0);
+    }
+
     #[tokio::test]
     async fn reset_discards_a_paused_pending_run() {
         let directory = tempfile::tempdir().unwrap();
@@ -2103,43 +2142,19 @@ mod tests {
             .pause_subscription_library(subscription_id, true)
             .unwrap();
 
-        let provider_state = application
+        let native_state = application
             .root()
-            .join("source-runners/onlyfans")
-            .join(format!("subscription-{subscription_id}/query-1"));
-        std::fs::create_dir_all(&provider_state).unwrap();
-        std::fs::write(provider_state.join("state.db"), b"stale").unwrap();
-        let archive_path = crate::subscriptions::archive::query_archive_path(
-            application.root(),
-            subscription_id,
-            1,
-        );
-        std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
-        let archive = rusqlite::Connection::open(&archive_path).unwrap();
-        archive
-            .execute_batch("CREATE TABLE archive (entry TEXT PRIMARY KEY);")
-            .unwrap();
-        archive
-            .execute("INSERT INTO archive(entry) VALUES (?1)", ["reset-post"])
-            .unwrap();
-        drop(archive);
-        let run_temp_path =
-            crate::subscriptions::archive::query_temp_root(application.root(), subscription_id, 1)
-                .join("run-crash-leftover");
-        std::fs::create_dir_all(&run_temp_path).unwrap();
-        std::fs::write(run_temp_path.join("download.part"), b"partial").unwrap();
-        let other_archive_path =
-            crate::subscriptions::archive::query_archive_path(application.root(), 999, 1);
-        std::fs::create_dir_all(other_archive_path.parent().unwrap()).unwrap();
-        let other_archive = rusqlite::Connection::open(&other_archive_path).unwrap();
-        other_archive
-            .execute_batch(
-                "CREATE TABLE archive (entry TEXT PRIMARY KEY);
-                 INSERT INTO archive(entry) VALUES ('same-query-post');",
-            )
-            .unwrap();
-        drop(other_archive);
-
+            .join("source-runners/native")
+            .join(format!(
+                "subscription-{subscription_id}/query-1/run-query-1"
+            ));
+        std::fs::create_dir_all(&native_state).unwrap();
+        std::fs::write(native_state.join("download.part"), b"stale").unwrap();
+        let other_native_state = application
+            .root()
+            .join("source-runners/native/subscription-999/query-1/run-query-1");
+        std::fs::create_dir_all(&other_native_state).unwrap();
+        std::fs::write(other_native_state.join("download.part"), b"other").unwrap();
         application
             .library()
             .auxiliary_write(
@@ -2286,9 +2301,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(!provider_state.exists());
-        assert!(!archive_path.exists());
-        assert!(!run_temp_path.exists());
-        assert!(other_archive_path.exists());
+        assert!(!native_state.exists());
+        assert!(other_native_state.exists());
     }
 }

@@ -919,9 +919,8 @@ mod weak_name_tests {
 
     /// Every synthetic shape the engine's name generators can emit must be
     /// classified weak, so a later source carrying a human title can upgrade
-    /// it. Generators: `{category}_{post_id}` (no-title gallery-dl sites),
-    /// gallery-dl file stems (ids/hashes), and the OnlyFans
-    /// `{creator} - {date}` fallback.
+    /// it. Generators include `{provider}_{post_id}`, source file stems
+    /// (ids/hashes), and the OnlyFans `{creator} - {date}` fallback.
     #[test]
     fn every_generated_name_shape_is_upgradeable() {
         for generated in [
@@ -932,8 +931,8 @@ mod weak_name_tests {
             "ehentai_8df0b5400a",
             "idolcomplex_1084425",
             // OnlyFans file stems ("0ig3r76odf_source", "3840x5766_<hex>")
-            // never become names: its bridge always emits a title. The plain
-            // hex stems gallery-dl can emit are covered in the test above.
+            // never become names because the provider emits a title. Plain
+            // hexadecimal stems are covered in the test above.
             "f1nn5ter - 2026-08-24",
         ] {
             assert!(is_weak_name(generated), "{generated} should be weak");

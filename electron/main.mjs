@@ -152,12 +152,10 @@ if (process.platform === 'win32') {
 
 if (app.isPackaged) {
   // macOS: extraFiles land in Contents/, but the exe is in Contents/MacOS/
-  const sidecarBase = process.platform === 'darwin'
+  const nativeToolBase = process.platform === 'darwin'
     ? path.join(path.dirname(process.execPath), '..')
     : path.dirname(process.execPath);
-  process.env.PICTO_FFMPEG_DIR = sidecarBase;
-  process.env.PICTO_GALLERY_DL_DIR = path.join(sidecarBase, 'gallery-dl');
-  process.env.PICTO_ONLYFANS_DIR = path.join(sidecarBase, 'onlyfans');
+  process.env.PICTO_FFMPEG_DIR = nativeToolBase;
 }
 
 protocol.registerSchemesAsPrivileged([

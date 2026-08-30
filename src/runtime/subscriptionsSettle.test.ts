@@ -410,7 +410,7 @@ describe('subscription settlement', () => {
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([galleryJob]);
   });
 
-  it('shows the gallery sidecar failure before cleaning up the transient job', async () => {
+  it('shows the gallery source failure before cleaning up the transient job', async () => {
     const galleryJob = {
       id: '9',
       name: 'ExHentai Gallery 1169267',

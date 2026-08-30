@@ -1,0 +1,13 @@
+{
+  "list": [
+    {
+      "id": 9104,
+      "text": "Recorded stream",
+      "postedAt": "2026-08-25T12:00:00+00:00",
+      "postedAtPrecise": 1787659200.25,
+      "streamId": 88,
+      "media": [{ "id": 704, "type": "video", "canView": true, "source": { "source": "https://cdn.example.test/media/704.mp4" } }]
+    }
+  ],
+  "hasMore": false
+}

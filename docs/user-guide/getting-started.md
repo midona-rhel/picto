@@ -10,7 +10,8 @@ Download the latest release for your platform from the [releases page](https://g
 - **macOS** — Open the `.dmg` and drag Picto to Applications
 - **Linux** — Run the `.AppImage` directly, or install the `.deb` package
 
-Picto bundles FFmpeg and gallery-dl automatically — no extra dependencies needed.
+Picto bundles FFmpeg and its native subscription providers automatically — no extra dependencies
+needed.
 
 ## First Launch
 

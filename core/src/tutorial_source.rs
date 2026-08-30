@@ -81,6 +81,22 @@ impl SourceRunner for TutorialSourceRunner {
                 .await?;
                 tokio::time::sleep(std::time::Duration::from_millis(180)).await;
             }
+            let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
+            send(
+                &output,
+                SourceEvent::PostComplete {
+                    post_key: post_key.into(),
+                    acknowledge,
+                },
+                &cancel,
+            )
+            .await?;
+            let _outcome = acknowledged.await.map_err(|_| {
+                RunnerFailure::terminal(
+                    RunnerFailureKind::Runtime,
+                    "Guided tour post settlement was not acknowledged",
+                )
+            })?;
             Ok(RunnerSuccess {
                 resume_cursor: Some(
                     if query.initial_run_complete {
@@ -91,6 +107,7 @@ impl SourceRunner for TutorialSourceRunner {
                     .into(),
                 ),
                 cleanup_paths: Vec::new(),
+                stop_after_current_execution: false,
             })
         })
     }

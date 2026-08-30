@@ -1,2 +1,0 @@
--r gallery-dl-runtime-requirements.txt
-pyinstaller==6.15.0

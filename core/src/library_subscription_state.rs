@@ -14,6 +14,7 @@ use crate::library_application::LibraryApplication;
 use crate::subscriptions::{
     ClaimedQueryRun, CreatedRun, DomainSchedule, NormalizedPost, RecoveryCounts,
 };
+use picto_sources::{SkipReason, SourcePostOutcome};
 
 const RESOURCES: [&str; 2] = ["subscriptions", "tasks"];
 const MAX_ATTEMPTS: i64 = 3;
@@ -24,6 +25,11 @@ fn resources() -> Vec<String> {
 }
 
 pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCounts, String> {
+    match std::fs::remove_dir_all(application.root().join("source-runners/native")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("native source recovery cleanup failed: {error}")),
+    }
     let result = application
         .library()
         .auxiliary_write_if_changed(
@@ -31,6 +37,79 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
             resources(),
             [],
             |transaction, _| {
+                transaction.execute(
+                    "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
+                     SELECT DISTINCT attempt.attempt_id, root.root_id, item.stable_key
+                     FROM source_post_attempt attempt
+                     JOIN subscription_run_query run_query USING(run_query_id)
+                     JOIN subscription_run run USING(run_id)
+                     JOIN source_post post USING(source_post_id)
+                     JOIN library_root root
+                       ON root.root_id = post.root_item_id
+                       OR root.root_id IN (
+                           SELECT media_item_id FROM source_item media
+                           WHERE media.source_post_id = post.source_post_id
+                             AND media.media_item_id IS NOT NULL
+                       )
+                     JOIN library_item item ON item.local_id = root.root_id
+                     WHERE attempt.state NOT IN ('added', 'skipped', 'failed', 'cancelled')
+                       AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                     ON CONFLICT DO NOTHING",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE source_post_attempt
+                     SET state = 'added', terminal_reason = NULL, settled_at = ?1
+                     WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
+                       AND EXISTS (
+                           SELECT 1 FROM source_attempt_root result
+                           WHERE result.attempt_id = source_post_attempt.attempt_id
+                             AND result.root_id IS NOT NULL
+                       )",
+                    [now],
+                )?;
+                transaction.execute(
+                    "UPDATE source_post_attempt
+                     SET state = 'skipped', terminal_reason = 'exact_duplicate', settled_at = ?1
+                     WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
+                       AND EXISTS (
+                           SELECT 1
+                           FROM source_post post
+                           JOIN library_root root ON root.root_id = post.root_item_id
+                           JOIN subscription_run_query run_query
+                             ON run_query.run_query_id = source_post_attempt.run_query_id
+                           JOIN subscription_run run USING(run_id)
+                           WHERE post.source_post_id = source_post_attempt.source_post_id
+                             AND root.imported_at_ms < unixepoch(run.created_at) * 1000
+                       )",
+                    [now],
+                )?;
+                transaction.execute(
+                    "UPDATE source_file_attempt
+                     SET state = CASE
+                             WHEN EXISTS (
+                                 SELECT 1 FROM source_post_attempt post_attempt
+                                 WHERE post_attempt.attempt_id = source_file_attempt.attempt_id
+                                   AND post_attempt.state = 'added'
+                             ) THEN 'retained'
+                             ELSE 'duplicate'
+                         END,
+                         staged_path = NULL
+                     WHERE state = 'staged'
+                       AND EXISTS (
+                           SELECT 1 FROM source_post_attempt post_attempt
+                           WHERE post_attempt.attempt_id = source_file_attempt.attempt_id
+                             AND post_attempt.state IN ('added', 'skipped')
+                       )",
+                    [],
+                )?;
+                // No canonical commit exists for these attempts. Replay the
+                // same provider boundary from its last committed cursor.
+                transaction.execute(
+                    "DELETE FROM source_post_attempt
+                     WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                    [],
+                )?;
                 let query_runs = transaction.execute(
                     "UPDATE subscription_run_query
                      SET status = 'pending', available_at = ?1, started_at = NULL,
@@ -44,12 +123,7 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                     "UPDATE subscription_run
                      SET status = 'pending', started_at = NULL, finished_at = NULL,
                          failure_kind = NULL, error_message = NULL
-                     WHERE status = 'running'
-                       AND EXISTS (
-                           SELECT 1 FROM subscription_run_query query_run
-                           WHERE query_run.run_id = subscription_run.run_id
-                             AND query_run.status = 'running'
-                       )",
+                     WHERE status = 'running'",
                     [],
                 )?;
                 let counts = RecoveryCounts { runs, query_runs };
@@ -184,16 +258,8 @@ pub fn claim_next_query(
                 };
                 let accepted_posts: u32 = transaction
                     .query_row(
-                        "SELECT COUNT(DISTINCT post.root_item_id)
-                         FROM subscription_run_source_item linked
-                         JOIN source_item item USING(source_item_id)
-                         JOIN source_post post USING(source_post_id)
-                         JOIN subscription_run_query run_query USING(run_query_id)
-                         JOIN subscription_run run USING(run_id)
-                         JOIN library_root root ON root.root_id = post.root_item_id
-                         WHERE linked.run_query_id = ?1
-                           AND item.state = 'ingested'
-                           AND root.imported_at_ms >= unixepoch(run.created_at) * 1000",
+                        "SELECT COUNT(*) FROM source_post_attempt
+                         WHERE run_query_id = ?1 AND state = 'added'",
                         [candidate.run_query_id],
                         |row| row.get::<_, i64>(0),
                     )?
@@ -222,23 +288,18 @@ pub fn claim_next_query(
                 // next tick).
                 let in_flight_posts: u32 = transaction
                     .query_row(
-                        "SELECT COUNT(DISTINCT item.source_post_id)
-                         FROM subscription_run_source_item linked
-                         JOIN source_item item USING(source_item_id)
-                         JOIN source_post post ON post.source_post_id = item.source_post_id
-                         WHERE linked.run_query_id = ?1
-                           AND item.state IN ('pending', 'downloaded')
-                           AND post.root_item_id IS NULL",
+                        "SELECT COUNT(*) FROM source_post_attempt
+                         WHERE run_query_id = ?1
+                           AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
                         [candidate.run_query_id],
                         |row| row.get::<_, i64>(0),
                     )?
                     .try_into()
                     .unwrap_or(u32::MAX);
-                let claimable = remaining.saturating_sub(in_flight_posts);
-                if claimable == 0 {
+                if in_flight_posts != 0 {
                     return Ok(None);
                 }
-                candidate.run_post_limit = Some(claimable);
+                candidate.run_post_limit = Some(remaining);
                 if transaction.execute(
                     "UPDATE subscription_run_query
                      SET status = 'running', started_at = ?1, attempt_count = attempt_count + 1,
@@ -323,6 +384,185 @@ pub fn query_ingest_settlement(
             )?;
             Ok(Ok(!pending))
         })
+        .map_err(|error| error.to_string())
+}
+
+/// Resolve the current post from canonical state after its ingest work has
+/// settled. Source runners use this result to advance their cursor and added
+/// budget; they never infer success from downloads alone.
+pub fn settled_post_outcome(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    post_key: &str,
+) -> Result<SourcePostOutcome, String> {
+    application
+        .library()
+        .auxiliary_write(
+            WorkPriority::CanonicalIngest,
+            resources(),
+            [],
+            |transaction, _| {
+                let row = transaction
+                    .query_row(
+                        "SELECT attempt.attempt_id, post.source_post_id, post.root_item_id,
+                            root.imported_at_ms >= unixepoch(run.created_at) * 1000,
+                            COUNT(item.source_item_id),
+                            COALESCE(SUM(item.state = 'pending'), 0),
+                            COALESCE(SUM(item.state = 'downloaded'), 0),
+                            COALESCE(SUM(item.state = 'ingested'), 0),
+                            COALESCE(SUM(item.state = 'failed'), 0),
+                            COALESCE(SUM(item.state = 'deleted'), 0)
+                     FROM subscription_run_query run_query
+                     JOIN subscription_run run USING(run_id)
+                     JOIN subscription_query definition USING(query_id)
+                     JOIN source_post post
+                       ON post.site_id = definition.site_id AND post.post_key = ?2
+                     JOIN source_post_attempt attempt
+                       ON attempt.run_query_id = run_query.run_query_id
+                      AND attempt.source_post_id = post.source_post_id
+                     LEFT JOIN library_root root ON root.root_id = post.root_item_id
+                     LEFT JOIN source_item item USING(source_post_id)
+                     WHERE run_query.run_query_id = ?1
+                     GROUP BY post.source_post_id",
+                        params![query.run_query_id, post_key],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, Option<u32>>(2)?,
+                                row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                                row.get::<_, i64>(4)?,
+                                row.get::<_, i64>(5)?,
+                                row.get::<_, i64>(6)?,
+                                row.get::<_, i64>(7)?,
+                                row.get::<_, i64>(8)?,
+                                row.get::<_, i64>(9)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((
+                    attempt_id,
+                    source_post_id,
+                    root_id,
+                    created_this_run,
+                    total,
+                    pending,
+                    downloaded,
+                    ingested,
+                    failed,
+                    deleted,
+                )) = row
+                else {
+                    return Err(LibraryError::InvalidState(
+                        "completed source post was not recorded".into(),
+                    ));
+                };
+                if pending != 0 || downloaded != 0 {
+                    return Err(LibraryError::InvalidState(
+                        "completed source post still has unsettled media".into(),
+                    ));
+                }
+                let outcome = if root_id.is_some() {
+                    if created_this_run {
+                        let roots = {
+                            let mut statement = transaction.prepare(
+                                "SELECT DISTINCT root.root_id, item.stable_key
+                             FROM library_root root
+                             JOIN library_item item ON item.local_id = root.root_id
+                             WHERE root.root_id = ?1
+                                OR root.root_id IN (
+                                    SELECT media_item_id FROM source_item
+                                    WHERE source_post_id = ?2 AND media_item_id IS NOT NULL
+                                )
+                             ORDER BY root.root_id",
+                            )?;
+                            let roots = statement
+                                .query_map(params![root_id, source_post_id], |row| {
+                                    Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
+                                })?
+                                .collect::<rusqlite::Result<Vec<_>>>()?;
+                            roots
+                        };
+                        if roots.is_empty() {
+                            return Err(LibraryError::InvalidState(
+                                "added source post has no canonical roots".into(),
+                            ));
+                        }
+                        for (root_id, stable_key) in &roots {
+                            transaction.execute(
+                            "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
+                             VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+                            params![attempt_id, root_id, stable_key],
+                        )?;
+                        }
+                        SourcePostOutcome::Added {
+                            root_ids: roots.into_iter().map(|(root_id, _)| root_id).collect(),
+                        }
+                    } else {
+                        SourcePostOutcome::Skipped {
+                            reason: SkipReason::ExactDuplicate,
+                        }
+                    }
+                } else if ingested != 0 {
+                    return Err(LibraryError::InvalidState(
+                        "ingested source media has no canonical root".into(),
+                    ));
+                } else {
+                    let reason = if total == 0 {
+                        SkipReason::NoUsableMedia
+                    } else if failed == total {
+                        SkipReason::SourceUnavailable
+                    } else if deleted == total {
+                        SkipReason::Other("deleted".into())
+                    } else {
+                        SkipReason::NoUsableMedia
+                    };
+                    SourcePostOutcome::Skipped { reason }
+                };
+                let (state, terminal_reason) = match &outcome {
+                    SourcePostOutcome::Added { .. } => ("added", None),
+                    SourcePostOutcome::Skipped { reason } => {
+                        let reason = match reason {
+                            SkipReason::NoUsableMedia => "no_usable_media".to_string(),
+                            SkipReason::ExactDuplicate | SkipReason::AlreadyImported => {
+                                "exact_duplicate".to_string()
+                            }
+                            SkipReason::UnsupportedMedia => "unsupported_media".to_string(),
+                            SkipReason::SourceUnavailable => "source_unavailable".to_string(),
+                            SkipReason::Other(reason) => reason.clone(),
+                        };
+                        ("skipped", Some(reason))
+                    }
+                    SourcePostOutcome::Failed { reason, .. } => ("failed", Some(reason.clone())),
+                };
+                transaction.execute(
+                    "UPDATE source_file_attempt
+                 SET state = CASE
+                         WHEN state = 'staged' AND ?2 = 'added' THEN 'retained'
+                         WHEN state = 'staged' THEN 'duplicate'
+                         ELSE state
+                     END,
+                     staged_path = NULL
+                 WHERE attempt_id = ?1",
+                    params![attempt_id, state],
+                )?;
+                transaction.execute(
+                    "UPDATE source_post_attempt
+                 SET state = ?1, terminal_reason = ?2, settled_at = ?3
+                 WHERE attempt_id = ?4
+                   AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                    params![
+                        state,
+                        terminal_reason,
+                        chrono::Utc::now().to_rfc3339(),
+                        attempt_id
+                    ],
+                )?;
+                Ok(outcome)
+            },
+        )
+        .map(|(outcome, _)| outcome)
         .map_err(|error| error.to_string())
 }
 
@@ -411,44 +651,84 @@ pub fn source_item_id(
         .map_err(|error| error.to_string())
 }
 
-pub fn mark_source_items_downloaded(
+pub fn mark_source_item_staged(
     application: &LibraryApplication,
-    source_item_ids: &[i64],
+    run_query_id: i64,
+    source_item_id: i64,
+    content_hash: &str,
+    staged_path: &str,
+    bytes_staged: u64,
     now: &str,
-) -> Result<(), String> {
-    if source_item_ids.is_empty() {
-        return Ok(());
-    }
+) -> Result<bool, String> {
+    let bytes_staged = i64::try_from(bytes_staged)
+        .map_err(|_| "downloaded media size exceeds SQLite integer range".to_string())?;
     application
         .library()
-        .auxiliary_write_if_changed(
+        .auxiliary_write(
             WorkPriority::CanonicalIngest,
             resources(),
             [],
             |transaction, _| {
-                let mut changed = 0;
-                for source_item_id in source_item_ids {
-                    changed += transaction.execute(
-                        "UPDATE source_item SET state = 'downloaded', last_error = NULL, updated_at = ?1
-                         WHERE source_item_id = ?2 AND state = 'pending'",
-                        params![now, source_item_id],
-                    )?;
-                    transaction.execute(
-                        "UPDATE subscription_issue
-                         SET status = 'resolved', last_seen_at = ?1, resolved_at = ?1
-                         WHERE issue_key = ?2 AND status IN ('open', 'acknowledged')",
-                        params![now, format!("source_item:{source_item_id}:download")],
-                    )?;
-                }
-                Ok((changed != 0).then_some(()))
+                let attempt_id = transaction.query_row(
+                    "SELECT attempt.attempt_id
+                     FROM source_post_attempt attempt
+                     JOIN source_item item ON item.source_post_id = attempt.source_post_id
+                     WHERE attempt.run_query_id = ?1 AND item.source_item_id = ?2",
+                    params![run_query_id, source_item_id],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let duplicate = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM media_file WHERE content_hash = ?1)
+                         OR EXISTS(
+                             SELECT 1 FROM source_file_attempt sibling
+                             WHERE sibling.attempt_id = ?2
+                               AND sibling.source_item_id != ?3
+                               AND sibling.content_hash = ?1
+                               AND sibling.state IN ('staged', 'retained', 'duplicate')
+                         )",
+                    params![content_hash, attempt_id, source_item_id],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                transaction.execute(
+                    "UPDATE source_file_attempt
+                     SET content_hash = ?1, state = ?2, staged_path = ?3,
+                         bytes_staged = ?4, error = NULL
+                     WHERE attempt_id = ?5 AND source_item_id = ?6",
+                    params![
+                        content_hash,
+                        if duplicate { "duplicate" } else { "staged" },
+                        staged_path,
+                        bytes_staged,
+                        attempt_id,
+                        source_item_id,
+                    ],
+                )?;
+                transaction.execute(
+                    "UPDATE source_post_attempt SET state = 'downloading'
+                     WHERE attempt_id = ?1 AND state = 'discovered'",
+                    [attempt_id],
+                )?;
+                transaction.execute(
+                    "UPDATE source_item SET state = 'downloaded', last_error = NULL, updated_at = ?1
+                     WHERE source_item_id = ?2 AND state = 'pending'",
+                    params![now, source_item_id],
+                )?;
+                transaction.execute(
+                    "UPDATE subscription_issue
+                     SET status = 'resolved', last_seen_at = ?1, resolved_at = ?1
+                     WHERE issue_key = ?2 AND status IN ('open', 'acknowledged')",
+                    params![now, format!("source_item:{source_item_id}:download")],
+                )?;
+                Ok(duplicate)
             },
         )
-        .map(|_| ())
+        .map(|(duplicate, _)| duplicate)
         .map_err(|error| error.to_string())
 }
 
 pub fn mark_source_item_failed(
     application: &LibraryApplication,
+    run_query_id: i64,
     subscription_id: i64,
     query_id: i64,
     source_item_id: i64,
@@ -462,6 +742,18 @@ pub fn mark_source_item_failed(
             resources(),
             [],
             |transaction, _| {
+                transaction.execute(
+                    "UPDATE source_file_attempt
+                     SET state = 'failed', error = ?1
+                     WHERE source_item_id = ?2 AND attempt_id = (
+                         SELECT attempt_id FROM source_post_attempt
+                         WHERE run_query_id = ?3
+                           AND source_post_id = (
+                               SELECT source_post_id FROM source_item WHERE source_item_id = ?2
+                           )
+                     )",
+                    params![error, source_item_id, run_query_id],
+                )?;
                 let changed = transaction.execute(
                     "UPDATE source_item
                      SET state = 'failed', last_error = ?1, updated_at = ?2
@@ -557,6 +849,19 @@ fn record_post_in(
         |row| row.get::<_, i64>(0),
     )?;
     transaction.execute(
+        "INSERT INTO source_post_attempt (
+             run_query_id, source_post_id, state, started_at
+         ) VALUES (?1, ?2, 'discovered', ?3)
+         ON CONFLICT(run_query_id, source_post_id) DO NOTHING",
+        params![run_query_id, source_post_id, now],
+    )?;
+    let attempt_id = transaction.query_row(
+        "SELECT attempt_id FROM source_post_attempt
+         WHERE run_query_id = ?1 AND source_post_id = ?2",
+        params![run_query_id, source_post_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    transaction.execute(
         "INSERT INTO subscription_source_post
              (subscription_id, query_id, source_post_id, last_seen_run_id)
          VALUES (?1, ?2, ?3, ?4)
@@ -611,6 +916,13 @@ fn record_post_in(
              VALUES (?1, ?2) ON CONFLICT DO NOTHING",
             params![run_query_id, source_item_id],
         )?;
+        transaction.execute(
+            "INSERT INTO source_file_attempt (
+                 attempt_id, source_item_id, state
+             ) VALUES (?1, ?2, 'discovered')
+             ON CONFLICT(attempt_id, source_item_id) DO NOTHING",
+            params![attempt_id, source_item_id],
+        )?;
         ids.insert(item.item_key.clone(), source_item_id);
     }
     Ok(ids)
@@ -622,25 +934,38 @@ pub fn complete_query(
     resume_cursor: Option<&str>,
     now: &str,
 ) -> Result<MutationReceipt, String> {
+    complete_query_with_policy(application, query, resume_cursor, true, now)
+}
+
+pub fn complete_query_terminal(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    resume_cursor: Option<&str>,
+    now: &str,
+) -> Result<MutationReceipt, String> {
+    complete_query_with_policy(application, query, resume_cursor, false, now)
+}
+
+fn complete_query_with_policy(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    resume_cursor: Option<&str>,
+    continue_if_budget_remaining: bool,
+    now: &str,
+) -> Result<MutationReceipt, String> {
     write_transition(application, |transaction| {
         let added_posts: u32 = transaction
             .query_row(
-                "SELECT COUNT(DISTINCT post.root_item_id)
-                 FROM subscription_run_source_item linked
-                 JOIN source_item item USING(source_item_id)
-                 JOIN source_post post USING(source_post_id)
-                 JOIN subscription_run_query run_query USING(run_query_id)
-                 JOIN subscription_run run USING(run_id)
-                 JOIN library_root root ON root.root_id = post.root_item_id
-                 WHERE linked.run_query_id = ?1
-                   AND item.state = 'ingested'
-                   AND root.imported_at_ms >= unixepoch(run.created_at) * 1000",
+                "SELECT COUNT(*) FROM source_post_attempt
+                 WHERE run_query_id = ?1 AND state = 'added'",
                 [query.run_query_id],
                 |row| row.get::<_, i64>(0),
             )?
             .try_into()
             .unwrap_or(u32::MAX);
-        let continue_run = resume_cursor != Some("") && added_posts < query.configured_post_limit();
+        let continue_run = continue_if_budget_remaining
+            && resume_cursor != Some("")
+            && added_posts < query.configured_post_limit();
         if continue_run {
             transaction.execute(
                 "UPDATE subscription_run_query
@@ -761,6 +1086,15 @@ pub fn fail_query(
                 query.run_query_id
             ],
         )?;
+        if retry_at.is_none() {
+            transaction.execute(
+                "UPDATE source_post_attempt
+                 SET state = 'failed', terminal_reason = ?1, settled_at = ?2
+                 WHERE run_query_id = ?3
+                   AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+                params![kind, now, query.run_query_id],
+            )?;
+        }
         transaction.execute(
             "UPDATE subscription_query
              SET last_failure_at = ?1, last_failure_kind = ?2, last_failure_message = ?3
@@ -960,16 +1294,16 @@ fn settle_run(
     if pending != 0 || running != 0 {
         return Ok(false);
     }
-    let downloaded = transaction.query_row(
+    let unsettled = transaction.query_row(
         "SELECT COUNT(*)
          FROM subscription_run_query query_run
-         JOIN subscription_run_source_item linked USING(run_query_id)
-         JOIN source_item item USING(source_item_id)
-         WHERE query_run.run_id = ?1 AND item.state = 'downloaded'",
+         JOIN source_post_attempt attempt USING(run_query_id)
+         WHERE query_run.run_id = ?1
+           AND attempt.state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
         [run_id],
         |row| row.get::<_, i64>(0),
     )?;
-    if downloaded != 0 && failed == 0 && cancelled == 0 {
+    if unsettled != 0 && failed == 0 && cancelled == 0 {
         return Ok(false);
     }
     let status = if failed != 0 {
@@ -1109,8 +1443,16 @@ mod tests {
             "2026-08-29T00:00:02Z",
         )
         .unwrap();
-        mark_source_items_downloaded(&application, &[ids["media-1"]], "2026-08-29T00:00:03Z")
-            .unwrap();
+        mark_source_item_staged(
+            &application,
+            first.run_query_id,
+            ids["media-1"],
+            "run-created-hash",
+            "/tmp/run-created",
+            1,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
         application
             .library()
             .auxiliary_write(
@@ -1156,6 +1498,10 @@ mod tests {
                 },
             )
             .unwrap();
+        assert!(matches!(
+            settled_post_outcome(&application, &first, "post-1").unwrap(),
+            SourcePostOutcome::Added { .. }
+        ));
         complete_query(&application, &first, None, "2026-08-29T00:00:04Z").unwrap();
 
         let mut next_schedule = DomainSchedule::new();
@@ -1231,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_but_not_ingested_posts_reserve_the_added_post_budget() {
+    fn downloaded_but_not_ingested_post_blocks_a_second_worker_claim() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let definition = NewSubscription {
@@ -1259,43 +1605,42 @@ mod tests {
             .unwrap();
         assert_eq!(first.source_post_batch_size(), 2);
 
-        // The window downloads two posts, but neither has been canonically
-        // ingested yet: no roots exist, items sit in `downloaded`.
-        for post in ["post-1", "post-2"] {
-            let ids = record_post(
-                &application,
-                first.run_query_id,
-                &NormalizedPost {
-                    site_id: first.site_id.clone(),
-                    post_key: post.into(),
+        let ids = record_post(
+            &application,
+            first.run_query_id,
+            &NormalizedPost {
+                site_id: first.site_id.clone(),
+                post_key: "post-1".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "post-1:media".into(),
+                    position: 0,
+                    media_url: None,
                     canonical_url: None,
-                    creator_name: None,
-                    title: None,
-                    description: None,
-                    captured_at: None,
-                    metadata_json: None,
-                    items: vec![NormalizedItem {
-                        item_key: format!("{post}:media"),
-                        position: 0,
-                        media_url: None,
-                        canonical_url: None,
-                    }],
-                },
-                "2026-08-29T00:00:02Z",
-            )
-            .unwrap();
-            mark_source_items_downloaded(
-                &application,
-                &[ids[&format!("{post}:media")]],
-                "2026-08-29T00:00:03Z",
-            )
-            .unwrap();
-        }
+                }],
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            first.run_query_id,
+            ids["post-1:media"],
+            "post-1-hash",
+            "/tmp/post-1",
+            1,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
         complete_query(&application, &first, None, "2026-08-29T00:00:04Z").unwrap();
 
-        // Both in-flight posts cover the whole budget: nothing is claimable
-        // and the query must NOT settle as succeeded while ingestion is
-        // pending — the claim waits.
+        // An open post attempt is exclusively owned by the current worker. A
+        // retry cannot claim the query and begin another post beside it.
         let mut waiting_schedule = DomainSchedule::new();
         assert!(
             claim_next_query(&application, &mut waiting_schedule, "2026-08-29T00:00:05Z")
@@ -1319,8 +1664,200 @@ mod tests {
             "reserved budget must not settle the query"
         );
 
-        // One post skips (its item resolves without a root): the reservation
-        // is released and exactly one slot becomes claimable again.
+        mark_source_item_failed(
+            &application,
+            first.run_query_id,
+            first.subscription_id,
+            first.query_id,
+            ids["post-1:media"],
+            "gone",
+            "2026-08-29T00:00:05Z",
+        )
+        .unwrap();
+        assert!(matches!(
+            settled_post_outcome(&application, &first, "post-1").unwrap(),
+            SourcePostOutcome::Skipped { .. }
+        ));
+        let mut retry_schedule = DomainSchedule::new();
+        let second = claim_next_query(&application, &mut retry_schedule, "2026-08-29T00:00:06Z")
+            .unwrap()
+            .expect("a released reservation makes budget claimable again");
+        assert_eq!(
+            second.source_post_batch_size(),
+            2,
+            "a skipped post does not consume the added-post budget"
+        );
+    }
+
+    #[test]
+    fn recovery_replays_an_incomplete_post_from_the_committed_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Interrupted download".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: query.site_id.clone(),
+                post_key: "interrupted".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "interrupted:media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["interrupted:media"],
+            "interrupted-hash",
+            "/tmp/interrupted",
+            1,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            recover(&application, "2026-08-29T00:01:00Z").unwrap(),
+            RecoveryCounts {
+                runs: 1,
+                query_runs: 1,
+            }
+        );
+        let (attempts, run_status, query_status): (i64, String, String) = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM source_post_attempt WHERE run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT status FROM subscription_run WHERE run_id = ?1",
+                        [query.run_id],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT status FROM subscription_run_query WHERE run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(
+            attempts, 0,
+            "the current post is redownloaded after restart"
+        );
+        assert_eq!(run_status, "pending");
+        assert_eq!(query_status, "pending");
+        assert!(claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:01:01Z",
+        )
+        .unwrap()
+        .is_some());
+    }
+
+    #[test]
+    fn recovery_settles_a_canonical_commit_before_replaying_the_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Committed ingest".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: query.site_id.clone(),
+                post_key: "committed".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "committed:media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["committed:media"],
+            "committed-hash",
+            "/tmp/committed",
+            1,
+            "2026-08-29T00:00:03Z",
+        )
+        .unwrap();
         application
             .library()
             .auxiliary_write(
@@ -1329,23 +1866,75 @@ mod tests {
                 [],
                 |transaction, _| {
                     transaction.execute(
-                        "UPDATE source_item SET state = 'ingested'
-                         WHERE item_key = 'post-1:media'",
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (6000, 'recovered-root', 1)",
                         [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (6001, 'committed-hash', '/tmp/committed', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (6000, 'recovered', 6001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root
+                             (root_id, name, cover_media_id, imported_at_ms, modified_at_ms,
+                              media_count, total_size_bytes)
+                         VALUES (6000, 'recovered', 6000, 1787976003000, 1787976003000, 1, 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested', media_item_id = 6000
+                         WHERE source_item_id = ?1",
+                        [ids["committed:media"]],
+                    )?;
+                    transaction.execute(
+                        "UPDATE source_post SET root_item_id = 6000
+                         WHERE source_post_id = (
+                             SELECT source_post_id FROM source_item WHERE source_item_id = ?1
+                         )",
+                        [ids["committed:media"]],
                     )?;
                     Ok(())
                 },
             )
             .unwrap();
-        let mut retry_schedule = DomainSchedule::new();
-        let second = claim_next_query(&application, &mut retry_schedule, "2026-08-29T00:00:06Z")
-            .unwrap()
-            .expect("a released reservation makes budget claimable again");
-        assert_eq!(
-            second.source_post_batch_size(),
-            1,
-            "the still-in-flight post keeps its slot reserved"
-        );
+
+        recover(&application, "2026-08-29T00:01:00Z").unwrap();
+        let (state, roots, file_state): (String, i64, String) = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT state FROM source_post_attempt WHERE run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM source_attempt_root result
+                         JOIN source_post_attempt attempt USING(attempt_id)
+                         WHERE attempt.run_query_id = ?1 AND result.root_id = 6000",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT file.state FROM source_file_attempt file
+                         JOIN source_post_attempt attempt USING(attempt_id)
+                         WHERE attempt.run_query_id = ?1",
+                        [query.run_query_id],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(state, "added");
+        assert_eq!(roots, 1);
+        assert_eq!(file_state, "retained");
     }
 
     #[test]

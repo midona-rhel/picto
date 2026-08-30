@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::credential_store::{CredentialType, SiteCredential};
-use crate::subscriptions::gallery_dl_runner::{site_by_id, SiteEntry, SITES};
+use crate::subscriptions::sites::{site_by_id, SiteEntry, SITES};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -144,7 +144,7 @@ pub fn set_library_credential(
     now: &str,
 ) -> Result<picto_library::MutationReceipt, String> {
     let owner = credential_owner(&input.site_id)?;
-    let credential_type = CredentialType::from_str(&input.credential_type)
+    let credential_type = CredentialType::parse(&input.credential_type)
         .ok_or_else(|| format!("Unsupported credential type: {}", input.credential_type))?;
     if !owner.credential_types.contains(&credential_type.as_str()) {
         return Err(format!(

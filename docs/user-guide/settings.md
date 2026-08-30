@@ -43,7 +43,9 @@ View information about the current library: name, path, and file count. See [Lib
 
 Configure subscription download behavior:
 
-- Subscription downloads are serial. Picto preserves gallery-dl's provider-specific request timing; sources without a specific interval wait a random 0.5-2 seconds between requests to the same host. Failed requests retry with increasing backoff.
+- Subscription posts are serial. Native providers use their required request timing; sources without
+  a specific interval wait a random 0.5-2 seconds between requests to the same host. Media within the
+  current post may download concurrently, and failed requests retry with increasing backoff.
 - **Batch Size** — Maximum files per subscription run. Set to unlimited or a specific number (1-5000).
 - **Abort Threshold** — Stop a subscription run after this many consecutive already-downloaded files (1-500, default 10). Prevents re-scanning your entire download history.
 - **Default Import Status** — Whether watched folders import as Inbox or Active by default.

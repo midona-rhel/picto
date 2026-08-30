@@ -5,8 +5,8 @@ Picto is licensed under the MIT License. See LICENSE.
 
 This file identifies separately distributed runtimes and prominent bundled assets. Every release
 also contains generated, version-exact notices for the JavaScript and Rust dependency graphs under
-`resources/app.asar/dist/licenses/`, plus exact Python sidecar notices beside each sidecar binary.
-Those generated notices include the license files published in the locked package sources.
+`resources/app.asar/dist/licenses/`. Those generated notices include the license files published in
+the locked package sources.
 
 
 FFmpeg / FFprobe
@@ -22,26 +22,6 @@ Picto invokes FFmpeg and FFprobe as separate subprocesses. Release downloads are
 against publisher-provided SHA-256 digests by `scripts/download-ffmpeg.sh`. The selected builds may
 contain additional GPL/LGPL/BSD/MIT/ISC/MPL components; the build publisher's configuration and
 license inventory are authoritative for the exact archive.
-
-
-gallery-dl sidecar
-------------------
-Pinned revision: d05a77933a89a31ff9d57a2c12cda2ee336845e6
-License: GPL-2.0-only
-Source: https://codeberg.org/mikf/gallery-dl/src/commit/d05a77933a89a31ff9d57a2c12cda2ee336845e6
-
-The isolated sidecar build freezes gallery-dl and its exact runtime dependencies. Its generated
-`gallery-dl/THIRD_PARTY_LICENSES.txt` is shipped beside the executable.
-
-
-OF-Scraper sidecar
-------------------
-Pinned revision: d10ce94935fd2a6cd02a662e624b0081e976a0a6
-License: MIT
-Source: https://github.com/datawhores/OF-Scraper/tree/d10ce94935fd2a6cd02a662e624b0081e976a0a6
-
-The isolated sidecar build freezes OF-Scraper and its runtime dependencies. Its generated
-`onlyfans/THIRD_PARTY_LICENSES.txt` is shipped beside the executable.
 
 
 Ruffle
@@ -106,7 +86,7 @@ Generated dependency notices
 ----------------------------
 `npm run generate:license-notices` derives notices from `package-lock.json`, locked Cargo metadata,
 and the installed package/crate license files. `npm run release:audit` rejects dependencies without
-declared licenses, floating sidecar runtime requirements, missing notice packaging, copied audit
+declared licenses, missing notice packaging, copied audit
 artifacts, local absolute paths, and other release hygiene failures.
 
 License expressions in generated notices are the package authors' declarations. A package's own

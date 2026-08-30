@@ -29,7 +29,7 @@ credential store.
 
 - React owns presentation and transient interaction state. It does not open SQLite or infer whether
   a native operation committed.
-- Electron owns windows, menus, protocols, updater delivery, credentials, and packaged sidecars.
+- Electron owns windows, menus, protocols, updater delivery, credentials, and packaged native tools.
   The preload exposes a narrow typed IPC surface; renderer code has no Node integration.
 - Rust owns library sessions, queries, mutations, background work, and invalidation. A generation
   change closes the old library before a new session can answer commands.

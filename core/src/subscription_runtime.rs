@@ -24,9 +24,11 @@ use picto_library::{
     MutationReceipt, PreparedCollectionImport, PreparedImport, PreparedIngestJob,
     PreparedIngestPayload,
 };
+use picto_sources::SourcePostOutcome;
 
 const CHANNEL_CAPACITY: usize = 32;
 const RUN_STATE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const RUNNER_CANCEL_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const PROGRESS_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub type RunnerFuture<'a> =
@@ -36,6 +38,9 @@ pub type RunnerFuture<'a> =
 pub struct RunnerSuccess {
     pub resume_cursor: Option<String>,
     pub cleanup_paths: Vec<PathBuf>,
+    /// Stop this run at the committed cursor even if its added-post target was
+    /// not reached (for example after the bounded no-media/duplicate scan).
+    pub stop_after_current_execution: bool,
 }
 
 /// A source-normalized item that is ready for durable ingest.
@@ -56,11 +61,15 @@ pub struct FailedMediaItem {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum SourceEvent {
     PostTraversed(NormalizedPost),
     MediaDownloaded(DownloadedItem),
     MediaFailed(FailedMediaItem),
-    PostComplete(tokio::sync::oneshot::Sender<()>),
+    PostComplete {
+        post_key: String,
+        acknowledge: tokio::sync::oneshot::Sender<SourcePostOutcome>,
+    },
 }
 
 struct SourceProgressPublisher {
@@ -271,12 +280,22 @@ async fn run_claimed_query<R: SourceRunner>(
                 settle_runner_failure(application, &query, failure, &settled_at)?;
                 return Ok(None);
             }
-            match state::complete_query(
-                application,
-                &query,
-                success.resume_cursor.as_deref(),
-                &settled_at,
-            ) {
+            let completion = if success.stop_after_current_execution {
+                state::complete_query_terminal(
+                    application,
+                    &query,
+                    success.resume_cursor.as_deref(),
+                    &settled_at,
+                )
+            } else {
+                state::complete_query(
+                    application,
+                    &query,
+                    success.resume_cursor.as_deref(),
+                    &settled_at,
+                )
+            };
+            match completion {
                 Ok(receipt) => receipt,
                 Err(error) => {
                     settle_runner_failure(
@@ -369,18 +388,22 @@ async fn run_stream<R: SourceRunner>(
         tokio::select! {
             _ = cancel.cancelled() => {
                 runner_cancel.cancel();
-                return Ok(Err(RunnerFailure::retryable(
+                let mut failure = RunnerFailure::retryable(
                     RunnerFailureKind::Interrupted,
                     "Subscription run interrupted",
-                )));
+                );
+                collect_cancelled_runner_cleanup(&mut failure, &mut runner_future).await;
+                break Err(failure);
             }
             _ = state_poll.tick() => {
                 if crate::settings::subscription_inbox_is_full_library(application)? {
                     runner_cancel.cancel();
-                    return Ok(Err(RunnerFailure::retryable(
+                    let mut failure = RunnerFailure::retryable(
                         RunnerFailureKind::InboxFull,
                         "Inbox reached its configured subscription limit",
-                    )));
+                    );
+                    collect_cancelled_runner_cleanup(&mut failure, &mut runner_future).await;
+                    break Err(failure);
                 }
                 if !state::query_is_running(application, query.run_query_id)? {
                     tracing::warn!(
@@ -388,10 +411,12 @@ async fn run_stream<R: SourceRunner>(
                         "source query row left the running state mid-run"
                     );
                     runner_cancel.cancel();
-                    return Ok(Err(RunnerFailure::retryable(
+                    let mut failure = RunnerFailure::retryable(
                         RunnerFailureKind::Interrupted,
                         "Subscription run stopped",
-                    )));
+                    );
+                    collect_cancelled_runner_cleanup(&mut failure, &mut runner_future).await;
+                    break Err(failure);
                 }
             }
             result = &mut runner_future => break result,
@@ -431,21 +456,11 @@ async fn run_stream<R: SourceRunner>(
 
     cleanup_runner_paths(&runner_result).await;
 
-    if atomic_gallery && !atomic_items.is_empty() {
-        if runner_result.is_ok() {
-            return Ok(Err(RunnerFailure::retryable(
-                RunnerFailureKind::InvalidOutput,
-                "Gallery source ended before canonical ingestion completed",
-            )));
-        } else {
-            let post_keys = atomic_items
-                .iter()
-                .map(|item| item.post.post_key.as_str())
-                .collect::<BTreeSet<_>>();
-            for post_key in post_keys {
-                release_post_archive(application, query, post_key).await;
-            }
-        }
+    if atomic_gallery && !atomic_items.is_empty() && runner_result.is_ok() {
+        return Ok(Err(RunnerFailure::retryable(
+            RunnerFailureKind::InvalidOutput,
+            "Gallery source ended before canonical ingestion completed",
+        )));
     }
     if runner_result.is_ok() && !grouped_items.is_empty() {
         return Ok(Err(RunnerFailure::retryable(
@@ -457,13 +472,31 @@ async fn run_stream<R: SourceRunner>(
     Ok(runner_result)
 }
 
+async fn collect_cancelled_runner_cleanup<F>(
+    failure: &mut RunnerFailure,
+    runner_future: &mut std::pin::Pin<&mut F>,
+) where
+    F: std::future::Future<Output = Result<RunnerSuccess, RunnerFailure>>,
+{
+    if let Ok(result) = tokio::time::timeout(RUNNER_CANCEL_ACK_TIMEOUT, runner_future).await {
+        match result {
+            Ok(success) => failure.cleanup_paths.extend(success.cleanup_paths),
+            Err(cancelled) => failure.cleanup_paths.extend(cancelled.cleanup_paths),
+        }
+    }
+}
+
 async fn cleanup_runner_paths(result: &Result<RunnerSuccess, RunnerFailure>) {
     let paths = match result {
         Ok(success) => &success.cleanup_paths,
         Err(failure) => &failure.cleanup_paths,
     };
     for path in paths {
-        crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(path).await;
+        if let Err(error) = tokio::fs::remove_dir_all(path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %path.display(), %error, "Could not clean source staging");
+            }
+        }
     }
 }
 
@@ -481,36 +514,42 @@ async fn handle_source_event(
     progress: &mut SourceProgressPublisher,
 ) -> Result<(), String> {
     let durable_change = match event {
-        SourceEvent::PostComplete(acknowledge) if atomic_gallery => {
+        SourceEvent::PostComplete {
+            post_key,
+            acknowledge,
+        } if atomic_gallery => {
             validate_complete_gallery(atomic_items)?;
             let items = std::mem::take(atomic_items);
-            let post_key = items[0].post.post_key.clone();
-            let mut gallery_post = items[0].post.clone();
-            gallery_post.items = items
-                .iter()
-                .flat_map(|item| item.post.items.iter().cloned())
-                .collect();
+            if items[0].post.post_key != post_key {
+                return Err("Gallery settlement identity does not match its media".into());
+            }
+            let gallery_post = items[0].post.clone();
             state::record_post(
                 application,
                 query.run_query_id,
                 &gallery_post,
                 &Utc::now().to_rfc3339(),
             )?;
-            if let Err(error) = enqueue_group(application, query, destination, items).await {
-                release_post_archive(application, query, &post_key).await;
-                return Err(error);
+            enqueue_group(application, query, destination, items).await?;
+            wait_for_query_ingest(application, query, cancel)
+                .await
+                .map_err(|failure| failure.message)?;
+            let outcome = state::settled_post_outcome(application, query, &post_key)?;
+            let _ = acknowledge.send(outcome);
+            true
+        }
+        SourceEvent::PostComplete {
+            post_key,
+            acknowledge,
+        } => {
+            if let Some(items) = grouped_items.remove(&post_key) {
+                enqueue_group(application, query, destination, items).await?;
             }
             wait_for_query_ingest(application, query, cancel)
                 .await
                 .map_err(|failure| failure.message)?;
-            let _ = acknowledge.send(());
-            true
-        }
-        SourceEvent::PostComplete(acknowledge) => {
-            wait_for_query_ingest(application, query, cancel)
-                .await
-                .map_err(|failure| failure.message)?;
-            let _ = acknowledge.send(());
+            let outcome = state::settled_post_outcome(application, query, &post_key)?;
+            let _ = acknowledge.send(outcome);
             false
         }
         SourceEvent::PostTraversed(post) if atomic_gallery => {
@@ -526,9 +565,13 @@ async fn handle_source_event(
             let source_item_id =
                 ensure_source_item_recorded(application, query, &item, recorded_source_items)?;
             persist_downloaded_media(application, std::slice::from_mut(&mut item))?;
-            state::mark_source_items_downloaded(
+            state::mark_source_item_staged(
                 application,
-                &[source_item_id],
+                query.run_query_id,
+                source_item_id,
+                &item.input.facts.content_hash,
+                &item.input.file_path,
+                item.input.facts.size_bytes,
                 &Utc::now().to_rfc3339(),
             )?;
             atomic_items.push(item);
@@ -558,9 +601,13 @@ async fn handle_source_event(
             let source_item_id =
                 ensure_source_item_recorded(application, query, &item, recorded_source_items)?;
             persist_downloaded_media(application, std::slice::from_mut(&mut item))?;
-            state::mark_source_items_downloaded(
+            state::mark_source_item_staged(
                 application,
-                &[source_item_id],
+                query.run_query_id,
+                source_item_id,
+                &item.input.facts.content_hash,
+                &item.input.file_path,
+                item.input.facts.size_bytes,
                 &Utc::now().to_rfc3339(),
             )?;
             if query.group_posts || item.force_collection {
@@ -574,11 +621,7 @@ async fn handle_source_event(
                     let items = grouped_items
                         .remove(&post_key)
                         .expect("completed source group exists");
-                    if let Err(error) = enqueue_group(application, query, destination, items).await
-                    {
-                        release_post_archive(application, query, &post_key).await;
-                        return Err(error);
-                    }
+                    enqueue_group(application, query, destination, items).await?;
                 }
             } else {
                 enqueue_group(application, query, destination, vec![item]).await?;
@@ -598,6 +641,7 @@ async fn handle_source_event(
                 .ok_or_else(|| "Failed subscription media was not recorded".to_string())?;
             state::mark_source_item_failed(
                 application,
+                query.run_query_id,
                 query.subscription_id,
                 query.query_id,
                 source_item_id,
@@ -664,30 +708,30 @@ fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
     {
         return Err("A gallery import produced more than one source post".to_string());
     }
-    if !items.last().is_some_and(|item| item.post_complete) {
-        return Err("Gallery download ended before the complete post was available".to_string());
+    let expected = first
+        .post
+        .items
+        .iter()
+        .map(|item| item.item_key.as_str())
+        .collect::<BTreeSet<_>>();
+    if expected.len() != first.post.items.len() {
+        return Err("Gallery post contains duplicate media identities".into());
     }
-    let expected = items.iter().find_map(|item| {
-        item.post
-            .metadata_json
-            .as_deref()
-            .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
-            .and_then(|metadata| {
-                metadata
-                    .get("filecount")
-                    .or_else(|| metadata.get("count"))
-                    .and_then(|value| {
-                        value
-                            .as_u64()
-                            .or_else(|| value.as_str()?.parse::<u64>().ok())
-                    })
-            })
-    });
-    if let Some(expected) = expected.filter(|expected| *expected != items.len() as u64) {
+    let actual = items
+        .iter()
+        .map(|item| {
+            item.input
+                .source_identity
+                .as_ref()
+                .map(|source| source.source_item_key.as_str())
+                .ok_or_else(|| "Gallery media is missing source identity".to_string())
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if actual.len() != items.len() || actual != expected {
         return Err(format!(
-            "Gallery download was incomplete: received {} of {} media files",
-            items.len(),
-            expected
+            "Gallery download was incomplete: received {} of {} declared media files",
+            actual.len(),
+            expected.len()
         ));
     }
     Ok(())
@@ -696,20 +740,6 @@ fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
 fn publish_source_progress(_application: &LibraryApplication) -> Result<(), String> {
     // Source-state writes already publish coalesced task invalidations.
     Ok(())
-}
-
-async fn release_post_archive(
-    application: &LibraryApplication,
-    query: &ClaimedQueryRun,
-    post_key: &str,
-) {
-    let _ = crate::subscriptions::archive::clear_post_archive_entries_at_root(
-        application.root(),
-        query.subscription_id,
-        query.query_id,
-        &[post_key.to_string()],
-    )
-    .await;
 }
 
 async fn enqueue_group(
@@ -721,6 +751,20 @@ async fn enqueue_group(
     if items.is_empty() {
         return Err("A completed source post has no media".into());
     }
+    let source_positions = items[0]
+        .post
+        .items
+        .iter()
+        .map(|item| (item.item_key.clone(), item.position))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    items.sort_by_key(|item| {
+        item.input
+            .source_identity
+            .as_ref()
+            .and_then(|source| source_positions.get(&source.source_item_key))
+            .copied()
+            .unwrap_or(i64::MAX)
+    });
     ensure_subscription_thumbnails(application, &items).await?;
     let post = items[0].post.clone();
     let folders = destination
@@ -922,6 +966,142 @@ mod tests {
         assert!(!path.exists());
     }
 
+    struct CancellationCleanupRunner {
+        cleanup_path: PathBuf,
+    }
+
+    impl SourceRunner for CancellationCleanupRunner {
+        fn run<'a>(
+            &'a self,
+            _query: &'a ClaimedQueryRun,
+            _output: Sender<SourceEvent>,
+            cancel: CancellationToken,
+        ) -> RunnerFuture<'a> {
+            Box::pin(async move {
+                cancel.cancelled().await;
+                let mut failure =
+                    RunnerFailure::retryable(RunnerFailureKind::Interrupted, "cancelled");
+                failure.cleanup_paths.push(self.cleanup_path.clone());
+                Err(failure)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_acknowledgement_cleans_runner_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let cleanup_path = directory.path().join("native-staging");
+        std::fs::create_dir_all(&cleanup_path).unwrap();
+        std::fs::write(cleanup_path.join("partial"), b"partial").unwrap();
+        let definition = crate::subscription_catalog::NewSubscription {
+            name: "Example".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![crate::subscription_catalog::NewSubscriptionQuery {
+                site_id: "twitter".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-30T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:00:00Z")
+            .unwrap();
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let worker = SubscriptionWorker::with_cancellation(
+            &application,
+            CancellationCleanupRunner {
+                cleanup_path: cleanup_path.clone(),
+            },
+            cancel,
+        );
+        worker.tick("2026-08-30T00:00:01Z").await.unwrap();
+
+        assert!(!cleanup_path.exists());
+    }
+
+    fn gallery_item(post: &NormalizedPost, item_key: &str) -> DownloadedItem {
+        DownloadedItem {
+            post: post.clone(),
+            input: PreparedImport {
+                stable_key: format!("source:ehentai:gallery:{item_key}"),
+                media_name: item_key.into(),
+                file_path: format!("/{item_key}.jpg"),
+                facts: ImmutableMediaFacts {
+                    mime: "image/jpeg".into(),
+                    size_bytes: 1,
+                    width: Some(1),
+                    height: Some(1),
+                    duration_ms: None,
+                    frame_count: Some(1),
+                    content_hash: format!("hash-{item_key}"),
+                    perceptual_hash: None,
+                    palette: Vec::new(),
+                },
+                lifecycle: Lifecycle::Inbox,
+                rating: Rating::Unrated,
+                notes: None,
+                tags: Vec::new(),
+                folders: Vec::new(),
+                source_urls: Vec::new(),
+                source_identity: Some(SourceIdentity {
+                    source_key: "ehentai:gallery".into(),
+                    source_item_key: item_key.into(),
+                    source_text: None,
+                }),
+                imported_at_ms: 1_700_000_000_000,
+                captured_at_ms: None,
+            },
+            post_complete: false,
+            force_collection: true,
+            delete_after_ingest: true,
+        }
+    }
+
+    #[test]
+    fn native_gallery_completion_requires_the_exact_declared_media_set() {
+        let post = NormalizedPost {
+            site_id: "ehentai".into(),
+            post_key: "gallery".into(),
+            canonical_url: Some("https://e-hentai.org/g/1/0123456789/".into()),
+            creator_name: None,
+            title: Some("Gallery".into()),
+            description: None,
+            captured_at: None,
+            metadata_json: None,
+            items: vec![
+                crate::subscriptions::NormalizedItem {
+                    item_key: "page-1".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                },
+                crate::subscriptions::NormalizedItem {
+                    item_key: "page-2".into(),
+                    position: 1,
+                    media_url: None,
+                    canonical_url: None,
+                },
+            ],
+        };
+        let complete = vec![gallery_item(&post, "page-2"), gallery_item(&post, "page-1")];
+        assert!(validate_complete_gallery(&complete).is_ok());
+        assert!(validate_complete_gallery(&complete[..1]).is_err());
+        assert!(validate_complete_gallery(&[
+            gallery_item(&post, "page-1"),
+            gallery_item(&post, "page-1"),
+        ])
+        .is_err());
+    }
+
     struct OneItemRunner<'a> {
         application: &'a LibraryApplication,
         item: DownloadedItem,
@@ -947,7 +1127,10 @@ mod tests {
                     .unwrap();
                 let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
                 output
-                    .send(SourceEvent::PostComplete(acknowledge))
+                    .send(SourceEvent::PostComplete {
+                        post_key: self.item.post.post_key.clone(),
+                        acknowledge,
+                    })
                     .await
                     .unwrap();
                 acknowledged.await.unwrap();
@@ -972,6 +1155,64 @@ mod tests {
                 Ok(RunnerSuccess {
                     resume_cursor: Some(String::new()),
                     cleanup_paths: self.cleanup_paths.clone(),
+                    stop_after_current_execution: false,
+                })
+            })
+        }
+    }
+
+    struct MultiItemRunner<'a> {
+        application: &'a LibraryApplication,
+        items: Vec<DownloadedItem>,
+        cleanup_path: PathBuf,
+    }
+
+    impl SourceRunner for MultiItemRunner<'_> {
+        fn run<'a>(
+            &'a self,
+            _query: &'a ClaimedQueryRun,
+            output: Sender<SourceEvent>,
+            _cancel: CancellationToken,
+        ) -> RunnerFuture<'a> {
+            Box::pin(async move {
+                output
+                    .send(SourceEvent::PostTraversed(self.items[0].post.clone()))
+                    .await
+                    .unwrap();
+                for item in &self.items {
+                    output
+                        .send(SourceEvent::MediaDownloaded(item.clone()))
+                        .await
+                        .unwrap();
+                }
+                let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
+                output
+                    .send(SourceEvent::PostComplete {
+                        post_key: self.items[0].post.post_key.clone(),
+                        acknowledge,
+                    })
+                    .await
+                    .unwrap();
+                acknowledged.await.unwrap();
+                let ingested = self
+                    .application
+                    .library()
+                    .auxiliary_read(
+                        picto_library::database::WorkPriority::VisibleRead,
+                        |connection| {
+                            Ok(connection.query_row(
+                                "SELECT COUNT(*) FROM source_item WHERE state = 'ingested'",
+                                [],
+                                |row| row.get::<_, i64>(0),
+                            )?)
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(ingested, self.items.len() as i64);
+                Ok(RunnerSuccess {
+                    resume_cursor: Some(String::new()),
+                    cleanup_paths: vec![self.cleanup_path.clone()],
+                    stop_after_current_execution: false,
                 })
             })
         }
@@ -1003,13 +1244,17 @@ mod tests {
                     .unwrap();
                 let (acknowledge, acknowledged) = tokio::sync::oneshot::channel();
                 output
-                    .send(SourceEvent::PostComplete(acknowledge))
+                    .send(SourceEvent::PostComplete {
+                        post_key: self.post.post_key.clone(),
+                        acknowledge,
+                    })
                     .await
                     .unwrap();
                 acknowledged.await.unwrap();
                 Ok(RunnerSuccess {
                     resume_cursor: Some(String::new()),
                     cleanup_paths: Vec::new(),
+                    stop_after_current_execution: false,
                 })
             })
         }
@@ -1231,6 +1476,142 @@ mod tests {
             assert_eq!(rerun.runs[0].counts.posts_added, 0);
             assert_eq!(rerun.runs[0].counts.posts_skipped, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn native_gallery_publishes_one_ordered_collection_after_every_file_settles() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let downloads = directory.path().join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let post = NormalizedPost {
+            site_id: "ehentai".into(),
+            post_key: "gallery-1".into(),
+            canonical_url: Some("https://e-hentai.org/g/1/token/".into()),
+            creator_name: Some("example".into()),
+            title: Some("Gallery one".into()),
+            description: Some("Two pages".into()),
+            captured_at: None,
+            metadata_json: None,
+            items: vec![
+                crate::subscriptions::NormalizedItem {
+                    item_key: "page-1".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                },
+                crate::subscriptions::NormalizedItem {
+                    item_key: "page-2".into(),
+                    position: 1,
+                    media_url: None,
+                    canonical_url: None,
+                },
+            ],
+        };
+        let mut items = Vec::new();
+        for (item_key, color) in [("page-2", 32_u8), ("page-1", 16_u8)] {
+            let path = downloads.join(format!("{item_key}.png"));
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([color, 8, 4, 255]))
+                .save(&path)
+                .unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            items.push(DownloadedItem {
+                post: post.clone(),
+                input: PreparedImport {
+                    stable_key: format!("source:ehentai:gallery-1:{item_key}"),
+                    media_name: item_key.into(),
+                    file_path: path.to_string_lossy().into_owned(),
+                    facts: ImmutableMediaFacts {
+                        mime: "image/png".into(),
+                        size_bytes: bytes.len() as u64,
+                        width: Some(1),
+                        height: Some(1),
+                        duration_ms: None,
+                        frame_count: Some(1),
+                        content_hash: hex::encode(Sha256::digest(&bytes)),
+                        perceptual_hash: None,
+                        palette: Vec::new(),
+                    },
+                    lifecycle: Lifecycle::Inbox,
+                    rating: Rating::Unrated,
+                    notes: None,
+                    tags: vec!["creator:example".into()],
+                    folders: Vec::new(),
+                    source_urls: vec!["https://e-hentai.org/g/1/0123456789/".into()],
+                    source_identity: Some(SourceIdentity {
+                        source_key: "ehentai:gallery-1".into(),
+                        source_item_key: item_key.into(),
+                        source_text: None,
+                    }),
+                    imported_at_ms: chrono::DateTime::parse_from_rfc3339("2026-08-30T00:00:01Z")
+                        .unwrap()
+                        .timestamp_millis(),
+                    captured_at_ms: None,
+                },
+                post_complete: false,
+                force_collection: true,
+                delete_after_ingest: false,
+            });
+        }
+        let definition = crate::subscription_catalog::NewSubscription {
+            name: "Gallery".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![crate::subscription_catalog::NewSubscriptionQuery {
+                site_id: "ehentai".into(),
+                query_text: "https://e-hentai.org/g/1/0123456789/".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-30T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:00:00Z")
+            .unwrap();
+        let runner = MultiItemRunner {
+            application: &application,
+            items,
+            cleanup_path: downloads.clone(),
+        };
+        let mut schedule = DomainSchedule::new();
+        tick(&application, &mut schedule, &runner, "2026-08-30T00:00:01Z")
+            .await
+            .unwrap();
+
+        assert!(!downloads.exists());
+        let root_id = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(connection.query_row(
+                        "SELECT local_id FROM library_item WHERE item_kind = 2",
+                        [],
+                        |row| row.get::<_, u32>(0),
+                    )?)
+                },
+            )
+            .unwrap();
+        let details = application.details(picto_library::RootId(root_id)).unwrap();
+        assert_eq!(details.root.media_count, 2);
+        assert_eq!(
+            details
+                .media
+                .iter()
+                .map(|media| media.media_name.as_str())
+                .collect::<Vec<_>>(),
+            ["page-1", "page-2"]
+        );
+        let activity =
+            crate::subscription_activity::list_runs_library(&application, subscription_id, 1)
+                .unwrap();
+        assert_eq!(activity.runs[0].counts.posts_traversed, 1);
+        assert_eq!(activity.runs[0].counts.posts_added, 1);
+        assert_eq!(activity.runs[0].counts.downloaded, 2);
     }
 
     #[tokio::test]

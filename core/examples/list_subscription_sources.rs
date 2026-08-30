@@ -1,4 +1,4 @@
-use picto_core::subscriptions::gallery_dl_runner::SITES;
+use picto_core::subscriptions::sites::SITES;
 use picto_core::subscriptions::source_adapter::describe_site;
 
 fn main() {

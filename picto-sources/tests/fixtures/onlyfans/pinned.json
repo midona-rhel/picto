@@ -1,0 +1,13 @@
+{
+  "list": [
+    {
+      "id": 9103,
+      "text": "Pinned post",
+      "postedAt": "2026-08-26T12:00:00+00:00",
+      "postedAtPrecise": 1787745600.25,
+      "isPinned": true,
+      "media": [{ "id": 703, "type": "audio", "canView": true, "source": { "source": "https://cdn.example.test/media/703.mp3" } }]
+    }
+  ],
+  "hasMore": false
+}

@@ -1,0 +1,25 @@
+{
+  "results": [
+    {
+      "deviationid": "123456789",
+      "url": "https://www.deviantart.com/ArtistName/art/Rendered-Study-123456789",
+      "title": "Rendered Study",
+      "published_time": 1788048000,
+      "author": { "username": "ArtistName" },
+      "content": {
+        "src": "https://images-wixmp.example/f/rendered-study.png",
+        "filesize": 4000
+      },
+      "videos": [
+        {
+          "src": "https://images-wixmp.example/f/rendered-study-720.mp4",
+          "quality": "720p",
+          "filesize": 8000
+        }
+      ],
+      "tags": ["landscape", { "tag_name": "digital-art" }]
+    }
+  ],
+  "has_more": true,
+  "next_offset": 1
+}

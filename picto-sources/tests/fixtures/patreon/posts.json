@@ -1,0 +1,68 @@
+{
+  "data": [
+    {
+      "type": "post",
+      "id": "58577141",
+      "attributes": {
+        "title": "Behind the scenes",
+        "content": "<p>Visible post prose</p>",
+        "teaser_text": "Preview",
+        "published_at": "2026-08-30T10:00:00Z",
+        "patreon_url": "https://www.patreon.com/posts/behind-the-scenes-58577141?ref=feed",
+        "post_file": {
+          "id": "post-file",
+          "url": "https://c10.patreonusercontent.com/post-file.mp4",
+          "name": "post-file.mp4"
+        },
+        "image": {
+          "id": "large-image",
+          "large_url": "https://c10.patreonusercontent.com/large.jpg",
+          "file_name": "large.jpg"
+        }
+      },
+      "relationships": {
+        "user": {"data": {"type": "user", "id": "10"}},
+        "user_defined_tags": {"data": [{"type": "post_tag", "id": "user_defined;behind-the-scenes"}]},
+        "images": {"data": [{"type": "media", "id": "image-1"}]},
+        "attachments": {"data": [{"type": "media", "id": "attachment-1"}]},
+        "attachments_media": {"data": []},
+        "media": {"data": []}
+      }
+    }
+  ],
+  "included": [
+    {
+      "type": "user",
+      "id": "10",
+      "attributes": {
+        "full_name": "Creator Name",
+        "url": "https://www.patreon.com/c/creator-name"
+      }
+    },
+    {
+      "type": "post_tag",
+      "id": "user_defined;behind-the-scenes",
+      "attributes": {"value": "behind-the-scenes"}
+    },
+    {
+      "type": "media",
+      "id": "image-1",
+      "attributes": {
+        "download_url": "https://c10.patreonusercontent.com/image.png",
+        "file_name": "image.png",
+        "size_bytes": 100
+      }
+    },
+    {
+      "type": "media",
+      "id": "attachment-1",
+      "attributes": {
+        "url": "https://www.patreon.com/file?h=attachment",
+        "name": "attachment.pdf"
+      }
+    }
+  ],
+  "links": {
+    "next": "https://www.patreon.com/api/posts?filter%5Bcampaign_id%5D=987654&page%5Bcount%5D=1&page%5Bcursor%5D=next-token&sort=-published_at"
+  }
+}

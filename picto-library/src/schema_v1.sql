@@ -248,6 +248,44 @@ CREATE TABLE subscription_run_source_item (
     PRIMARY KEY(run_query_id, source_item_id)
 ) WITHOUT ROWID, STRICT;
 
+-- Run-local source state. Stable source_post/source_item rows describe provider
+-- identity only; attempts are the sole authority for progress and outcomes.
+CREATE TABLE source_post_attempt (
+    attempt_id INTEGER PRIMARY KEY,
+    run_query_id INTEGER NOT NULL REFERENCES subscription_run_query(run_query_id) ON DELETE CASCADE,
+    source_post_id INTEGER NOT NULL REFERENCES source_post(source_post_id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN (
+        'discovered', 'downloading', 'downloaded', 'ingesting',
+        'added', 'skipped', 'failed', 'cancelled'
+    )),
+    terminal_reason TEXT,
+    started_at TEXT NOT NULL,
+    settled_at TEXT,
+    UNIQUE(run_query_id, source_post_id)
+) STRICT;
+
+CREATE UNIQUE INDEX idx_source_post_attempt_open ON source_post_attempt(run_query_id)
+    WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled');
+
+CREATE TABLE source_file_attempt (
+    file_attempt_id INTEGER PRIMARY KEY,
+    attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
+    source_item_id INTEGER NOT NULL REFERENCES source_item(source_item_id) ON DELETE CASCADE,
+    content_hash TEXT,
+    state TEXT NOT NULL CHECK (state IN ('discovered', 'staged', 'retained', 'duplicate', 'failed')),
+    staged_path TEXT,
+    bytes_staged INTEGER NOT NULL DEFAULT 0 CHECK (bytes_staged >= 0),
+    error TEXT,
+    UNIQUE(attempt_id, source_item_id)
+) STRICT;
+
+CREATE TABLE source_attempt_root (
+    attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
+    root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
+    root_stable_key TEXT NOT NULL,
+    PRIMARY KEY(attempt_id, root_stable_key)
+) WITHOUT ROWID, STRICT;
+
 CREATE TABLE ingest_job (
     ingest_job_id INTEGER PRIMARY KEY,
     job_key TEXT NOT NULL UNIQUE,
@@ -514,6 +552,8 @@ CREATE INDEX idx_subscription_query_subscription ON subscription_query(subscript
 CREATE INDEX idx_subscription_run_subscription ON subscription_run(subscription_id, created_at, run_id);
 CREATE INDEX idx_source_post_root ON source_post(root_item_id, source_post_id);
 CREATE INDEX idx_source_item_media ON source_item(media_item_id, source_item_id);
+CREATE INDEX idx_source_post_attempt_run ON source_post_attempt(run_query_id, attempt_id);
+CREATE INDEX idx_source_file_attempt_progress ON source_file_attempt(attempt_id, state, file_attempt_id);
 CREATE INDEX idx_ingest_job_ready ON ingest_job(status, available_at, ingest_job_id);
 CREATE INDEX idx_work_item_ready ON work_item(status, priority, available_at, work_id);
 CREATE UNIQUE INDEX idx_work_item_file_kind ON work_item(file_id, work_type)

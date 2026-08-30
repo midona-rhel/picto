@@ -1,0 +1,26 @@
+{
+  "list": [
+    {
+      "id": 9002,
+      "text": "Creator message",
+      "createdAt": "2026-08-29T09:00:00+00:00",
+      "fromUser": { "id": 42, "username": "fixturecreator" },
+      "media": [
+        {
+          "id": 601,
+          "type": "photo",
+          "canView": true,
+          "source": { "source": "https://cdn.example.test/media/601.jpg" }
+        }
+      ]
+    },
+    {
+      "id": 9003,
+      "text": "Subscriber reply",
+      "createdAt": "2026-08-29T08:00:00+00:00",
+      "fromUser": { "id": 7, "username": "subscriber" },
+      "media": []
+    }
+  ],
+  "hasMore": false
+}

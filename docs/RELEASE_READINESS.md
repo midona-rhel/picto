@@ -7,17 +7,17 @@ Picto ships for these platforms only:
 - Linux on x86-64, distributed as an AppImage.
 
 Intel macOS is not a supported build or runtime target. Package configuration, CI artifact names,
-native addons, and downloaded sidecars must not imply otherwise.
+native addons, and downloaded native tools must not imply otherwise.
 
 ## Required gates
 
 1. `npm run release:audit` passes before compilation.
 2. TypeScript, focused UI tests, the production frontend build, Rust tests, and native-addon build
    pass on every supported runner.
-3. `npm run release:audit -- --artifacts` passes after sidecars and native binaries are built.
+3. `npm run release:audit -- --artifacts` passes after native binaries are built.
 4. The packaged smoke test opens the app with an isolated library, loads and settles the renderer,
-   exercises both packaged sidecar self-tests, closes the native library, and removes its temporary
-   data without native-module or sidecar errors. Import and thumbnail behavior remains covered by
+   closes the native library, and removes its temporary data without native-module errors. Import,
+   subscription, and thumbnail behavior remains covered by
    focused integration tests rather than being overstated as part of this smoke test.
 5. Cloud Sync and Tutorials pass their separately owned persistence, accessibility, packaged-build,
    and restart-recovery gates.
@@ -45,10 +45,11 @@ native addons, and downloaded sidecars must not imply otherwise.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
   x64, and Linux x64. A normal push to `main` runs verification only. The Windows and Linux package
   results are publication gates and necessarily run after the release candidate is uploaded.
-- Gallery-dl and OF-Scraper source revisions and Python dependency graphs are frozen. The universal
-  OnlyFans lock resolves for macOS ARM64, Windows x64, and Linux x64 on Python 3.12.
-- TypeScript, the production build, all 883 frontend tests, 271 Rust unit tests, 11 Rust integration
-  tests, command parity, and source/artifact audits pass. React scheduling warnings are clean.
+- Every subscription provider is implemented by the native Rust source crate. Release packages
+  contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
+- TypeScript, the production build, all 884 frontend tests, 303 Rust unit tests, 69 Rust integration
+  tests, command parity, strict Clippy, and source/artifact audits pass. React scheduling warnings
+  are clean.
 - `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
   and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.
 - The release candidate is separated into reviewed commits and the worktree is clean; generated

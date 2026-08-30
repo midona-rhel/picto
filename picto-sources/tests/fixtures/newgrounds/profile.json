@@ -1,0 +1,11 @@
+{
+  "using_elastic": false,
+  "calendar_view": true,
+  "items": {
+    "2026": [
+      "<a href=\"https://www.newgrounds.com/art/view/artist-name/first-work\" class=\"item-portalitem-art-medium\" title=\"First &amp; Best Work\"><h4>First Work</h4></a>",
+      "<a href=\"https://www.newgrounds.com/art/view/artist-name/second-work\" class=\"item-portalitem-art-medium\" title=\"Second Work\"><h4>Second Work</h4></a>"
+    ]
+  },
+  "load_more": "<button>More</button>"
+}

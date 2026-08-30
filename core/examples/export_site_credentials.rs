@@ -14,7 +14,7 @@ fn main() -> Result<(), String> {
         .ok_or("usage: export_site_credentials <output.json>")?;
     let mut credentials = BTreeMap::new();
     let mut missing = Vec::new();
-    for site in picto_core::subscriptions::gallery_dl_runner::SITES {
+    for site in picto_core::subscriptions::sites::SITES {
         let owner = site.credential_owner_site_id;
         if credentials.contains_key(owner) {
             continue;

@@ -570,66 +570,20 @@ fn activity_counts_for_query(
     run_query_id: i64,
 ) -> rusqlite::Result<ActivityCounts> {
     connection.query_row(
-        "SELECT (SELECT COUNT(DISTINCT ssp.source_post_id)
-                 FROM subscription_run_query current
-                 JOIN subscription_source_post ssp
-                   ON ssp.query_id = current.query_id
-                  AND ssp.last_seen_run_id = current.run_id
-                 WHERE current.run_query_id = ?1),
-                COUNT(DISTINCT CASE
-                    WHEN si.state = 'ingested'
-                     AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
-                    THEN post.root_item_id END),
-                (SELECT COUNT(*)
-                 FROM subscription_run_query current
-                 JOIN subscription_run current_run USING(run_id)
-                 JOIN subscription_source_post seen
-                   ON seen.query_id = current.query_id
-                  AND seen.last_seen_run_id = current.run_id
-                 LEFT JOIN source_post seen_post
-                   ON seen_post.source_post_id = seen.source_post_id
-                 LEFT JOIN library_root seen_root
-                   ON seen_root.root_id = seen_post.root_item_id
-                 WHERE current.run_query_id = ?1
-                   AND (seen_root.root_id IS NULL
-                        OR seen_root.imported_at_ms < unixepoch(current_run.created_at) * 1000)
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM source_item candidate
-                       LEFT JOIN ingest_job candidate_job
-                         ON candidate_job.source_item_id = candidate.source_item_id
-                       WHERE candidate.source_post_id = seen.source_post_id
-                         AND (candidate.state IN ('pending', 'downloaded', 'failed')
-                              OR candidate_job.status IN ('pending', 'running', 'failed'))
-                   )),
-                COUNT(DISTINCT rsi.source_item_id),
-                COUNT(DISTINCT CASE
-                    WHEN si.state = 'downloaded' AND si.updated_at >= run.created_at
-                    THEN rsi.source_item_id
-                    WHEN si.state IN ('ingested', 'deleted')
-                     AND (root.imported_at_ms >= unixepoch(run.created_at) * 1000
-                          OR ij.updated_at >= run.created_at)
-                    THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
-                                     AND ij.updated_at >= run.created_at
-                                    THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE
-                    WHEN si.state = 'ingested'
-                     AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
-                    THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= run.created_at)
-                                          OR (ij.status = 'failed' AND ij.updated_at >= run.created_at)
-                                    THEN rsi.source_item_id END),
-                COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= run.created_at
-                                    THEN rsi.source_item_id END)
-         FROM subscription_run_source_item rsi
-         JOIN subscription_run_query run_query USING(run_query_id)
-         JOIN subscription_run run USING(run_id)
-         JOIN source_item si ON si.source_item_id = rsi.source_item_id
-         LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
-         LEFT JOIN library_root root ON root.root_id = post.root_item_id
-         LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
-         WHERE rsi.run_query_id = ?1",
+        "SELECT COUNT(DISTINCT attempt.attempt_id),
+                COUNT(DISTINCT CASE WHEN attempt.state = 'added' THEN attempt.attempt_id END),
+                COUNT(DISTINCT CASE WHEN attempt.state = 'skipped' THEN attempt.attempt_id END),
+                COUNT(DISTINCT file.file_attempt_id),
+                COUNT(DISTINCT CASE WHEN file.state IN ('staged', 'retained') THEN file.file_attempt_id END),
+                COUNT(DISTINCT CASE WHEN job.status IN ('pending', 'running')
+                                    THEN file.file_attempt_id END),
+                COUNT(DISTINCT CASE WHEN file.state = 'retained' THEN file.file_attempt_id END),
+                COUNT(DISTINCT CASE WHEN file.state = 'failed' THEN file.file_attempt_id END),
+                0
+         FROM source_post_attempt attempt
+         LEFT JOIN source_file_attempt file USING(attempt_id)
+         LEFT JOIN ingest_job job ON job.source_item_id = file.source_item_id
+         WHERE attempt.run_query_id = ?1",
         [run_query_id],
         |row| {
             Ok(ActivityCounts {
@@ -681,137 +635,54 @@ WITH target_runs AS (
     ORDER BY created_at DESC, run_id DESC
     LIMIT ?2
 ),
-post_counts AS (
+counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
-           COUNT(DISTINCT CASE
-               WHEN (root.root_id IS NULL
-                     OR root.imported_at_ms < unixepoch(tr.created_at) * 1000)
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM source_item candidate
-                    LEFT JOIN ingest_job candidate_job
-                      ON candidate_job.source_item_id = candidate.source_item_id
-                    WHERE candidate.source_post_id = ssp.source_post_id
-                      AND (candidate.state IN ('pending', 'downloaded', 'failed')
-                           OR candidate_job.status IN ('pending', 'running', 'failed'))
-                )
-               THEN ssp.source_post_id END) AS posts_skipped
+           COUNT(DISTINCT attempt.attempt_id) AS posts_traversed,
+           COUNT(DISTINCT CASE WHEN attempt.state = 'added' THEN attempt.attempt_id END) AS posts_added,
+           COUNT(DISTINCT CASE WHEN attempt.state = 'skipped' THEN attempt.attempt_id END) AS posts_skipped,
+           COUNT(DISTINCT file.file_attempt_id) AS fetched,
+           COUNT(DISTINCT CASE WHEN file.state IN ('staged', 'retained') THEN file.file_attempt_id END) AS downloaded,
+           COUNT(DISTINCT CASE WHEN job.status IN ('pending', 'running') THEN file.file_attempt_id END) AS queued,
+           COUNT(DISTINCT CASE WHEN file.state = 'retained' THEN file.file_attempt_id END) AS ingested,
+           COUNT(DISTINCT CASE WHEN file.state = 'failed' THEN file.file_attempt_id END) AS failed,
+           0 AS deleted
     FROM target_runs tr
     JOIN subscription_run_query srq ON srq.run_id = tr.run_id
-    LEFT JOIN subscription_source_post ssp
-      ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
-    LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
-    LEFT JOIN library_root root ON root.root_id = post.root_item_id
-    GROUP BY srq.run_id
-),
-run_counts AS (
-    SELECT srq.run_id,
-           COUNT(DISTINCT CASE
-               WHEN si.state = 'ingested'
-                AND root.imported_at_ms >= unixepoch(tr.created_at) * 1000
-               THEN post.root_item_id END) AS posts_added,
-           COUNT(DISTINCT rsi.source_item_id) AS fetched,
-           COUNT(DISTINCT CASE
-               WHEN si.state = 'downloaded' AND si.updated_at >= tr.created_at
-               THEN rsi.source_item_id
-               WHEN si.state IN ('ingested', 'deleted')
-                AND (root.imported_at_ms >= unixepoch(tr.created_at) * 1000
-                     OR ij.updated_at >= tr.created_at)
-               THEN rsi.source_item_id END) AS downloaded,
-           COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
-                                AND ij.updated_at >= tr.created_at
-                               THEN rsi.source_item_id END) AS queued,
-           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                AND root.imported_at_ms >= unixepoch(tr.created_at) * 1000
-                               THEN rsi.source_item_id END) AS ingested,
-           COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= tr.created_at)
-                                     OR (ij.status = 'failed' AND ij.updated_at >= tr.created_at)
-                               THEN rsi.source_item_id END) AS failed,
-           COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= tr.created_at
-                               THEN rsi.source_item_id END) AS deleted
-    FROM target_runs tr
-    JOIN subscription_run_query srq ON srq.run_id = tr.run_id
-    LEFT JOIN subscription_run_source_item rsi ON rsi.run_query_id = srq.run_query_id
-    LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
-    LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
-    LEFT JOIN library_root root ON root.root_id = post.root_item_id
-    LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
+    LEFT JOIN source_post_attempt attempt ON attempt.run_query_id = srq.run_query_id
+    LEFT JOIN source_file_attempt file USING(attempt_id)
+    LEFT JOIN ingest_job job ON job.source_item_id = file.source_item_id
     GROUP BY srq.run_id
 )
 SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.started_at, sr.finished_at, sr.failure_kind, sr.error_message,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
-       COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
-       COALESCE(pc.posts_skipped, 0),
-       COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
-       COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
-       COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
+       COALESCE(c.posts_traversed, 0), COALESCE(c.posts_added, 0),
+       COALESCE(c.posts_skipped, 0),
+       COALESCE(c.fetched, 0), COALESCE(c.downloaded, 0),
+       COALESCE(c.queued, 0), COALESCE(c.ingested, 0),
+       COALESCE(c.failed, 0), COALESCE(c.deleted, 0)
 FROM target_runs sr
-LEFT JOIN post_counts pc ON pc.run_id = sr.run_id
-LEFT JOIN run_counts rc ON rc.run_id = sr.run_id
+LEFT JOIN counts c ON c.run_id = sr.run_id
 ORDER BY sr.created_at DESC, sr.run_id DESC
 "#;
 
 const RUN_SUMMARY_BY_ID_SQL: &str = r#"
-WITH post_counts AS (
+WITH counts AS (
     SELECT srq.run_id,
-           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed,
-           COUNT(DISTINCT CASE
-               WHEN (root.root_id IS NULL
-                     OR root.imported_at_ms < unixepoch(run.created_at) * 1000)
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM source_item candidate
-                    LEFT JOIN ingest_job candidate_job
-                      ON candidate_job.source_item_id = candidate.source_item_id
-                    WHERE candidate.source_post_id = ssp.source_post_id
-                      AND (candidate.state IN ('pending', 'downloaded', 'failed')
-                           OR candidate_job.status IN ('pending', 'running', 'failed'))
-                )
-               THEN ssp.source_post_id END) AS posts_skipped
+           COUNT(DISTINCT attempt.attempt_id) AS posts_traversed,
+           COUNT(DISTINCT CASE WHEN attempt.state = 'added' THEN attempt.attempt_id END) AS posts_added,
+           COUNT(DISTINCT CASE WHEN attempt.state = 'skipped' THEN attempt.attempt_id END) AS posts_skipped,
+           COUNT(DISTINCT file.file_attempt_id) AS fetched,
+           COUNT(DISTINCT CASE WHEN file.state IN ('staged', 'retained') THEN file.file_attempt_id END) AS downloaded,
+           COUNT(DISTINCT CASE WHEN job.status IN ('pending', 'running') THEN file.file_attempt_id END) AS queued,
+           COUNT(DISTINCT CASE WHEN file.state = 'retained' THEN file.file_attempt_id END) AS ingested,
+           COUNT(DISTINCT CASE WHEN file.state = 'failed' THEN file.file_attempt_id END) AS failed,
+           0 AS deleted
     FROM subscription_run_query srq
-    JOIN subscription_run run ON run.run_id = srq.run_id
-    LEFT JOIN subscription_source_post ssp
-      ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
-    LEFT JOIN source_post post ON post.source_post_id = ssp.source_post_id
-    LEFT JOIN library_root root ON root.root_id = post.root_item_id
-    WHERE srq.run_id = ?1
-    GROUP BY srq.run_id
-),
-run_counts AS (
-    SELECT srq.run_id,
-           COUNT(DISTINCT CASE
-               WHEN si.state = 'ingested'
-                AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
-               THEN post.root_item_id END) AS posts_added,
-           COUNT(DISTINCT rsi.source_item_id) AS fetched,
-           COUNT(DISTINCT CASE
-               WHEN si.state = 'downloaded' AND si.updated_at >= run.created_at
-               THEN rsi.source_item_id
-               WHEN si.state IN ('ingested', 'deleted')
-                AND (root.imported_at_ms >= unixepoch(run.created_at) * 1000
-                     OR ij.updated_at >= run.created_at)
-               THEN rsi.source_item_id END) AS downloaded,
-           COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
-                                AND ij.updated_at >= run.created_at
-                               THEN rsi.source_item_id END) AS queued,
-           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
-                               THEN rsi.source_item_id END) AS ingested,
-           COUNT(DISTINCT CASE WHEN (si.state = 'failed' AND si.updated_at >= run.created_at)
-                                     OR (ij.status = 'failed' AND ij.updated_at >= run.created_at)
-                               THEN rsi.source_item_id END) AS failed,
-           COUNT(DISTINCT CASE WHEN si.state = 'deleted' AND si.updated_at >= run.created_at
-                               THEN rsi.source_item_id END) AS deleted
-    FROM subscription_run_query srq
-    JOIN subscription_run run ON run.run_id = srq.run_id
-    LEFT JOIN subscription_run_source_item rsi ON rsi.run_query_id = srq.run_query_id
-    LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
-    LEFT JOIN source_post post ON post.source_post_id = si.source_post_id
-    LEFT JOIN library_root root ON root.root_id = post.root_item_id
-    LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
+    LEFT JOIN source_post_attempt attempt ON attempt.run_query_id = srq.run_query_id
+    LEFT JOIN source_file_attempt file USING(attempt_id)
+    LEFT JOIN ingest_job job ON job.source_item_id = file.source_item_id
     WHERE srq.run_id = ?1
     GROUP BY srq.run_id
 )
@@ -819,14 +690,13 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.started_at, sr.finished_at, sr.failure_kind, sr.error_message,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
-       COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
-       COALESCE(pc.posts_skipped, 0),
-       COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
-       COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
-       COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
+       COALESCE(c.posts_traversed, 0), COALESCE(c.posts_added, 0),
+       COALESCE(c.posts_skipped, 0),
+       COALESCE(c.fetched, 0), COALESCE(c.downloaded, 0),
+       COALESCE(c.queued, 0), COALESCE(c.ingested, 0),
+       COALESCE(c.failed, 0), COALESCE(c.deleted, 0)
 FROM subscription_run sr
-LEFT JOIN post_counts pc ON pc.run_id = sr.run_id
-LEFT JOIN run_counts rc ON rc.run_id = sr.run_id
+LEFT JOIN counts c ON c.run_id = sr.run_id
 WHERE sr.run_id = ?1
 "#;
 
@@ -889,13 +759,16 @@ mod tests {
             "2026-08-29T00:00:02Z",
         )
         .unwrap();
-        crate::library_subscription_state::mark_source_items_downloaded(
+        crate::library_subscription_state::mark_source_item_staged(
             &application,
-            &[ids["page-1"]],
+            query.run_query_id,
+            ids["page-1"],
+            "gallery-page-1-hash",
+            "/tmp/gallery-page-1",
+            1,
             "2026-08-29T00:00:03Z",
         )
         .unwrap();
-
         let progress = current_progress_library(&application, subscription_id)
             .unwrap()
             .unwrap();
@@ -1006,6 +879,15 @@ mod tests {
             "2026-08-29T00:00:03Z",
         )
         .unwrap();
+        assert!(matches!(
+            crate::library_subscription_state::settled_post_outcome(
+                &application,
+                &query,
+                "old-post",
+            )
+            .unwrap(),
+            picto_sources::SourcePostOutcome::Skipped { .. }
+        ));
 
         let progress = current_progress_library(&application, subscription_id)
             .unwrap()

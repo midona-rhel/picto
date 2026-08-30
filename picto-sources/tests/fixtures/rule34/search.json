@@ -1,0 +1,25 @@
+[
+  {
+    "id": 987654,
+    "created_at": "2026-01-02 03:04:05+00:00",
+    "rating": "explicit",
+    "file_url": "https://api-cdn.rule34.xxx/images/ab/cd/hash.jpg",
+    "md5": "abcdef0123456789abcdef0123456789",
+    "tags": "artist_name character_name series_name solo highres",
+    "tag_info": [
+      { "tag": "artist_name", "type": "artist" },
+      { "tag": "character_name", "type": "character" },
+      { "tag": "series_name", "type": "copyright" },
+      { "tag": "solo", "type": "tag" },
+      { "tag": "highres", "type": "metadata" }
+    ]
+  },
+  {
+    "id": 987653,
+    "created_at": "2026-01-02 03:03:05+00:00",
+    "rating": "q",
+    "file_url": "https://api-cdn.rule34.xxx/images/ef/video.mp4",
+    "md5": "fedcba9876543210fedcba9876543210",
+    "tags": "animation"
+  }
+]

@@ -1,0 +1,51 @@
+{
+  "illusts": [
+    {
+      "id": 12345678,
+      "title": "Blue sky",
+      "type": "manga",
+      "caption": "<p>First line<br>Second line</p>",
+      "create_date": "2026-08-20T12:30:00+09:00",
+      "x_restrict": 0,
+      "user": {
+        "id": 173530,
+        "name": "Aoi Artist",
+        "account": "aoi_artist"
+      },
+      "tags": [
+        { "name": "風景", "translated_name": "landscape" },
+        { "name": "オリジナル", "translated_name": "original" }
+      ],
+      "series": {
+        "id": 77,
+        "title": "Sky Book"
+      },
+      "image_urls": {
+        "large": "https://i.pximg.net/img-master/img/2026/08/20/12/30/00/12345678_p0_master1200.jpg"
+      },
+      "meta_single_page": {
+        "original_image_url": ""
+      },
+      "meta_pages": [
+        { "image_urls": { "original": "https://i.pximg.net/img-original/img/2026/08/20/12/30/00/12345678_p0.png" } },
+        { "image_urls": { "original": "https://i.pximg.net/img-original/img/2026/08/20/12/30/00/12345678_p1.png" } },
+        { "image_urls": { "original": "https://i.pximg.net/img-original/img/2026/08/20/12/30/00/12345678_p2.png" } }
+      ]
+    },
+    {
+      "id": 12345677,
+      "title": "Later post",
+      "type": "illust",
+      "caption": "",
+      "create_date": "2026-08-19T12:30:00+09:00",
+      "x_restrict": 1,
+      "user": { "id": 44, "name": "Other Artist", "account": "other" },
+      "tags": [],
+      "meta_single_page": {
+        "original_image_url": "https://i.pximg.net/img-original/img/2026/08/19/12/30/00/12345677_p0.jpg"
+      },
+      "meta_pages": []
+    }
+  ],
+  "next_url": "https://app-api.pixiv.net/v1/search/illust?word=original&offset=30"
+}

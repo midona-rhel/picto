@@ -1,0 +1,13 @@
+{
+  "body": {
+    "items": [
+      {
+        "id": "112233",
+        "creatorId": "creator-name",
+        "title": "A FANBOX post",
+        "publishedDatetime": "2026-08-30T10:00:00Z"
+      }
+    ],
+    "nextUrl": "https://api.fanbox.cc/post.listCreator?creatorId=creator-name&limit=1&maxPublishedDatetime=2026-08-30T10%3A00%3A00Z&maxId=112233"
+  }
+}

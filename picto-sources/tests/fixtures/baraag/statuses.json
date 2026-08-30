@@ -1,0 +1,35 @@
+[
+  {
+    "id": "117023587543794517",
+    "created_at": "2026-08-02T02:37:17.000Z",
+    "content": "<p>A <strong>readable</strong> post &amp; note.</p>",
+    "url": "https://baraag.net/@Blue_/117023587543794517",
+    "account": {
+      "id": "109876543210",
+      "username": "Blue_",
+      "acct": "Blue_@baraag.net"
+    },
+    "tags": [
+      {"name": "doodlegirl", "url": "https://baraag.net/tags/doodlegirl"},
+      {"name": "character:wolf_girl", "url": "https://baraag.net/tags/characterwolf_girl"}
+    ],
+    "media_attachments": [
+      {
+        "id": "2001",
+        "type": "image",
+        "url": "https://media.baraag.net/files/image.jpg",
+        "preview_url": "https://media.baraag.net/files/small/image.jpg",
+        "remote_url": null,
+        "description": "drawing"
+      },
+      {
+        "id": "2002",
+        "type": "video",
+        "url": "https://media.baraag.net/files/clip.mp4",
+        "preview_url": "https://media.baraag.net/files/small/clip.jpg",
+        "remote_url": null,
+        "description": null
+      }
+    ]
+  }
+]

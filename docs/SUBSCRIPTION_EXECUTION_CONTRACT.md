@@ -40,33 +40,17 @@ source identity keeps repeated work idempotent.
 
 ## Provider Requirements
 
-- Gallery providers pause extraction at each post boundary until Picto acknowledges settlement.
-- List providers run with an explicit one-source-post process window because extractor hooks may
-  pipeline discovery ahead of downloads. The durable runner starts the next window only after the
-  current post reaches canonical library state.
+- Every native adapter returns a bounded metadata window and exposes one post to the shared session
+  at a time. The session refuses to expose another post until Picto acknowledges settlement.
 - Gallery imports treat the entire gallery as the one current post.
 - Query providers continue past posts without usable media until the added-post budget is reached or
   source history ends.
-- A provider-specific downloader may retain its own cache, but that cache cannot redefine Picto's
-  ordering, counters, or completion boundary.
+- Providers own endpoint and response-shape details only. The shared Rust HTTP runtime, downloader,
+  staging owner, canonical ingest path, and settlement engine own all execution behavior.
 
 ## Adapter Isolation
 
-The persisted runner and post acknowledgement protocol are shared infrastructure. Extractor
-monkey-patches are not shared infrastructure and are installed only for the named site:
-
-| Site | Site-specific behavior |
-|---|---|
-| Rule34.xxx | Categorized API tag enrichment |
-| Idol Complex and Sankaku | Their shared Sankaku keyset cursor API |
-| DeviantArt | Whole-deviation expansion and cursor |
-| Fur Affinity, Hentai Foundry, Newgrounds | Early post window before detail-page requests |
-| Tumblr | Native post cursor |
-| pixivFANBOX | FANBOX transport and pagination compatibility |
-| Patreon | Lazy attachment handling and Patreon pagination |
-| SubscribeStar | SubscribeStar post pagination |
-| OnlyFans | Dedicated downloader with a one-post process window |
-
-All other supported gallery-dl sites run through their native extractor without one of these
-site-specific patches. Common bridge code may normalize events, enforce the accepted-post cap, and
-wait for Rust acknowledgement, but it must not alter one site's extractor behavior for another.
+The persisted runner and post acknowledgement protocol are shared infrastructure. Adapters may
+compose reusable cursor, tag, pagination, and media-description helpers, but one provider's headers,
+authentication transform, response parser, or endpoint behavior must not affect another provider.
+There is no Python extractor, provider archive database, or sidecar execution path in production.

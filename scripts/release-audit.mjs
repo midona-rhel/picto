@@ -15,6 +15,18 @@ const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' 
   .split('\n')
   .filter((file) => file && existsSync(path.join(root, file)));
 
+const removedSubscriptionRuntimePaths = [
+  'core/src/gallery_dl_source.rs',
+  'core/src/onlyfans_source.rs',
+  'core/src/sidecar_process.rs',
+  'core/src/subscriptions/gallery_dl_runner.rs',
+  'scripts/gallery_dl_bridge.py',
+  'scripts/onlyfans_bridge.py',
+];
+for (const file of removedSubscriptionRuntimePaths) {
+  assert(!existsSync(path.join(root, file)), `removed subscription runtime returned: ${file}`);
+}
+
 for (const file of tracked) {
   assert(!file.startsWith('output/'), `tracked audit output must be removed: ${file}`);
   assert(!file.startsWith('.vite/'), `tracked Vite cache must be removed: ${file}`);
@@ -76,6 +88,11 @@ assert(macLibraryIcon?.from === 'build/library.icns', 'macOS packages must inclu
 assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
+assert(
+  !(packageManifest.build.extraResources ?? []).some((resource) =>
+    /gallery[-_]?dl|onlyfans|of[-_]?scraper|python/i.test(`${resource.from ?? ''} ${resource.to ?? ''}`)),
+  'release package must not contain a Python subscription runtime',
+);
 
 const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
 const expectedMacIconLayers = ['01-spine.png', '02-under-pages.png', '03-open-book.png'];
@@ -85,11 +102,6 @@ for (const [index, imageName] of expectedMacIconLayers.entries()) {
   assert(group?.layers?.length === 1 && group.layers[0]?.['image-name'] === imageName, `native macOS icon layer order is invalid: ${imageName}`);
   assert(group?.layers?.[0]?.glass === true && group?.specular === true, `native macOS icon material is invalid: ${imageName}`);
 }
-for (const sidecar of ['gallery-dl', 'onlyfans']) {
-  const entry = packageManifest.build.extraFiles.find((candidate) => candidate.to === `${sidecar}/`);
-  assert(entry?.filter?.includes('THIRD_PARTY_LICENSES.txt'), `${sidecar} package must include its frozen Python notices`);
-}
-
 const packageLock = JSON.parse(read('package-lock.json'));
 for (const [location, dependency] of Object.entries(packageLock.packages ?? {})) {
   if (!location.startsWith('node_modules/')) continue;
@@ -135,20 +147,6 @@ for (const slug of Object.keys(coremlArtifacts)) {
   assert(model?.license && model.license !== 'NOASSERTION', `Core ML artifact lacks explicit redistribution terms: ${slug}`);
 }
 
-const runtimeRequirements = read('scripts/gallery-dl-runtime-requirements.txt');
-const onlyFansRequirements = read('scripts/onlyfans-bridge-requirements.txt');
-const floatingRequirement = /^\s*[^#\n]+(?:>=|~=|>|<)[^\n]*$/m;
-assert(!floatingRequirement.test(runtimeRequirements), 'gallery-dl runtime requirements must be exact pins');
-assert(!floatingRequirement.test(onlyFansRequirements), 'OnlyFans sidecar requirements must be exact pins');
-for (const [name, requirements] of [
-  ['gallery-dl', runtimeRequirements],
-  ['OnlyFans', onlyFansRequirements],
-]) {
-  for (const url of requirements.matchAll(/https:\/\/[^\s]+\/archive\/([^/\s]+)\.zip/g)) {
-    assert(/^[a-f0-9]{40}$/.test(url[1]), `${name} Git dependency must use a full commit SHA`);
-  }
-}
-
 const releasePlan = read('docs/RELEASE_COMPLETION_PLAN.md');
 assert(releasePlan.includes('Cloud Sync and Tutorials'), 'release plan must identify Cloud Sync and Tutorials as release gates');
 assert(!releasePlan.includes('Cloud sync is deferred') && !releasePlan.includes('Cloud sync is absent'), 'release plan still claims Cloud Sync is deferred or absent');
@@ -171,25 +169,12 @@ if (checkArtifacts) {
     'build/library.ico',
     'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
     'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
-    'vendor/gallery-dl/THIRD_PARTY_LICENSES.txt',
-    'vendor/onlyfans/THIRD_PARTY_LICENSES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
-
-  for (const [file, packageName] of [
-    ['vendor/gallery-dl/THIRD_PARTY_LICENSES.txt', 'gallery-dl@'],
-    ['vendor/onlyfans/THIRD_PARTY_LICENSES.txt', 'ofscraper@'],
-  ]) {
-    if (existsSync(path.join(root, file))) {
-      assert(read(file).toLowerCase().includes(packageName), `sidecar notices omit the frozen ${packageName.slice(0, -1)} package: ${file}`);
-    }
-  }
 
   const executableSuffix = process.platform === 'win32' ? '.exe' : '';
   for (const file of [
     `vendor/ffmpeg/ffmpeg${executableSuffix}`,
     `vendor/ffmpeg/ffprobe${executableSuffix}`,
-    `vendor/gallery-dl/picto-gallery-dl-bridge${executableSuffix}`,
-    `vendor/onlyfans/picto-onlyfans-bridge${executableSuffix}`,
   ]) {
     const artifact = path.join(root, file);
     const exists = existsSync(artifact);

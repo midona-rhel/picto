@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT4S">
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4">
+      <Representation id="low" bandwidth="100000" width="640" height="360">
+        <SegmentTemplate initialization="video/$RepresentationID$-init.mp4" media="video/$RepresentationID$-$Number$.m4s" startNumber="10" timescale="1">
+          <SegmentTimeline><S t="0" d="2" r="1"/></SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+      <Representation id="high" bandwidth="500000" width="1280" height="720">
+        <SegmentTemplate initialization="video/$RepresentationID$-init.mp4" media="video/$RepresentationID$-$Number$.m4s" startNumber="10" timescale="1">
+          <SegmentTimeline><S t="0" d="2" r="1"/></SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet contentType="audio" mimeType="audio/mp4">
+      <Representation id="audio" bandwidth="128000">
+        <SegmentTemplate initialization="audio/init.mp4" media="audio/$Time$.m4s" timescale="1">
+          <SegmentTimeline><S t="0" d="2" r="1"/></SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

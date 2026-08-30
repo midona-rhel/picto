@@ -1,0 +1,13 @@
+{
+  "list": [
+    {
+      "id": 9102,
+      "text": "Archived post",
+      "postedAt": "2026-08-27T12:00:00+00:00",
+      "postedAtPrecise": 1787832000.25,
+      "isArchived": true,
+      "media": [{ "id": 702, "type": "video", "canView": true, "files": { "full": { "url": "https://cdn.example.test/media/702.mp4" } } }]
+    }
+  ],
+  "hasMore": false
+}

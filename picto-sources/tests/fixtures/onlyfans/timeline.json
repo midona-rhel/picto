@@ -1,0 +1,12 @@
+{
+  "list": [
+    {
+      "id": 9101,
+      "text": "Timeline post",
+      "postedAt": "2026-08-28T12:00:00+00:00",
+      "postedAtPrecise": 1787918400.25,
+      "media": [{ "id": 701, "type": "photo", "canView": true, "source": { "source": "https://cdn.example.test/media/701.jpg" } }]
+    }
+  ],
+  "hasMore": false
+}

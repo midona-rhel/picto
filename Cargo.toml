@@ -2,6 +2,7 @@
 members = [
     "core",
     "picto-library",
+    "picto-sources",
     "native/picto-node",
 ]
 resolver = "2"
@@ -28,6 +29,8 @@ opt-level = 3
 [profile.dev.package.picto_core]
 opt-level = 2
 [profile.dev.package.picto_library]
+opt-level = 2
+[profile.dev.package.picto_sources]
 opt-level = 2
 [profile.dev.package.picto_node]
 opt-level = 2

@@ -4,13 +4,14 @@ use std::path::Path;
 use chrono::Utc;
 use picto_core::blob_store::{mime_to_extension, BlobStore};
 use picto_core::library_application::LibraryApplication;
-use picto_core::onlyfans_source::SubscriptionSourceRouter;
+use picto_core::native_source::NativeSourceRunner;
 use picto_core::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
 use picto_core::subscription_runtime::SubscriptionWorker;
-use picto_core::subscriptions::gallery_dl_runner::site_by_id;
+use picto_core::subscriptions::sites::site_by_id;
 use picto_core::subscriptions::source_adapter::describe_site;
 use picto_library::database::WorkPriority;
 use picto_library::{LibraryError, Lifecycle, RootId, RootKind};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct MediaEvidence {
@@ -197,8 +198,9 @@ async fn execute_run(
     if !created.created {
         return Err("subscription already had an active run".into());
     }
-    let runner = SubscriptionSourceRouter::open(application.root());
-    let worker = SubscriptionWorker::new(application, runner);
+    let runner = NativeSourceRunner::open(application.root());
+    let cancel = CancellationToken::new();
+    let worker = SubscriptionWorker::with_cancellation(application, runner, cancel.clone());
     // Batched-window providers settle one source window per tick and return
     // the query to pending until the run's post budget or cursor is
     // exhausted, exactly like the production scheduler loop. Drive ticks
@@ -211,7 +213,30 @@ async fn execute_run(
                 .unwrap_or(7_200),
         );
     loop {
-        worker.tick(&Utc::now().to_rfc3339()).await?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            cancel.cancel();
+            return Err(format!(
+                "run {} exceeded the certification timeout",
+                created.run_id
+            ));
+        }
+        let tick_at = Utc::now().to_rfc3339();
+        let tick = worker.tick(&tick_at);
+        tokio::pin!(tick);
+        match tokio::time::timeout(remaining, &mut tick).await {
+            Ok(result) => {
+                result?;
+            }
+            Err(_) => {
+                cancel.cancel();
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut tick).await;
+                return Err(format!(
+                    "run {} exceeded the certification timeout",
+                    created.run_id
+                ));
+            }
+        }
         loop {
             let report = picto_core::library_ingest_runtime::run_batch(application, 64)?;
             if report.ingested == 0 && report.failed == 0 {
@@ -230,12 +255,6 @@ async fn execute_run(
             .map_err(|error| error.to_string())?;
         if !matches!(status.as_str(), "pending" | "running") {
             break;
-        }
-        if std::time::Instant::now() > deadline {
-            return Err(format!(
-                "run {} still {status} at the certification timeout",
-                created.run_id
-            ));
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
@@ -517,7 +536,12 @@ fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<
         }
         validate_root_shape(post)?;
         for media in &post.items {
-            if !media.mime_type.starts_with("image/") && !media.mime_type.starts_with("video/") {
+            if !picto_core::media_capabilities::capabilities_for_stored_media(
+                &media.mime_type,
+                None,
+            )
+            .ingest_supported
+            {
                 return Err(format!(
                     "source item {} produced unsupported MIME {}",
                     media.item_key, media.mime_type
@@ -668,9 +692,6 @@ struct PacingEvidence {
 /// Prove every consecutive pair of requests to one host is at least the
 /// policy interval apart, from the bridge's HTTP-boundary trace.
 fn validate_request_pacing(trace_path: &std::path::Path) -> Result<PacingEvidence, String> {
-    // Timestamps are truncated to whole milliseconds when recorded, so a
-    // compliant 500ms lower bound can read just below 500ms.
-    const MINIMUM_GAP_MS: i64 = 495;
     let raw = std::fs::read_to_string(trace_path).map_err(|error| {
         format!(
             "certification ran without a request trace at {}: {error}",
@@ -687,13 +708,17 @@ fn validate_request_pacing(trace_path: &std::path::Path) -> Result<PacingEvidenc
         let at = entry["monotonic_ms"]
             .as_i64()
             .ok_or("trace line without a monotonic timestamp")?;
+        let expected_gap = entry["minimum_interval_ms"]
+            .as_i64()
+            .ok_or("trace line without its effective domain policy")?
+            .saturating_sub(5);
         requests += 1;
         if let Some(previous) = last_by_host.insert(host.clone(), at) {
             let gap = at - previous;
             minimum_gap = minimum_gap.min(gap);
-            if gap < MINIMUM_GAP_MS {
+            if gap < expected_gap {
                 return Err(format!(
-                    "two requests to {host} were only {gap}ms apart; the policy requires at least 0.5 seconds per domain"
+                    "two requests to {host} were only {gap}ms apart; its policy requires at least {expected_gap}ms"
                 ));
             }
         }
@@ -756,7 +781,7 @@ fn write_report(
             "metadata_text_sanitized": true,
             "tags_and_creator_metadata_checked": true,
             "tag_namespaces_canonical_or_general": true,
-            "image_video_mime_only": true,
+            "supported_media_mime": true,
             "blob_sizes_match_sqlite": true,
             "single_posts_are_media_roots": true,
             "multi_media_posts_are_collection_roots": true,

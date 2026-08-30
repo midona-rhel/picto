@@ -1,0 +1,43 @@
+{
+  "body": {
+    "post": {
+      "id": "112233",
+      "creatorId": "creator-name",
+      "title": "A FANBOX post",
+      "excerpt": "Opening prose",
+      "publishedDatetime": "2026-08-30T10:00:00Z",
+      "tags": ["exclusive", "wip"],
+      "coverImageUrl": "https://downloads.fanbox.cc/images/cover.jpg",
+      "body": {
+        "blocks": [
+          {"text": "Second block"},
+          {"links": [{"url": "https://example.test"}]},
+          {"imageId": "image-1"},
+          {"fileId": "file-1"}
+        ],
+        "imageMap": {
+          "image-1": {
+            "id": "image-1",
+            "originalUrl": "https://downloads.fanbox.cc/images/original.png",
+            "extension": "png"
+          }
+        },
+        "fileMap": {
+          "file-1": {
+            "id": "file-1",
+            "url": "https://downloads.fanbox.cc/files/document.pdf",
+            "name": "document",
+            "extension": "pdf"
+          },
+          "archive-1": {
+            "id": "archive-1",
+            "url": "https://downloads.fanbox.cc/files/archive.zip",
+            "name": "archive",
+            "extension": "zip"
+          }
+        },
+        "html": "<a href=\"https://downloads.fanbox.cc/files/bonus.mp3\">bonus</a>"
+      }
+    }
+  }
+}

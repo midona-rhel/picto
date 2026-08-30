@@ -1,0 +1,66 @@
+{
+  "list": [
+    {
+      "id": 9001,
+      "text": "<p>Hello &amp; welcome <b>bold</b> text</p>",
+      "postedAt": "2026-08-29T10:00:00+00:00",
+      "postedAtPrecise": 1787997600.125,
+      "author": { "id": 42, "username": "fixturecreator" },
+      "media": [
+        {
+          "id": 501,
+          "type": "photo",
+          "canView": true,
+          "files": { "full": { "url": "https://cdn.example.test/media/501.jpg", "size": 1234 } }
+        },
+        {
+          "id": 502,
+          "type": "video",
+          "canView": true,
+          "source": { "source": "https://cdn.example.test/media/502.mp4" }
+        },
+        {
+          "id": 503,
+          "type": "video",
+          "canView": true,
+          "files": { "drm": { "manifest": { "dash": "https://cdn.example.test/media/503.mpd" } } }
+        },
+        {
+          "id": 504,
+          "type": "video",
+          "canView": true,
+          "source": { "source": "https://cdn.example.test/media/504.m3u8" }
+        },
+        {
+          "id": 505,
+          "type": "file",
+          "canView": true,
+          "source": { "source": "https://cdn.example.test/media/archive.zip" }
+        },
+        {
+          "id": 506,
+          "type": "video",
+          "canView": true,
+          "videoSources": {
+            "720": "https://cdn.example.test/media/506-720.mp4",
+            "1080": "https://cdn.example.test/media/506-1080.mp4"
+          }
+        },
+        {
+          "id": 507,
+          "type": "photo",
+          "canView": false,
+          "source": { "source": "https://cdn.example.test/media/507.jpg" }
+        },
+        {
+          "id": 508,
+          "type": "video",
+          "canView": true,
+          "files": { "full": { "url": "https://cdn.example.test/media/508.m3u8" } },
+          "source": { "source": "https://cdn.example.test/media/508.mp4" }
+        }
+      ]
+    }
+  ],
+  "hasMore": true
+}

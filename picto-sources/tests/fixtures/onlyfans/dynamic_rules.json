@@ -1,0 +1,6 @@
+{
+  "static_param": "fixture-static",
+  "format": "prefix:{}:{:x}:suffix",
+  "checksum_indexes": [0, 3, 7, 12, 19],
+  "checksum_constant": -17
+}

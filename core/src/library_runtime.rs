@@ -152,7 +152,7 @@ fn start_subscription_workers(
                 _ => "library-subscription-4",
             },
             tokio::spawn(async move {
-                let runner = crate::onlyfans_source::SubscriptionSourceRouter::open(
+                let runner = crate::native_source::NativeSourceRunner::open(
                     worker_application.root(),
                 );
                 let worker = crate::subscription_runtime::SubscriptionWorker::with_shared_schedule(

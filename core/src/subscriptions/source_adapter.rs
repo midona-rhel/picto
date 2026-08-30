@@ -1,16 +1,13 @@
-mod types;
-
 use serde::Serialize;
 use url::Url;
 
-use crate::subscriptions::gallery_dl_runner::{
-    build_url, normalize_baraag_username, normalize_ehentai_gallery_url, normalize_fanbox_creator,
-    normalize_furaffinity_username, normalize_newgrounds_username, normalize_onlyfans_creator,
-    normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
-    normalize_twitter_username, site_by_id, SiteEntry,
+use crate::subscriptions::sites::{
+    build_url, normalize_archive_creator_url, normalize_baraag_username,
+    normalize_ehentai_gallery_url, normalize_fanbox_creator, normalize_furaffinity_username,
+    normalize_newgrounds_username, normalize_onlyfans_creator, normalize_patreon_creator,
+    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username, site_by_id,
+    SiteEntry,
 };
-
-pub use types::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SiteQueryKind {
@@ -46,8 +43,7 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
                 Url::parse(&url)
                     .ok()?
                     .path_segments()?
-                    .filter(|segment| !segment.is_empty())
-                    .next_back()
+                    .rfind(|segment| !segment.is_empty())
                     .map(ToOwned::to_owned)
             })
             .unwrap_or_else(|| trimmed.to_string());
@@ -61,8 +57,7 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
                 Url::parse(&url)
                     .ok()?
                     .path_segments()?
-                    .filter(|segment| !segment.is_empty())
-                    .next()
+                    .find(|segment| !segment.is_empty())
                     .map(ToOwned::to_owned)
             })
             .unwrap_or_else(|| trimmed.to_string());
@@ -90,6 +85,15 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     }
     if site_id == "onlyfans" && query_kind == "user" {
         return normalize_onlyfans_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if matches!(site_id, "pawchive" | "coomer" | "kemono") && query_kind == "user" {
+        let host = match site_id {
+            "pawchive" => "pawchive.pw",
+            "coomer" => "coomer.st",
+            _ => "kemono.cr",
+        };
+        return normalize_archive_creator_url(trimmed, host)
+            .unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "pixivuser" && query_kind == "user" {
         if let Ok(url) = Url::parse(trimmed) {
@@ -132,13 +136,11 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     {
         return Err("Pixiv user subscriptions require a numeric user ID".to_string());
     }
-    if site_id == "hentaifoundry" {
-        if build_url("hentaifoundry", query_text).is_none() {
-            return Err(
-                "Hentai Foundry subscriptions require a safe username slug or canonical user URL"
-                    .to_string(),
-            );
-        }
+    if site_id == "hentaifoundry" && build_url("hentaifoundry", query_text).is_none() {
+        return Err(
+            "Hentai Foundry subscriptions require a safe username slug or canonical user URL"
+                .to_string(),
+        );
     }
     if site_id == "baraag" {
         normalize_baraag_username(query_text)?;
@@ -172,6 +174,14 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     }
     if site_id == "onlyfans" {
         normalize_onlyfans_creator(query_text)?;
+    }
+    if matches!(site_id, "pawchive" | "coomer" | "kemono") {
+        let host = match site_id {
+            "pawchive" => "pawchive.pw",
+            "coomer" => "coomer.st",
+            _ => "kemono.cr",
+        };
+        normalize_archive_creator_url(query_text, host)?;
     }
     if matches!(
         site_id,
@@ -416,7 +426,7 @@ mod tests {
 
     #[test]
     fn inferred_kind_is_valid_for_every_site() {
-        for site in crate::subscriptions::gallery_dl_runner::SITES {
+        for site in crate::subscriptions::sites::SITES {
             assert_ne!(
                 site.supports_query, site.supports_account,
                 "site '{}' must expose exactly one query behavior",
@@ -452,11 +462,11 @@ mod tests {
     #[test]
     fn pixiv_user_and_search_build_their_specific_artwork_urls() {
         assert_eq!(
-            crate::subscriptions::gallery_dl_runner::build_url("pixivuser", "1234").as_deref(),
+            crate::subscriptions::sites::build_url("pixivuser", "1234").as_deref(),
             Some("https://www.pixiv.net/en/users/1234/artworks")
         );
         assert_eq!(
-            crate::subscriptions::gallery_dl_runner::build_url("pixiv", "landscape").as_deref(),
+            crate::subscriptions::sites::build_url("pixiv", "landscape").as_deref(),
             Some("https://www.pixiv.net/en/tags/landscape/artworks?s_mode=s_tag")
         );
     }

@@ -1,0 +1,88 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "timeline_v2": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "tweet-1960123456789012345",
+                    "content": {
+                      "itemContent": {
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1960123456789012345",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "legacy": { "screen_name": "OpenAI" }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "id_str": "1960123456789012345",
+                              "created_at": "Sat Aug 30 00:00:00 +0000 2026",
+                              "full_text": "Native subscriptions #Picto",
+                              "entities": {
+                                "hashtags": [{ "text": "Picto" }]
+                              },
+                              "extended_entities": {
+                                "media": [
+                                  {
+                                    "id_str": "1960123000000000001",
+                                    "media_key": "3_1960123000000000001",
+                                    "type": "photo",
+                                    "media_url_https": "https://pbs.twimg.com/media/Example.jpg"
+                                  },
+                                  {
+                                    "id_str": "1960123000000000002",
+                                    "media_key": "7_1960123000000000002",
+                                    "type": "video",
+                                    "media_url_https": "https://pbs.twimg.com/ext_tw_video_thumb/Example/pu/img/preview.jpg",
+                                    "video_info": {
+                                      "variants": [
+                                        {
+                                          "bitrate": 256000,
+                                          "content_type": "video/mp4",
+                                          "url": "https://video.twimg.com/ext_tw_video/Example/pu/vid/320x180/low.mp4"
+                                        },
+                                        {
+                                          "bitrate": 2176000,
+                                          "content_type": "video/mp4",
+                                          "url": "https://video.twimg.com/ext_tw_video/Example/pu/vid/1280x720/high.mp4"
+                                        },
+                                        {
+                                          "content_type": "application/x-mpegURL",
+                                          "url": "https://video.twimg.com/ext_tw_video/Example/pu/pl/playlist.m3u8"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "cursor-bottom-1",
+                    "content": {
+                      "cursorType": "Bottom",
+                      "value": "DAABCgAB"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
