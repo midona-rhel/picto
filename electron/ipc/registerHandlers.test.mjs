@@ -1,7 +1,34 @@
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { runReverseImageSearch } from './registerHandlers.mjs';
+import { closeDesktopWindow, runReverseImageSearch } from './registerHandlers.mjs';
+
+describe('closeDesktopWindow', () => {
+  it.each(['win32', 'linux'])('quits when closing the main window on %s', (platform) => {
+    const main = { close: vi.fn() };
+    const app = { quit: vi.fn() };
+    closeDesktopWindow({ app, windowManager: { getMainWindow: () => main }, win: main, platform });
+    expect(app.quit).toHaveBeenCalledOnce();
+    expect(main.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps the application alive when closing the main window on macOS', () => {
+    const main = { close: vi.fn() };
+    const app = { quit: vi.fn() };
+    closeDesktopWindow({ app, windowManager: { getMainWindow: () => main }, win: main, platform: 'darwin' });
+    expect(main.close).toHaveBeenCalledOnce();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it('closes secondary windows without quitting', () => {
+    const main = {};
+    const secondary = { close: vi.fn() };
+    const app = { quit: vi.fn() };
+    closeDesktopWindow({ app, windowManager: { getMainWindow: () => main }, win: secondary, platform: 'win32' });
+    expect(secondary.close).toHaveBeenCalledOnce();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+});
 
 class FakeWebContents extends EventEmitter {
   constructor() {

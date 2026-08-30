@@ -196,6 +196,14 @@ export async function runReverseImageSearch({
   }
 }
 
+export function closeDesktopWindow({ app, windowManager, win, platform = process.platform }) {
+  if (platform !== 'darwin' && win === windowManager.getMainWindow()) {
+    app.quit();
+    return;
+  }
+  win.close();
+}
+
 export function registerIpcHandlers({
   app,
   ipcMain,
@@ -239,7 +247,7 @@ export function registerIpcHandlers({
         else win.maximize();
         break;
       case 'close':
-        win.close();
+        closeDesktopWindow({ app, windowManager, win });
         break;
       default:
         break;
