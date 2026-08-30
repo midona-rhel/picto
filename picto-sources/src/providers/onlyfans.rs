@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,7 +23,6 @@ const MAX_CURSOR_BYTES: usize = 32 * 1024;
 const MAX_CURSOR_IDS: usize = 512;
 const MAX_CURSOR_OFFSET: u32 = 10_000_000;
 const MAX_ACTIVE_CREATORS: usize = 32;
-const MAX_SEEN_POSTS: usize = 4096;
 const FEED_AREAS: [FeedArea; 4] = [
     FeedArea::Timeline,
     FeedArea::Archived,
@@ -39,7 +38,6 @@ pub fn adapter() -> OnlyFansAdapter {
 pub struct OnlyFansAdapter {
     rules: Mutex<Option<CachedRules>>,
     profiles: Mutex<HashMap<String, Profile>>,
-    seen: Mutex<HashMap<String, SeenPosts>>,
 }
 
 #[derive(Clone)]
@@ -91,12 +89,6 @@ enum FeedArea {
     Streams,
 }
 
-#[derive(Default)]
-struct SeenPosts {
-    order: VecDeque<String>,
-    values: HashSet<String>,
-}
-
 #[derive(Debug)]
 struct ApiPage {
     posts: Vec<Value>,
@@ -128,9 +120,6 @@ impl NativeSourceAdapter for OnlyFansAdapter {
         Box::pin(async move {
             let username = normalized_username(&request.query)?;
             validate_credentials(credentials)?;
-            if request.cursor.is_none() && request.partition.0 == "purchased" {
-                self.reset_seen(&username);
-            }
             let rules = self.dynamic_rules(http, cancel).await?;
             let profile = self
                 .profile(&username, credentials, &rules, http, cancel)
@@ -251,26 +240,17 @@ impl OnlyFansAdapter {
         cancel: &CancellationToken,
     ) -> Result<DiscoveryBatch, SourceError> {
         let mut cursor = decode_cursor(request, None)?;
-        loop {
-            let url = purchased_url(&profile.username, cursor.offset)?;
-            let page = signed_page(http, url, credentials, rules, cancel).await?;
-            let Some(raw) = page.posts.into_iter().next() else {
-                return Ok(empty_terminal());
-            };
-            cursor.offset = cursor.offset.checked_add(1).ok_or_else(invalid_cursor)?;
-            let post_id = post_id(&raw)?;
-            let exhausted = !page.has_more;
-            if !self.remember_if_new(&profile.username, &post_id) {
-                if exhausted {
-                    return Ok(empty_terminal());
-                }
-                continue;
-            }
-            return one_post(
-                normalize_post(request, profile, credentials, raw, encode_cursor(&cursor)?)?,
-                exhausted,
-            );
-        }
+        let url = purchased_url(&profile.username, cursor.offset)?;
+        let page = signed_page(http, url, credentials, rules, cancel).await?;
+        let Some(raw) = page.posts.into_iter().next() else {
+            return Ok(empty_terminal());
+        };
+        cursor.offset = cursor.offset.checked_add(1).ok_or_else(invalid_cursor)?;
+        let exhausted = !page.has_more;
+        one_post(
+            normalize_post(request, profile, credentials, raw, encode_cursor(&cursor)?)?,
+            exhausted,
+        )
     }
 
     async fn discover_messages(
@@ -292,9 +272,7 @@ impl OnlyFansAdapter {
             let id = post_id(&raw)?;
             cursor.anchor = Some(id.clone());
             let exhausted = !page.has_more;
-            if !is_creator_message(&raw, &profile.id)
-                || !self.remember_if_new(&profile.username, &id)
-            {
+            if !is_creator_message(&raw, &profile.id) {
                 if exhausted {
                     return Ok(empty_terminal());
                 }
@@ -338,7 +316,7 @@ impl OnlyFansAdapter {
             let exhausted_area = !page.has_more;
             let mut after = cursor.clone();
             let exhausted = exhausted_area && !advance_feed_area(&mut after);
-            if seen_in_feed || !self.remember_if_new(&profile.username, &id) {
+            if seen_in_feed {
                 cursor = after;
                 if exhausted {
                     return Ok(empty_terminal());
@@ -350,31 +328,6 @@ impl OnlyFansAdapter {
                 exhausted,
             );
         }
-    }
-
-    fn reset_seen(&self, username: &str) {
-        let mut creators = self.seen.lock().expect("OnlyFans seen-set mutex poisoned");
-        creators.remove(username);
-    }
-
-    fn remember_if_new(&self, username: &str, post_id: &str) -> bool {
-        let mut creators = self.seen.lock().expect("OnlyFans seen-set mutex poisoned");
-        if creators.len() >= MAX_ACTIVE_CREATORS && !creators.contains_key(username) {
-            if let Some(key) = creators.keys().next().cloned() {
-                creators.remove(&key);
-            }
-        }
-        let seen = creators.entry(username.to_string()).or_default();
-        if !seen.values.insert(post_id.to_string()) {
-            return false;
-        }
-        seen.order.push_back(post_id.to_string());
-        while seen.order.len() > MAX_SEEN_POSTS {
-            if let Some(expired) = seen.order.pop_front() {
-                seen.values.remove(&expired);
-            }
-        }
-        true
     }
 }
 
@@ -1189,14 +1142,5 @@ mod tests {
         let protected = media.iter().find(|media| media.stable_id == "503").unwrap();
         assert_eq!(protected.file_name.as_deref(), Some("503.mp4"));
         assert_eq!(protected.delivery(), crate::MediaDelivery::Dash);
-    }
-
-    #[test]
-    fn earlier_priority_partitions_win_duplicate_posts() {
-        let adapter = adapter();
-        adapter.reset_seen("fixturecreator");
-        assert!(adapter.remember_if_new("fixturecreator", "9001"));
-        assert!(!adapter.remember_if_new("fixturecreator", "9001"));
-        assert!(adapter.remember_if_new("fixturecreator", "9002"));
     }
 }
