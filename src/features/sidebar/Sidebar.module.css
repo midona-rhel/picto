@@ -12,6 +12,7 @@
 }
 
 .scroll {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -19,6 +20,15 @@
   /* Keep both columns stable: left inset equals gutter + right inner padding. */
   scrollbar-gutter: stable;
   padding: 0 var(--sidebar-list-right-padding) 16px 0;
+}
+
+.scrollTopSentinel {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 @supports not (scrollbar-gutter: stable) {

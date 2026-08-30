@@ -62,9 +62,12 @@ import {
   GRID_TILE_RADIUS,
   gridGapForSpacing,
 } from '../gridAppearance';
+import { useScrollToTop } from '../../../shared/hooks/useScrollToTop';
+import { ScrollToTopButton } from '../../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 
 const TEXT_NAME_ROW_H = 20;
 const GRID_RESIZE_RENDER_MARGIN = 500;
+const RETURN_TO_TOP_THRESHOLD = 200;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 const EMPTY_FOLDER_NODE_SET = new Set<string>();
 
@@ -228,6 +231,7 @@ export function CanvasGrid({
 }: CanvasGridProps) {
   const gap = gridGapForSpacing(useAtomValue(gridSpacingAtom));
   const containerRef = useRef<HTMLDivElement>(null);
+  const returnToTop = useScrollToTop(containerRef, RETURN_TO_TOP_THRESHOLD);
   const dragOwnerIdRef = useRef(0);
   if (dragOwnerIdRef.current === 0) dragOwnerIdRef.current = createDragOwnerId();
   const containerCallbackRef = useCallback((el: HTMLDivElement | null) => {
@@ -1401,6 +1405,12 @@ export function CanvasGrid({
         onPointerUp={handlePointerUp}
       >
         <div ref={contentFrameRef} className={styles.contentFrame}>
+          <div
+            ref={returnToTop.sentinelRef}
+            className={styles.scrollTopSentinel}
+            style={{ top: RETURN_TO_TOP_THRESHOLD }}
+            aria-hidden="true"
+          />
           {headerContent && <div ref={headerRef}>{headerContent}</div>}
         {marqueeVisual && (
           <div className={styles.marquee} style={{
@@ -1473,6 +1483,10 @@ export function CanvasGrid({
           </div>
         </div>
       </div>
+      <ScrollToTopButton
+        visible={returnToTop.visible}
+        onClick={returnToTop.scrollToTop}
+      />
       {hoverPreview && <HoverPreviewPortal fileHash={hoverPreview.fileHash} mime={hoverPreview.mime} />}
       {dragGhost && (
         <DragGhost

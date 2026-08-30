@@ -25,6 +25,15 @@
   width: 100%;
 }
 
+.scrollTopSentinel {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .canvasWrap {
   position: relative;
   width: 100%;

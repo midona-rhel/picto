@@ -75,8 +75,11 @@ import { refreshSubscriptionsWorkspace } from '../../runtime/subscriptionsSettle
 import { subscriptionsController } from '../../controllers/subscriptionsController';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 import { contentSortSubmenu } from '../folders/folderContextMenu';
+import { useScrollToTop } from '../../shared/hooks/useScrollToTop';
+import { ScrollToTopButton } from '../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 
 const IC = 19;
+const SIDEBAR_RETURN_TO_TOP_THRESHOLD = 360;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
 
 function kbd(id: string): string | undefined {
@@ -225,6 +228,8 @@ function queryTarget(scope: BaseScope): EntityTarget {
 }
 
 export function Sidebar() {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const returnToTop = useScrollToTop(scrollRef, SIDEBAR_RETURN_TO_TOP_THRESHOLD);
   const nodes = useAtomValue(sidebarNodesAtom);
   const systemNodes = useAtomValue(systemNodesAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
@@ -1182,7 +1187,13 @@ export function Sidebar() {
   return (
     <div className={styles.root}>
       <LibrarySwitcherButton />
-      <div className={styles.scroll}>
+      <div ref={scrollRef} className={styles.scroll}>
+        <div
+          ref={returnToTop.sentinelRef}
+          className={styles.scrollTopSentinel}
+          style={{ top: SIDEBAR_RETURN_TO_TOP_THRESHOLD }}
+          aria-hidden="true"
+        />
         {loading && nodes.length === 0 && (
           <div className={styles.loadingMessage}>Loading…</div>
         )}
@@ -1407,6 +1418,12 @@ export function Sidebar() {
           <div className={styles.noFilterResults}>No matching folders</div>
         )}
       </div>
+
+      <ScrollToTopButton
+        visible={returnToTop.visible}
+        bottom={48}
+        onClick={returnToTop.scrollToTop}
+      />
 
       {(sidebarPreferences.showFolders || sidebarPreferences.showSmartFolders) && <div className={styles.treeFilter} data-help-id="sidebar-filter">
         <div className={styles.treeFilterField}>
