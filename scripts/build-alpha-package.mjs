@@ -11,8 +11,10 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const SIGNING_IDENTITY = 'Picto Code Signing';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -146,13 +148,17 @@ function supportsIconComposer() {
   return match !== null && Number(match[1]) >= 26;
 }
 
-const args = ['electron-builder', '--publish=never', ...process.argv.slice(2)];
+const args = [
+  path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'),
+  '--publish=never',
+  ...process.argv.slice(2),
+];
 if (!supportsIconComposer()) {
   console.log('Xcode 26 Icon Composer is unavailable; packaging with the generated flat macOS icon.');
   args.push('--config.mac.icon=build/icon-flat.png');
 }
 
-const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const command = process.execPath;
 const signing = prepareMacSigning();
 const stop = (exitCode) => {
   signing?.cleanup();
@@ -165,6 +171,7 @@ try {
     stdio: 'inherit',
     env: signing?.environment ?? process.env,
   });
+  if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
   process.removeAllListeners('SIGINT');
