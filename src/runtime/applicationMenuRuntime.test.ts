@@ -4,13 +4,14 @@ import { gridSelectionAtom } from '../state/selection';
 import { exportModalAtom } from '../state/modals';
 
 const mocks = vi.hoisted(() => ({
-  listeners: new Map<string, () => void>(),
+  listeners: new Map<string, (event?: unknown) => void>(),
   chooseAndImportFiles: vi.fn().mockResolvedValue(undefined),
   chooseAndImportFolder: vi.fn().mockResolvedValue(undefined),
   exportMedia: vi.fn().mockResolvedValue(undefined),
   showError: vi.fn(),
   showInfo: vi.fn(),
   showSuccess: vi.fn(),
+  setTargetRating: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../platform/ipc', () => ({
@@ -23,6 +24,13 @@ vi.mock('../controllers/filesController', () => ({
   chooseAndImportFiles: mocks.chooseAndImportFiles,
   chooseAndImportFolder: mocks.chooseAndImportFolder,
   filesController: { exportMedia: mocks.exportMedia },
+}));
+vi.mock('../controllers/entityMutations', () => ({
+  setTargetRating: mocks.setTargetRating,
+  setTargetLifecycle: vi.fn().mockResolvedValue(undefined),
+  permanentlyDeleteTarget: vi.fn().mockResolvedValue(undefined),
+  updateTargetFolderMembership: vi.fn().mockResolvedValue(undefined),
+  settleSelectionAfterMutation: vi.fn(),
 }));
 vi.mock('../shared/lib/notifications', () => ({
   showErrorNotification: mocks.showError,
@@ -77,6 +85,16 @@ describe('application menu runtime', () => {
     await vi.waitFor(() => expect(mocks.exportMedia).toHaveBeenCalledWith(
       { kind: 'explicit', root_ids: [7] },
       { output_dir: '/tmp/export', format: 'original' },
+    ));
+  });
+
+  it('routes contextual rating commands through the canonical metadata mutation', async () => {
+    startApplicationMenuRuntime();
+    await vi.waitFor(() => expect(mocks.listeners.has('menu:selection-action')).toBe(true));
+    mocks.listeners.get('menu:selection-action')?.({ payload: { action: 'set-rating', rating: 4 } });
+    await vi.waitFor(() => expect(mocks.setTargetRating).toHaveBeenCalledWith(
+      { kind: 'explicit', root_ids: [7] },
+      4,
     ));
   });
 });

@@ -605,6 +605,11 @@ export function registerIpcHandlers({
     return null;
   });
 
+  handle('picto:application-menu:set-context', (_event, { context } = {}) => {
+    menuManager.setCommandContext(context);
+    return null;
+  });
+
   handle('picto:application-menu:execute', (event, { id }) => {
     const item = resolveMenuItem(id);
     const win = BrowserWindow.fromWebContents(event.sender);

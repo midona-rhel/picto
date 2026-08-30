@@ -8,6 +8,9 @@ export const appController = {
       getApplicationMenuShortcutBindings(),
     ) ?? Promise.resolve();
   },
+  syncApplicationMenuContext(context: Record<string, unknown>): Promise<unknown> {
+    return (window as any).picto?.api?.setApplicationMenuContext?.(context) ?? Promise.resolve();
+  },
   openSettingsWindow(panel?: string): Promise<void> {
     return openSettingsWindow(panel);
   },

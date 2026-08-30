@@ -137,3 +137,57 @@ test('opens the real About settings section', () => {
   help.submenu.find((item) => item.label === 'About Picto').click();
   expect(openSettingsWindow).toHaveBeenCalledWith('about');
 });
+
+test('keeps selection commands disabled until renderer context makes them valid', () => {
+  let template = null;
+  const sendToFocusedWindow = vi.fn();
+  const manager = createMenuManager({
+    app: { name: 'Picto' },
+    Menu: {
+      buildFromTemplate: (next) => { template = next; return next; },
+      setApplicationMenu: () => {},
+    },
+    dialog: {},
+    isDev: false,
+    getCachedConfig: () => ({ pinnedLibraries: [], libraryHistory: [] }),
+    saveGlobalConfig: async () => {},
+    getCurrentLibraryRoot: () => null,
+    libraryDisplayName: (path) => path,
+    switchLibrary: async () => {},
+    openSettingsWindow: () => {},
+    openSubscriptionsWindow: () => {},
+    openLibraryManager: () => {},
+    sendToFocusedWindow,
+    sendToMainWindow: () => {},
+    checkForUpdates: () => {},
+    platform: 'darwin',
+  });
+
+  manager.buildAppMenu();
+  let byLabel = new Map(template.map((item) => [item.label, item]));
+  expect(byLabel.get('File').submenu.find((item) => item.label === 'Export Originals…').enabled).toBe(false);
+  expect(byLabel.get('Organize').submenu.find((item) => item.label === 'Set Rating').enabled).toBe(false);
+
+  manager.setCommandContext({
+    selectionCount: 2,
+    singleSelected: false,
+    singleKind: null,
+    scopeKind: 'trash',
+    statusFilter: 'trash',
+    canRename: true,
+    canCopyNames: true,
+    canRegenerateThumbnails: true,
+  });
+  byLabel = new Map(template.map((item) => [item.label, item]));
+  const edit = byLabel.get('Edit').submenu;
+  expect(edit.find((item) => item.label === 'Batch Rename…').enabled).toBe(true);
+  expect(edit.find((item) => item.label === 'Restore 2 Items').enabled).toBe(true);
+  expect(edit.find((item) => item.label === 'Delete 2 Permanently').enabled).toBe(true);
+
+  const rating = byLabel.get('Organize').submenu.find((item) => item.label === 'Set Rating');
+  rating.submenu[5].click();
+  expect(sendToFocusedWindow).toHaveBeenCalledWith('menu:selection-action', {
+    action: 'set-rating',
+    rating: 5,
+  });
+});
