@@ -195,6 +195,16 @@ if (checkArtifacts) {
       assert(!links.includes('/opt/homebrew/') && !links.includes('/usr/local/'), 'native addon links to a build-host package-manager path');
     }
   }
+
+  if (process.platform === 'linux') {
+    const addon = path.join(root, 'native/picto-node/index.node');
+    const webGpuRuntime = path.join(root, 'native/picto-node/libwebgpu_dawn.so');
+    assert(existsSync(webGpuRuntime), 'release WebGPU runtime is missing beside the native addon');
+    if (existsSync(addon)) {
+      const links = execFileSync('ldd', [addon], { encoding: 'utf8' });
+      assert(!links.includes('not found'), 'release native addon has unresolved runtime libraries');
+    }
+  }
 }
 
 if (failures.length > 0) {

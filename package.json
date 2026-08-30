@@ -52,6 +52,9 @@
       "dist/*.html",
       "electron/**/*",
       "native/picto-node/index.node",
+      "native/picto-node/*.so*",
+      "native/picto-node/*.dylib",
+      "native/picto-node/*.dll",
       "!node_modules/**",
       "node_modules/{electron-updater,builder-util-runtime,fs-extra,graceful-fs,jsonfile,universalify,js-yaml,argparse,lazy-val,lodash.escaperegexp,lodash.isequal,semver,tiny-typed-emitter,debug,ms,sax}/**/*",
       "LICENSE",
@@ -59,7 +62,10 @@
       "package.json"
     ],
     "asarUnpack": [
-      "native/**/*.node"
+      "native/**/*.node",
+      "native/**/*.so*",
+      "native/**/*.dylib",
+      "native/**/*.dll"
     ],
     "extraFiles": [
       {

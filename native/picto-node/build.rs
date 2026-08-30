@@ -1,6 +1,9 @@
 fn main() {
     napi_build::setup();
 
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
     println!("cargo:rerun-if-changed=src/drag_mac.m");
     println!("cargo:rerun-if-changed=src/open_with_mac.m");
 

@@ -13,4 +13,11 @@ const result = spawnSync(process.execPath, [napi, 'build', ...process.argv.slice
 });
 
 if (result.error) throw result.error;
-process.exitCode = result.status ?? 1;
+if (result.status !== 0) {
+  process.exitCode = result.status ?? 1;
+} else {
+  const stageScript = path.join(root, 'scripts', 'stage-native-runtime-libraries.mjs');
+  const stage = spawnSync(process.execPath, [stageScript], { cwd: root, stdio: 'inherit' });
+  if (stage.error) throw stage.error;
+  process.exitCode = stage.status ?? 1;
+}
