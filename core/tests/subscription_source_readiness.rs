@@ -57,6 +57,30 @@ struct RunEvidence {
     status: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct AttemptEvidence {
+    post_key: String,
+    outcome: String,
+    terminal_reason: Option<String>,
+    started_at: String,
+    settled_at: String,
+    retained_files: i64,
+    duplicate_files: i64,
+    failed_files: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct AttemptSequenceEvidence {
+    traversed: usize,
+    added: usize,
+    skipped: usize,
+    failed: usize,
+    retained_files: i64,
+    duplicate_files: i64,
+    failed_files: i64,
+    attempts: Vec<AttemptEvidence>,
+}
+
 /// Certifies one real source against Picto's replacement subscription, ingest,
 /// collection, blob, and restart boundaries. The source is selected through
 /// environment variables by `scripts/verify-sites.mjs`.
@@ -119,6 +143,7 @@ async fn certify_selected_source() -> Result<(), String> {
 
     let first_run = execute_run(&application, subscription_id, batch_size).await?;
     require_success(first_run, &application)?;
+    let first_attempts = read_attempt_sequence(&application, first_run.run_id, batch_size)?;
     let first = read_evidence(&application, subscription_id)?;
     validate_evidence(root, &site_id, &first)?;
     if first.posts.is_empty() {
@@ -147,8 +172,10 @@ async fn certify_selected_source() -> Result<(), String> {
 
     // One more source post proves that the next run continues from persisted
     // state instead of replaying the first source window.
+    reopened.set_subscription_posts_per_run_library(subscription_id, 1)?;
     let second_run = execute_run(&reopened, subscription_id, 1).await?;
     require_success(second_run, &reopened)?;
+    let second_attempts = read_attempt_sequence(&reopened, second_run.run_id, 1)?;
     let continued = read_evidence(&reopened, subscription_id)?;
     validate_evidence(root, &site_id, &continued)?;
     require_prefix_preserved(&first, &continued)?;
@@ -174,7 +201,9 @@ async fn certify_selected_source() -> Result<(), String> {
         batch_size,
         auth_mode,
         &first,
+        &first_attempts,
         &continued,
+        &second_attempts,
         &pacing,
     )?;
     println!(
@@ -186,6 +215,112 @@ async fn certify_selected_source() -> Result<(), String> {
         continued.posts.len(),
     );
     Ok(())
+}
+
+fn read_attempt_sequence(
+    application: &LibraryApplication,
+    run_id: i64,
+    added_post_limit: u32,
+) -> Result<AttemptSequenceEvidence, String> {
+    let rows = application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            let mut statement = connection.prepare(
+                "SELECT attempt.run_query_id, post.post_key, attempt.state,
+                        attempt.terminal_reason, attempt.started_at, attempt.settled_at,
+                        COALESCE(SUM(file.state = 'retained'), 0),
+                        COALESCE(SUM(file.state = 'duplicate'), 0),
+                        COALESCE(SUM(file.state = 'failed'), 0)
+                 FROM subscription_run_query run_query
+                 JOIN source_post_attempt attempt USING(run_query_id)
+                 JOIN source_post post USING(source_post_id)
+                 LEFT JOIN source_file_attempt file USING(attempt_id)
+                 WHERE run_query.run_id = ?1
+                 GROUP BY attempt.attempt_id
+                 ORDER BY attempt.run_query_id, attempt.attempt_id",
+            )?;
+            let rows = statement
+                .query_map([run_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        AttemptEvidence {
+                            post_key: row.get(1)?,
+                            outcome: row.get(2)?,
+                            terminal_reason: row.get(3)?,
+                            started_at: row.get(4)?,
+                            settled_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                            retained_files: row.get(6)?,
+                            duplicate_files: row.get(7)?,
+                            failed_files: row.get(8)?,
+                        },
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut last_settlement_by_query = BTreeMap::new();
+    let mut attempts = Vec::with_capacity(rows.len());
+    for (run_query_id, attempt) in rows {
+        if !matches!(attempt.outcome.as_str(), "added" | "skipped" | "failed") {
+            return Err(format!(
+                "successful run {run_id} retained nonterminal post {} in state {}",
+                attempt.post_key, attempt.outcome
+            ));
+        }
+        let started = chrono::DateTime::parse_from_rfc3339(&attempt.started_at)
+            .map_err(|error| format!("invalid attempt start time: {error}"))?;
+        let settled = chrono::DateTime::parse_from_rfc3339(&attempt.settled_at)
+            .map_err(|error| format!("invalid attempt settlement time: {error}"))?;
+        if settled < started {
+            return Err(format!(
+                "post {} settled before it was traversed",
+                attempt.post_key
+            ));
+        }
+        if let Some(previous) = last_settlement_by_query.insert(run_query_id, settled) {
+            if started < previous {
+                return Err(format!(
+                    "post {} was traversed before the preceding post settled",
+                    attempt.post_key
+                ));
+            }
+        }
+        if attempt.outcome == "skipped" && attempt.retained_files != 0 {
+            return Err(format!(
+                "skipped post {} retained {} downloaded files",
+                attempt.post_key, attempt.retained_files
+            ));
+        }
+        attempts.push(attempt);
+    }
+
+    let added = attempts
+        .iter()
+        .filter(|attempt| attempt.outcome == "added")
+        .count();
+    if added > added_post_limit as usize {
+        return Err(format!(
+            "run {run_id} added {added} posts beyond its limit of {added_post_limit}"
+        ));
+    }
+    Ok(AttemptSequenceEvidence {
+        traversed: attempts.len(),
+        added,
+        skipped: attempts
+            .iter()
+            .filter(|attempt| attempt.outcome == "skipped")
+            .count(),
+        failed: attempts
+            .iter()
+            .filter(|attempt| attempt.outcome == "failed")
+            .count(),
+        retained_files: attempts.iter().map(|attempt| attempt.retained_files).sum(),
+        duplicate_files: attempts.iter().map(|attempt| attempt.duplicate_files).sum(),
+        failed_files: attempts.iter().map(|attempt| attempt.failed_files).sum(),
+        attempts,
+    })
 }
 
 async fn execute_run(
@@ -743,7 +878,9 @@ fn write_report(
     batch_size: u32,
     auth_mode: &'static str,
     first: &Evidence,
+    first_attempts: &AttemptSequenceEvidence,
     final_evidence: &Evidence,
+    continuation_attempts: &AttemptSequenceEvidence,
     pacing: &PacingEvidence,
 ) -> Result<(), String> {
     let Some(path) = std::env::var_os("PICTO_LIVE_SUBSCRIPTION_REPORT") else {
@@ -754,7 +891,7 @@ fn write_report(
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let report = serde_json::json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": Utc::now().to_rfc3339(),
         "site_id": site_id,
         "query": query,
@@ -766,12 +903,14 @@ fn write_report(
             "media_items": first.media_count(),
             "collections": first.collection_count(),
             "posts": first.posts,
+            "attempt_sequence": first_attempts,
         },
         "final_state": {
             "traversed_posts": final_evidence.traversed_post_count,
             "materialized_posts": final_evidence.posts.len(),
             "media_items": final_evidence.media_count(),
             "collections": final_evidence.collection_count(),
+            "continuation_attempt_sequence": continuation_attempts,
         },
         "request_pacing": pacing,
         "checks": {
@@ -788,6 +927,10 @@ fn write_report(
             "collection_members_follow_source_order": true,
             "restart_is_stable": true,
             "next_run_continues": true,
+            "post_attempts_do_not_overlap": true,
+            "successful_runs_have_only_terminal_attempts": true,
+            "added_post_budget_not_exceeded": true,
+            "downloaded_files_are_newly_retained_files": true,
         }
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap())
