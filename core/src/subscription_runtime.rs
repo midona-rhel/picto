@@ -11,7 +11,6 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use chrono::Utc;
 use tokio::sync::mpsc::{self, Sender};
@@ -29,7 +28,6 @@ use picto_sources::SourcePostOutcome;
 const CHANNEL_CAPACITY: usize = 32;
 const RUN_STATE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 const RUNNER_CANCEL_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const PROGRESS_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub type RunnerFuture<'a> =
     Pin<Box<dyn Future<Output = Result<RunnerSuccess, RunnerFailure>> + Send + 'a>>;
@@ -70,38 +68,6 @@ pub enum SourceEvent {
         post_key: String,
         acknowledge: tokio::sync::oneshot::Sender<SourcePostOutcome>,
     },
-}
-
-struct SourceProgressPublisher {
-    last_publish: Instant,
-    dirty: bool,
-}
-
-impl SourceProgressPublisher {
-    fn new() -> Self {
-        Self {
-            last_publish: Instant::now(),
-            dirty: false,
-        }
-    }
-
-    fn changed(&mut self, application: &LibraryApplication) -> Result<(), String> {
-        self.dirty = true;
-        if self.last_publish.elapsed() >= PROGRESS_PUBLISH_INTERVAL {
-            self.flush(application)?;
-        }
-        Ok(())
-    }
-
-    fn flush(&mut self, application: &LibraryApplication) -> Result<(), String> {
-        if !self.dirty {
-            return Ok(());
-        }
-        publish_source_progress(application)?;
-        self.last_publish = Instant::now();
-        self.dirty = false;
-        Ok(())
-    }
 }
 
 /// Failure returned by a source runner.
@@ -382,7 +348,6 @@ async fn run_stream<R: SourceRunner>(
     let mut grouped_items = std::collections::BTreeMap::<String, Vec<DownloadedItem>>::new();
     let mut atomic_items = Vec::new();
     let mut recorded_source_items = BTreeSet::new();
-    let mut progress = SourceProgressPublisher::new();
 
     let runner_result = loop {
         tokio::select! {
@@ -431,7 +396,6 @@ async fn run_stream<R: SourceRunner>(
                     &mut grouped_items,
                     &mut atomic_items,
                     &mut recorded_source_items,
-                    &mut progress,
                 ).await?,
                 None => input_open = false,
             },
@@ -449,7 +413,6 @@ async fn run_stream<R: SourceRunner>(
             &mut grouped_items,
             &mut atomic_items,
             &mut recorded_source_items,
-            &mut progress,
         )
         .await?;
     }
@@ -468,7 +431,6 @@ async fn run_stream<R: SourceRunner>(
             "Source run ended before a grouped post completed",
         )));
     }
-    progress.flush(application)?;
     Ok(runner_result)
 }
 
@@ -511,9 +473,8 @@ async fn handle_source_event(
     grouped_items: &mut std::collections::BTreeMap<String, Vec<DownloadedItem>>,
     atomic_items: &mut Vec<DownloadedItem>,
     recorded_source_items: &mut BTreeSet<(String, String)>,
-    progress: &mut SourceProgressPublisher,
 ) -> Result<(), String> {
-    let durable_change = match event {
+    match event {
         SourceEvent::PostComplete {
             post_key,
             acknowledge,
@@ -536,7 +497,6 @@ async fn handle_source_event(
                 .map_err(|failure| failure.message)?;
             let outcome = state::settled_post_outcome(application, query, &post_key)?;
             let _ = acknowledge.send(outcome);
-            true
         }
         SourceEvent::PostComplete {
             post_key,
@@ -550,7 +510,6 @@ async fn handle_source_event(
                 .map_err(|failure| failure.message)?;
             let outcome = state::settled_post_outcome(application, query, &post_key)?;
             let _ = acknowledge.send(outcome);
-            false
         }
         SourceEvent::PostTraversed(post) if atomic_gallery => {
             state::record_post(
@@ -559,7 +518,6 @@ async fn handle_source_event(
                 &post,
                 &Utc::now().to_rfc3339(),
             )?;
-            true
         }
         SourceEvent::MediaDownloaded(mut item) if atomic_gallery => {
             let source_item_id =
@@ -575,7 +533,6 @@ async fn handle_source_event(
                 &Utc::now().to_rfc3339(),
             )?;
             atomic_items.push(item);
-            true
         }
         SourceEvent::MediaFailed(item) if atomic_gallery => {
             return Err(format!(
@@ -595,7 +552,6 @@ async fn handle_source_event(
                     .iter()
                     .map(|item| (post.post_key.clone(), item.item_key.clone())),
             );
-            true
         }
         SourceEvent::MediaDownloaded(mut item) => {
             let source_item_id =
@@ -626,7 +582,6 @@ async fn handle_source_event(
             } else {
                 enqueue_group(application, query, destination, vec![item]).await?;
             }
-            true
         }
         SourceEvent::MediaFailed(item) => {
             let ids = state::record_post(
@@ -649,11 +604,7 @@ async fn handle_source_event(
                 &Utc::now().to_rfc3339(),
             )?;
             recorded_source_items.insert((item.post.post_key, item.item_key));
-            true
         }
-    };
-    if durable_change {
-        progress.changed(application)?;
     }
     Ok(())
 }
@@ -734,11 +685,6 @@ fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
             expected.len()
         ));
     }
-    Ok(())
-}
-
-fn publish_source_progress(_application: &LibraryApplication) -> Result<(), String> {
-    // Source-state writes already publish coalesced task invalidations.
     Ok(())
 }
 
