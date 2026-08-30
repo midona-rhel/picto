@@ -19,3 +19,9 @@ test('keeps settings on the native macOS resize path', () => {
   expect(source).toContain('win.setWindowButtonVisibility(false)');
   expect(source).toMatch(/minHeight: 650,[\s\S]*?resizable: true/);
 });
+
+test('clips the transparent Library Manager surface to rounded corners', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/features/library/LibraryManager.module.css'), 'utf8');
+  expect(source).toContain('border-radius: 10px');
+  expect(source).toContain('clip-path: inset(0 round 10px)');
+});

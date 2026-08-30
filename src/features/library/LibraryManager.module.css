@@ -7,6 +7,8 @@
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: 10px;
+  clip-path: inset(0 round 10px);
   overflow: hidden;
 }
 
