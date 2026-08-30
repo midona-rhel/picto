@@ -182,7 +182,7 @@ async function loadPairDetails(pair: DuplicatePair): Promise<PairDetails> {
   };
   const [left, right] = await Promise.all([loadSide(pair.left), loadSide(pair.right)]);
   return {
-    pairKey: `${pair.file_id_a}:${pair.file_id_b}`,
+    pairKey: duplicatePairKey(pair),
     left,
     right,
   };
@@ -485,7 +485,9 @@ export function DuplicatesScreen() {
   const [thumbnailGate, setThumbnailGate] = useState({ pairKey: '', left: false, right: false });
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const [pendingThumbnailGate, setPendingThumbnailGate] = useState({ left: false, right: false });
+  const [pendingDetails, setPendingDetails] = useState<PairDetails | null>(null);
   const pendingPair = pendingIndex == null ? null : pairs[pendingIndex] ?? null;
+  const pendingPairKey = pendingPair ? duplicatePairKey(pendingPair) : '';
   const markThumbnailReady = useCallback((side: ComparisonSide, readyPairKey: string) => {
     if (readyPairKey !== activePairKeyRef.current) return;
     setThumbnailGate((current) => {
@@ -505,19 +507,6 @@ export function DuplicatesScreen() {
       current[side] ? current : { ...current, [side]: true }
     ));
   }, []);
-  useLayoutEffect(() => {
-    if (pendingIndex == null || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
-    const readyPair = pairs[pendingIndex];
-    if (!readyPair) return;
-    setThumbnailGate({
-      pairKey: duplicatePairKey(readyPair),
-      left: true,
-      right: true,
-    });
-    setIndex(pendingIndex);
-    setPendingIndex(null);
-    setPendingThumbnailGate({ left: false, right: false });
-  }, [pairs, pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
   const resolvedCount = Math.max(0, initialTotal - total);
   const zoom = useLinkedComparisonZoom({
     leftContainerRef: leftPreviewRef,
@@ -548,6 +537,47 @@ export function DuplicatesScreen() {
     showErrorNotification({ title, message });
   }, []);
 
+  useEffect(() => {
+    if (!pendingPair || !pendingPairKey) {
+      setPendingDetails(null);
+      return;
+    }
+    let cancelled = false;
+    void loadPairDetails(pendingPair)
+      .then((details) => {
+        if (!cancelled) setPendingDetails(details);
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setPendingIndex(null);
+        setPendingThumbnailGate({ left: false, right: false });
+        setPendingDetails(null);
+        reportFailure(cause, 'Unable to load duplicate media');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingPairKey, reportFailure]);
+
+  useLayoutEffect(() => {
+    if (pendingIndex == null || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
+    const readyPair = pairs[pendingIndex];
+    if (!readyPair) return;
+    const readyPairKey = duplicatePairKey(readyPair);
+    if (pendingDetails?.pairKey !== readyPairKey) return;
+
+    requestIdRef.current += 1;
+    preparedDetailsRef.current = pendingDetails;
+    setLeft(pendingDetails.left);
+    setRight(pendingDetails.right);
+    setMetadataLoading(false);
+    setThumbnailGate({ pairKey: readyPairKey, left: true, right: true });
+    setIndex(pendingIndex);
+    setPendingIndex(null);
+    setPendingThumbnailGate({ left: false, right: false });
+    setPendingDetails(null);
+  }, [pairs, pendingDetails, pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
+
   const loadPairs = useCallback(async ({
     showLoading = true,
     resetProgress = true,
@@ -555,6 +585,7 @@ export function DuplicatesScreen() {
     if (showLoading) setLoading(true);
     setPendingIndex(null);
     setPendingThumbnailGate({ left: false, right: false });
+    setPendingDetails(null);
     setError(null);
     try {
       const page = await getDuplicatePairs();
@@ -647,6 +678,7 @@ export function DuplicatesScreen() {
       preparedDetailsRef.current = prepared;
       setPendingIndex(null);
       setPendingThumbnailGate({ left: false, right: false });
+      setPendingDetails(null);
       setPairs(page.items);
       setTotal(page.total);
       setIndex(nextIndex);
@@ -693,6 +725,7 @@ export function DuplicatesScreen() {
     const boundedIndex = Math.max(0, Math.min(Math.max(0, pairs.length - 1), nextIndex));
     if (boundedIndex === index || pendingIndex != null) return;
     setPendingThumbnailGate({ left: false, right: false });
+    setPendingDetails(null);
     setPendingIndex(boundedIndex);
   }, [index, pairs.length, pendingIndex]);
   const goPrevious = useCallback(() => requestIndex(index - 1), [index, requestIndex]);

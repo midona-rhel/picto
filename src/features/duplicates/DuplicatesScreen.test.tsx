@@ -549,6 +549,10 @@ describe('DuplicatesScreen', () => {
   });
 
   it('keeps the previous candidate painted until the next thumbnail is decoded', async () => {
+    let resolveNextLeft!: (value: CanonicalEntityDetails) => void;
+    const nextLeftDetails = new Promise<CanonicalEntityDetails>((resolve) => {
+      resolveNextLeft = resolve;
+    });
     const secondPair = pair();
     secondPair.file_id_a = 3;
     secondPair.file_id_b = 4;
@@ -566,7 +570,7 @@ describe('DuplicatesScreen', () => {
     vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
       if (itemId === 11) return details(itemId, 'left', 'Left image');
       if (itemId === 22) return details(itemId, 'right', 'Right image');
-      if (itemId === 33) return details(itemId, 'next-left', 'Next left image');
+      if (itemId === 33) return nextLeftDetails;
       return details(itemId, 'next-right', 'Next right image');
     });
 
@@ -595,6 +599,15 @@ describe('DuplicatesScreen', () => {
     expect(screen.getByTestId('left-preview-layers').querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
     fireEvent.load(pendingRight);
 
+    expect(screen.getByText('Left image')).toBeInTheDocument();
+    expect(screen.getByText('Right image')).toBeInTheDocument();
+    expect(screen.queryByText('next-left')).not.toBeInTheDocument();
+    expect(screen.queryByText('next-right')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveNextLeft(details(33, 'next-left', 'Next left image'));
+    });
+
     const leftLayers = screen.getByTestId('left-preview-layers');
     const rightLayers = screen.getByTestId('right-preview-layers');
     await waitFor(() => {
@@ -605,6 +618,10 @@ describe('DuplicatesScreen', () => {
       expect(nextLeftThumbnail.className).toContain('thumbnailImageReady');
       expect(nextRightThumbnail.className).toContain('thumbnailImageReady');
     });
+    expect(screen.getByText('Next left image')).toBeInTheDocument();
+    expect(screen.getByText('Next right image')).toBeInTheDocument();
+    expect(screen.queryByText('next-left')).not.toBeInTheDocument();
+    expect(screen.queryByText('next-right')).not.toBeInTheDocument();
   });
 
   it('uses the shared pixel-snapped toolbar glyphs for fit and difference', async () => {
