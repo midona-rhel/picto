@@ -583,12 +583,14 @@ pub async fn dispatch_library_async(
                             .query_row(
                                 "SELECT EXISTS (
                                      SELECT 1
-                                     FROM subscription_run run
+                                     FROM subscription_run_query run_query
+                                     JOIN subscription_run run
+                                       ON run.run_id = run_query.run_id
                                      JOIN subscription_query query
-                                       ON query.subscription_id = run.subscription_id
+                                       ON query.query_id = run_query.query_id
                                      WHERE run.status IN ('pending', 'running')
+                                       AND run_query.status IN ('pending', 'running')
                                        AND query.site_id = 'ehentai'
-                                       AND query.display_name = 'Gallery import'
                                  )",
                                 [],
                                 |row| row.get::<_, bool>(0),

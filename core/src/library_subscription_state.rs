@@ -231,6 +231,18 @@ pub fn claim_next_query(
                                WHERE sibling_rq.status = 'running'
                                  AND sibling_run.subscription_id = r.subscription_id
                            )
+                           -- Gallery downloads are globally single-flight. E-Hentai and
+                           -- ExHentai use different domain keys but share one gallery pipeline.
+                           AND (
+                               q.site_id <> 'ehentai'
+                               OR NOT EXISTS (
+                                   SELECT 1 FROM subscription_run_query gallery_rq
+                                   JOIN subscription_query gallery_q
+                                     ON gallery_q.query_id = gallery_rq.query_id
+                                   WHERE gallery_rq.status = 'running'
+                                     AND gallery_q.site_id = 'ehentai'
+                               )
+                           )
                          ORDER BY qr.available_at, qr.run_query_id",
                     )?
                     .query_map([now], |row| {
@@ -1700,6 +1712,67 @@ mod tests {
             .unwrap()
             .expect("the sibling becomes claimable once the first settles");
         assert_ne!(second.query_id, first.query_id);
+    }
+
+    #[test]
+    fn gallery_queries_are_single_flight_across_subscriptions_and_hosts() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let create_gallery = |name: &str, query_text: &str| {
+            application
+                .create_subscription_definition_library(
+                    &NewSubscription {
+                        name: name.into(),
+                        schedule: "manual".into(),
+                        initial_post_limit: Some(1),
+                        periodic_post_limit: Some(1),
+                        queries: vec![NewSubscriptionQuery {
+                            site_id: "ehentai".into(),
+                            query_text: query_text.into(),
+                            display_name: Some("Gallery import".into()),
+                            notes: None,
+                            group_posts: true,
+                        }],
+                    },
+                    "2026-08-29T00:00:00Z",
+                )
+                .unwrap()
+                .0
+        };
+        let ehentai = create_gallery("E-Hentai", "https://e-hentai.org/g/12345/67890abcde/");
+        let exhentai = create_gallery("ExHentai", "https://exhentai.org/g/54321/abcdef0123/");
+        application
+            .request_subscription_run_library(ehentai, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(exhentai, "2026-08-29T00:00:00Z")
+            .unwrap();
+
+        let mut schedule = DomainSchedule::new();
+        let first = claim_next_query(&application, &mut schedule, "2026-08-29T00:00:01Z")
+            .unwrap()
+            .expect("the first gallery is claimable");
+        assert_eq!(first.site_id, "ehentai");
+        assert!(
+            claim_next_query(
+                &application,
+                &mut DomainSchedule::new(),
+                "2026-08-29T00:00:02Z",
+            )
+            .unwrap()
+            .is_none(),
+            "a gallery on the other host must wait for the active gallery"
+        );
+
+        complete_query(&application, &first, None, "2026-08-29T00:00:03Z").unwrap();
+        let second = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:04Z",
+        )
+        .unwrap()
+        .expect("the second gallery becomes claimable after settlement");
+        assert_ne!(second.subscription_id, first.subscription_id);
     }
 
     #[test]
