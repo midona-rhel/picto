@@ -31,7 +31,7 @@ export function WindowControls({
       <KbdTooltip label="Maximize"><button type="button" className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label="Maximize">
         <IconSquare size={12} stroke={1.5} />
       </button></KbdTooltip>
-      <KbdTooltip label="Close"><WindowCloseButton /></KbdTooltip>
+      <KbdTooltip label="Close"><WindowCloseButton destructive /></KbdTooltip>
     </div>
   );
 }

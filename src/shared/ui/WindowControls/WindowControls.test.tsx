@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { describe, expect, it, vi } from 'vitest';
+import { WindowCloseButton } from './WindowCloseButton';
 import { WindowControls } from './WindowControls';
 
 describe('WindowControls', () => {
@@ -14,6 +15,12 @@ describe('WindowControls', () => {
     expect(screen.getByRole('button', { name: 'Minimize' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Maximize' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveAttribute('data-destructive', 'true');
+  });
+
+  it('keeps close buttons outside the main window neutral', () => {
+    render(<WindowCloseButton />);
+    expect(screen.getByRole('button', { name: 'Close' })).not.toHaveAttribute('data-destructive');
   });
 
   it('uses native controls on macOS', () => {

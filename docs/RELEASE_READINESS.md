@@ -1,4 +1,4 @@
-# Picto 0.6.0-alpha release readiness
+# Picto 0.6.1-alpha release readiness
 
 Picto ships for these platforms only:
 
@@ -39,7 +39,7 @@ native addons, and downloaded native tools must not imply otherwise.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Public Apple Developer ID signing and notarization are not part of the `0.6.0-alpha` gate. The
+- Public Apple Developer ID signing and notarization are not part of the `0.6.1-alpha` gate. The
   macOS alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
@@ -47,9 +47,8 @@ native addons, and downloaded native tools must not imply otherwise.
   results are publication gates and necessarily run after the release candidate is uploaded.
 - Every subscription provider is implemented by the native Rust source crate. Release packages
   contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
-- TypeScript, the production build, all 884 frontend tests, 303 Rust unit tests, 69 Rust integration
-  tests, command parity, strict Clippy, and source/artifact audits pass. React scheduling warnings
-  are clean.
+- TypeScript, the production build, the complete frontend and Rust test suites, command parity,
+  strict Clippy, and source/artifact audits pass. React scheduling warnings are clean.
 - `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
   and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.
 - The release candidate is separated into reviewed commits and the worktree is clean; generated

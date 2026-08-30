@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test/render';
 import { Settings } from './Settings';
 import { getKeyboardPreset, setKeyboardPreset } from '../../shared/lib/shortcuts';
+import packageMetadata from '../../../package.json';
 
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
@@ -200,7 +201,7 @@ describe('Settings', () => {
 
     await user.click(screen.getByRole('button', { name: 'About' }));
 
-    expect(await screen.findByText('Version 0.6.0-alpha · macOS')).toBeInTheDocument();
+    expect(await screen.findByText(`Version ${packageMetadata.version} · macOS`)).toBeInTheDocument();
     expect(screen.queryByText(/43\.4\.1/)).not.toBeInTheDocument();
   });
 
