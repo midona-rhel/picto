@@ -20,6 +20,24 @@ function safeExtension(name, mimeType) {
   return MIME_EXTENSIONS.get(mimeType?.split(';', 1)[0]?.toLowerCase()) ?? '.bin';
 }
 
+function decodeHtmlUrl(value) {
+  return value.replaceAll('&amp;', '&').replaceAll('&#39;', "'").replaceAll('&quot;', '"');
+}
+
+function imageUrlFromHtml(html, pageUrl) {
+  const candidates = [
+    /<img\b(?=[^>]*\bid=["']img["'])[^>]*\bsrc=["']([^"']+)/i,
+    /<meta\b(?=[^>]*\bproperty=["']og:image["'])[^>]*\bcontent=["']([^"']+)/i,
+    /<meta\b(?=[^>]*\bcontent=["']([^"']+)["'])[^>]*\bproperty=["']og:image["']/i,
+    /<img\b[^>]*\bsrc=["']([^"']+)/i,
+  ];
+  for (const pattern of candidates) {
+    const match = html.match(pattern);
+    if (match?.[1]) return new URL(decodeHtmlUrl(match[1]), pageUrl).href;
+  }
+  return null;
+}
+
 export async function materializeDroppedMedia(input, {
   fetchImpl,
   outputDirectory = join(tmpdir(), 'picto-browser-drops'),
@@ -35,11 +53,20 @@ export async function materializeDroppedMedia(input, {
       throw new Error('Only HTTP and HTTPS browser drops are supported.');
     }
     if (!fetchImpl) throw new Error('Browser image downloading is unavailable.');
-    const response = await fetchImpl(parsed.href);
+    let response = await fetchImpl(parsed.href);
     if (!response.ok) throw new Error(`Could not download dropped media (${response.status}).`);
     bytes = Buffer.from(await response.arrayBuffer());
     mimeType ||= response.headers.get('content-type') ?? '';
     sourceUrl = parsed.href;
+
+    if (mimeType.toLowerCase().startsWith('text/html')) {
+      const imageUrl = imageUrlFromHtml(bytes.toString('utf8'), parsed.href);
+      if (!imageUrl) throw new Error('The dropped web page did not contain an importable image.');
+      response = await fetchImpl(imageUrl, { headers: { referer: parsed.href } });
+      if (!response.ok) throw new Error(`Could not download dropped image (${response.status}).`);
+      bytes = Buffer.from(await response.arrayBuffer());
+      mimeType = response.headers.get('content-type') ?? '';
+    }
   }
 
   if (!bytes?.length) throw new Error('The dropped browser item did not contain media data.');

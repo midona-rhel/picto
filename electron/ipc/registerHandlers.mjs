@@ -527,7 +527,7 @@ export function registerIpcHandlers({
   });
 
   handle('picto:drop:materialize', (_event, input) => materializeDroppedMedia(input, {
-    fetchImpl: (url) => net.fetch(url),
+    fetchImpl: (url, options) => net.fetch(url, options),
   }));
 
   handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
