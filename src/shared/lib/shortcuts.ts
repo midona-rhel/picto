@@ -200,8 +200,23 @@ export function setKeyboardPreset(preset: KeyboardPreset, persist = true): void 
   }
 }
 
+/** Reload bindings written by another Picto window. */
+export function reloadShortcutStateFromStorage(): void {
+  const storedPreset = localStorage.getItem(STORAGE_KEY);
+  setKeyboardPreset(storedPreset === 'eu' ? 'eu' : 'us', false);
+  shortcutOverrides = loadOverrides();
+}
+
 // Apply stored preset on load
 if (activePreset === 'eu') setKeyboardPreset('eu', false);
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.storageArea !== localStorage) return;
+    if (event.key !== STORAGE_KEY && event.key !== OVERRIDES_STORAGE_KEY && event.key !== null) return;
+    reloadShortcutStateFromStorage();
+  });
+}
 
 // ── Helpers ──
 

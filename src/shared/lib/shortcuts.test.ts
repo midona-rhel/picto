@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { getKeyboardPreset, getShortcut, matchesShortcutDef, setKeyboardPreset, setShortcutBinding } from './shortcuts';
+import {
+  getKeyboardPreset,
+  getShortcut,
+  matchesShortcutDef,
+  reloadShortcutStateFromStorage,
+  setKeyboardPreset,
+  setShortcutBinding,
+} from './shortcuts';
 
 describe('keyboard presets', () => {
   afterEach(() => {
@@ -27,6 +34,22 @@ describe('keyboard presets', () => {
       'nav.search': { keys: 'Mod+Shift+F' },
     });
     setShortcutBinding('nav.search', 'keys', 'Mod+F');
+  });
+
+  it('reloads bindings persisted by another window', () => {
+    localStorage.setItem('picto-keyboard-preset', 'eu');
+    localStorage.setItem('picto-shortcut-overrides', JSON.stringify({
+      'nav.search': { keys: 'Mod+Shift+F' },
+    }));
+
+    reloadShortcutStateFromStorage();
+
+    expect(getKeyboardPreset()).toBe('eu');
+    expect(getShortcut('view.fitWindow')?.keys).toBe('Shift+F');
+    expect(getShortcut('nav.search')?.keys).toBe('Mod+Shift+F');
+
+    localStorage.setItem('picto-shortcut-overrides', '{}');
+    reloadShortcutStateFromStorage();
   });
 
   it('allows Shift to extend a remapped grid movement shortcut', () => {
