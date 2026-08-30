@@ -14,6 +14,15 @@ const MIME_EXTENSIONS = new Map([
   ['image/webp', '.webp'],
 ]);
 
+export async function fetchWithBlockedClientFallback(primaryFetch, fallbackFetch, url, options) {
+  try {
+    return await primaryFetch(url, options);
+  } catch (error) {
+    if (!String(error?.message ?? error).includes('ERR_BLOCKED_BY_CLIENT')) throw error;
+    return fallbackFetch(url, options);
+  }
+}
+
 function safeExtension(name, mimeType) {
   const extension = extname(name ?? '').toLowerCase();
   if (/^\.[a-z0-9]{1,8}$/.test(extension)) return extension;

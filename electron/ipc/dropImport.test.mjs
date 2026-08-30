@@ -3,7 +3,39 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'vitest';
-import { materializeDroppedMedia } from './dropImport.mjs';
+import { fetchWithBlockedClientFallback, materializeDroppedMedia } from './dropImport.mjs';
+
+test('retries client-blocked Electron requests through the fallback transport', async () => {
+  const calls = [];
+  const response = await fetchWithBlockedClientFallback(
+    async () => { throw new Error('net::ERR_BLOCKED_BY_CLIENT'); },
+    async (url, options) => {
+      calls.push({ url, options });
+      return 'downloaded';
+    },
+    'https://example.com/image.webp',
+    { headers: { referer: 'https://example.com/view' } },
+  );
+
+  assert.equal(response, 'downloaded');
+  assert.deepEqual(calls, [{
+    url: 'https://example.com/image.webp',
+    options: { headers: { referer: 'https://example.com/view' } },
+  }]);
+});
+
+test('does not hide ordinary network failures behind the fallback transport', async () => {
+  let fallbackCalled = false;
+  await assert.rejects(
+    fetchWithBlockedClientFallback(
+      async () => { throw new Error('net::ERR_NAME_NOT_RESOLVED'); },
+      async () => { fallbackCalled = true; },
+      'https://example.invalid/image.webp',
+    ),
+    /ERR_NAME_NOT_RESOLVED/,
+  );
+  assert.equal(fallbackCalled, false);
+});
 
 const outputDirectories = [];
 

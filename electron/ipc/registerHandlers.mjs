@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { arch, platform, release, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clipboardFilePaths, clipboardHasImport, writeClipboardFilePaths } from './clipboardImport.mjs';
-import { materializeDroppedMedia } from './dropImport.mjs';
+import { fetchWithBlockedClientFallback, materializeDroppedMedia } from './dropImport.mjs';
 import { createTrustedIpcHandle } from './trustedIpc.mjs';
 
 function createReverseSearchConfigs() {
@@ -527,7 +527,12 @@ export function registerIpcHandlers({
   });
 
   handle('picto:drop:materialize', (_event, input) => materializeDroppedMedia(input, {
-    fetchImpl: (url, options) => net.fetch(url, options),
+    fetchImpl: (url, options) => fetchWithBlockedClientFallback(
+      (requestUrl, requestOptions) => net.fetch(requestUrl, requestOptions),
+      (requestUrl, requestOptions) => fetch(requestUrl, requestOptions),
+      url,
+      options,
+    ),
   }));
 
   handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
