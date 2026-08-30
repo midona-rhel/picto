@@ -32,6 +32,7 @@ const RATINGS: RatingMap = RatingMap::new(&[
     ("explicit", "explicit"),
 ]);
 const MAX_TAG_PAGES: u32 = 10;
+const MAX_EMPTY_KEYSET_PAGES: u32 = 16;
 
 #[derive(Clone, Copy)]
 pub(super) struct SankakuConfig {
@@ -85,10 +86,33 @@ impl NativeSourceAdapter for SankakuAdapter {
         Box::pin(async move {
             self.validate_query(&request.query)?;
             let credentials = api_credentials(self.config, credentials);
-            let response = http
-                .get_json::<ApiPage>(request_url(self.config, request)?, &credentials, cancel)
-                .await?;
-            normalize_page(self.config, request, response)
+            let mut page_request = request.clone();
+            for empty_pages in 0..=MAX_EMPTY_KEYSET_PAGES {
+                let response = http
+                    .get_json::<ApiPage>(
+                        request_url(self.config, &page_request)?,
+                        &credentials,
+                        cancel,
+                    )
+                    .await?;
+                let next = next_cursor(&response)?;
+                let batch = normalize_page(self.config, &page_request, response)?;
+                if !batch.posts.is_empty() || batch.exhausted {
+                    return Ok(batch);
+                }
+                if empty_pages == MAX_EMPTY_KEYSET_PAGES {
+                    return Err(SourceError::new(
+                        SourceErrorKind::InvalidResponse,
+                        format!(
+                            "{} returned too many empty keyset pages",
+                            self.config.display_name
+                        ),
+                        true,
+                    ));
+                }
+                page_request.cursor = next;
+            }
+            unreachable!("bounded Sankaku keyset loop always returns")
         })
     }
 
@@ -197,12 +221,7 @@ pub(super) fn normalize_page(
         ));
     }
 
-    let next = response
-        .meta
-        .and_then(|meta| meta.next)
-        .filter(|cursor| !cursor.is_empty())
-        .map(|cursor| CURSOR.validate(&cursor).map(ToOwned::to_owned))
-        .transpose()?;
+    let next = next_cursor(&response)?;
     let exhausted = next.is_none();
     let current = request.cursor.clone();
     let last = response.data.len().saturating_sub(1);
@@ -221,6 +240,16 @@ pub(super) fn normalize_page(
         .collect::<Result<Vec<_>, SourceError>>()?;
 
     Ok(DiscoveryBatch { posts, exhausted })
+}
+
+fn next_cursor(response: &ApiPage) -> Result<Option<String>, SourceError> {
+    response
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.next.as_deref())
+        .filter(|cursor| !cursor.is_empty())
+        .map(|cursor| CURSOR.validate(cursor).map(ToOwned::to_owned))
+        .transpose()
 }
 
 fn normalize_post(
@@ -624,6 +653,22 @@ mod tests {
         let batch = normalize_page(config(), &request(), response).unwrap();
         assert_eq!(batch.posts.len(), 1);
         assert!(batch.posts[0].media.is_empty());
+    }
+
+    #[test]
+    fn empty_keyset_pages_preserve_the_provider_continuation() {
+        let response: ApiPage = serde_json::from_value(json!({
+            "data": [],
+            "meta": {"next": "next-visible-window"}
+        }))
+        .unwrap();
+        assert_eq!(
+            next_cursor(&response).unwrap().as_deref(),
+            Some("next-visible-window")
+        );
+        let batch = normalize_page(config(), &request(), response).unwrap();
+        assert!(batch.posts.is_empty());
+        assert!(!batch.exhausted);
     }
 
     #[test]
