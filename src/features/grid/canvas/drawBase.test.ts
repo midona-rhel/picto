@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { drawCanvasBaseLayer } from './drawBase';
+import { drawBrokenThumbnail } from '../../../shared/ui/ThumbnailImage/drawBrokenThumbnail';
 
 vi.mock('../../../shared/ui/ThumbnailImage/drawBrokenThumbnail', () => ({
   drawBrokenThumbnail: vi.fn(),
@@ -65,5 +66,75 @@ describe('drawCanvasBaseLayer', () => {
     });
 
     expect(fills).toEqual(['#202124']);
+  });
+
+  it('draws detailed broken artwork only inside the real viewport, not the overscan buffer', () => {
+    vi.mocked(drawBrokenThumbnail).mockClear();
+    const ctx = {
+      beginPath: vi.fn(),
+      clip: vi.fn(),
+      fillRect: vi.fn(),
+      filter: 'none',
+      globalAlpha: 1,
+      restore: vi.fn(),
+      roundRect: vi.fn(),
+      save: vi.fn(),
+      stroke: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const brokenItem = {
+      itemId: 1,
+      kind: 'media' as const,
+      displayFileHash: 'missing',
+      hash: '1',
+      thumbnailHash: 'missing',
+      name: null,
+      mime: 'image/jpeg',
+      width: 100,
+      height: 100,
+      rating: null,
+      durationMs: null,
+      dominantColor: null,
+      aspectRatio: 1,
+      numFrames: null,
+      mediaCount: 1,
+    };
+
+    drawCanvasBaseLayer({
+      ctx,
+      positions: [
+        { x: 0, y: 0, w: 100, h: 100 },
+        { x: 0, y: 160, w: 100, h: 100 },
+      ],
+      items: [brokenItem, { ...brokenItem, itemId: 2, hash: '2' }],
+      atlasGet: () => ({ thumb: null, state: 'error', lastAccessed: 0, bytes: 0 }),
+      revealProgress: () => 0,
+      activeTiles: [0, 1],
+      draw: {
+        scrollTop: 0,
+        viewportHeight: 300,
+        visibleScrollTop: 0,
+        visibleViewportHeight: 100,
+        textHeight: 0,
+        borderRadius: 4,
+      },
+      theme: {
+        placeholderBg: '#202124',
+        isLight: false,
+        borderRadius: 4,
+        textPrimary: '#fff',
+        textTertiary: '#aaa',
+        glassBorder: '#444',
+      },
+      viewMode: 'grid',
+      fitThumbnails: true,
+      grayscale: false,
+      showTileName: false,
+      showResolution: false,
+      showExtension: false,
+      showExtensionLabel: false,
+      showItemCount: false,
+    });
+
+    expect(drawBrokenThumbnail).toHaveBeenCalledOnce();
   });
 });

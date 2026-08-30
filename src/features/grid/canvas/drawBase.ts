@@ -41,6 +41,9 @@ interface ThemeLike {
 export interface DrawContext {
   scrollTop: number;
   viewportHeight: number;
+  /** Actual user-visible range inside the larger resize/scroll render buffer. */
+  visibleScrollTop?: number;
+  visibleViewportHeight?: number;
   textHeight: number;
   borderRadius: number;
 }
@@ -118,6 +121,8 @@ export function drawCanvasBaseLayer({
   showItemCount,
 }: BaseLayerArgs): boolean {
   const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
+  const visibleTop = draw.visibleScrollTop ?? scrollTop;
+  const visibleBottom = visibleTop + (draw.visibleViewportHeight ?? cssH);
   // Grid default = contain. fitThumbnails flips grid to cover (fill/crop).
   // Waterfall/justified = always cover.
   const effectiveFit = viewMode === 'grid'
@@ -214,7 +219,11 @@ export function drawCanvasBaseLayer({
       if (entry?.state === 'error') {
         ctx.fillStyle = theme.placeholderBg;
         ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
-        drawBrokenThumbnail(ctx, pos.x, drawY, pos.w, imageHeight, theme.placeholderBg);
+        // Keep the overscan buffer neutral, but do not spend gradients,
+        // shadows, and path strokes on artwork the user cannot see.
+        if (pos.y + pos.h >= visibleTop && pos.y <= visibleBottom) {
+          drawBrokenThumbnail(ctx, pos.x, drawY, pos.w, imageHeight, theme.placeholderBg);
+        }
       } else {
         fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
       }

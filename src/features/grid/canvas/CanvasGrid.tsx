@@ -543,6 +543,8 @@ export function CanvasGrid({
     const drawCtx: DrawContext = {
       scrollTop,
       viewportHeight: renderHeight,
+      visibleScrollTop,
+      visibleViewportHeight: vp.viewportHeight,
       textHeight,
       borderRadius: 4,
     };
