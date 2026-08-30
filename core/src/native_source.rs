@@ -281,27 +281,20 @@ impl NativeSourceRunner {
                         return Ok(None);
                     };
                     let mut statement = connection.prepare(
-                        "SELECT item.item_key, item.state, item.media_item_id,
+                        "SELECT item.item_key,
                                 EXISTS(
-                                    SELECT 1 FROM deletion_tombstone tombstone
-                                    WHERE tombstone.stable_key =
-                                        'source:' || ?2 || ':' || ?3 || ':' || item.item_key
+                                    SELECT 1
+                                    FROM media_item media
+                                    JOIN media_file file ON file.file_id = media.file_id
+                                    WHERE media.media_id = item.media_item_id
                                 )
                          FROM source_item item
                          WHERE item.source_post_id = ?1",
                     )?;
                     let items = statement
-                        .query_map(
-                            rusqlite::params![source_post_id, post.site_id, post.stable_id],
-                            |row| {
-                                Ok((
-                                    row.get::<_, String>(0)?,
-                                    row.get::<_, String>(1)?,
-                                    row.get::<_, Option<u32>>(2)?,
-                                    row.get::<_, bool>(3)?,
-                                ))
-                            },
-                        )?
+                        .query_map([source_post_id], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+                        })?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     Ok(Some(items))
                 },
@@ -315,21 +308,12 @@ impl NativeSourceRunner {
                 download_media: remote_media,
             });
         };
-        let states = known
-            .into_iter()
-            .map(|(item_key, state, media_item_id, deleted)| {
-                (item_key, (state, media_item_id, deleted))
-            })
-            .collect::<BTreeMap<_, _>>();
+        let states = known.into_iter().collect::<BTreeMap<_, _>>();
         let download_media = remote_media
             .into_iter()
             .filter(|media_id| match states.get(media_id) {
                 None => true,
-                Some((state, media_item_id, deleted)) => {
-                    !(*deleted
-                        || state == "deleted"
-                        || state == "ingested" && media_item_id.is_some())
-                }
+                Some(blob_exists) => !blob_exists,
             })
             .collect();
         Ok(PostRevisitPlan {

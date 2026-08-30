@@ -1627,7 +1627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deliberately_deleted_subscription_item_is_skipped_without_retrying_the_post() {
+    async fn subscription_item_without_a_blob_is_downloaded_again() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let downloads = directory.path().join("downloads");
@@ -1709,7 +1709,7 @@ mod tests {
                 delete_after_ingest: false,
             },
             cleanup_paths: vec![downloads.clone()],
-            expected_state: "deleted",
+            expected_state: "ingested",
         };
         let definition = crate::subscription_catalog::NewSubscription {
             name: "Example".into(),
@@ -1771,9 +1771,9 @@ mod tests {
             .unwrap();
         assert_eq!(run_status, "succeeded");
         assert_eq!(query_failure, None);
-        assert_eq!(item_state, "deleted");
+        assert_eq!(item_state, "ingested");
         assert_eq!(job_status, "succeeded");
-        assert_eq!(roots, 0);
+        assert_eq!(roots, 1);
         assert!(!downloads.exists());
     }
 

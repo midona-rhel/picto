@@ -429,6 +429,17 @@ impl LibraryApplication {
                             [subscription_id],
                         )?;
                         transaction.execute(
+                            "DELETE FROM deletion_tombstone
+                             WHERE stable_key IN (
+                                 SELECT 'source:' || post.site_id || ':' || post.post_key || ':' || item.item_key
+                                 FROM subscription_source_post linked
+                                 JOIN source_post post USING(source_post_id)
+                                 JOIN source_item item USING(source_post_id)
+                                 WHERE linked.subscription_id = ?1
+                             )",
+                            [subscription_id],
+                        )?;
+                        transaction.execute(
                             "DELETE FROM subscription_source_post
                              WHERE subscription_id = ?1",
                             [subscription_id],
@@ -2279,7 +2290,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )?;
-                    assert!(source_tombstone);
+                    assert!(!source_tombstone);
                     assert!(unrelated_tombstone);
                     assert_eq!(
                         connection.query_row(

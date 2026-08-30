@@ -899,18 +899,7 @@ fn record_post_in(
                  media_url = COALESCE(excluded.media_url, source_item.media_url),
                  canonical_url = COALESCE(excluded.canonical_url, source_item.canonical_url),
                  state = CASE
-                     WHEN source_item.state = 'ingested'
-                      AND source_item.media_item_id IS NULL
-                      AND (SELECT root_item_id FROM source_post
-                           WHERE source_post_id = source_item.source_post_id) IS NULL
-                      AND EXISTS (
-                          SELECT 1 FROM deletion_tombstone tombstone
-                          WHERE tombstone.stable_key =
-                              'source:' || ?7 || ':' || ?8 || ':' || source_item.item_key
-                      )
-                     THEN 'deleted'
-                     WHEN source_item.state = 'ingested'
-                      AND source_item.media_item_id IS NULL
+                     WHEN source_item.media_item_id IS NULL
                       AND (SELECT root_item_id FROM source_post
                            WHERE source_post_id = source_item.source_post_id) IS NULL
                      THEN 'pending'
@@ -932,14 +921,17 @@ fn record_post_in(
                 item.media_url,
                 item.canonical_url,
                 now,
-                post.site_id,
-                post.post_key,
             ],
         )?;
         let source_item_id = transaction.query_row(
             "SELECT source_item_id FROM source_item WHERE source_post_id = ?1 AND item_key = ?2",
             params![source_post_id, item.item_key],
             |row| row.get::<_, i64>(0),
+        )?;
+        transaction.execute(
+            "DELETE FROM deletion_tombstone
+             WHERE stable_key = 'source:' || ?1 || ':' || ?2 || ':' || ?3",
+            params![post.site_id, post.post_key, item.item_key],
         )?;
         transaction.execute(
             "INSERT INTO subscription_run_source_item(run_query_id, source_item_id)
