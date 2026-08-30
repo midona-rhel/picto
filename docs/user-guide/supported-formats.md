@@ -14,7 +14,7 @@ owned separately by `core/src/media_capabilities.rs`. This page must change with
 `.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.gif`, `.webp`, `.bmp`, `.dib`, `.tif`,
 `.tiff`, `.svg`, `.svgz`, `.ico`, `.icns`, `.cur`, `.heic`, `.heics`, `.heif`, `.heifs`, `.hif`,
 `.avif`, `.avifs`, `.jxl`, `.qoi`, `.base64`, `.insp`, `.svga`, `.pag`, `.lottie`, `.dds`, `.exr`,
-`.hdr`, `.tga`, `.iff`, `.lbm`.
+`.hdr`, `.tga`, `.iff`, `.lbm`, `.ugoira`.
 
 ## Video
 
@@ -59,8 +59,11 @@ Camera RAW: `.3fr`, `.arw`, `.cr2`, `.cr3`, `.crw`, `.dng`, `.erf`, `.mrw`, `.ne
 `.pptx`, `.xls`, `.xlsx`, `.doc`, `.docx`, `.eddx`, `.emmx`, `.html`, `.htm`, `.mhtml`, `.url`,
 `.epub`, `.cbz`, `.djvu`, `.djv`, `.swf`, `.eps`.
 
-Generic `.zip` archives are not imported or opened by Picto. Extract the files outside Picto before
-importing them. Format-specific containers such as EPUB and CBZ remain supported.
+Generic `.zip` archives explicitly selected for import or downloaded by a subscription are safely
+expanded. The ZIP file and its accepted expanded contents are each capped at 1 GiB, with a 512 MiB
+per-entry limit. Accepted members are ingested as a collection and the container is discarded;
+nested archives are not expanded. ZIPs encountered while importing or watching a folder are
+ignored. Format-specific containers such as EPUB and CBZ remain supported.
 
 PDF, DOCX, PPTX, plain text, Markdown, JSON, RTF, EPUB, CBZ and DjVu have read-only internal
 viewers built on the same document shell. JPEG XL has native decode, thumbnails, image analysis and

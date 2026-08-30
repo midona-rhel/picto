@@ -14,7 +14,8 @@ surfaces covered by the final smoke. No deferred or unimplemented PBI blocks thi
    members inherit. ZIP imports are safely expanded into one collection.
 3. `All` means active accepted roots only. Inbox and Trash stay outside All and library scopes.
 4. The durable ingest queue is the only entrypoint for manual, watch, subscription, and retry work.
-5. Before 1.0, there are no migrations. A library must match the current schema or fail untouched.
+5. Before 1.0, only named alpha schema fingerprints may migrate. Migration requires a consistent
+   backup, one transaction, post-migration validation, and an untouched failure for unknown schemas.
 6. Every mutation settles SQLite and projections before emitting one revision/resource invalidation.
 7. PBIs close only after focused tests and an application-level smoke; completed PBIs are deleted.
 8. The pre-release macOS alpha uses Picto's private self-signed certificate and is intentionally not
@@ -108,4 +109,4 @@ surfaces covered by the final smoke. No deferred or unimplemented PBI blocks thi
 - Cloud Sync and Tutorials pass the packaged smoke without bypassing application operations or
   duplicating product UI.
 - Deferred optional PBIs are not release gates.
-- No pre-1.0 migration code exists.
+- Known alpha schema upgrades are explicit and tested; unknown schemas fail without mutation.

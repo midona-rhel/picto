@@ -5,8 +5,9 @@ bitmaps are rebuildable projections used to keep lookups fast.
 
 Visible library items are either standalone media items or collections. Media assets may be images,
 video, audio, 3D, design-source, font, RAW, document, or web files. Acceptance does not imply that a
-detail renderer exists yet; unsupported previews retain the original bytes and metadata. Generic
-ZIP archives are unsupported and are never opened, expanded, or stored as library items. A collection is
+detail renderer exists yet; unsupported previews retain the original bytes and metadata. ZIP files
+explicitly selected or downloaded by a source are safely expanded into accepted members and are
+never stored as opaque library items. Folder imports and watched-folder scans do not open ZIPs. A collection is
 a first-class root item: it owns lifecycle and folder membership, and
 its members inherit both. Collection operations apply to all members unless a member is detached.
 `All` is the accepted active library only; Inbox and Trash are separate lifecycle scopes and must
@@ -32,8 +33,9 @@ writes must update affected projections incrementally and keep the UI responsive
 - One user behavior gets one production path. Adapters normalize into that path.
 - Prefer direct, tested behavior and delete replaced paths in the same change.
 - Do not add frontend/backend compatibility shims.
-- Before 1.0, do not write database migrations. New libraries must match the current schema;
-  incompatible libraries fail clearly without mutation.
+- Before 1.0, migrate only explicitly supported alpha schema fingerprints. Each migration creates a
+  consistent backup, runs in one transaction, validates the result, and leaves unknown schemas
+  untouched with a clear incompatibility error. Do not add best-effort or shape-guessing upgrades.
 - Tests prove user-visible behavior and persistence boundaries, not forwarding between wrappers.
 - Production code must not retain TODO/FIXME placeholders; implement, remove, or record a concrete
   release blocker.
@@ -52,8 +54,9 @@ restart recovery. Progress is persisted and queried; interrupted work resumes id
 Every subscription query processes source posts serially. It discovers one post and records it as
 traversed, downloads all usable media for that post, durably ingests the complete post, records the
 post as added, and only then requests the next post. Posts without usable media are traversed but
-not added. The per-run post limit counts successfully added posts, not traversed posts or media
-files. Providers may download files within the current post concurrently, but they must not
+not added. The per-run post limit counts settled posts: added posts plus skipped posts. A query may
+have at most one traversed-but-unsettled post and must not discover another after reaching the
+limit. Providers may download files within the current post concurrently, but they must not
 prefetch, download, or ingest media from a later post before the current post settles.
 
 # Host Input Automation Safety
