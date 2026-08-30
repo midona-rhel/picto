@@ -410,6 +410,32 @@ describe('subscription settlement', () => {
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([galleryJob]);
   });
 
+  it('keeps a gallery import while its persisted run is pending', async () => {
+    const galleryJob = {
+      id: '9',
+      name: 'E-Hentai Gallery 12345',
+      queries: [{ site_id: 'ehentai' }],
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [galleryJob],
+      runningSubscriptionIds: [],
+      runningProgress: [],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({ runningSubscriptionIds: [], runningProgress: [] });
+    listRuns.mockResolvedValue([{
+      status: 'pending',
+      failure_kind: null,
+      error_message: null,
+    }]);
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(listRuns).toHaveBeenCalledWith('9'));
+
+    expect(cleanupGalleryImport).not.toHaveBeenCalled();
+    expect(showErrorNotification).not.toHaveBeenCalled();
+    expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([galleryJob]);
+  });
+
   it('shows the gallery source failure before cleaning up the transient job', async () => {
     const galleryJob = {
       id: '9',

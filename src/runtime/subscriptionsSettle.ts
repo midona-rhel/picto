@@ -161,6 +161,9 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
       // Creation and run startup are separate native operations. An invalidation can
       // expose the queued job before its run record exists; leave it alone and retry.
       if (!latest) return;
+      // A workspace/runtime read can also observe the run before the worker claim is
+      // reflected in runningSubscriptionIds. Pending and running are not failures.
+      if (latest.status === 'pending' || latest.status === 'running') return;
       if (latest.status === 'succeeded') {
         const cleanup = await subscriptionsController.cleanupGalleryImport(job.id);
         showSuccessNotification({
