@@ -6,7 +6,9 @@ Pawchive, Coomer, and Kemono are native providers with fixture coverage. Pawchiv
 durable live certification. Coomer and Kemono metadata endpoints were reachable on 2026-08-30, but
 their production-path runs did not return media bytes within the bounded 120-second certification
 window. Both runs cancelled cleanly without publishing false success, but complete live publication
-is not yet proven.
+is not yet proven. The same bounded production-path probe was repeated on 2026-08-30 after the
+reset/duplicate verifier was strengthened; both providers again reached the 120-second media wait,
+returned their query to pending on cancellation, and produced no certification report or root.
 
 ## Required Behavior
 
