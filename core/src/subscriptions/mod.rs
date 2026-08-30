@@ -161,6 +161,37 @@ pub(crate) fn create_run_in(
         });
     }
 
+    let is_gallery = tx.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM subscription_query
+             WHERE subscription_id = ?1 AND site_id = 'ehentai'
+         )",
+        [subscription_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if is_gallery {
+        let gallery_running = tx.query_row(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM subscription_run active_run
+                 JOIN subscription_run_query active_query_run
+                   ON active_query_run.run_id = active_run.run_id
+                 JOIN subscription_query active_query
+                   ON active_query.query_id = active_query_run.query_id
+                 WHERE active_run.status IN ('pending', 'running')
+                   AND active_query_run.status IN ('pending', 'running')
+                   AND active_query.site_id = 'ehentai'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if gallery_running {
+            return Err(sql_error(
+                "A gallery download is already running. Wait for it to finish before adding another.",
+            ));
+        }
+    }
+
     tx.execute(
         "INSERT INTO subscription_run (
              subscription_id, requested_by, status, created_at

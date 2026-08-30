@@ -10,6 +10,7 @@ import {
   getSubscriptionRunTarget,
   isQueryCompleted,
   isGalleryImportJob,
+  isVisibleGalleryImportJob,
   isSubscriptionCompleted,
 } from './subscriptionUtils';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
@@ -85,6 +86,15 @@ describe('gallery imports', () => {
       query({ site_id: 'ehentai', query_kind: 'user', query_text: 'https://e-hentai.org/g/1/0123456789/' }),
     ]))).toBe(true);
     expect(isGalleryImportJob(subscription([query({ site_id: 'twitter' })]))).toBe(false);
+  });
+
+  it('shows gallery imports only after a canonical run exists', () => {
+    const idle = subscription([
+      query({ site_id: 'ehentai', query_kind: 'user', query_text: 'https://e-hentai.org/g/1/0123456789/' }),
+    ]);
+    expect(isVisibleGalleryImportJob(idle)).toBe(false);
+    expect(isVisibleGalleryImportJob({ ...idle, run_status: 'pending' })).toBe(true);
+    expect(isVisibleGalleryImportJob({ ...idle, run_status: 'running' })).toBe(true);
   });
 });
 

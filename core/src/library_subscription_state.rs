@@ -1744,9 +1744,10 @@ mod tests {
         application
             .request_subscription_run_library(ehentai, "2026-08-29T00:00:00Z")
             .unwrap();
-        application
+        assert!(application
             .request_subscription_run_library(exhentai, "2026-08-29T00:00:00Z")
-            .unwrap();
+            .unwrap_err()
+            .contains("gallery download is already running"));
 
         let mut schedule = DomainSchedule::new();
         let first = claim_next_query(&application, &mut schedule, "2026-08-29T00:00:01Z")
@@ -1764,7 +1765,10 @@ mod tests {
             "a gallery on the other host must wait for the active gallery"
         );
 
-        complete_query(&application, &first, None, "2026-08-29T00:00:03Z").unwrap();
+        complete_query_terminal(&application, &first, None, "2026-08-29T00:00:03Z").unwrap();
+        application
+            .request_subscription_run_library(exhentai, "2026-08-29T00:00:03Z")
+            .unwrap();
         let second = claim_next_query(
             &application,
             &mut DomainSchedule::new(),

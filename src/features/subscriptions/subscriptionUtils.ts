@@ -14,6 +14,10 @@ export function isGalleryImportJob(subscription: SubscriptionInfo): boolean {
   return subscription.queries?.length === 1 && subscription.queries[0]?.site_id === 'ehentai';
 }
 
+export function isVisibleGalleryImportJob(subscription: SubscriptionInfo): boolean {
+  return isGalleryImportJob(subscription) && subscription.run_status != null;
+}
+
 export function getSubscriptionRunTarget(
   subscription: SubscriptionInfo,
   mode?: string | null,

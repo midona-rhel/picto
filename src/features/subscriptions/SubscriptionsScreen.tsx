@@ -23,7 +23,7 @@ import { SubscriptionCoverDialog } from './components/SubscriptionCoverDialog';
 import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
 import { AddGalleryDialog, type AddGalleryInput } from './components/AddGalleryDialog';
-import { isGalleryImportJob } from './subscriptionUtils';
+import { isGalleryImportJob, isVisibleGalleryImportJob } from './subscriptionUtils';
 import { createSubscriptionActionQueue } from './subscriptionActionQueue';
 import {
   EMPTY_SUBSCRIPTION_DETAIL_STATE,
@@ -184,7 +184,7 @@ export function SubscriptionsScreen() {
   }, [act]);
 
   const busy = busyKey != null;
-  const galleryJobs = snapshot?.subscriptions.filter(isGalleryImportJob) ?? [];
+  const galleryJobs = snapshot?.subscriptions.filter(isVisibleGalleryImportJob) ?? [];
   const galleryImportRunning = galleryJobs.some(
     (job) => snapshot?.runningSubscriptionIds.includes(job.id) || progressBySubscriptionId.has(job.id),
   );
