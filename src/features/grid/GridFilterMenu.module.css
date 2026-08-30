@@ -49,7 +49,8 @@
   width: 100%;
   height: 32px;
   box-sizing: border-box;
-  padding: 0 18px 0 10px;
+  /* Reserve the six pixels used by the active filter's floating remove control. */
+  padding: 6px 18px 0 10px;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -195,9 +196,9 @@
   padding: 0;
   border: 0;
   border-radius: 50%;
-  color: var(--color-text-primary);
-  background: var(--color-surface-2);
-  opacity: .7;
+  color: var(--color-bg-app);
+  background: var(--color-text-primary);
+  opacity: .9;
   cursor: pointer;
 }
 
