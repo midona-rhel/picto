@@ -24,6 +24,7 @@ function buildMenuTemplate(platform = 'linux', overrides = {}) {
     openLibraryManager: () => {},
     sendToFocusedWindow: () => {},
     sendToMainWindow: () => {},
+    checkForUpdates: () => {},
     platform,
     ...overrides,
   });
@@ -84,6 +85,7 @@ test('rebuilds native accelerators from the renderer shortcut registry', () => {
     openLibraryManager: () => {},
     sendToFocusedWindow: () => {},
     sendToMainWindow: () => {},
+    checkForUpdates: () => {},
     platform: 'win32',
   });
 
@@ -118,4 +120,12 @@ test('library and file commands invoke live application workflows', () => {
     ['menu:export-basic'],
     ['menu:export-advanced'],
   ]);
+});
+
+test('checks for updates from the File menu', () => {
+  const checkForUpdates = vi.fn();
+  const template = buildMenuTemplate('win32', { checkForUpdates });
+  const file = template.find((item) => item.label === 'File');
+  file.submenu.find((item) => item.label === 'Check for Updates…').click();
+  expect(checkForUpdates).toHaveBeenCalledOnce();
 });

@@ -233,6 +233,12 @@
 .settingPlaceholder { font-size: var(--font-size-md); color: var(--color-text-tertiary); }
 
 /* ── Settings blocks — matches legacy panelBlock pattern ── */
+.panelDescription {
+  margin: 12px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
 
 .settingsBlock {
   width: 100%;

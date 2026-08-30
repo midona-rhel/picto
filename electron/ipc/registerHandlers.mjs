@@ -219,6 +219,7 @@ export function registerIpcHandlers({
   getAssociatedApplications,
   openWithApplication,
   isDev,
+  updateService,
 }) {
   const openWithOptionsByExtension = new Map();
   const handle = createTrustedIpcHandle(ipcMain, windowManager.ownsWebContents);
@@ -630,6 +631,11 @@ export function registerIpcHandlers({
     }
     return null;
   });
+
+  handle('picto:updates:check', () => updateService.check());
+  handle('picto:updates:state', () => updateService.getState());
+  handle('picto:updates:install', () => updateService.install());
+  handle('picto:updates:open-release', () => updateService.openRelease());
 
   handle('picto:monitor:current', () => {
     const point = screen.getCursorScreenPoint();

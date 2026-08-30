@@ -11,6 +11,7 @@ import {
 import { libraryInvalidation } from './libraryInvalidation';
 import { startDiagnosticsRuntime } from './diagnosticsRuntime';
 import { startCloudSettle } from './cloudSettle';
+import { startUpdateRuntime } from './updateRuntime';
 
 let cleanupFns: Array<() => void> = [];
 
@@ -23,6 +24,7 @@ export function startAppRuntime(): () => void {
     startApplicationMenuRuntime(),
     startDiagnosticsRuntime(),
     startCloudSettle(),
+    startUpdateRuntime(),
     startSidebarSettle(),
     startGridSettle(),
     startHistoryRuntime(),

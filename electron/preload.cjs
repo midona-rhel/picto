@@ -96,6 +96,14 @@ const monitor = {
   gpu: () => ipcRenderer.invoke('picto:monitor:gpu'),
 };
 
+const updates = {
+  check: () => ipcRenderer.invoke('picto:updates:check'),
+  state: () => ipcRenderer.invoke('picto:updates:state'),
+  install: () => ipcRenderer.invoke('picto:updates:install'),
+  openRelease: () => ipcRenderer.invoke('picto:updates:open-release'),
+  onState: (handler) => on('picto:update-state', handler),
+};
+
 const webview = {
   startNativeDrag: (hashes, iconDataUrl) => ipcRenderer.send('ondragstart', { hashes, iconDataUrl }),
   onDragDropEvent: (handler) => {
@@ -150,6 +158,7 @@ contextBridge.exposeInMainWorld('picto', {
   clipboard,
   shell: shellOps,
   monitor,
+  updates,
   webview,
   search,
   siteIcons,

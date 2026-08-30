@@ -23,6 +23,7 @@ import {
   IconLayoutSidebar,
   IconLibrary,
   IconSearch,
+  IconRefresh,
   IconSettings2,
   IconSortAscending,
   IconSortDescending,
@@ -63,6 +64,7 @@ import type { RestorePoint } from '../../shared/types/generated/application/Rest
 import type { LibraryChanged } from '../../shared/types/generated/application/LibraryChanged';
 import type { LibraryStatistics } from '../../shared/types/generated/application/LibraryStatistics';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { checkForUpdates, getUpdateState, installUpdate, onUpdateState, openUpdateRelease, type UpdateState } from '../../platform/updateApi';
 
 // ── Settings row definition ──
 
@@ -90,6 +92,11 @@ const PANELS: PanelDef[] = [
     id: 'general', label: 'General', icon: IconSettings2,
     keywords: 'general appearance theme color light dark gray blue purple zoom tags group namespace prefix compact',
     description: 'Appearance and zoom.',
+  },
+  {
+    id: 'updates', label: 'Updates', icon: IconRefresh,
+    keywords: 'updates software version release notes download install latest',
+    description: 'Check for new versions of Picto.',
   },
   {
     id: 'library', label: 'Library', icon: IconLibrary,
@@ -145,6 +152,44 @@ const PANELS: PanelDef[] = [
     separatorBefore: true,
   },
 ];
+
+function UpdatesPanel() {
+  const [state, setState] = useState<UpdateState | null>(null);
+  useEffect(() => {
+    void getUpdateState().then(setState);
+    let dispose: (() => void) | undefined;
+    void onUpdateState(setState).then((value) => { dispose = value; });
+    return () => dispose?.();
+  }, []);
+  const status = state?.status === 'checking'
+    ? 'Checking…'
+    : state?.status === 'downloading'
+      ? `Downloading ${state.progress ? `${Math.round(state.progress.percent)}%` : ''}`
+      : state?.status === 'downloaded'
+        ? `Picto ${state.version} is ready to install`
+        : state?.status === 'available'
+          ? `Picto ${state.version} is available`
+          : state?.status === 'current'
+            ? 'Picto is up to date'
+            : state?.error || 'Check for a newer version of Picto.';
+  return <div className={styles.panelContent}>
+    <div className={styles.settingsBlock}>
+      <div className={styles.blockContent}>
+        <div className={styles.blockTitle}>Software Update</div>
+        <Row label="Installed version"><span>{state?.currentVersion ?? '—'}</span></Row>
+        <div className={styles.rowSep} />
+        <Row label={status}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className={styles.footerBtn} type="button" disabled={state?.status === 'checking' || state?.status === 'downloading'} onClick={() => void checkForUpdates().then(setState)}>Check Now</button>
+            {state?.status === 'downloaded' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void installUpdate()}>{state.platform === 'darwin' ? 'Open Download Page' : 'Restart and Install'}</button> : null}
+            {state?.status === 'available' && state.platform === 'darwin' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void openUpdateRelease()}>Open Download Page</button> : null}
+          </div>
+        </Row>
+        <p className={styles.panelDescription}>{state?.automaticInstall ? 'Updates download in the background and install after Picto closes.' : 'On macOS, Picto opens the release download because this build is not signed for automatic installation.'}</p>
+      </div>
+    </div>
+  </div>;
+}
 
 // ── Individual setting rows (for General + future panels) ──
 
@@ -1313,6 +1358,8 @@ export function Settings() {
             <CloudPanel initialSnapshot={cloudSnapshot} />
           ) : activePanel.id === 'library' ? (
             <LibraryPanel statistics={libraryStatistics} />
+          ) : activePanel.id === 'updates' ? (
+            <UpdatesPanel />
           ) : null}
         </div>
 

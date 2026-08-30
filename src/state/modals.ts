@@ -172,3 +172,5 @@ export const groupOrganizerModalAtom = atom<GroupOrganizerModalState>({
   notes: '',
   notesMaximumBytes: 65_536,
 });
+
+export const updateModalAtom = atom({ open: false });

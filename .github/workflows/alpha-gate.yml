@@ -82,14 +82,22 @@ jobs:
             package-artifacts: |
               dist/*.dmg
               dist/*.zip
+              dist/*.yml
+              dist/*.blockmap
           - os: ubuntu-24.04
             platform: linux
             artifact: linux-x64
-            package-artifacts: dist/*.AppImage
+            package-artifacts: |
+              dist/*.AppImage
+              dist/*.yml
+              dist/*.blockmap
           - os: windows-latest
             platform: windows
             artifact: windows-x64
-            package-artifacts: dist/*.exe
+            package-artifacts: |
+              dist/*.exe
+              dist/*.yml
+              dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -191,8 +199,11 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: true
+          generate_release_notes: true
           files: |
             release-artifacts/*.dmg
             release-artifacts/*.zip
             release-artifacts/*.AppImage
             release-artifacts/*.exe
+            release-artifacts/*.yml
+            release-artifacts/*.blockmap

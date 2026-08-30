@@ -23,6 +23,7 @@ import { createFlashThumbnailService } from './services/flashThumbnailService.mj
 import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
 import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
 import { createSiteIconService } from './services/siteIconService.mjs';
+import { createUpdateService } from './services/updateService.mjs';
 
 installConsoleForwarding();
 
@@ -284,8 +285,17 @@ const menuManager = createMenuManager({
   openLibraryManager: windowManager.openLibraryManager,
   sendToFocusedWindow: windowManager.sendToFocusedWindow,
   sendToMainWindow: windowManager.sendToMainWindow,
+  checkForUpdates: () => {
+    void updateService.check().then(() => windowManager.sendToMainWindow('menu:show-updates'));
+  },
 });
 buildAppMenu = menuManager.buildAppMenu;
+
+const updateService = createUpdateService({
+  app,
+  net,
+  sendToAllWindows: windowManager.sendToAllWindows,
+});
 
 if (isPackagedSmoke) {
   ipcMain.on('picto:smoke:renderer-failure', (_event, failure) => {
@@ -319,6 +329,7 @@ registerIpcHandlers({
   getAssociatedApplications,
   openWithApplication,
   isDev,
+  updateService,
 });
 
 function wireNativeEvents() {
@@ -445,6 +456,7 @@ function startDevCaptureWatcher() {
 app.whenReady().then(async () => {
   await bootstrapApplication();
   startDevCaptureWatcher();
+  updateService.start();
 
   // Auto theme: broadcast OS dark/light mode changes to all windows
   nativeTheme.on('updated', () => {

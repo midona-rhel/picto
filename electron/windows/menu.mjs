@@ -13,6 +13,7 @@ export function createMenuManager({
   openLibraryManager,
   sendToFocusedWindow,
   sendToMainWindow,
+  checkForUpdates,
   platform = process.platform,
 }) {
   let shortcutBindings = {};
@@ -187,6 +188,11 @@ export function createMenuManager({
               click: () => openSettingsWindow(),
             },
           ] : []),
+          { type: 'separator' },
+          {
+            label: 'Check for Updates…',
+            click: () => checkForUpdates(),
+          },
           { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],

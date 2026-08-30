@@ -3,6 +3,7 @@ import { chooseAndImportFiles, chooseAndImportFolder, filesController } from '..
 import { listen } from '../platform/ipc';
 import { gridScopeAtom } from '../state/grid';
 import { exportModalAtom } from '../state/modals';
+import { updateModalAtom } from '../state/modals';
 import { selectionCountAtom, selectionTargetAtom } from '../state/selection';
 import { showErrorNotification, showInfoNotification, showSuccessNotification } from '../shared/lib/notifications';
 
@@ -10,7 +11,8 @@ type ApplicationMenuEvent =
   | 'menu:import-files'
   | 'menu:import-folder'
   | 'menu:export-basic'
-  | 'menu:export-advanced';
+  | 'menu:export-advanced'
+  | 'menu:show-updates';
 
 const store = getDefaultStore();
 
@@ -43,6 +45,10 @@ async function exportOriginals(): Promise<void> {
 }
 
 async function runMenuAction(name: ApplicationMenuEvent): Promise<void> {
+  if (name === 'menu:show-updates') {
+    store.set(updateModalAtom, { open: true });
+    return;
+  }
   if (name === 'menu:import-files') {
     await chooseAndImportFiles(store.get(gridScopeAtom));
     return;
@@ -71,6 +77,7 @@ export function startApplicationMenuRuntime(): () => void {
     'menu:import-folder',
     'menu:export-basic',
     'menu:export-advanced',
+    'menu:show-updates',
   ];
   for (const name of names) {
     void listen(name, () => {
