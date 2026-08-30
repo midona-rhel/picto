@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, screen } from 'electron';
+import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, protocol, screen } from 'electron';
 import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
@@ -24,6 +24,7 @@ import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
 import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
 import { createSiteIconService } from './services/siteIconService.mjs';
 import { createUpdateService } from './services/updateService.mjs';
+import { createSubscriptionNotificationService } from './services/subscriptionNotificationService.mjs';
 
 installConsoleForwarding();
 
@@ -235,6 +236,13 @@ const windowManager = createWindowManager({
   },
 });
 
+const subscriptionNotifications = createSubscriptionNotificationService({
+  Notification,
+  app,
+  invokeSerialized,
+  getCurrentLibraryRoot,
+});
+
 let buildAppMenu = () => {};
 
 const libraryHost = createLibraryHostService({
@@ -336,6 +344,7 @@ function wireNativeEvents() {
   onNativeEvent((name, payload) => {
     if (!name || typeof name !== 'string') return;
 
+    subscriptionNotifications.handleNativeEvent(name, payload);
     windowManager.sendToAllWindows(name, payload);
   });
 }
@@ -457,6 +466,7 @@ app.whenReady().then(async () => {
   await bootstrapApplication();
   startDevCaptureWatcher();
   updateService.start();
+  void subscriptionNotifications.refresh();
 
   // Auto theme: broadcast OS dark/light mode changes to all windows
   nativeTheme.on('updated', () => {
