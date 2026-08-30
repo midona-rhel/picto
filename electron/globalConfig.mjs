@@ -5,6 +5,7 @@ import path from 'node:path';
 const DEFAULT_CONFIG = {
   libraryHistory: [],
   pinnedLibraries: [],
+  cloudRoots: [],
   lastLibrary: null,
   windowState: {
     main: null,

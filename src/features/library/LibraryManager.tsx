@@ -3,7 +3,6 @@ import {
   IconAlertTriangle,
   IconBrandDropbox,
   IconBrandGoogleDrive,
-  IconBooks,
   IconCheck,
   IconCloud,
   IconCloudOff,
@@ -54,6 +53,7 @@ interface LibraryConfigResult {
   }>;
   currentPath: string | null;
   libraryFailure?: { path?: string | null; message: string } | null;
+  cloudRoots?: DetectedCloudRoot[];
   existsMap: Record<string, boolean>;
 }
 
@@ -161,7 +161,13 @@ export function LibraryManager() {
 
   const refreshCloud = useCallback(async () => {
     try {
-      const roots = await invoke<DetectedCloudRoot[]>('cloud.providers.detect');
+      const [detectedRoots, globalConfig] = await Promise.all([
+        invoke<DetectedCloudRoot[]>('cloud.providers.detect'),
+        pictoLibrary().getConfig() as Promise<LibraryConfigResult>,
+      ]);
+      const roots = [...(globalConfig.cloudRoots ?? []), ...detectedRoots].filter(
+        (root, index, all) => all.findIndex((candidate) => candidate.provider === root.provider && candidate.path === root.path) === index,
+      );
       setCloudRoots(roots);
       const discovered = await Promise.all(roots.map(async (root) => {
         try {
@@ -405,6 +411,42 @@ export function LibraryManager() {
       setMessage(`Cloud sync enabled through ${root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'}.`);
     });
 
+  const chooseCloudRoot = (provider: DetectedCloudRoot['provider']) => {
+    void run(`cloud-location:${provider}`, async () => {
+      const providerName = provider === 'google_drive' ? 'Google Drive' : 'Dropbox';
+      const result = await (window as any).picto.dialog.open({
+        properties: ['openDirectory'],
+        multiple: false,
+        title: `Choose the ${providerName} synced folder`,
+      });
+      const rootPath = Array.isArray(result) ? result[0] : result;
+      if (!rootPath) return;
+      const root: DetectedCloudRoot = {
+        provider,
+        account_label: baseName(rootPath) || providerName,
+        path: rootPath,
+      };
+      // Discovery validates that the selected location exists before it is
+      // remembered. Configuration performs the stronger writable check.
+      await invoke('cloud.libraries.discover', { root_path: root.path });
+      await pictoLibrary().rememberCloudRoot(root);
+      const configuredCurrentLibrary = Boolean(selectedEntry?.current && !cloudConfiguration?.root_path);
+      if (configuredCurrentLibrary) {
+        await invoke('cloud.configure', {
+          provider: root.provider,
+          account_label: root.account_label,
+          root_path: root.path,
+        });
+      } else if (!selectedEntry) {
+        setShowCloudOpen(true);
+      }
+      await refreshCloud();
+      setMessage(configuredCurrentLibrary
+        ? `Cloud sync enabled through ${providerName}.`
+        : `${providerName} location saved.`);
+    });
+  };
+
   const setCloudPaused = (paused: boolean) =>
     run('cloud-pause', async () => {
       await invoke('cloud.pause', { paused });
@@ -583,7 +625,15 @@ export function LibraryManager() {
               <div className={styles.createPane}>
                 <span className={styles.heroIcon}><IconCloud size={26} /></span>
                 <div className={styles.heroTitle}>Open a cloud library</div>
-                <p className={styles.heroDescription}>Choose a verified Picto library found in an installed desktop sync folder.</p>
+                <p className={styles.heroDescription}>Select your synced folder, then choose a Picto library found there.</p>
+                <div className={styles.cloudProviderActions}>
+                  <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('google_drive')} disabled={busy !== null}>
+                    <IconBrandGoogleDrive size={18} /><span>Connect Google Drive…</span><small>Choose folder</small>
+                  </button>
+                  <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('dropbox')} disabled={busy !== null}>
+                    <IconBrandDropbox size={18} /><span>Connect Dropbox…</span><small>Choose folder</small>
+                  </button>
+                </div>
                 {cloudLibraries.length > 0 ? (
                   <div className={styles.cloudLibraryList}>
                     {cloudLibraries.map((library) => {
@@ -775,7 +825,7 @@ export function LibraryManager() {
                         </div>
                       ) : cloudStatus?.message ? <p className={styles.cloudMessage}>{cloudStatus.message}</p> : null}
                     </>
-                  ) : cloudRoots.length > 0 ? (
+                  ) : (
                     <div className={styles.cloudProviderActions}>
                       {cloudRoots.map((root) => {
                         const isDropbox = root.provider === 'dropbox';
@@ -795,14 +845,44 @@ export function LibraryManager() {
                           </button>
                         );
                       })}
+                      <button
+                        type="button"
+                        className={styles.cloudProviderButton}
+                        onClick={() => chooseCloudRoot('google_drive')}
+                        disabled={busy !== null}
+                      >
+                        <IconBrandGoogleDrive size={18} />
+                        <span>Connect Google Drive…</span>
+                        <small>Choose folder</small>
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.cloudProviderButton}
+                        onClick={() => chooseCloudRoot('dropbox')}
+                        disabled={busy !== null}
+                      >
+                        <IconBrandDropbox size={18} />
+                        <span>Connect Dropbox…</span>
+                        <small>Choose folder</small>
+                      </button>
                     </div>
-                  ) : (
-                    <p className={styles.cardDescription}>Install and sign in to Google Drive or Dropbox on this computer, then reopen Library Manager.</p>
                   )}
                 </section>
               </>
             ) : (
-              <div className={styles.emptyDetail}><IconBooks size={28} /><span>Select a library</span></div>
+              <div className={styles.createPane}>
+                <span className={styles.heroIcon}><IconCloud size={26} /></span>
+                <div className={styles.heroTitle}>Get started</div>
+                <p className={styles.heroDescription}>Create a library on this device or connect an existing cloud folder.</p>
+                <div className={styles.cloudProviderActions}>
+                  <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('google_drive')} disabled={busy !== null}>
+                    <IconBrandGoogleDrive size={18} /><span>Connect Google Drive…</span><small>Choose folder</small>
+                  </button>
+                  <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('dropbox')} disabled={busy !== null}>
+                    <IconBrandDropbox size={18} /><span>Connect Dropbox…</span><small>Choose folder</small>
+                  </button>
+                </div>
+              </div>
             )}
 
             {message ? <div className={styles.message}>{message}</div> : null}
@@ -825,7 +905,7 @@ export function LibraryManager() {
               setSelectedPath(null);
               setShowIconEditor(false);
             }}
-            disabled={busy !== null || cloudRoots.length === 0}
+            disabled={busy !== null}
           >
             Open from Cloud…
           </button>

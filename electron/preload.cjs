@@ -78,6 +78,7 @@ const library = {
   delete: (path) => ipcRenderer.invoke('picto:library:delete', { path }),
   togglePin: (path) => ipcRenderer.invoke('picto:library:togglePin', { path }),
   getConfig: () => ipcRenderer.invoke('picto:library:getConfig'),
+  rememberCloudRoot: (root) => ipcRenderer.invoke('picto:library:rememberCloudRoot', root),
   rename: (path, newName) => ipcRenderer.invoke('picto:library:rename', { path, newName }),
   relocate: (oldPath) => ipcRenderer.invoke('picto:library:relocate', { oldPath }),
   setMeta: (path, meta) => ipcRenderer.invoke('picto:library:setMeta', { path, meta }),

@@ -4,6 +4,25 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+test('remembers a manually selected cloud root once', async () => {
+  const config = { cloudRoots: [] };
+  let saved = null;
+  const service = createLibraryHostService({
+    fs: {}, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+    addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+    getCachedConfig: () => config,
+    saveGlobalConfig: async (next) => { saved = next; },
+    updateLibraryPath: async () => {}, getCurrentLibraryRoot: () => null, setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {}, sendToAllWindows: () => {}, buildAppMenu: () => {},
+  });
+  const root = { provider: 'google_drive', account_label: 'My Drive', path: 'G:\\My Drive' };
+
+  await service.rememberCloudRoot(root);
+  await service.rememberCloudRoot(root);
+
+  expect(saved.cloudRoots).toEqual([root]);
+});
+
 test('an initial navigation failure closes the library and preserves its error for Library Manager', async () => {
   const events = [];
   let currentPath = '/Pictures/Broken.library';

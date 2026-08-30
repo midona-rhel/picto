@@ -666,6 +666,7 @@ export function registerIpcHandlers({
   handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
   handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
   handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
+  handle('picto:library:rememberCloudRoot', async (_event, root) => libraryService.rememberCloudRoot(root));
   handle('picto:library:setMeta', async (_event, { path, meta }) => libraryService.setLibraryMeta(path, meta));
   handle('picto:tutorial:start', async () => libraryService.startTutorialLibrary());
   handle('picto:tutorial:reset', async () => libraryService.resetTutorialLibrary());

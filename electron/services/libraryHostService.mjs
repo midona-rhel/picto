@@ -641,6 +641,23 @@ export function createLibraryHostService({
     };
   }
 
+  async function rememberCloudRoot(root) {
+    const provider = String(root?.provider ?? '');
+    const accountLabel = String(root?.account_label ?? '').trim();
+    const rootPath = String(root?.path ?? '').trim();
+    if (!['google_drive', 'dropbox'].includes(provider) || !accountLabel || !rootPath) {
+      throw new Error('Invalid cloud folder location');
+    }
+    const config = getCachedConfig();
+    const cloudRoots = Array.isArray(config.cloudRoots) ? config.cloudRoots : [];
+    config.cloudRoots = [
+      { provider, account_label: accountLabel, path: rootPath },
+      ...cloudRoots.filter((entry) => entry?.provider !== provider || entry?.path !== rootPath),
+    ];
+    await saveGlobalConfig(config);
+    return config.cloudRoots;
+  }
+
   async function failActiveLibrary(message) {
     const failureMessage = String(message || 'The library navigation could not be loaded.');
     const failedPath = getCurrentLibraryRoot();
@@ -718,6 +735,7 @@ export function createLibraryHostService({
     relocateLibrary,
     removeLibrary,
     renameLibrary,
+    rememberCloudRoot,
     setLibraryMeta,
     startTutorialLibrary,
     resetTutorialLibrary,
