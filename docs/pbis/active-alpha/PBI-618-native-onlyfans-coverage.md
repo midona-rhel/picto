@@ -23,5 +23,5 @@ boundary instead of being downloaded.
 1. An authenticated smoke proves purchases, messages, timeline, archived, and pinned partitions
    each produce media when the account exposes them.
 2. A mixed creator run settles partitions deterministically without losing or duplicating media.
-3. Reset clears all three partition cursors and reruns without hanging.
+3. Reset clears all five partition cursors and reruns without hanging.
 4. No OF-Scraper process, database, package, or compatibility patch is used.
