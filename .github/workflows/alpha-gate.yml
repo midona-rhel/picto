@@ -34,6 +34,9 @@ jobs:
           node-version: 24
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.98.0
+          components: clippy
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
@@ -65,13 +68,32 @@ jobs:
       - name: Fetch locked Rust dependencies
         run: cargo fetch --manifest-path core/Cargo.toml --locked
 
-      - name: Run alpha verify gate
-        run: npm run gate:alpha
+      - name: Audit release inputs
+        run: npm run release:audit
+
+      - name: Typecheck renderer
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Test renderer
+        run: npm run test -- --run
+
+      - name: Check command parity
+        run: npm run check:command-parity
+
+      # Keep strict lint ahead of the long Rust test suite. A new compiler lint
+      # should fail one named step immediately, not surface after every test has run.
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --lib --tests --locked --quiet
 
   alpha-package:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})
     needs: alpha-verify
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')
+    # Release branches are preflight-only. Packaging them as well as their tag
+    # doubled every platform build and encouraged tagging before CI was green.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
@@ -112,6 +134,9 @@ jobs:
           python-version: '3.12'
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: 1.98.0
+          components: clippy
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
@@ -157,10 +182,12 @@ jobs:
           PICTO_REQUIRE_MAC_SIGNING: ${{ runner.os == 'macOS' && 'true' || 'false' }}
 
       - name: Run alpha smoke (Linux)
+        id: smoke-linux
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
 
       - name: Run alpha smoke
+        id: smoke-other
         if: runner.os != 'Linux'
         run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
 
@@ -172,7 +199,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload alpha smoke report
-        if: always()
+        if: always() && (steps.smoke-linux.outcome != 'skipped' || steps.smoke-other.outcome != 'skipped')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: alpha-smoke-${{ matrix.platform }}
