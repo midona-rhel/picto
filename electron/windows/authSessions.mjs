@@ -261,8 +261,14 @@ function createCookieAdapter(site) {
           return { status: 'active', message: `Log in with ${site.label} to continue.` };
         }
       }
+      const userAgent = String(contents.getUserAgent?.() ?? '').trim();
       return {
-        credential: { site_category: site.id, credential_type: 'cookies', cookies },
+        credential: {
+          site_category: site.id,
+          credential_type: 'cookies',
+          cookies,
+          ...(site.id === 'fanbox' && userAgent ? { headers: { 'user-agent': userAgent } } : {}),
+        },
         message: `${site.label} session captured.`,
       };
     },

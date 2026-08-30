@@ -203,7 +203,7 @@ pub static SITES: &[SiteEntry] = &[
         supports_query: false,
         supports_account: true,
         auth_required_for_full_access: true,
-        auth_strictly_required: true,
+        auth_strictly_required: false,
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },

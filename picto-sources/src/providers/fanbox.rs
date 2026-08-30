@@ -12,6 +12,8 @@ use crate::{
 };
 
 const API_DOMAIN: &str = "api.fanbox.cc";
+const FIREFOX_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0";
 const CURSOR: OpaqueCursor = OpaqueCursor::new(2_048);
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
@@ -27,7 +29,7 @@ impl NativeSourceAdapter for FanboxSource {
             display_name: "pixivFANBOX",
             domain: "fanbox.cc",
             partitions: &["posts"],
-            anonymous: false,
+            anonymous: true,
         }
     }
 
@@ -46,7 +48,7 @@ impl NativeSourceAdapter for FanboxSource {
             let creator = normalize_creator(&request.query)?;
             let credentials = api_credentials(credentials);
             let url = listing_url(request.cursor.as_deref(), &creator)?;
-            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
+            let response = fanbox_json(http, url, &credentials, cancel).await?;
             normalize_listing(request, &creator, response)
         })
     }
@@ -63,9 +65,29 @@ impl NativeSourceAdapter for FanboxSource {
             let mut url =
                 Url::parse("https://api.fanbox.cc/post.info").expect("static FANBOX post endpoint");
             url.query_pairs_mut().append_pair("postId", &post.stable_id);
-            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
+            let response = fanbox_json(http, url, &credentials, cancel).await?;
             normalize_post(post, response)
         })
+    }
+}
+
+async fn fanbox_json(
+    http: &HttpRuntime,
+    url: Url,
+    credentials: &RequestCredentials,
+    cancel: &CancellationToken,
+) -> Result<Value, SourceError> {
+    match http
+        .get_json::<Value>(url.clone(), credentials, cancel)
+        .await
+    {
+        Err(error)
+            if error.kind == SourceErrorKind::Authentication && !credentials.cookies.is_empty() =>
+        {
+            let anonymous = api_credentials(&RequestCredentials::default());
+            http.get_json::<Value>(url, &anonymous, cancel).await
+        }
+        result => result,
     }
 }
 
@@ -80,6 +102,15 @@ fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
         .headers
         .entry("Origin".to_string())
         .or_insert_with(|| "https://www.fanbox.cc".to_string());
+    if !credentials
+        .headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("user-agent"))
+    {
+        credentials
+            .headers
+            .insert("User-Agent".to_string(), FIREFOX_USER_AGENT.to_string());
+    }
     for (name, value) in [
         ("Referer", "https://www.fanbox.cc/"),
         ("Sec-Fetch-Dest", "empty"),
@@ -514,8 +545,8 @@ mod tests {
     use crate::{CanonicalTag, SourcePartition};
 
     #[test]
-    fn requires_login_and_preserves_the_fanbox_browser_request_context() {
-        assert!(!adapter().descriptor().anonymous);
+    fn supports_anonymous_access_and_preserves_the_fanbox_browser_request_context() {
+        assert!(adapter().descriptor().anonymous);
         let credentials = api_credentials(&RequestCredentials::default());
         assert_eq!(
             credentials.headers.get("Origin").map(String::as_str),
@@ -531,6 +562,23 @@ mod tests {
                 .get("Sec-Fetch-Site")
                 .map(String::as_str),
             Some("same-site")
+        );
+        assert_eq!(
+            credentials.headers.get("User-Agent").map(String::as_str),
+            Some(FIREFOX_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn preserves_the_user_agent_captured_with_the_session() {
+        let mut credentials = RequestCredentials::default();
+        credentials
+            .headers
+            .insert("user-agent".into(), "captured browser".into());
+        let credentials = api_credentials(&credentials);
+        assert_eq!(
+            credentials.headers.get("user-agent").map(String::as_str),
+            Some("captured browser")
         );
     }
 

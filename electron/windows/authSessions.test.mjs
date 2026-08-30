@@ -404,6 +404,7 @@ describe('direct-site authentication', () => {
       site_id: 'fanbox',
       credential_type: 'cookies',
       cookies: { FANBOXSESSID: 'valid', __cf_bm: 'browser-session' },
+      headers: { 'user-agent': 'Mozilla/5.0 Electron/37.0.0 Picto/0.5.0' },
     }));
     expect(sessions.getAuthSessionState().status).toBe('completed');
   });
