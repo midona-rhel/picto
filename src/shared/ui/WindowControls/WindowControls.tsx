@@ -23,10 +23,10 @@ export function WindowControls({
 
   return (
     <div className={styles.controls}>
-      <KbdTooltip label="Minimize"><button className={styles.btn} onClick={() => callWindow('minimize')} aria-label="Minimize">
+      <KbdTooltip label="Minimize"><button type="button" className={styles.btn} onClick={() => callWindow('minimize')} aria-label="Minimize">
         <IconMinus size={16} stroke={1} />
       </button></KbdTooltip>
-      <KbdTooltip label="Maximize"><button className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label="Maximize">
+      <KbdTooltip label="Maximize"><button type="button" className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label="Maximize">
         <IconSquare size={12} stroke={1.5} />
       </button></KbdTooltip>
       <KbdTooltip label="Close"><WindowCloseButton /></KbdTooltip>

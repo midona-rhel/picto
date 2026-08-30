@@ -6,6 +6,7 @@
   gap: 0;
   margin-left: auto;
   flex-shrink: 0;
+  app-region: no-drag;
   -webkit-app-region: no-drag;
 }
 
@@ -26,6 +27,7 @@
   width: 28px;
   height: var(--control-height-md);
   min-width: 28px;
+  app-region: no-drag;
   -webkit-app-region: no-drag;
   transition: all 150ms var(--ease-default);
 }

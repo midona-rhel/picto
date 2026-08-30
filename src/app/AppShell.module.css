@@ -29,6 +29,7 @@
   height: var(--titlebar-height);
   display: flex;
   margin-right: var(--titlebar-inspector-width, 0px);
+  app-region: drag;
   -webkit-app-region: drag;
   font-family: var(--font-family-ui);
 }
@@ -342,6 +343,7 @@
 .inspectorTitlebar {
   flex-shrink: 0;
   height: var(--titlebar-height);
+  app-region: drag;
   -webkit-app-region: drag;
   display: flex;
   align-items: center;
@@ -362,6 +364,7 @@
   height: var(--titlebar-height);
   padding: 0 8px;
   background: var(--color-bg-app);
+  app-region: drag;
   -webkit-app-region: drag;
 }
 

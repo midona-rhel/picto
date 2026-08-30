@@ -30,14 +30,20 @@ describe('WindowControls', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 
-  it('routes the close control through the desktop window API', () => {
+  it('routes every control through the desktop window API', () => {
     const call = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window, 'picto', {
       value: { api: { window: { call } } },
       configurable: true,
     });
     render(<MantineProvider><WindowControls platform="Win32" /></MantineProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(call).toHaveBeenCalledWith('close');
+    expect(call.mock.calls).toEqual([
+      ['minimize'],
+      ['toggleMaximize'],
+      ['close'],
+    ]);
   });
 });
