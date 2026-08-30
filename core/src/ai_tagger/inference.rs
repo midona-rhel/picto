@@ -429,7 +429,7 @@ fn create_runtime(
     }
 
     #[cfg(not(target_os = "macos"))]
-    let _ = coreml_current;
+    let _ = (input_size, label_count, adapter, coreml_current);
 
     #[cfg(target_os = "windows")]
     {

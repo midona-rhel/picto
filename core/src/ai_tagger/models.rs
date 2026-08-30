@@ -247,6 +247,7 @@ pub(crate) fn coreml_artifact_is_current(dir: &std::path::Path, model: &ModelInf
             == Some(artifact.sha256.as_str())
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn mark_coreml_artifact_current(
     dir: &std::path::Path,
     model: &ModelInfo,

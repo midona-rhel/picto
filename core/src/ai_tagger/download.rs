@@ -347,6 +347,7 @@ async fn download_file(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn verify_file(path: &Path, expected_sha256: &str) -> Result<(), String> {
     let mut file = std::fs::File::open(path)
         .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
