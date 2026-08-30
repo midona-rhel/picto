@@ -231,7 +231,7 @@ export function registerIpcHandlers({
     }
 
     if (command === 'open_settings_window') {
-      windowManager.openSettingsWindow();
+      windowManager.openSettingsWindow(args?.panel ?? null);
       return null;
     }
     if (command === 'open_external_url') {

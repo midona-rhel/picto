@@ -129,3 +129,11 @@ test('checks for updates from the File menu', () => {
   file.submenu.find((item) => item.label === 'Check for Updates…').click();
   expect(checkForUpdates).toHaveBeenCalledOnce();
 });
+
+test('opens the real About settings section', () => {
+  const openSettingsWindow = vi.fn();
+  const template = buildMenuTemplate('win32', { openSettingsWindow });
+  const help = template.find((item) => item.label === 'Help');
+  help.submenu.find((item) => item.label === 'About Picto').click();
+  expect(openSettingsWindow).toHaveBeenCalledWith('about');
+});

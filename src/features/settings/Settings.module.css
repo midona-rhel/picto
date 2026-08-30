@@ -225,6 +225,18 @@
   line-height: var(--line-height-sm);
 }
 
+.aboutPanel { max-width: 620px; margin: 0 auto; }
+.aboutHero { display: flex; align-items: center; gap: 18px; padding: 18px 4px 24px; }
+.aboutLogo { width: 72px; height: 72px; flex: 0 0 72px; }
+.aboutHero h1 { margin: 0; color: var(--color-text-primary); font-size: 28px; line-height: 32px; }
+.aboutHero p { margin: 3px 0 7px; color: var(--color-text-secondary); }
+.aboutHero span { color: var(--color-text-tertiary); font-family: var(--font-family-mono); font-size: var(--font-size-sm); }
+.aboutLinks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.aboutLinks button { min-width: 0; height: 54px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid var(--color-border-secondary); border-radius: var(--radius-md); background: var(--color-control-surface); color: var(--color-text-primary); font: inherit; cursor: pointer; }
+.aboutLinks button:hover { background: var(--color-surface-hover); border-color: var(--color-border-primary); }
+.aboutLinks button svg:last-child { color: var(--color-text-tertiary); }
+.aboutCopyright { margin: 22px 0 0; text-align: center; color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
+
 .settingsBlock {
   width: 100%;
   min-width: 0;

@@ -30,8 +30,8 @@ export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
 }
 
-export function openSettingsWindow(): Promise<void> {
-  return invoke<void>('open_settings_window');
+export function openSettingsWindow(panel?: string): Promise<void> {
+  return invoke<void>('open_settings_window', panel ? { panel } : undefined);
 }
 
 export async function resolveFilePath(fileHash: string): Promise<string> {

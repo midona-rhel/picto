@@ -16,6 +16,10 @@ import {
   IconCheck,
   IconCommand,
   IconCloud,
+  IconBrandGithub,
+  IconExternalLink,
+  IconInfoCircle,
+  IconScale,
   IconEye,
   IconFolderDown,
   IconDownload,
@@ -65,6 +69,8 @@ import type { LibraryStatistics } from '../../shared/types/generated/application
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { checkForUpdates, getUpdateState, installUpdate, onUpdateState, openUpdateRelease, type UpdateState } from '../../platform/updateApi';
+import { openExternalUrl } from '../../platform/shellApi';
+import pictoLogo from '../../../build/icons/picto-flat.svg';
 
 // ── Settings row definition ──
 
@@ -151,6 +157,12 @@ const PANELS: PanelDef[] = [
     description: 'Local models, confidence thresholds, and auto-tag behavior.',
     separatorBefore: true,
   },
+  {
+    id: 'about', label: 'About', icon: IconInfoCircle,
+    keywords: 'about picto version build copyright license github website release',
+    description: 'Version, project information, and licenses.',
+    separatorBefore: true,
+  },
 ];
 
 function UpdatesPanel() {
@@ -188,6 +200,36 @@ function UpdatesPanel() {
         <p className={styles.panelDescription}>{state?.automaticInstall ? 'Updates download in the background and install after Picto closes.' : 'On macOS, Picto opens the release download because this build is not signed for automatic installation.'}</p>
       </div>
     </div>
+  </div>;
+}
+
+function AboutPanel() {
+  const [state, setState] = useState<UpdateState | null>(null);
+  useEffect(() => { void getUpdateState().then(setState); }, []);
+  const platform = state?.platform === 'darwin' ? 'macOS' : state?.platform === 'win32' ? 'Windows' : state?.platform === 'linux' ? 'Linux' : state?.platform;
+  return <div className={`${styles.panelContent} ${styles.aboutPanel}`}>
+    <div className={styles.aboutHero}>
+      <img className={styles.aboutLogo} src={pictoLogo} alt="" />
+      <div>
+        <h1>Picto</h1>
+        <p>Personal media library and organization.</p>
+        <span>Version {state?.currentVersion ?? '—'}{platform ? ` · ${platform}` : ''}</span>
+      </div>
+    </div>
+    <div className={styles.settingsBlock}>
+      <div className={styles.blockContent}>
+        <div className={styles.blockTitle}>Application</div>
+        <Row label="Software updates"><button className={styles.footerBtn} type="button" onClick={() => void checkForUpdates().then(setState)}>Check Now</button></Row>
+        <div className={styles.rowSep} />
+        <Row label="License"><span className={styles.staticValue}>MIT</span></Row>
+      </div>
+    </div>
+    <div className={styles.aboutLinks}>
+      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto')}><IconBrandGithub size={16} /> Project on GitHub <IconExternalLink size={13} /></button>
+      <button type="button" onClick={() => void openUpdateRelease()}><IconRefresh size={16} /> Release notes <IconExternalLink size={13} /></button>
+      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto/blob/main/LICENSE')}><IconScale size={16} /> Open-source license <IconExternalLink size={13} /></button>
+    </div>
+    <p className={styles.aboutCopyright}>© {new Date().getFullYear()} Picto contributors</p>
   </div>;
 }
 
@@ -1096,6 +1138,17 @@ export function Settings() {
   const [libraryStatistics, setLibraryStatistics] = useState<LibraryStatistics | null>(null);
   const [cloudSnapshot, setCloudSnapshot] = useState<CloudSnapshot | null>(null);
   const [aiRuntimeStatus, setAiRuntimeStatus] = useState<AiRuntimeStatus | null>(null);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    void listen<string>('picto:settings:navigate', ({ payload }) => {
+      if (PANELS.some((panel) => panel.id === payload)) {
+        setSelected(payload);
+        setSearch('');
+      }
+    }).then((value) => { dispose = value; });
+    return () => dispose?.();
+  }, []);
   const savedSnapshotRef = useRef<{
     app: AppSettings | null;
     prefs: ViewPrefsDto | null;
@@ -1360,6 +1413,8 @@ export function Settings() {
             <LibraryPanel statistics={libraryStatistics} />
           ) : activePanel.id === 'updates' ? (
             <UpdatesPanel />
+          ) : activePanel.id === 'about' ? (
+            <AboutPanel />
           ) : null}
         </div>
 

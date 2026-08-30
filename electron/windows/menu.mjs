@@ -88,7 +88,10 @@ export function createMenuManager({
         ? [{
             label: app.name,
             submenu: [
-              { role: 'about' },
+              {
+                label: 'About Picto',
+                click: () => openSettingsWindow('about'),
+              },
               { type: 'separator' },
               {
                 label: 'Preferences…',
@@ -283,7 +286,7 @@ export function createMenuManager({
         submenu: [
           {
             label: 'About Picto',
-            click: () => openSettingsWindow(),
+            click: () => openSettingsWindow('about'),
           },
         ],
       },

@@ -496,14 +496,20 @@ export function createWindowManager({
     }
   }
 
-  function openSettingsWindow() {
+  function openSettingsWindow(panel = null) {
     const label = 'settings';
     const existing = windowsByLabel.get(label);
     if (existing && !existing.isDestroyed()) {
       existing.focus();
+      if (panel) existing.webContents.send('picto:settings:navigate', panel);
       return;
     }
-    createWindow(label, null, 900, 650);
+    const win = createWindow(label, null, 900, 650);
+    if (panel) {
+      win.webContents.once('did-finish-load', () => {
+        if (!win.isDestroyed()) win.webContents.send('picto:settings:navigate', panel);
+      });
+    }
   }
 
   function openSubscriptionsWindow() {

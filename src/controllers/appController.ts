@@ -8,8 +8,8 @@ export const appController = {
       getApplicationMenuShortcutBindings(),
     ) ?? Promise.resolve();
   },
-  openSettingsWindow(): Promise<void> {
-    return openSettingsWindow();
+  openSettingsWindow(panel?: string): Promise<void> {
+    return openSettingsWindow(panel);
   },
 
   subscribeOsThemeChanged(onChange: (payload: { isDark: boolean }) => void): Promise<() => void> {
