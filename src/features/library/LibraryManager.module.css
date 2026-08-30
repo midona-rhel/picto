@@ -48,23 +48,6 @@
 
 .title { flex: 1; font-size: var(--font-size-lg); font-weight: var(--font-weight-bold); }
 
-.closeBtn {
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.closeBtn:hover { color: var(--color-text-primary); background: var(--color-surface-hover); }
-
 .workspace {
   flex: 1;
   min-height: 0;

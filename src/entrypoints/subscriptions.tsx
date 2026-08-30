@@ -20,6 +20,6 @@ window.addEventListener('beforeunload', () => {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <SubscriptionsScreen />
+    <SubscriptionsScreen standalone />
   </React.StrictMode>,
 );

@@ -17,7 +17,8 @@ import {
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import { ToolbarActualSizeIcon, ToolbarCloseIcon, ToolbarFitIcon } from '../../shared/ui/icons/toolbar-icons';
+import { ToolbarActualSizeIcon, ToolbarFitIcon } from '../../shared/ui/icons/toolbar-icons';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
@@ -436,14 +437,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </button>
             </KbdTooltip>
 
-            <KbdTooltip label="Close" shortcutId="view.closeDetail">
-              <button
-                className={styles.icBtn}
-                onClick={() => void windowController.closeCurrentWindow()}
-              >
-                <ToolbarCloseIcon />
-              </button>
-            </KbdTooltip>
+            <KbdTooltip label="Close" shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
           </div>
         </div>
       )}

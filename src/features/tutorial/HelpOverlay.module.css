@@ -18,8 +18,7 @@
 .coachmark p { margin: 0; color: rgba(255,255,255,.84); font-size: var(--font-size-sm); line-height: 18px; }
 .progress { font-size: var(--font-size-caption); color: rgba(255,255,255,.68); text-transform: capitalize; }
 .error { color: #ffe0e0 !important; }
-.closeButton { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: rgba(255,255,255,.74); cursor: pointer; }
-.closeButton:hover { background: rgba(255,255,255,.14); color: #fff; }
+.closeButton { position: absolute; top: 6px; right: 6px; }
 .actions { position: absolute; right: 16px; bottom: 14px; left: 16px; display: flex; justify-content: space-between; gap: 8px; }
 .actions button, .primaryButton { height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
 .actions button:hover, .primaryButton:hover { background: rgba(255,255,255,.24); }

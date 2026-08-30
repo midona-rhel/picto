@@ -163,21 +163,6 @@
   font-weight: var(--font-weight-bold);
 }
 
-.closeBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px; height: 24px;
-  border: none; border-radius: 4px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  margin-left: auto;
-  -webkit-app-region: no-drag;
-  transition: all 150ms ease;
-}
-.closeBtn:hover { background: var(--color-surface-hover); color: var(--color-text-primary); }
-
 .contentBody {
   flex: 1;
   min-width: 0;

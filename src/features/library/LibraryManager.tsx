@@ -37,6 +37,7 @@ import {
   type SyncRateSample,
 } from './librarySyncPresentation';
 import styles from './LibraryManager.module.css';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 
 interface LibraryConfigResult {
   libraryHistory?: string[];
@@ -569,9 +570,7 @@ export function LibraryManager() {
       <section className={styles.panel}>
         <header className={styles.header} data-window-drag-region="">
           <div className={styles.title}>Library Manager</div>
-          <button className={styles.closeBtn} onClick={() => window.close()} aria-label="Close">
-            <IconX size={14} />
-          </button>
+          <WindowCloseButton onClick={() => window.close()} />
         </header>
 
         <div className={styles.workspace}>

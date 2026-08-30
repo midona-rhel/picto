@@ -5,12 +5,13 @@
  * and displaces inspector actions such as Pin.
  */
 
-import { IconMinus, IconSquare, IconX } from '@tabler/icons-react';
+import { IconMinus, IconSquare } from '@tabler/icons-react';
 import { KbdTooltip } from '../KbdTooltip';
+import { WindowCloseButton } from './WindowCloseButton';
 import styles from './WindowControls.module.css';
 
 function callWindow(method: string) {
-  (window as any).picto?.window?.call(method)?.catch?.(() => {});
+  (window as any).picto?.api?.window?.call(method)?.catch?.(() => {});
 }
 
 export function WindowControls({
@@ -18,7 +19,7 @@ export function WindowControls({
 }: {
   platform?: string;
 } = {}) {
-  if (!/^Win/i.test(platform)) return null;
+  if (!/^(Win|Linux)/i.test(platform)) return null;
 
   return (
     <div className={styles.controls}>
@@ -28,9 +29,7 @@ export function WindowControls({
       <KbdTooltip label="Maximize"><button className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label="Maximize">
         <IconSquare size={12} stroke={1.5} />
       </button></KbdTooltip>
-      <KbdTooltip label="Close"><button className={`${styles.btn} ${styles.closeBtn}`} onClick={() => callWindow('close')} aria-label="Close">
-        <IconX size={16} stroke={1} />
-      </button></KbdTooltip>
+      <KbdTooltip label="Close"><WindowCloseButton /></KbdTooltip>
     </div>
   );
 }

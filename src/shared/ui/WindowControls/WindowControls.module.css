@@ -38,6 +38,12 @@
   background: var(--color-pressed-overlay);
 }
 
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
 .btn.closeBtn:hover {
   color: var(--color-on-primary);
   background: #e81123;

@@ -27,7 +27,6 @@ import {
   IconSettings2,
   IconSortAscending,
   IconSortDescending,
-  IconX,
 } from '@tabler/icons-react';
 import {
   getKeyboardPreset,
@@ -64,6 +63,7 @@ import type { RestorePoint } from '../../shared/types/generated/application/Rest
 import type { LibraryChanged } from '../../shared/types/generated/application/LibraryChanged';
 import type { LibraryStatistics } from '../../shared/types/generated/application/LibraryStatistics';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { checkForUpdates, getUpdateState, installUpdate, onUpdateState, openUpdateRelease, type UpdateState } from '../../platform/updateApi';
 
 // ── Settings row definition ──
@@ -1284,7 +1284,7 @@ export function Settings() {
           <span className={styles.contentTitle}>
             {isSearching ? `Search results for "${search}"` : activePanel.label}
           </span>
-          <button className={styles.closeBtn} onClick={handleClose}><IconX size={14} /></button>
+          <WindowCloseButton onClick={handleClose} />
         </div>
 
         <div className={styles.contentBody}>

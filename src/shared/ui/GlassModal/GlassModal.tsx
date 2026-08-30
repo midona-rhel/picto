@@ -7,11 +7,10 @@
 
 import { useEffect, useId, useRef, useState, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
 import btnStyles from '../../styles/actionButton.module.css';
 import { useShortcutScope } from '../../hooks/useShortcutScope';
-import { KbdTooltip } from '../KbdTooltip';
+import { WindowCloseButton } from '../WindowControls';
 
 export interface GlassModalProps {
   open: boolean;
@@ -99,11 +98,7 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
       >
         <div className={styles.header}>
           <span className={styles.title} id={titleId}>{title}</span>
-          <KbdTooltip label="Close" shortcutId="view.closeDetail">
-            <button className={styles.closeBtn} onClick={startClose} type="button" aria-label="Close">
-              <IconX size={14} />
-            </button>
-          </KbdTooltip>
+          <WindowCloseButton onClick={startClose} />
         </div>
         <div className={`${styles.body} ${flush ? styles.bodyFlush : ''}`}>
           {children}

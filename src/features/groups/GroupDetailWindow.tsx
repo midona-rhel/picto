@@ -3,7 +3,7 @@ import { IconPin, IconPinFilled } from '@tabler/icons-react';
 import { viewerController } from '../../controllers/viewerController';
 import { windowController } from '../../controllers/windowController';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import { ToolbarCloseIcon } from '../../shared/ui/icons/toolbar-icons';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { ModalLayer } from '../modals/ModalLayer';
 import { TagSelectPanel } from '../tags/TagSelectPanel';
 import { FolderPickerPanel } from '../folders/FolderPickerPanel';
@@ -84,11 +84,7 @@ export function GroupDetailWindow({ groupId }: { groupId: number }) {
               {alwaysOnTop ? <IconPinFilled size={16} /> : <IconPin size={16} />}
             </button>
           </KbdTooltip>
-          <KbdTooltip label="Close" shortcutId="view.closeDetail">
-            <button className={detailStyles.icBtn} onClick={() => void windowController.closeCurrentWindow()}>
-              <ToolbarCloseIcon />
-            </button>
-          </KbdTooltip>
+          <KbdTooltip label="Close" shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
         </div>
       </div>
 

@@ -71,27 +71,6 @@
   text-overflow: ellipsis;
 }
 
-.closeBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 5px;
-  background: none;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.closeBtn:hover {
-  color: var(--color-text-primary);
-  background: var(--color-subtle-overlay);
-}
-
 /* ── Body ── */
 
 .body {

@@ -1,7 +1,8 @@
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties,
 } from 'react';
-import { IconChevronLeft, IconChevronRight, IconQuestionMark, IconX } from '@tabler/icons-react';
+import { IconChevronLeft, IconChevronRight, IconQuestionMark } from '@tabler/icons-react';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 import { GUIDED_TOUR_STEPS, type TutorialPlacement } from './tutorialSteps';
 import {
   executeTutorialActions, finishTutorialSession, startTutorialSession, waitForTutorialCondition,
@@ -204,7 +205,7 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
           {mode === 'tour' && pointerStyle && card && <span className={styles.targetPointer} data-placement={card.placement} style={pointerStyle} />}
           {mode === 'launcher' && (
             <section className={styles.exploreCard} data-tutorial-controls onPointerDown={(event) => event.stopPropagation()}>
-              <button className={styles.closeButton} type="button" aria-label="Close help" onClick={() => setMode('closed')}><IconX size={14} /></button>
+              <div className={styles.closeButton}><WindowCloseButton ariaLabel="Close help" onClick={() => setMode('closed')} /></div>
               <strong>Explore Picto</strong>
               <span>The guided tour opens a temporary offline library and restores this one when you exit.</span>
               {error && <span className={styles.error}>{error}</span>}
@@ -213,7 +214,7 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
           )}
           {mode === 'tour' && active && card && (
             <section className={styles.coachmark} data-tutorial-controls style={{ top: card.top, left: card.left } as CSSProperties} role="dialog" aria-modal="true" aria-labelledby="picto-help-title" onPointerDown={(event) => event.stopPropagation()}>
-              <button className={styles.closeButton} type="button" aria-label="Exit tutorial" disabled={busy} onClick={() => void exit()}><IconX size={14} /></button>
+              <div className={styles.closeButton}><WindowCloseButton ariaLabel="Exit tutorial" disabled={busy} onClick={() => void exit()} /></div>
               <span className={styles.progress}>{active.chapter.replace('-', ' ')} · {index + 1} of {GUIDED_TOUR_STEPS.length}</span>
               <h2 id="picto-help-title">{active.title}</h2>
               <p>{busy ? 'Preparing the real interface…' : active.description}</p>

@@ -40,8 +40,9 @@ import {
   subscriptionsWorkspaceSnapshotAtom,
 } from '../../state/subscriptionsWorkspace';
 import styles from './SubscriptionsScreen.module.css';
+import { WindowCloseButton } from '../../shared/ui/WindowControls';
 
-export function SubscriptionsScreen() {
+export function SubscriptionsScreen({ standalone = false }: { standalone?: boolean } = {}) {
   const [snapshot, setSnapshot] = useAtom(subscriptionsWorkspaceSnapshotAtom);
   const [selection, setSelection] = useAtom(subscriptionsSelectionAtom);
   const [detail, setDetail] = useAtom(subscriptionsDetailAtom);
@@ -334,6 +335,7 @@ export function SubscriptionsScreen() {
 
   return (
     <div className={styles.root}>
+      {standalone ? <div className={styles.standaloneTitlebar} data-window-drag-region=""><WindowCloseButton /></div> : null}
       <main className={styles.detailPane}>
         {selection == null && snapshot ? (
           <SubscriptionsGrid
