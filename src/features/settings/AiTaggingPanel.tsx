@@ -147,6 +147,8 @@ export function AiTaggingPanel({
             const operationPercent = operationTotal > 0
               ? Math.max(0, Math.min(100, ((m.downloadedBytes ?? 0) / operationTotal) * 100))
               : 0;
+            const operationActive = modelDownloading || modelOptimizing;
+            const operationLabel = modelOptimizing ? 'Optimizing' : 'Downloading';
             const displayLabel = MODEL_SHORT_LABELS[m.slug] ?? m.label;
             const metadata = `${m.dataset} · ${fmtSize(m.sizeBytes)} · ≈${Math.round(m.referenceInferenceMs)} ms/image`;
             return (
@@ -158,8 +160,12 @@ export function AiTaggingPanel({
                     <KbdTooltip label={metadata}><div className={styles.modelMeta}>{metadata}</div></KbdTooltip>
                   </div>
                   <div className={styles.modelState}>
-                    {modelDownloading || modelOptimizing ? (
+                    {operationActive ? (
                       <div className={styles.downloadWrap}>
+                        <span className={styles.operationStatus} aria-live="polite">
+                          <span className={styles.operationLabel}>{operationLabel}</span>
+                          <span className={styles.operationPercent}>{Math.round(operationPercent)}%</span>
+                        </span>
                         <button
                           className={`${actionStyles.btn} ${styles.modelAction}`}
                           type="button"
@@ -204,17 +210,21 @@ export function AiTaggingPanel({
                       </button>
                     )}
                   </div>
-                  {modelDownloading || modelOptimizing ? (
-                    <div
-                      className={styles.modelProgress}
-                      style={{ width: `${operationPercent}%` }}
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(operationPercent)}
-                      aria-label={`${modelOptimizing ? 'Optimizing' : 'Downloading'} ${m.label}`}
+                  <div
+                    className={`${styles.modelProgressTrack} ${operationActive ? styles.modelProgressTrackActive : ''}`.trim()}
+                    data-model-progress={m.slug}
+                    role={operationActive ? 'progressbar' : undefined}
+                    aria-valuemin={operationActive ? 0 : undefined}
+                    aria-valuemax={operationActive ? 100 : undefined}
+                    aria-valuenow={operationActive ? Math.round(operationPercent) : undefined}
+                    aria-label={operationActive ? `${operationLabel} ${m.label}` : undefined}
+                    aria-hidden={operationActive ? undefined : true}
+                  >
+                    <span
+                      className={styles.modelProgressFill}
+                      style={{ transform: `scaleX(${operationActive ? operationPercent / 100 : 0})` }}
                     />
-                  ) : null}
+                  </div>
                 </div>
               </div>
             );

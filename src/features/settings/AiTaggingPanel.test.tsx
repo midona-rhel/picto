@@ -122,9 +122,15 @@ describe('AiTaggingPanel', () => {
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
     await renderPanel();
     await screen.findByRole('button', { name: 'Download' });
+    const row = screen.getByText('WD14 SWN').closest('[class*="modelRow"]')!;
+    const progressSlot = row.querySelector(`[data-model-progress="${model.slug}"]`);
+    expect(progressSlot).toHaveAttribute('aria-hidden', 'true');
     await setupUser().click(screen.getByRole('button', { name: 'Download' }));
     expect(mocks.download).toHaveBeenCalledWith(model.slug);
-    expect(await screen.findByRole('progressbar')).toBeInTheDocument();
+    expect(await screen.findByRole('progressbar')).toBe(progressSlot);
+    expect(screen.getByText('Downloading')).toBeInTheDocument();
+    expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.getByText('WD14 SWN').closest('[class*="modelRow"]')).toBe(row);
     expect(screen.queryByText('Downloading…')).not.toBeInTheDocument();
     await act(async () => { resolveDownload(status(true)); });
     await waitFor(() => expect(mocks.status.mock.calls.length).toBeGreaterThan(1));
