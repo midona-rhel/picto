@@ -47,7 +47,6 @@ export function QueryRow({
   onOpenAuth: () => void;
   onShowStats: () => void;
 }) {
-  const label = query.display_name?.trim() || query.query_text;
   const source = getSiteLabel(query.site_id, sites);
 
   return (
@@ -60,7 +59,7 @@ export function QueryRow({
     >
       <span className={styles.qCellSource} title={source}>{source}</span>
       <KbdTooltip label="Double-click for source details"><span className={styles.qCellQuery}>
-        <span className={styles.qName} title={query.query_text}>{label}</span>
+        <span className={styles.qName} title={query.query_text}>{query.query_text}</span>
         {query.source_history_complete && query.completed_initial_run && (
           <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title="Checked all available posts" />
         )}

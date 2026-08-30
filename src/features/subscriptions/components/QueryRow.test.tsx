@@ -60,7 +60,7 @@ describe('QueryRow', () => {
   it('opens source details from row content but not from action controls', () => {
     const callbacks = renderRow();
 
-    fireEvent.doubleClick(screen.getByText('Creator'));
+    fireEvent.doubleClick(screen.getByText('creator-name'));
     expect(callbacks.onShowStats).toHaveBeenCalledTimes(1);
 
     fireEvent.doubleClick(screen.getByLabelText('Run query now'));
@@ -71,7 +71,8 @@ describe('QueryRow', () => {
     renderRow();
 
     expect(screen.getByText('fanbox')).toHaveAttribute('title', 'fanbox');
-    expect(screen.getByText('Creator')).toHaveAttribute('title', 'creator-name');
+    expect(screen.getByText('creator-name')).toHaveAttribute('title', 'creator-name');
+    expect(screen.queryByText('Creator')).not.toBeInTheDocument();
     expect(screen.queryByText('never')).not.toBeInTheDocument();
   });
 
