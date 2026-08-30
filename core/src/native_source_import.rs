@@ -130,6 +130,7 @@ async fn prepare_member(
             source_key: source_key.to_string(),
             source_item_key: source_item_key.to_string(),
             source_text: (!source_text.is_empty()).then(|| source_text.to_string()),
+            source_attempt_id: None,
         }),
         imported_at_ms,
         captured_at_ms: post.created_at.as_deref().and_then(parse_source_time_ms),

@@ -361,6 +361,8 @@ pub struct SourceIdentity {
     pub source_key: String,
     pub source_item_key: String,
     pub source_text: Option<String>,
+    #[serde(default)]
+    pub source_attempt_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

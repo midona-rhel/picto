@@ -38,28 +38,6 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
             [],
             |transaction, _| {
                 transaction.execute(
-                    "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
-                     SELECT DISTINCT attempt.attempt_id, root.root_id, item.stable_key
-                     FROM source_post_attempt attempt
-                     JOIN subscription_run_query run_query USING(run_query_id)
-                     JOIN subscription_run run USING(run_id)
-                     JOIN source_post post USING(source_post_id)
-                     JOIN library_root root
-                       ON root.root_id = post.root_item_id
-                       OR root.root_id IN (
-                           SELECT media_item_id FROM source_item media
-                           WHERE media.source_post_id = post.source_post_id
-                             AND media.media_item_id IS NOT NULL
-                       )
-                     JOIN library_item item ON item.local_id = root.root_id
-                     WHERE attempt.state NOT IN ('added', 'skipped', 'failed', 'cancelled')
-                       AND root.imported_at_ms >=
-                           CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
-                           + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER)
-                     ON CONFLICT DO NOTHING",
-                    [],
-                )?;
-                transaction.execute(
                     "UPDATE source_post_attempt
                      SET state = 'added', terminal_reason = NULL, settled_at = ?1
                      WHERE state NOT IN ('added', 'skipped', 'failed', 'cancelled')
@@ -78,13 +56,12 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                            SELECT 1
                            FROM source_post post
                            JOIN library_root root ON root.root_id = post.root_item_id
-                           JOIN subscription_run_query run_query
-                             ON run_query.run_query_id = source_post_attempt.run_query_id
-                           JOIN subscription_run run USING(run_id)
                            WHERE post.source_post_id = source_post_attempt.source_post_id
-                             AND root.imported_at_ms <
-                                 CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
-                                 + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER)
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM source_attempt_root result
+                                 WHERE result.attempt_id = source_post_attempt.attempt_id
+                                   AND result.root_id IS NOT NULL
+                             )
                        )",
                     [now],
                 )?;
@@ -421,9 +398,11 @@ pub fn settled_post_outcome(
                 let row = transaction
                     .query_row(
                         "SELECT attempt.attempt_id, post.source_post_id, post.root_item_id,
-                            root.imported_at_ms >=
-                                CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
-                                + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER),
+                            EXISTS(
+                                SELECT 1 FROM source_attempt_root result
+                                WHERE result.attempt_id = attempt.attempt_id
+                                  AND result.root_id IS NOT NULL
+                            ),
                             COUNT(item.source_item_id),
                             COALESCE(SUM(item.state = 'pending'), 0),
                             COALESCE(SUM(item.state = 'downloaded'), 0),
@@ -431,7 +410,6 @@ pub fn settled_post_outcome(
                             COALESCE(SUM(item.state = 'failed'), 0),
                             COALESCE(SUM(item.state = 'deleted'), 0)
                      FROM subscription_run_query run_query
-                     JOIN subscription_run run USING(run_id)
                      JOIN subscription_query definition USING(query_id)
                      JOIN source_post post
                        ON post.site_id = definition.site_id AND post.post_key = ?2
@@ -463,7 +441,7 @@ pub fn settled_post_outcome(
                     attempt_id,
                     source_post_id,
                     root_id,
-                    created_this_run,
+                    created_this_attempt,
                     total,
                     pending,
                     downloaded,
@@ -482,7 +460,7 @@ pub fn settled_post_outcome(
                     ));
                 }
                 let outcome = if root_id.is_some() {
-                    if created_this_run {
+                    if created_this_attempt {
                         let roots = {
                             let mut statement = transaction.prepare(
                                 "SELECT DISTINCT root.root_id, item.stable_key
@@ -662,6 +640,28 @@ pub fn source_item_id(
                  JOIN source_post post ON post.source_post_id = item.source_post_id
                  WHERE post.site_id = ?1 AND post.post_key = ?2 AND item.item_key = ?3",
                     params![site_id, post_key, item_key],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub fn source_attempt_id(
+    application: &LibraryApplication,
+    run_query_id: i64,
+    post_key: &str,
+) -> Result<i64, String> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            connection
+                .query_row(
+                    "SELECT attempt.attempt_id
+                     FROM source_post_attempt attempt
+                     JOIN source_post post USING(source_post_id)
+                     WHERE attempt.run_query_id = ?1 AND post.post_key = ?2",
+                    params![run_query_id, post_key],
                     |row| row.get(0),
                 )
                 .map_err(Into::into)
@@ -1502,6 +1502,12 @@ mod tests {
                         [],
                     )?;
                     transaction.execute(
+                        "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
+                         SELECT attempt_id, 5000, 'run-created-root'
+                         FROM source_post_attempt WHERE run_query_id = ?1",
+                        [first.run_query_id],
+                    )?;
+                    transaction.execute(
                         "UPDATE source_item SET state = 'ingested' WHERE source_item_id = ?1",
                         [ids["media-1"]],
                     )?;
@@ -1542,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn same_second_existing_root_is_not_counted_as_added() {
+    fn root_created_by_an_earlier_post_in_the_same_run_is_not_counted_as_added() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let definition = NewSubscription {
@@ -1562,12 +1568,12 @@ mod tests {
             .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
             .unwrap();
         application
-            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00.900Z")
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00.100Z")
             .unwrap();
         let query = claim_next_query(
             &application,
             &mut DomainSchedule::new(),
-            "2026-08-29T00:00:00.901Z",
+            "2026-08-29T00:00:00.200Z",
         )
         .unwrap()
         .unwrap();
@@ -1590,7 +1596,7 @@ mod tests {
                     canonical_url: None,
                 }],
             },
-            "2026-08-29T00:00:00.902Z",
+            "2026-08-29T00:00:00.500Z",
         )
         .unwrap();
         mark_source_item_staged(
@@ -1600,10 +1606,12 @@ mod tests {
             "existing-hash",
             "/tmp/existing",
             1,
-            "2026-08-29T00:00:00.903Z",
+            "2026-08-29T00:00:00.600Z",
         )
         .unwrap();
-        let imported_at_ms = DateTime::parse_from_rfc3339("2026-08-29T00:00:00.100Z")
+        // This root was created after the run started but before this post was
+        // traversed, as happens when two posts in one run reuse the same media.
+        let imported_at_ms = DateTime::parse_from_rfc3339("2026-08-29T00:00:00.300Z")
             .unwrap()
             .timestamp_millis();
         application
@@ -2090,6 +2098,12 @@ mod tests {
                               media_count, total_size_bytes)
                          VALUES (6000, 'recovered', 6000, 1787976003000, 1787976003000, 1, 1)",
                         [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
+                         SELECT attempt_id, 6000, 'recovered-root'
+                         FROM source_post_attempt WHERE run_query_id = ?1",
+                        [query.run_query_id],
                     )?;
                     transaction.execute(
                         "UPDATE source_item SET state = 'ingested', media_item_id = 6000

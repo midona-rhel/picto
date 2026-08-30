@@ -166,6 +166,7 @@ async fn prepare_fixture(
             source_key: format!("twitter:{post_key}"),
             source_item_key: item_key.into(),
             source_text: Some("{\"tutorial\":true,\"network\":false}".into()),
+            source_attempt_id: None,
         }),
         imported_at_ms: chrono::Utc::now().timestamp_millis(),
         captured_at_ms: Some(-14_221_440_000_000),

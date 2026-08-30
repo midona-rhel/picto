@@ -135,6 +135,7 @@ fn synthetic(index: usize, rng: &mut Lcg) -> PreparedImport {
             source_key: "scale-fixture".into(),
             source_item_key: format!("scale-{index}"),
             source_text: Some(source_text),
+            source_attempt_id: None,
         }),
         imported_at_ms: 1_700_000_000_000 + index as i64,
         captured_at_ms: None,

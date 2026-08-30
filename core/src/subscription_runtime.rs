@@ -522,6 +522,7 @@ async fn handle_source_event(
         SourceEvent::MediaDownloaded(mut item) if atomic_gallery => {
             let source_item_id =
                 ensure_source_item_recorded(application, query, &item, recorded_source_items)?;
+            attach_source_attempt(application, query, &mut item)?;
             persist_downloaded_media(application, std::slice::from_mut(&mut item))?;
             state::mark_source_item_staged(
                 application,
@@ -556,6 +557,7 @@ async fn handle_source_event(
         SourceEvent::MediaDownloaded(mut item) => {
             let source_item_id =
                 ensure_source_item_recorded(application, query, &item, recorded_source_items)?;
+            attach_source_attempt(application, query, &mut item)?;
             persist_downloaded_media(application, std::slice::from_mut(&mut item))?;
             state::mark_source_item_staged(
                 application,
@@ -647,6 +649,21 @@ fn ensure_source_item_recorded(
         &item.post.post_key,
         &source.source_item_key,
     )
+}
+
+fn attach_source_attempt(
+    application: &LibraryApplication,
+    query: &ClaimedQueryRun,
+    item: &mut DownloadedItem,
+) -> Result<(), String> {
+    let attempt_id =
+        state::source_attempt_id(application, query.run_query_id, &item.post.post_key)?;
+    item.input
+        .source_identity
+        .as_mut()
+        .ok_or_else(|| "A subscription item needs source identity".to_string())?
+        .source_attempt_id = Some(attempt_id);
+    Ok(())
 }
 
 fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
@@ -1002,6 +1019,7 @@ mod tests {
                     source_key: "ehentai:gallery".into(),
                     source_item_key: item_key.into(),
                     source_text: None,
+                    source_attempt_id: None,
                 }),
                 imported_at_ms: 1_700_000_000_000,
                 captured_at_ms: None,
@@ -1317,6 +1335,7 @@ mod tests {
                             source_key: format!("{site_id}:post-1"),
                             source_item_key: "media-1".into(),
                             source_text: None,
+                            source_attempt_id: None,
                         }),
                         imported_at_ms: 1_700_000_000_000,
                         captured_at_ms: None,
@@ -1491,6 +1510,7 @@ mod tests {
                         source_key: "ehentai:gallery-1".into(),
                         source_item_key: item_key.into(),
                         source_text: None,
+                        source_attempt_id: None,
                     }),
                     imported_at_ms: chrono::DateTime::parse_from_rfc3339("2026-08-30T00:00:01Z")
                         .unwrap()
@@ -1636,6 +1656,7 @@ mod tests {
                         source_key: "twitter:deleted-post".into(),
                         source_item_key: "media-1".into(),
                         source_text: None,
+                        source_attempt_id: None,
                     }),
                     imported_at_ms: 1_700_000_000_000,
                     captured_at_ms: None,

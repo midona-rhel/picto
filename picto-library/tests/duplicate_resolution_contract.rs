@@ -42,6 +42,7 @@ fn imported(
             source_key: "fixture".into(),
             source_item_key: key.into(),
             source_text: Some(format!("source {key}")),
+            source_attempt_id: None,
         }),
         imported_at_ms: 1_700_000_000_000,
         captured_at_ms: Some(1_600_000_000_000),

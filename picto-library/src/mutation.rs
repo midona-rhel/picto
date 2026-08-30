@@ -1244,6 +1244,14 @@ impl Library {
                     root_ids.push(output.root_id);
                     if output.created_root {
                         created_root_ids.push(output.root_id);
+                        if let Some(attempt_id) = input
+                            .source_identity
+                            .as_ref()
+                            .and_then(|source| source.source_attempt_id)
+                        {
+                            record_source_attempt_root(transaction, attempt_id, output.root_id)?;
+                            resources.insert("subscriptions".to_owned());
+                        }
                     }
                     resources.extend(output.resources);
                     bitmap_keys.extend(output.bitmap_keys);
@@ -1406,6 +1414,9 @@ impl Library {
                 }
                 let winning_collection_id = existing_collections.first().copied();
                 let preserve_singleton_collection = !reuse_identity && ordered_roots.len() == 1;
+                let creates_collection = (ordered_roots.len() >= 2
+                    || preserve_singleton_collection)
+                    && winning_collection_id.is_none();
                 let (published_root, mut affected) =
                     if ordered_roots.len() >= 2 || preserve_singleton_collection {
                         let output = crate::group::organize(
@@ -1459,6 +1470,18 @@ impl Library {
                         input.modified_at_ms,
                     )?;
                     resources.insert("tasks".to_owned());
+                }
+                if !created_root_ids.is_empty() || creates_collection {
+                    for attempt_id in input
+                        .members
+                        .iter()
+                        .filter_map(|member| member.source_identity.as_ref())
+                        .filter_map(|source| source.source_attempt_id)
+                        .collect::<BTreeSet<_>>()
+                    {
+                        record_source_attempt_root(transaction, attempt_id, published_root)?;
+                        resources.insert("subscriptions".to_owned());
+                    }
                 }
                 resources.extend(["tags".to_owned(), "folders".to_owned()]);
                 let receipt = PublicationCoordinator::receipt(
@@ -7616,6 +7639,22 @@ fn stage_delete_ids(
     for id in ids {
         insert.execute([id])?;
     }
+    Ok(())
+}
+
+fn record_source_attempt_root(
+    transaction: &rusqlite::Transaction<'_>,
+    attempt_id: i64,
+    root_id: RootId,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
+         SELECT ?1, item.local_id, item.stable_key
+         FROM library_item item
+         WHERE item.local_id = ?2
+         ON CONFLICT DO NOTHING",
+        rusqlite::params![attempt_id, root_id.0],
+    )?;
     Ok(())
 }
 
