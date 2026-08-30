@@ -81,6 +81,22 @@ struct AttemptSequenceEvidence {
     attempts: Vec<AttemptEvidence>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct ResetReplayEvidence {
+    attempts: AttemptSequenceEvidence,
+    roots_before: i64,
+    roots_after: i64,
+}
+
+struct CertificationPhases<'a> {
+    first: &'a Evidence,
+    first_attempts: &'a AttemptSequenceEvidence,
+    final_evidence: &'a Evidence,
+    continuation_attempts: &'a AttemptSequenceEvidence,
+    reset_replay: &'a ResetReplayEvidence,
+    pacing: &'a PacingEvidence,
+}
+
 /// Certifies one real source against Picto's replacement subscription, ingest,
 /// collection, blob, and restart boundaries. The source is selected through
 /// environment variables by `scripts/verify-sites.mjs`.
@@ -194,17 +210,43 @@ async fn certify_selected_source() -> Result<(), String> {
         }
     }
 
+    let roots_before_reset = root_count(&reopened)?;
+    reopened.reset_subscription_library(subscription_id).await?;
+    validate_reset_state(&reopened, subscription_id)?;
+    let reset_run = execute_run(&reopened, subscription_id, 1).await?;
+    require_success(reset_run, &reopened)?;
+    let reset_attempts = read_attempt_sequence(&reopened, reset_run.run_id, 1)?;
+    if reset_attempts.traversed == 0 {
+        return Err("reset replay traversed no source posts".into());
+    }
+    let roots_after_reset = root_count(&reopened)?;
+    if roots_after_reset - roots_before_reset != reset_attempts.added as i64 {
+        return Err(format!(
+            "reset replay added {} canonical roots for {} added posts",
+            roots_after_reset - roots_before_reset,
+            reset_attempts.added
+        ));
+    }
+    let reset_replay = ResetReplayEvidence {
+        attempts: reset_attempts,
+        roots_before: roots_before_reset,
+        roots_after: roots_after_reset,
+    };
+
     let pacing = validate_request_pacing(&request_trace)?;
     write_report(
         &site_id,
         &query_text,
         batch_size,
         auth_mode,
-        &first,
-        &first_attempts,
-        &continued,
-        &second_attempts,
-        &pacing,
+        &CertificationPhases {
+            first: &first,
+            first_attempts: &first_attempts,
+            final_evidence: &continued,
+            continuation_attempts: &second_attempts,
+            reset_replay: &reset_replay,
+            pacing: &pacing,
+        },
     )?;
     println!(
         "subscription_certification: site={} first_posts={} first_media={} collections={} final_posts={} restart=passed continuation=passed",
@@ -214,6 +256,67 @@ async fn certify_selected_source() -> Result<(), String> {
         first.collection_count(),
         continued.posts.len(),
     );
+    Ok(())
+}
+
+fn root_count(application: &LibraryApplication) -> Result<i64, String> {
+    application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))?)
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn validate_reset_state(
+    application: &LibraryApplication,
+    subscription_id: i64,
+) -> Result<(), String> {
+    let stale_rows = application
+        .library()
+        .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            let runs: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM subscription_run WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            let linked_posts: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM subscription_source_post WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            let issues: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM subscription_issue WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            let stale_query_state: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM subscription_query
+                 WHERE subscription_id = ?1
+                   AND (resume_cursor IS NOT NULL OR initial_run_complete != 0
+                        OR last_success_at IS NOT NULL OR last_failure_at IS NOT NULL
+                        OR last_failure_kind IS NOT NULL OR last_failure_message IS NOT NULL)",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            Ok(runs + linked_posts + issues + stale_query_state)
+        })
+        .map_err(|error| error.to_string())?;
+    if stale_rows != 0 {
+        return Err(format!(
+            "subscription reset retained {stale_rows} run, post, issue, or cursor records"
+        ));
+    }
+    let staging = application
+        .root()
+        .join("source-runners/native")
+        .join(format!("subscription-{subscription_id}"));
+    if staging.exists() {
+        return Err(format!(
+            "subscription reset retained native staging at {}",
+            staging.display()
+        ));
+    }
     Ok(())
 }
 
@@ -877,11 +980,7 @@ fn write_report(
     query: &str,
     batch_size: u32,
     auth_mode: &'static str,
-    first: &Evidence,
-    first_attempts: &AttemptSequenceEvidence,
-    final_evidence: &Evidence,
-    continuation_attempts: &AttemptSequenceEvidence,
-    pacing: &PacingEvidence,
+    phases: &CertificationPhases<'_>,
 ) -> Result<(), String> {
     let Some(path) = std::env::var_os("PICTO_LIVE_SUBSCRIPTION_REPORT") else {
         return Ok(());
@@ -898,21 +997,22 @@ fn write_report(
         "authentication": auth_mode,
         "requested_source_posts": batch_size,
         "first_fetch": {
-            "traversed_posts": first.traversed_post_count,
-            "materialized_posts": first.posts.len(),
-            "media_items": first.media_count(),
-            "collections": first.collection_count(),
-            "posts": first.posts,
-            "attempt_sequence": first_attempts,
+            "traversed_posts": phases.first.traversed_post_count,
+            "materialized_posts": phases.first.posts.len(),
+            "media_items": phases.first.media_count(),
+            "collections": phases.first.collection_count(),
+            "posts": phases.first.posts,
+            "attempt_sequence": phases.first_attempts,
         },
         "final_state": {
-            "traversed_posts": final_evidence.traversed_post_count,
-            "materialized_posts": final_evidence.posts.len(),
-            "media_items": final_evidence.media_count(),
-            "collections": final_evidence.collection_count(),
-            "continuation_attempt_sequence": continuation_attempts,
+            "traversed_posts": phases.final_evidence.traversed_post_count,
+            "materialized_posts": phases.final_evidence.posts.len(),
+            "media_items": phases.final_evidence.media_count(),
+            "collections": phases.final_evidence.collection_count(),
+            "continuation_attempt_sequence": phases.continuation_attempts,
         },
-        "request_pacing": pacing,
+        "request_pacing": phases.pacing,
+        "reset_replay": phases.reset_replay,
         "checks": {
             "provider_request_pacing": true,
             "source_identity_persisted": true,
@@ -931,6 +1031,8 @@ fn write_report(
             "successful_runs_have_only_terminal_attempts": true,
             "added_post_budget_not_exceeded": true,
             "downloaded_files_are_newly_retained_files": true,
+            "reset_clears_progress_cursors_issues_and_staging": true,
+            "reset_replay_does_not_duplicate_canonical_roots": true,
         }
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap())

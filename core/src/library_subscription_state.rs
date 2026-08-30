@@ -53,7 +53,9 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                        )
                      JOIN library_item item ON item.local_id = root.root_id
                      WHERE attempt.state NOT IN ('added', 'skipped', 'failed', 'cancelled')
-                       AND root.imported_at_ms >= unixepoch(run.created_at) * 1000
+                       AND root.imported_at_ms >=
+                           CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
+                           + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER)
                      ON CONFLICT DO NOTHING",
                     [],
                 )?;
@@ -80,7 +82,9 @@ pub fn recover(application: &LibraryApplication, now: &str) -> Result<RecoveryCo
                              ON run_query.run_query_id = source_post_attempt.run_query_id
                            JOIN subscription_run run USING(run_id)
                            WHERE post.source_post_id = source_post_attempt.source_post_id
-                             AND root.imported_at_ms < unixepoch(run.created_at) * 1000
+                             AND root.imported_at_ms <
+                                 CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
+                                 + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER)
                        )",
                     [now],
                 )?;
@@ -405,7 +409,9 @@ pub fn settled_post_outcome(
                 let row = transaction
                     .query_row(
                         "SELECT attempt.attempt_id, post.source_post_id, post.root_item_id,
-                            root.imported_at_ms >= unixepoch(run.created_at) * 1000,
+                            root.imported_at_ms >=
+                                CAST(strftime('%s', run.created_at) AS INTEGER) * 1000
+                                + CAST(substr(strftime('%f', run.created_at), 4, 3) AS INTEGER),
                             COUNT(item.source_item_id),
                             COALESCE(SUM(item.state = 'pending'), 0),
                             COALESCE(SUM(item.state = 'downloaded'), 0),
@@ -1521,6 +1527,126 @@ mod tests {
             })
             .unwrap();
         assert_eq!(statuses, ["succeeded", "running"]);
+    }
+
+    #[test]
+    fn same_second_existing_root_is_not_counted_as_added() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Exact duplicate".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-29T00:00:00.900Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:00.901Z",
+        )
+        .unwrap()
+        .unwrap();
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: query.site_id.clone(),
+                post_key: "duplicate".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![NormalizedItem {
+                    item_key: "duplicate:media".into(),
+                    position: 0,
+                    media_url: None,
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-29T00:00:00.902Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["duplicate:media"],
+            "existing-hash",
+            "/tmp/existing",
+            1,
+            "2026-08-29T00:00:00.903Z",
+        )
+        .unwrap();
+        let imported_at_ms = DateTime::parse_from_rfc3339("2026-08-29T00:00:00.100Z")
+            .unwrap()
+            .timestamp_millis();
+        application
+            .library()
+            .auxiliary_write(
+                WorkPriority::CanonicalIngest,
+                ["subscriptions".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute(
+                        "INSERT INTO library_item(local_id, stable_key, item_kind)
+                         VALUES (7000, 'existing-root', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, content_hash, file_path, mime, size_bytes)
+                         VALUES (7001, 'existing-hash', '/tmp/existing', 'image/png', 1)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_item(media_id, media_name, file_id)
+                         VALUES (7000, 'existing', 7001)",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root
+                             (root_id, name, cover_media_id, imported_at_ms, modified_at_ms,
+                              media_count, total_size_bytes)
+                         VALUES (7000, 'existing', 7000, ?1, ?1, 1, 1)",
+                        [imported_at_ms],
+                    )?;
+                    transaction.execute(
+                        "UPDATE source_item SET state = 'ingested', media_item_id = 7000
+                         WHERE source_item_id = ?1",
+                        [ids["duplicate:media"]],
+                    )?;
+                    transaction.execute(
+                        "UPDATE source_post SET root_item_id = 7000
+                         WHERE source_post_id = (
+                             SELECT source_post_id FROM source_item WHERE source_item_id = ?1
+                         )",
+                        [ids["duplicate:media"]],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            settled_post_outcome(&application, &query, "duplicate").unwrap(),
+            SourcePostOutcome::Skipped {
+                reason: SkipReason::ExactDuplicate,
+            }
+        );
     }
 
     #[test]
