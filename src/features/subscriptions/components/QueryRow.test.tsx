@@ -67,6 +67,14 @@ describe('QueryRow', () => {
     expect(callbacks.onShowStats).toHaveBeenCalledTimes(1);
   });
 
+  it('presents the provider as the source and the configured text as the query', () => {
+    renderRow();
+
+    expect(screen.getByText('fanbox')).toHaveAttribute('title', 'fanbox');
+    expect(screen.getByText('Creator')).toHaveAttribute('title', 'creator-name');
+    expect(screen.queryByText('never')).not.toBeInTheDocument();
+  });
+
   it('runs only this query and describes pausing as putting it on hold', () => {
     const callbacks = renderRow();
 

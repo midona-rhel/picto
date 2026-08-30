@@ -101,7 +101,7 @@ impl NativeSourceAdapter for OnlyFansAdapter {
             id: "onlyfans",
             display_name: "OnlyFans",
             domain: "onlyfans.com",
-            partitions: &["purchased", "messages", "feed"],
+            partitions: &["messages", "purchased", "feed"],
             anonymous: false,
         }
     }
@@ -986,7 +986,7 @@ mod tests {
         let adapter = adapter();
         assert_eq!(
             adapter.descriptor().partitions,
-            &["purchased", "messages", "feed"]
+            &["messages", "purchased", "feed"]
         );
         assert_eq!(
             normalized_username("https://onlyfans.com/FixtureCreator/").unwrap(),

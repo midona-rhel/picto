@@ -730,7 +730,7 @@
 
 .qRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.28fr) 76px 76px minmax(82px, 110px) 128px;
+  grid-template-columns: minmax(90px, 0.28fr) minmax(0, 1fr) 76px 76px 128px;
   gap: 10px;
   min-width: 0;
 }
@@ -739,11 +739,12 @@
   min-width: 0;
 }
 
-.qCellName {
+.qCellQuery {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .qName {
@@ -778,7 +779,8 @@
   white-space: nowrap;
 }
 
-.qCellSite {
+.qCellSource {
+  min-width: 0;
   color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -853,10 +855,10 @@
 
 @container (max-width: 440px) {
   .qRow {
-    grid-template-columns: minmax(0, 1fr) 44px 44px minmax(82px, 105px) 128px;
+    grid-template-columns: minmax(0, 1fr) 44px 44px 128px;
   }
 
-  .qCellSite {
+  .qCellSource {
     display: none;
   }
 }

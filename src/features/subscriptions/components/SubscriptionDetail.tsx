@@ -369,11 +369,10 @@ export function SubscriptionDetail({
               {subscription.queries.length > 0 ? (
                 <div className={`${styles.qTable} ${styles.subscriptionTable}`.trim()}>
                   <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.qRow}`}>
-                    <span>Source</span>
-                    <span className={styles.qCellSite}>Site</span>
+                    <span className={styles.qCellSource}>Source</span>
+                    <span>Query</span>
                     <span className={styles.qCellNum}>Posts</span>
                     <span className={styles.qCellNum}>Media</span>
-                    <span>Last check</span>
                     <span />
                   </div>
                   {subscription.queries.map((query) => {
@@ -464,8 +463,8 @@ export function SubscriptionDetail({
       <GlassModal open={statsQuery != null} onClose={() => setStatsQuery(null)} title="Source details" size="sm">
         {statsQuery && (
           <div className={styles.queryStats}>
-            <div><span>Source</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
-            <div><span>Site</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
+            <div><span>Source</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
+            <div><span>Query</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
             <div><span>Posts</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
             <div><span>Media</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
             <div><span>Last check</span><strong>{statsQuery.last_check_time ? formatRelativeTime(statsQuery.last_check_time) : 'Never'}</strong></div>

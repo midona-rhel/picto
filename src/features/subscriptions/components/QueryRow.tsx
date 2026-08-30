@@ -11,7 +11,7 @@ import type {
   SubscriptionSiteInfo,
 } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
-import { formatRelativeTime, getSiteLabel } from '../subscriptionUtils';
+import { getSiteLabel } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
 /** One dense table row in the queries table. */
@@ -48,6 +48,7 @@ export function QueryRow({
   onShowStats: () => void;
 }) {
   const label = query.display_name?.trim() || query.query_text;
+  const source = getSiteLabel(query.site_id, sites);
 
   return (
     <div
@@ -57,7 +58,8 @@ export function QueryRow({
         onShowStats();
       }}
     >
-      <KbdTooltip label="Double-click for source details"><span className={styles.qCellName}>
+      <span className={styles.qCellSource} title={source}>{source}</span>
+      <KbdTooltip label="Double-click for source details"><span className={styles.qCellQuery}>
         <span className={styles.qName} title={query.query_text}>{label}</span>
         {query.source_history_complete && query.completed_initial_run && (
           <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title="Checked all available posts" />
@@ -67,13 +69,8 @@ export function QueryRow({
           <span className={styles.qFailureText} title={query.last_failure_message}>{query.last_failure_message}</span>
         )}
       </span></KbdTooltip>
-      <span className={styles.qCellSite}>{getSiteLabel(query.site_id, sites)}</span>
       <span className={styles.qCellNum}>{query.posts_found.toLocaleString()}</span>
       <span className={styles.qCellNum}>{query.files_found.toLocaleString()}</span>
-      <span className={styles.qCellTime}>
-        {query.last_check_time ? formatRelativeTime(query.last_check_time) : 'never'}
-        {!query.completed_initial_run && ' · syncing'}
-      </span>
       <span className={styles.qCellActions} onDoubleClick={(event) => event.stopPropagation()}>
         <KbdTooltip label="Run only this source now">
           <button
