@@ -115,27 +115,19 @@ impl DeviantArtSource {
             }
         }
 
-        let mut form = BTreeMap::new();
-        match credential_key.as_deref() {
+        let response = match credential_key.as_deref() {
             Some(refresh_token) => {
-                form.insert("grant_type".to_string(), "refresh_token".to_string());
-                form.insert("refresh_token".to_string(), refresh_token.to_string());
+                match request_access_token(http, credentials, Some(refresh_token), cancel).await {
+                    Ok(response) if response.has_access_token() => response,
+                    Ok(_) => request_access_token(http, credentials, None, cancel).await?,
+                    Err(error) if stored_login_can_fall_back(&error) => {
+                        request_access_token(http, credentials, None, cancel).await?
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            None => {
-                form.insert("grant_type".to_string(), "client_credentials".to_string());
-            }
-        }
-        let mut token_credentials = credentials.clone();
-        token_credentials.allowed_domains.insert(DOMAIN.to_string());
-        token_credentials.headers.insert(
-            "Authorization".to_string(),
-            CLIENT_AUTHORIZATION.to_string(),
-        );
-        let raw = http
-            .post_form_text(token_url(), &token_credentials, &form, cancel)
-            .await?;
-        let response: AccessTokenResponse = serde_json::from_str(&raw)
-            .map_err(|error| invalid_response(format!("invalid DeviantArt token: {error}")))?;
+            None => request_access_token(http, credentials, None, cancel).await?,
+        };
         let access_token = response
             .access_token
             .filter(|value| !value.trim().is_empty())
@@ -148,6 +140,42 @@ impl DeviantArtSource {
         });
         Ok(access_token)
     }
+}
+
+async fn request_access_token(
+    http: &HttpRuntime,
+    credentials: &RequestCredentials,
+    refresh_token: Option<&str>,
+    cancel: &CancellationToken,
+) -> Result<AccessTokenResponse, SourceError> {
+    let mut form = BTreeMap::new();
+    match refresh_token {
+        Some(refresh_token) => {
+            form.insert("grant_type".to_string(), "refresh_token".to_string());
+            form.insert("refresh_token".to_string(), refresh_token.to_string());
+        }
+        None => {
+            form.insert("grant_type".to_string(), "client_credentials".to_string());
+        }
+    }
+    let mut token_credentials = credentials.clone();
+    token_credentials.allowed_domains.insert(DOMAIN.to_string());
+    token_credentials.headers.insert(
+        "Authorization".to_string(),
+        CLIENT_AUTHORIZATION.to_string(),
+    );
+    let raw = http
+        .post_form_text(token_url(), &token_credentials, &form, cancel)
+        .await?;
+    serde_json::from_str(&raw)
+        .map_err(|error| invalid_response(format!("invalid DeviantArt token: {error}")))
+}
+
+fn stored_login_can_fall_back(error: &SourceError) -> bool {
+    matches!(
+        error.kind,
+        SourceErrorKind::Authentication | SourceErrorKind::InvalidResponse
+    )
 }
 
 fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
@@ -467,6 +495,14 @@ struct AccessTokenResponse {
     expires_in: Option<u64>,
 }
 
+impl AccessTokenResponse {
+    fn has_access_token(&self) -> bool {
+        self.access_token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }
+}
+
 #[derive(Deserialize)]
 struct GalleryResponse {
     #[serde(default)]
@@ -637,5 +673,29 @@ mod tests {
         assert_eq!(current_offset(&request(Some("42"))).unwrap(), 42);
         assert!(current_offset(&request(Some("1000000001"))).is_err());
         assert!(current_offset(&request(Some("next"))).is_err());
+    }
+
+    #[test]
+    fn optional_login_falls_back_only_for_rejected_token_exchanges() {
+        assert!(stored_login_can_fall_back(&SourceError::new(
+            SourceErrorKind::InvalidResponse,
+            "400 Bad Request",
+            false,
+        )));
+        assert!(stored_login_can_fall_back(&SourceError::new(
+            SourceErrorKind::Authentication,
+            "401 Unauthorized",
+            false,
+        )));
+        assert!(!stored_login_can_fall_back(&SourceError::new(
+            SourceErrorKind::Network,
+            "connection failed",
+            true,
+        )));
+        assert!(!stored_login_can_fall_back(&SourceError::new(
+            SourceErrorKind::RateLimited,
+            "retry later",
+            true,
+        )));
     }
 }
