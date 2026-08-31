@@ -29,6 +29,8 @@ export interface QuickLookProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   metadataRootId?: number | null;
+  /** Root recorded as recently viewed. Use null to preserve history ordering. */
+  recordItemId?: number | null;
   totalCount?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
@@ -42,14 +44,15 @@ interface QuickLookContentProps extends QuickLookProps {
 }
 
 export function QuickLookContent({
-  items, currentIndex, metadataRootId, onNavigate, onClose, onLoadMore, onReady,
+  items, currentIndex, metadataRootId, recordItemId, onNavigate, onClose, onLoadMore, onReady,
   thumbnailReady = false, thumbnailUrlOverride,
 }: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
   const currentHash = currentItem?.content_hash ?? '';
   const mutationRootId = metadataRootId === undefined ? currentItemId : metadataRootId;
-  useRecordMediaView(mutationRootId ?? 0);
+  const effectiveRecordItemId = recordItemId === undefined ? mutationRootId : recordItemId;
+  useRecordMediaView(effectiveRecordItemId);
   const currentMime = currentItem?.mime ?? '';
   const previewPreferences = usePreviewPreferences();
   const rendererKind = detailRendererKind(currentMime);

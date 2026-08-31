@@ -3666,7 +3666,11 @@ fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable(
     let (inbox, _) = library
         .ingest(&imported("recent-inbox", Lifecycle::Inbox, &[]))
         .unwrap();
-    library.record_recent_view(older, 100).unwrap();
+    let first_view = library.record_recent_view(older, 100).unwrap();
+    assert_eq!(
+        first_view.resources,
+        vec!["recently_viewed".to_string(), "sidebar".to_string()]
+    );
     library.record_recent_view(inbox, 300).unwrap();
     library.record_recent_view(newer, 200).unwrap();
 
@@ -3693,6 +3697,33 @@ fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable(
             .map(|item| item.root_id)
             .collect::<Vec<_>>(),
         vec![newer, older]
+    );
+
+    // Timestamp resolution must not leave fast navigation tied and ordered by ID.
+    library.record_recent_view(older, 200).unwrap();
+    let retouched = library
+        .query(
+            &RootQuery {
+                scope: ItemScope::RecentlyViewed,
+                view: ViewQuerySpec {
+                    filter: FilterExpr::default(),
+                    sort: ItemSort {
+                        field: SortField::FolderOrder,
+                        direction: SortDirection::Ascending,
+                        random_seed: None,
+                    },
+                },
+            },
+            &PageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        retouched
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        vec![older, newer]
     );
 
     library.clear_recent_views().unwrap();

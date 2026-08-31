@@ -542,7 +542,14 @@ impl Library {
                     return Err(LibraryError::NotFound(format!("root {root_id}")));
                 }
                 transaction.execute(
-                    "INSERT INTO recent_view (root_id, viewed_at_ms) VALUES (?1, ?2)
+                    "INSERT INTO recent_view (root_id, viewed_at_ms)
+                     VALUES (
+                         ?1,
+                         MAX(
+                             ?2,
+                             COALESCE((SELECT MAX(viewed_at_ms) + 1 FROM recent_view), ?2)
+                         )
+                     )
                      ON CONFLICT(root_id) DO UPDATE SET viewed_at_ms = excluded.viewed_at_ms",
                     rusqlite::params![root_id.0, viewed_at_ms],
                 )?;
@@ -550,7 +557,7 @@ impl Library {
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec!["recently-viewed".into()],
+                    vec!["recently-viewed".into(), "navigation".into()],
                     vec![root_id],
                 );
                 Ok((

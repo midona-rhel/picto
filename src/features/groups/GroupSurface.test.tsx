@@ -8,6 +8,7 @@ import type { CanonicalEntityDetails } from '../../shared/types/canonical';
 
 const mocks = vi.hoisted(() => ({
   getItemDetails: vi.fn(),
+  recordMediaView: vi.fn(() => Promise.resolve()),
   detachItems: vi.fn(),
   reorderGroup: vi.fn(),
   ungroup: vi.fn(),
@@ -25,7 +26,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../controllers/viewerController', () => ({
-  viewerController: { getItemDetails: mocks.getItemDetails },
+  viewerController: {
+    getItemDetails: mocks.getItemDetails,
+    recordMediaView: mocks.recordMediaView,
+  },
 }));
 vi.mock('../../platform/entityApi', () => ({
   detachItems: mocks.detachItems,
@@ -238,6 +242,15 @@ async function enterEditor() {
 }
 
 describe('GroupSurface', () => {
+  it('records the group once unless history recording is disabled', () => {
+    const view = render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    expect(mocks.recordMediaView).toHaveBeenCalledWith(7);
+
+    mocks.recordMediaView.mockClear();
+    view.rerender(<GroupSurface groupId={7} recordItemId={null} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    expect(mocks.recordMediaView).not.toHaveBeenCalled();
+  });
+
   it('does not expose a loading screen while group details are fetched', () => {
     mocks.getItemDetails.mockReturnValue(new Promise(() => {}));
     render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);

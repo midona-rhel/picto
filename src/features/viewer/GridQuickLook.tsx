@@ -10,6 +10,7 @@ interface GridQuickLookProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   totalCount?: number | null;
+  recordItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
   onLoadMore?: () => void;
@@ -90,6 +91,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
           totalCount={totalCount}
           onNavigate={props.onNavigate}
           onClose={() => props.onClose(currentItem.root_id)}
+          recordItemId={props.recordItemId === null ? null : currentItem.root_id}
         />
       ) : (
         <QuickLookContent

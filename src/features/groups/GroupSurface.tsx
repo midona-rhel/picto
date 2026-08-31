@@ -31,6 +31,7 @@ import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { contentSortSubmenu } from '../folders/folderContextMenu';
+import { useRecordMediaView } from '../viewer/hooks/useRecordMediaView';
 
 export interface GroupSurfaceProps {
   groupId: number;
@@ -41,6 +42,8 @@ export interface GroupSurfaceProps {
   rootTotal: number;
   onNavigateRoot: (delta: number) => void;
   onClose: () => void;
+  /** Root recorded as recently viewed. Use null when history itself is being browsed. */
+  recordItemId?: number | null;
 }
 
 function memberToGridItem(details: CanonicalEntityDetails, media: MediaRecord): CanonicalEntityGridItem {
@@ -260,7 +263,9 @@ export function GroupSurface({
   rootTotal,
   onNavigateRoot,
   onClose,
+  recordItemId,
 }: GroupSurfaceProps) {
+  useRecordMediaView(recordItemId === undefined ? groupId : recordItemId);
   const [details, setDetails] = useState<CanonicalEntityDetails | null>(
     () => viewerController.takePrefetchedItemDetails?.(groupId) ?? null,
   );
@@ -717,7 +722,7 @@ export function GroupSurface({
           currentIndex={viewerIndex}
           totalCount={members.length}
           backLabel="Back to group"
-          recordItemId={groupId}
+          recordItemId={null}
           ratingItemId={null}
           onNavigate={(delta) => setViewerIndex((index) => Math.max(
             0,
@@ -731,6 +736,7 @@ export function GroupSurface({
           items={members}
           currentIndex={quickLookIndex}
           metadataRootId={groupId}
+          recordItemId={null}
           totalCount={members.length}
           onNavigate={(delta) => setQuickLookIndex((index) => Math.max(
             0,

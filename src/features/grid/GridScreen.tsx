@@ -1607,6 +1607,7 @@ export function GridScreen({
           rootTotal={totalCount ?? items.length}
           onNavigateRoot={navigateRootDetail}
           onClose={() => closeRootDetail(viewerItem.root_id)}
+          recordItemId={gridScope.kind === 'recently_viewed' ? null : viewerItem.root_id}
         />
       ) : null}
 
@@ -1624,6 +1625,7 @@ export function GridScreen({
           items={items}
           currentIndex={viewerIndex}
           totalCount={totalCount}
+          recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateRootDetail}
           onClose={closeRootDetail}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
@@ -1635,6 +1637,7 @@ export function GridScreen({
           items={items}
           currentIndex={quickLookIndex}
           totalCount={totalCount}
+          recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateQuickLook}
           onClose={closeQuickLook}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}

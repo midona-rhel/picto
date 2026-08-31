@@ -7,6 +7,7 @@ interface GroupQuickLookContentProps {
   totalCount: number;
   onNavigate: (delta: number) => void;
   onClose: () => void;
+  recordItemId?: number | null;
 }
 
 export function GroupQuickLookContent({
@@ -15,6 +16,7 @@ export function GroupQuickLookContent({
   totalCount,
   onNavigate,
   onClose,
+  recordItemId,
 }: GroupQuickLookContentProps) {
   return (
     <div className={styles.frame} data-group-quick-look>
@@ -26,6 +28,7 @@ export function GroupQuickLookContent({
         rootTotal={totalCount}
         onNavigateRoot={onNavigate}
         onClose={onClose}
+        recordItemId={recordItemId}
       />
     </div>
   );
