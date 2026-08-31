@@ -30,4 +30,18 @@ describe('filterSidebarTree', () => {
     ]);
     expect(filterSidebarTree(smartNodes, '   ')).toBe(smartNodes);
   });
+
+  it('normalizes filtered tree ordering so matching siblings sort alphabetically', () => {
+    const smartNodes = [
+      { ...node('smart:1', 'Zebra review', 'section:smart_folders'), sort_order: 0 },
+      { ...node('smart:2', 'Alpha review', 'section:smart_folders'), sort_order: 1 },
+    ];
+
+    expect(filterSidebarTree(smartNodes, 'review').map(({ name, sort_order }) => (
+      [name, sort_order]
+    ))).toEqual([
+      ['Alpha review', 0],
+      ['Zebra review', 0],
+    ]);
+  });
 });

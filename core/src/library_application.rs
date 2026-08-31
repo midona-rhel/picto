@@ -635,9 +635,9 @@ impl LibraryApplication {
         cursor: Option<&str>,
         limit: i64,
     ) -> Result<picto_library::TagPage, String> {
-        let cursor = cursor
+        let offset = cursor
             .filter(|value| !value.is_empty())
-            .map(str::parse::<u32>)
+            .map(str::parse::<usize>)
             .transpose()
             .map_err(|_| "Invalid tag cursor".to_string())?
             .unwrap_or(0);
@@ -652,7 +652,6 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())?;
         let mut tags = tags
             .into_iter()
-            .filter(|tag| tag.tag_id.0 > cursor)
             .filter(|tag| namespace.is_none_or(|namespace| tag.namespace == namespace))
             .filter(|tag| {
                 search
@@ -660,9 +659,20 @@ impl LibraryApplication {
                     .is_none_or(|search| tag.subname.to_lowercase().contains(search))
             })
             .collect::<Vec<_>>();
-        tags.sort_by_key(|tag| tag.tag_id.0);
-        let next_cursor = (tags.len() > limit).then(|| tags[limit - 1].tag_id.0.to_string());
-        tags.truncate(limit);
+        tags.sort_by(|left, right| {
+            left.subname
+                .to_lowercase()
+                .cmp(&right.subname.to_lowercase())
+                .then_with(|| {
+                    left.namespace
+                        .to_lowercase()
+                        .cmp(&right.namespace.to_lowercase())
+                })
+                .then_with(|| left.tag_id.0.cmp(&right.tag_id.0))
+        });
+        let next_offset = offset.saturating_add(limit);
+        let next_cursor = (tags.len() > next_offset).then(|| next_offset.to_string());
+        let tags = tags.into_iter().skip(offset).take(limit).collect();
         Ok(picto_library::TagPage {
             tags,
             next_cursor,
@@ -1130,6 +1140,37 @@ mod tests {
             application.library().database().path(),
             directory.path().join(DATABASE_FILE)
         );
+    }
+
+    #[test]
+    fn tag_search_sorts_alphabetically_before_paginating() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path()).unwrap();
+        let mut tagged = input();
+        tagged.tags = vec!["zebra-cat".into(), "cat".into(), "cathedral".into()];
+        application.library().ingest(&tagged).unwrap();
+
+        let first = application.list_tags(None, Some("cat"), None, 2).unwrap();
+        assert_eq!(
+            first
+                .tags
+                .iter()
+                .map(|tag| tag.subname.as_str())
+                .collect::<Vec<_>>(),
+            ["cat", "cathedral"]
+        );
+        let second = application
+            .list_tags(None, Some("cat"), first.next_cursor.as_deref(), 2)
+            .unwrap();
+        assert_eq!(
+            second
+                .tags
+                .iter()
+                .map(|tag| tag.subname.as_str())
+                .collect::<Vec<_>>(),
+            ["zebra-cat"]
+        );
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]

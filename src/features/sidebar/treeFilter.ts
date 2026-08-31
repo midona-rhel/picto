@@ -17,5 +17,34 @@ export function filterSidebarTree(nodes: SidebarNodeDto[], query: string): Sideb
     }
   }
 
-  return nodes.filter((node) => visibleIds.has(node.id));
+  const visible = nodes
+    .filter((node) => visibleIds.has(node.id))
+    .map((node) => ({ ...node, sort_order: 0 }));
+  const compareNames = (left: SidebarNodeDto, right: SidebarNodeDto) => (
+    left.name.localeCompare(right.name, undefined, {
+      sensitivity: 'base',
+      numeric: true,
+    })
+  );
+  const children = new Map<string, SidebarNodeDto[]>();
+  const roots: SidebarNodeDto[] = [];
+  for (const node of visible) {
+    if (!node.parent_id || !visibleIds.has(node.parent_id)) {
+      roots.push(node);
+      continue;
+    }
+    const siblings = children.get(node.parent_id) ?? [];
+    siblings.push(node);
+    children.set(node.parent_id, siblings);
+  }
+  roots.sort(compareNames);
+  children.forEach((siblings) => siblings.sort(compareNames));
+
+  const ordered: SidebarNodeDto[] = [];
+  const append = (node: SidebarNodeDto) => {
+    ordered.push(node);
+    children.get(node.id)?.forEach(append);
+  };
+  roots.forEach(append);
+  return ordered;
 }
