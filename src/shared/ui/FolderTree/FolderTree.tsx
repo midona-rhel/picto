@@ -175,14 +175,14 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
           <span
             key={index}
             className={styles.treeGuide}
-            style={{ left: 16 + index * 24 }}
+            style={{ left: 14 + index * 24 }}
             data-folder-tree-guide
           />
         ) : null)}
         {depth > 0 && (
           <svg
             className={styles.treeBranch}
-            style={{ left: 16 + (depth - 1) * 24 }}
+            style={{ left: 14 + (depth - 1) * 24 }}
             viewBox="0 0 16 26"
             preserveAspectRatio="none"
             fill="none"
@@ -190,9 +190,9 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
             data-folder-tree-branch={isLastChild ? 'last' : 'middle'}
           >
             {isLastChild ? (
-              <path d="M0 0 V9.5 A3.5 3.5 0 0 0 3.5 13 H16" />
+              <path d="M0 0 V9.5 A3.5 3.5 0 0 0 3.5 13 H13" />
             ) : (
-              <path d="M0 0 V26 M0 13 H16" />
+              <path d="M0 0 V26 M0 13 H13" />
             )}
           </svg>
         )}

@@ -64,6 +64,9 @@ describe('FolderTree context target', () => {
 
     const childRow = screen.getByText('Child').closest('[style]') as HTMLElement;
     expect(childRow.style.getPropertyValue('--folder-row-indent')).toBe('28px');
-    expect(childRow.querySelector('[data-folder-tree-branch]')).toHaveAttribute('data-folder-tree-branch', 'last');
+    const branch = childRow.querySelector('[data-folder-tree-branch]') as SVGElement;
+    expect(branch).toHaveAttribute('data-folder-tree-branch', 'last');
+    expect(branch.style.left).toBe('14px');
+    expect(branch.querySelector('path')).toHaveAttribute('d', expect.stringContaining('H13'));
   });
 });

@@ -234,24 +234,24 @@ function StandardRow({
               /* L with cutout: top segment to Y=9, horizontal arm X=8..15 at Y=13 */
               <>
                 <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="12" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             ) : (
               /* T with cutout: top to Y=9, bottom from Y=17, horizontal arm X=8..15 */
               <>
                 <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                 <line x1="3.5" y1="17" x2="3.5" y2="26" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="12" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             )
           ) : (
             /* No arrow — standard L/T shapes */
             useLShape ? (
-              <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+              <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H12" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
             ) : (
               <>
                 <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="4" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="4" y1="13" x2="12" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             )
           )}
