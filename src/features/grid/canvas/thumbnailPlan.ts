@@ -13,6 +13,14 @@ export interface PlanTile {
   cy: number;
 }
 
+/** Originals are only useful when Chromium can decode them into an ImageBitmap. */
+export function shouldLoadFullQualityOriginal(tile: PlanTile, thresholdPx: number): boolean {
+  return tile.mime.startsWith('image/')
+    && tile.mime !== 'image/gif'
+    && tile.mime !== 'image/jxl'
+    && (tile.w > thresholdPx || tile.h > thresholdPx);
+}
+
 /**
  * FNV-1a 32-bit fingerprint over the plan: first 8 chars of each file hash
  * plus its quality tier, folded with the tile count. Same tile set, order,
@@ -29,7 +37,7 @@ export function computePlanFingerprint(tiles: PlanTile[], fullQualityThresholdPx
       h ^= fileHash.charCodeAt(j);
       h = Math.imul(h, 0x01000193);
     }
-    h ^= t.w > fullQualityThresholdPx || t.h > fullQualityThresholdPx ? 70 : 84;
+    h ^= shouldLoadFullQualityOriginal(t, fullQualityThresholdPx) ? 70 : 84;
     h = Math.imul(h, 0x01000193);
   }
   h ^= tiles.length;
