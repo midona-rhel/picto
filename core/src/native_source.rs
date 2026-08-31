@@ -29,7 +29,6 @@ pub struct NativeSourceRunner {
     library_root: PathBuf,
     library: Arc<picto_library::Library>,
     registry: ProviderRegistry,
-    http: Arc<HttpRuntime>,
     downloader: PostDownloader,
 }
 
@@ -39,7 +38,6 @@ impl NativeSourceRunner {
             library_root: application.root().to_path_buf(),
             library: Arc::clone(application.library()),
             registry: ProviderRegistry::native(),
-            http: shared_http_runtime(),
             downloader: PostDownloader::new(CURRENT_POST_DOWNLOAD_CONCURRENCY)
                 .expect("native download concurrency is nonzero"),
         }
@@ -55,6 +53,7 @@ impl NativeSourceRunner {
         output: mpsc::Sender<SourceEvent>,
         cancel: CancellationToken,
     ) -> Result<RunnerSuccess, RunnerFailure> {
+        let http = shared_http_runtime();
         let adapter = self.registry.get(&query.site_id).ok_or_else(|| {
             RunnerFailure::terminal(
                 RunnerFailureKind::InvalidQuery,
@@ -95,7 +94,7 @@ impl NativeSourceRunner {
             && query.attempt_count == 1
         {
             adapter
-                .preflight(&query.query_text, &credentials, &self.http, &cancel)
+                .preflight(&query.query_text, &credentials, &http, &cancel)
                 .await
                 .map_err(map_source_error)?;
         }
@@ -134,7 +133,7 @@ impl NativeSourceRunner {
         let mut bounded_refresh = false;
         let resume_cursor = loop {
             match session
-                .next_post(&self.http, &cancel)
+                .next_post(&http, &cancel)
                 .await
                 .map_err(map_source_error)?
             {
@@ -228,7 +227,7 @@ impl NativeSourceRunner {
                             &post,
                             &credentials,
                             &post_staging,
-                            &self.http,
+                            &http,
                             &cancel,
                             Arc::clone(&media_adapter),
                         )
