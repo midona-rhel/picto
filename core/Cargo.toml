@@ -1,6 +1,6 @@
 [package]
 name = "picto_core"
-version = "0.6.3-alpha"
+version = "0.6.4-alpha"
 edition = "2021"
 license = "MIT"
 
