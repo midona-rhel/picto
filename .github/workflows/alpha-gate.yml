@@ -228,7 +228,9 @@ jobs:
   alpha-release-assets:
     name: Attach Release Assets
     needs: alpha-package
-    if: startsWith(github.ref, 'refs/tags/')
+    # A tag intentionally skips alpha-verify. `always()` prevents that skipped
+    # ancestor from suppressing publication after every package job succeeds.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.alpha-package.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
