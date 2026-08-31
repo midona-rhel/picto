@@ -240,6 +240,76 @@ fn stale_checkpoint_cannot_hide_tags_or_smart_folders() {
 }
 
 #[test]
+fn stale_checkpoint_rebuild_preserves_and_repairs_lifecycle_partitions() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported(
+            "lifecycle-checkpoint-recovery",
+            Lifecycle::Inbox,
+            &[],
+        ))
+        .unwrap();
+    library.write_projection_checkpoint().unwrap();
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            "artist:alice",
+        )
+        .unwrap();
+    let revision = library.database().revision().unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute(
+                    "DELETE FROM canonical_bitmap WHERE domain = 1 AND key_id = 2",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE projection_checkpoint SET database_revision = ?1 WHERE singleton = 1",
+                    [revision as i64],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(reopened.counts().unwrap().inbox, 1);
+    assert!(!reopened
+        .projections()
+        .snapshot()
+        .lifecycle(Lifecycle::Active)
+        .contains(root.0));
+    assert_eq!(root_tag_count(&reopened, root), 1);
+    reopened
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute("DELETE FROM projection_checkpoint", [])?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(reopened);
+
+    let canonical_reopen = Library::open(path).unwrap();
+    assert_eq!(canonical_reopen.counts().unwrap().inbox, 1);
+    assert!(!canonical_reopen
+        .projections()
+        .snapshot()
+        .lifecycle(Lifecycle::Active)
+        .contains(root.0));
+}
+
+#[test]
 fn checkpoint_reloads_smart_folders_when_tag_projection_is_current() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");

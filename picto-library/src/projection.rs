@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
 use std::iter::FromIterator;
 use std::ops::{BitAnd, BitAndAssign, BitOrAssign, BitXor, Deref, SubAssign};
 use std::sync::Arc;
@@ -493,18 +494,20 @@ impl ProjectionStore {
                     let snapshot = crate::checkpoint::decode(&payload, revision)?;
                     if crate::checkpoint::tag_projection_matches(connection, &snapshot)?
                         && crate::smart::projection_matches(connection, &snapshot)?
+                        && snapshot_partitions_match(&snapshot)
                     {
                         Ok(snapshot)
                     } else {
                         // A copied or interrupted checkpoint may have a valid checksum and outer
                         // revision while carrying stale derived state. Rebuild from canonical data.
-                        load(connection)
+                        load(connection, Some(&snapshot))
                     }
                 } else {
-                    load(connection)
+                    load(connection, None)
                 }
             },
         )?;
+        persist_recovered_partitions(database, &snapshot)?;
         Ok(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
         })
@@ -519,7 +522,10 @@ impl ProjectionStore {
     }
 }
 
-fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
+fn load(
+    connection: &Connection,
+    checkpoint_fallback: Option<&ProjectionSnapshot>,
+) -> Result<ProjectionSnapshot> {
     let revision = crate::schema::validate(connection)?;
     let canonical = bitmap::load_all(connection)?;
 
@@ -793,6 +799,20 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
     }
 
     let every_root = all_roots(&root_kinds);
+    recover_partition(
+        "lifecycle",
+        &mut lifecycle,
+        checkpoint_fallback.map(|snapshot| snapshot.lifecycle.as_ref()),
+        &every_root,
+        Lifecycle::Active,
+    )?;
+    recover_partition(
+        "rating",
+        &mut ratings,
+        checkpoint_fallback.map(|snapshot| snapshot.ratings.as_ref()),
+        &every_root,
+        Rating::Unrated,
+    )?;
     validate_partition_coverage("lifecycle", lifecycle.values(), &every_root)?;
     validate_partition_coverage("rating", ratings.values(), &every_root)?;
 
@@ -832,6 +852,91 @@ fn load(connection: &Connection) -> Result<ProjectionSnapshot> {
     };
     crate::smart::load(connection, &mut snapshot)?;
     Ok(snapshot)
+}
+
+fn snapshot_partitions_match(snapshot: &ProjectionSnapshot) -> bool {
+    let every_root = all_roots(&snapshot.root_kinds);
+    partitions_match(snapshot.lifecycle.values(), &every_root)
+        && partitions_match(snapshot.ratings.values(), &every_root)
+}
+
+fn partitions_match<'a>(
+    partitions: impl Iterator<Item = &'a SharedBitmap> + Clone,
+    expected: &RoaringBitmap,
+) -> bool {
+    validate_partitions("projection", partitions.clone()).is_ok()
+        && partitions.fold(RoaringBitmap::new(), |mut result, values| {
+            result |= values;
+            result
+        }) == *expected
+}
+
+fn recover_partition<K: Copy + Eq + Hash>(
+    name: &str,
+    current: &mut HashMap<K, SharedBitmap>,
+    fallback: Option<&HashMap<K, SharedBitmap>>,
+    expected: &RoaringBitmap,
+    default_key: K,
+) -> Result<()> {
+    if partitions_match(current.values(), expected) {
+        return Ok(());
+    }
+    if let Some(fallback) = fallback.filter(|values| partitions_match(values.values(), expected)) {
+        *current = fallback.clone();
+        return Ok(());
+    }
+    validate_partitions(name, current.values())?;
+    for partition in current.values_mut() {
+        let unexpected = partition.to_bitmap() - expected;
+        partition.subtract(&unexpected);
+    }
+    let present = current
+        .values()
+        .fold(RoaringBitmap::new(), |mut result, values| {
+            result |= values;
+            result
+        });
+    let missing = expected - &present;
+    current.entry(default_key).or_default().union(&missing);
+    Ok(())
+}
+
+fn persist_recovered_partitions(
+    database: &LibraryDatabase,
+    snapshot: &ProjectionSnapshot,
+) -> Result<()> {
+    database.maintenance_write(
+        crate::database::WorkPriority::CorrectnessRecovery,
+        |transaction| {
+            let mut changed = 0;
+            for value in Lifecycle::ALL {
+                changed += bitmap::replace(
+                    transaction,
+                    snapshot.revision,
+                    BitmapKey {
+                        domain: BitmapDomain::Lifecycle,
+                        key_id: value.bitmap_key(),
+                    },
+                    snapshot.lifecycle(value),
+                )?;
+            }
+            for value in Rating::ALL {
+                changed += bitmap::replace(
+                    transaction,
+                    snapshot.revision,
+                    BitmapKey {
+                        domain: BitmapDomain::Rating,
+                        key_id: value.bitmap_key(),
+                    },
+                    snapshot.rating(value),
+                )?;
+            }
+            if changed != 0 {
+                transaction.execute("DELETE FROM projection_checkpoint WHERE singleton = 1", [])?;
+            }
+            Ok(())
+        },
+    )
 }
 
 fn validate_partitions<'a>(
