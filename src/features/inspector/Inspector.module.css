@@ -442,15 +442,23 @@
   flex-direction: column;
 }
 
-.selectionCount {
-  padding: 10px 14px;
+.selectionNameField {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 14px;
   color: var(--inspector-text-primary, var(--color-text-primary));
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-regular);
-  line-height: var(--line-height-sm);
-  text-align: center;
+  font: var(--font-weight-bold) 13px/20px var(--inspector-font-family, var(--font-family-ui));
 }
 
+.selectionNameField strong {
+  color: var(--inspector-field-focus, var(--color-primary));
+  font: inherit;
+}
 
 /* Tags — namespace:subtag chips with namespace coloring */
 .tagsWrap {

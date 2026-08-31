@@ -668,16 +668,19 @@ export function InspectorSkeleton({
         }}
       />
 
-      {selectionCount != null && (
-        <div className={styles.selectionCount} data-inspector-selection-count="">
-          {selectionCount.toLocaleString()} {t("items selected")}</div>
-      )}
-      {(name || notes || (showSource && source)) && (
+      {(selectionCount != null || name || notes || (showSource && source)) && (
         <InspectorFieldGroup>
         <div className={styles.fieldStack} data-inspector-identity="">
-          {name && <div data-inspector-anchor="name">
-            <InspectorField value={name.value} placeholder={t("Name")} readOnly={name.readOnly} onCommit={name.onCommit} />
-          </div>}
+          {selectionCount != null ? (
+            <div className={styles.selectionNameField} data-inspector-anchor="name" data-inspector-selection-count="">
+              <strong>{selectionCount.toLocaleString()}</strong>
+              {' '}<span>{t("items selected")}</span>
+            </div>
+          ) : name ? (
+            <div data-inspector-anchor="name">
+              <InspectorField value={name.value} placeholder={t("Name")} readOnly={name.readOnly} onCommit={name.onCommit} />
+            </div>
+          ) : null}
           {notes && <div data-inspector-anchor="notes">
             <InspectorField value={notes.value} placeholder={t("Notes")} readOnly={notes.readOnly} onCommit={notes.onCommit} />
           </div>}

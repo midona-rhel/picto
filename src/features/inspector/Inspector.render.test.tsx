@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
 import { MantineProvider } from '@mantine/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -165,7 +165,7 @@ describe('Inspector presentation branches', () => {
       const view = renderInspector(entry);
       assertStableAnchors(
         entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date Imported', 'Date Created', 'Date Modified'] : [],
-        entry.target.kind === 'multi' ? ['notes', 'source'] : undefined,
+        entry.target.kind === 'multi' ? ['name', 'notes', 'source'] : undefined,
       );
       const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
       if (entry.data || entry.target.kind === 'multi') {
@@ -388,7 +388,7 @@ describe('Inspector presentation branches', () => {
       selectionCount: 6,
     });
 
-    await screen.findByText('6 items selected');
+    await waitFor(() => expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('6 items selected'));
     const previews = [...document.querySelectorAll('[data-inspector-preview-hash]')];
     expect(previews.map((node) => node.getAttribute('data-inspector-preview-hash')))
       .toEqual(['file-1', 'file-2', 'file-3', 'file-4', 'file-5', 'file-6']);

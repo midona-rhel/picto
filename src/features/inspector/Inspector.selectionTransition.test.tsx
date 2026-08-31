@@ -146,7 +146,7 @@ describe('Inspector selection transition', () => {
     await act(async () => { resolveSummary?.(summary); });
 
     expect(screen.queryByText('Previous item')).not.toBeInTheDocument();
-    expect(screen.getByText('2 items selected')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
     expect(document.querySelector('[data-inspector-preview-hash="file-2"]')).toHaveAttribute('data-inspector-stack-entering');
     expect(document.querySelector('[data-inspector-preview-hash="file-1"]')).toHaveStyle({ opacity: '1' });
     expect(document.querySelector('[data-inspector-preview-hash="file-1"] [class*="stackShade"]')).toHaveStyle({ opacity: '0.7' });
@@ -170,7 +170,7 @@ describe('Inspector selection transition', () => {
     expect(document.querySelectorAll('[data-inspector-summary-loading]').length).toBeGreaterThan(0);
 
     await act(async () => { resolveSummary?.(summary); });
-    expect(screen.getByText('2 items selected')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
     expect(document.querySelector('[data-inspector-summary-loading]')).not.toBeInTheDocument();
   });
 
