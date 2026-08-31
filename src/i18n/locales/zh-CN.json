@@ -1461,5 +1461,8 @@
   "Zoom Level": "缩放级别",
   "Zoom out": "缩小",
   "Zoom Out": "缩小",
-  "Zoom to fit": "缩放以适应"
+  "Zoom to fit": "缩放以适应",
+  "Keep deleted files": "保留已删除的文件",
+  "days": "天",
+  "Recently deleted cloud files can be restored immediately during this period.": "在此期间，可以立即恢复最近删除的云端文件。"
 }

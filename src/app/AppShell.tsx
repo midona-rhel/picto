@@ -12,6 +12,7 @@ import { IconSettings, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { ToolbarHistoryIcon, ToolbarPanelIcon } from '../shared/ui/icons/toolbar-icons';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { WorkspaceSurface } from '../features/workspace/WorkspaceSurface';
+import { HeavyJobBar } from '../features/tasks/HeavyJobBar';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
@@ -718,6 +719,7 @@ export function AppShell() {
           <Inspector />
         </div>
       )}
+      <HeavyJobBar />
       <ModalLayer />
       <TagSelectPanel />
       <FolderPickerPanel />

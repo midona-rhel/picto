@@ -377,7 +377,7 @@ CREATE TABLE cloud_state (
     schema_generation INTEGER NOT NULL DEFAULT 1,
     hlc_physical_ms INTEGER NOT NULL DEFAULT 0,
     hlc_logical INTEGER NOT NULL DEFAULT 0,
-    retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":30,"full_media_history":false}'
+    retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":7,"full_media_history":false}'
 ) STRICT;
 
 CREATE TABLE cloud_outbox (

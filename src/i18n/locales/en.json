@@ -1461,5 +1461,8 @@
   "Zoom Level": "Zoom Level",
   "Zoom out": "Zoom out",
   "Zoom Out": "Zoom Out",
-  "Zoom to fit": "Zoom to fit"
+  "Zoom to fit": "Zoom to fit",
+  "Keep deleted files": "Keep deleted files",
+  "days": "days",
+  "Recently deleted cloud files can be restored immediately during this period.": "Recently deleted cloud files can be restored immediately during this period."
 }

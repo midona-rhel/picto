@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::library_application::LibraryApplication;
@@ -15,6 +16,8 @@ pub fn start(
     crate::library_subscription_state::recover(&application, &chrono::Utc::now().to_rfc3339())?;
     crate::library_ingest_runtime::recover(&application)?;
     crate::library_media_runtime::recover(&application)?;
+    crate::cloud::normalize_retention_library(&application)?;
+    let heavy_jobs = Arc::new(Semaphore::new(1));
     let mut workers = vec![
         (
             "library-publication",
@@ -22,7 +25,11 @@ pub fn start(
         ),
         (
             "library-ingest",
-            start_ingest_worker(Arc::clone(&application), cancel.child_token()),
+            start_ingest_worker(
+                Arc::clone(&application),
+                cancel.child_token(),
+                Arc::clone(&heavy_jobs),
+            ),
         ),
         (
             "library-watched-folders",
@@ -46,7 +53,11 @@ pub fn start(
         ),
         (
             "library-cloud-snapshot",
-            start_cloud_snapshot_worker(Arc::clone(&application), cancel.child_token()),
+            start_cloud_snapshot_worker(
+                Arc::clone(&application),
+                cancel.child_token(),
+                Arc::clone(&heavy_jobs),
+            ),
         ),
     ];
     workers.extend(start_subscription_workers(
@@ -64,6 +75,7 @@ pub fn start_tutorial(
     crate::library_subscription_state::recover(&application, &chrono::Utc::now().to_rfc3339())?;
     crate::library_ingest_runtime::recover(&application)?;
     crate::library_media_runtime::recover(&application)?;
+    let heavy_jobs = Arc::new(Semaphore::new(1));
     let mut workers = vec![
         (
             "library-publication",
@@ -71,7 +83,7 @@ pub fn start_tutorial(
         ),
         (
             "library-ingest",
-            start_ingest_worker(Arc::clone(&application), cancel.child_token()),
+            start_ingest_worker(Arc::clone(&application), cancel.child_token(), heavy_jobs),
         ),
         (
             "library-fts",
@@ -180,6 +192,7 @@ fn start_subscription_workers(
 fn start_ingest_worker(
     application: Arc<LibraryApplication>,
     cancel: CancellationToken,
+    heavy_jobs: Arc<Semaphore>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut idle = tokio::time::interval(Duration::from_millis(25));
@@ -188,6 +201,13 @@ fn start_ingest_worker(
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = idle.tick() => {
+                    let permit = tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        permit = Arc::clone(&heavy_jobs).acquire_owned() => match permit {
+                            Ok(permit) => permit,
+                            Err(_) => return,
+                        },
+                    };
                     let application = Arc::clone(&application);
                     match tokio::task::spawn_blocking(move || {
                         crate::library_ingest_runtime::run_batch(&application, 64)
@@ -196,6 +216,7 @@ fn start_ingest_worker(
                         Ok(Err(error)) => tracing::warn!(%error, "Canonical ingest batch failed"),
                         Err(error) => tracing::warn!(%error, "Canonical ingest worker stopped"),
                     }
+                    drop(permit);
                 }
             }
         }
@@ -328,6 +349,7 @@ fn start_ai_tag_worker(
 fn start_cloud_snapshot_worker(
     application: Arc<LibraryApplication>,
     cancel: CancellationToken,
+    heavy_jobs: Arc<Semaphore>,
 ) -> tokio::task::JoinHandle<()> {
     const CLOUD_IDLE_DELAY: Duration = Duration::from_secs(30);
     tokio::spawn(async move {
@@ -361,9 +383,17 @@ fn start_cloud_snapshot_worker(
                             continue;
                         }
                     };
+                    let permit = tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        permit = Arc::clone(&heavy_jobs).acquire_owned() => match permit {
+                            Ok(permit) => permit,
+                            Err(_) => return,
+                        },
+                    };
                     if let Err(error) = crate::cloud::snapshot::publish_library(&application, &provider).await {
                         tracing::warn!(%error, "Canonical cloud snapshot failed");
                     }
+                    drop(permit);
                 }
             }
         }

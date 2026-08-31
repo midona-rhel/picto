@@ -542,6 +542,7 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
     daily: typeof configuration.retention.daily === 'number' ? configuration.retention.daily : 30,
     weekly: typeof configuration.retention.weekly === 'number' ? configuration.retention.weekly : 26,
     yearly: typeof configuration.retention.yearly === 'number' ? configuration.retention.yearly : 5,
+    deleted_blobs_days: typeof configuration.retention.deleted_blobs_days === 'number' ? configuration.retention.deleted_blobs_days : 7,
   };
   const updateRetention = (field: keyof typeof retention, value: number) => {
     const next = { ...retention, [field]: value };
@@ -583,6 +584,8 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
           <Row label={t("Daily snapshots")}><CompactNumberInput label={t("Daily snapshots")} min={2} max={365} value={retention.daily} commitOnChange onCommit={(value) => updateRetention('daily', value)} /></Row>
           <Row label={t("Weekly snapshots")} sep><CompactNumberInput label={t("Weekly snapshots")} min={0} max={260} value={retention.weekly} commitOnChange onCommit={(value) => updateRetention('weekly', value)} /></Row>
           <Row label={t("Yearly snapshots")} sep><CompactNumberInput label={t("Yearly snapshots")} min={0} max={100} value={retention.yearly} commitOnChange onCommit={(value) => updateRetention('yearly', value)} /></Row>
+          <Row label={t("Keep deleted files")} sep><CompactNumberInput label={t("Keep deleted files")} min={0} max={3650} value={retention.deleted_blobs_days} commitOnChange onCommit={(value) => updateRetention('deleted_blobs_days', value)} /><span className={styles.staticValue}>{t("days")}</span></Row>
+          <p className={styles.settingHint}>{t("Recently deleted cloud files can be restored immediately during this period.")}</p>
         </div>
       </div>
 

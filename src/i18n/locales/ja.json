@@ -1461,5 +1461,8 @@
   "Zoom Level": "ズームレベル",
   "Zoom out": "ズームアウト",
   "Zoom Out": "ズームアウト",
-  "Zoom to fit": "合うズームレンズ"
+  "Zoom to fit": "合うズームレンズ",
+  "Keep deleted files": "削除したファイルを保持",
+  "days": "日",
+  "Recently deleted cloud files can be restored immediately during this period.": "この期間内であれば、最近削除したクラウドファイルをすぐに復元できます。"
 }

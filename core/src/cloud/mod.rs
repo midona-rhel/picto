@@ -293,7 +293,6 @@ pub fn update_retention_library(
     application: &LibraryApplication,
     retention: &serde_json::Value,
 ) -> Result<picto_library::MutationReceipt, String> {
-    let retention_json = serde_json::to_string(retention).map_err(|error| error.to_string())?;
     let published = application
         .library()
         .auxiliary_write_if_changed(
@@ -301,6 +300,29 @@ pub fn update_retention_library(
             ["cloud".to_string()],
             [],
             |transaction, _| {
+                let current = transaction.query_row(
+                    "SELECT retention_json FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?;
+                let mut merged = serde_json::from_str::<serde_json::Value>(&current)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let object = merged.as_object_mut().ok_or_else(|| {
+                    picto_library::LibraryError::InvalidState(
+                        "cloud retention settings are not an object".into(),
+                    )
+                })?;
+                if let Some(updates) = retention.as_object() {
+                    for (key, value) in updates {
+                        object.insert(key.clone(), value.clone());
+                    }
+                }
+                object
+                    .entry("deleted_blobs_days".to_owned())
+                    .or_insert(serde_json::json!(7));
+                let retention_json = serde_json::to_string(&merged).map_err(|error| {
+                    picto_library::LibraryError::InvalidState(error.to_string())
+                })?;
                 let changed = transaction.execute(
                     "UPDATE cloud_state SET retention_json = ?1
                      WHERE singleton = 1 AND retention_json != ?1",
@@ -311,6 +333,57 @@ pub fn update_retention_library(
         )
         .map_err(|error| error.to_string())?;
     cloud_receipt_or_current(application, published)
+}
+
+pub fn normalize_retention_library(application: &LibraryApplication) -> Result<(), String> {
+    application
+        .library()
+        .auxiliary_write_if_changed(
+            picto_library::database::WorkPriority::Maintenance,
+            ["cloud".to_string()],
+            [],
+            |transaction, _| {
+                let current = transaction.query_row(
+                    "SELECT retention_json FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?;
+                let mut retention = serde_json::from_str::<serde_json::Value>(&current)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let Some(object) = retention.as_object_mut() else {
+                    return Err(picto_library::LibraryError::InvalidState(
+                        "cloud retention settings are not an object".into(),
+                    ));
+                };
+                let was_legacy_default = object.get("deleted_blobs_days").and_then(|v| v.as_i64())
+                    == Some(30)
+                    && object.get("daily").and_then(|v| v.as_i64()) == Some(30)
+                    && object.get("weekly").and_then(|v| v.as_i64()) == Some(26)
+                    && object.get("yearly").and_then(|v| v.as_i64()) == Some(5)
+                    && object.get("epochs_days").and_then(|v| v.as_i64()) == Some(30)
+                    && object.get("full_media_history").and_then(|v| v.as_bool()) == Some(false);
+                if was_legacy_default || !object.contains_key("deleted_blobs_days") {
+                    object.insert("deleted_blobs_days".to_owned(), serde_json::json!(7));
+                }
+                object
+                    .entry("epochs_days".to_owned())
+                    .or_insert(serde_json::json!(30));
+                object
+                    .entry("full_media_history".to_owned())
+                    .or_insert(serde_json::json!(false));
+                let normalized = serde_json::to_string(&retention).map_err(|error| {
+                    picto_library::LibraryError::InvalidState(error.to_string())
+                })?;
+                let changed = transaction.execute(
+                    "UPDATE cloud_state SET retention_json = ?1
+                     WHERE singleton = 1 AND retention_json != ?1",
+                    [&normalized],
+                )?;
+                Ok((changed != 0).then_some(()))
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 pub fn set_paused_library(
@@ -502,5 +575,43 @@ mod tests {
 
         assert!(!snapshot_due_library(&application, 229, 30).unwrap());
         assert!(snapshot_due_library(&application, 230, 30).unwrap());
+    }
+
+    #[test]
+    fn retention_updates_preserve_deleted_blob_policy() {
+        let temp = tempfile::tempdir().unwrap();
+        let application =
+            LibraryApplication::create(temp.path().join("CloudRetention.library")).unwrap();
+
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Maintenance,
+                |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_state SET retention_json =
+                         '{\"daily\":30,\"weekly\":26,\"yearly\":5,\"epochs_days\":30,\"deleted_blobs_days\":30,\"full_media_history\":false}'
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        normalize_retention_library(&application).unwrap();
+
+        update_retention_library(
+            &application,
+            &serde_json::json!({"daily": 12, "weekly": 8, "yearly": 2}),
+        )
+        .unwrap();
+        let retention = configuration_library(&application).unwrap().retention;
+        assert_eq!(retention["daily"], 12);
+        assert_eq!(retention["weekly"], 8);
+        assert_eq!(retention["yearly"], 2);
+        assert_eq!(retention["deleted_blobs_days"], 7);
+        assert_eq!(retention["epochs_days"], 30);
+        assert_eq!(retention["full_media_history"], false);
     }
 }

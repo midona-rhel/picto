@@ -4755,21 +4755,28 @@ impl Library {
                 let mut files = std::collections::HashMap::new();
                 {
                     let mut statement = transaction.prepare_cached(
-                        "SELECT file.file_id, file.content_hash, file.file_path
+                        "SELECT file.file_id, file.content_hash, file.file_path,
+                                CASE WHEN cloud.remote_present = 1
+                                     THEN cloud.remote_extension ELSE NULL END
                          FROM media_item media
                          JOIN media_file file ON file.file_id = media.file_id
+                         LEFT JOIN cloud_blob_state cloud
+                           ON cloud.file_hash = file.content_hash
                          WHERE media.media_id = ?1",
                     )?;
                     for media_id in &media_ids {
-                        let (file_id, content_hash, file_path) =
-                            statement.query_row([media_id], |row| {
+                        let (file_id, content_hash, file_path, remote_extension) = statement
+                            .query_row([media_id], |row| {
                                 Ok((
                                     row.get::<_, u32>(0)?,
                                     row.get::<_, String>(1)?,
                                     row.get::<_, String>(2)?,
+                                    row.get::<_, Option<String>>(3)?,
                                 ))
                             })?;
-                        files.entry(file_id).or_insert((content_hash, file_path));
+                        files
+                            .entry(file_id)
+                            .or_insert((content_hash, file_path, remote_extension));
                     }
                 }
                 transaction.execute(
@@ -4807,13 +4814,55 @@ impl Library {
                 )?;
 
                 let mut cleanup = Vec::new();
-                for (file_id, (content_hash, file_path)) in files {
+                let (device_id, retention_json) = transaction.query_row(
+                    "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?;
+                let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
+                    .ok()
+                    .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
+                    .unwrap_or(7)
+                    .clamp(0, 3_650);
+                let deleted_at =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
+                        .ok_or_else(|| {
+                            LibraryError::InvalidInput("deletion timestamp is outside range".into())
+                        })?;
+                let purge_after = deleted_at + chrono::Duration::days(retention_days);
+
+                for (file_id, (content_hash, file_path, remote_extension)) in files {
                     let referenced = transaction.query_row(
                         "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
                         [file_id],
                         |row| row.get::<_, bool>(0),
                     )?;
                     if !referenced {
+                        if let Some(remote_extension) = remote_extension {
+                            transaction.execute(
+                                "INSERT INTO cloud_tombstone
+                                     (object_kind, object_key, mutation_id, hlc_physical_ms,
+                                      hlc_logical, device_id, causal_frontier_json,
+                                      deleted_at, purge_after)
+                                 VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
+                                 ON CONFLICT(object_kind, object_key) DO UPDATE SET
+                                     mutation_id = excluded.mutation_id,
+                                     hlc_physical_ms = excluded.hlc_physical_ms,
+                                     hlc_logical = excluded.hlc_logical,
+                                     device_id = excluded.device_id,
+                                     causal_frontier_json = excluded.causal_frontier_json,
+                                     deleted_at = excluded.deleted_at,
+                                     purge_after = excluded.purge_after",
+                                rusqlite::params![
+                                    format!("{content_hash}.{remote_extension}"),
+                                    uuid::Uuid::new_v4().to_string(),
+                                    deleted_at_ms,
+                                    device_id,
+                                    deleted_at.to_rfc3339(),
+                                    purge_after.to_rfc3339(),
+                                ],
+                            )?;
+                        }
                         transaction.execute(
                             "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
                              VALUES (?1, ?2, ?3)

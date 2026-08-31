@@ -102,12 +102,29 @@ pub(crate) fn insert_one(
             });
         }
     }
-    if transaction
-        .prepare_cached("SELECT EXISTS(SELECT 1 FROM deletion_tombstone WHERE stable_key = ?1)")?
-        .query_row([&input.stable_key], |row| row.get::<_, bool>(0))?
+    if let Some(deleted_at_ms) = transaction
+        .prepare_cached("SELECT deleted_at_ms FROM deletion_tombstone WHERE stable_key = ?1")?
+        .query_row([&input.stable_key], |row| row.get::<_, i64>(0))
+        .optional()?
     {
-        return Err(LibraryError::ImportDeleted);
+        if input.imported_at_ms <= deleted_at_ms {
+            return Err(LibraryError::ImportDeleted);
+        }
+        transaction
+            .prepare_cached("DELETE FROM deletion_tombstone WHERE stable_key = ?1")?
+            .execute([&input.stable_key])?;
     }
+
+    // A real ingestion after a deletion is a new add epoch. Retained cloud
+    // originals are content-addressed, so clearing the blob tombstone lets the
+    // cloud worker reuse the existing remote object instead of uploading it.
+    transaction
+        .prepare_cached(
+            "DELETE FROM cloud_tombstone
+             WHERE object_kind = 'blob'
+               AND (object_key = ?1 OR object_key LIKE ?1 || '.%')",
+        )?
+        .execute([&input.facts.content_hash])?;
 
     let existing_file = transaction
         .prepare_cached(

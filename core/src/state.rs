@@ -435,8 +435,13 @@ fn initialize_joined_database(
     transaction
         .execute(
             "UPDATE cloud_state SET device_id = ?1, provider = ?2, account_label = ?3,
-                    remote_root = ?4, paused = 0, state = 'idle', phase = 'idle',
-                    blocking = 0, completed_units = 0, total_units = NULL, message = '',
+                    remote_root = ?4, paused = 0, state = 'idle', phase = 'blobs',
+                    blocking = CASE WHEN EXISTS (SELECT 1 FROM media_file) THEN 1 ELSE 0 END,
+                    completed_units = 0,
+                    total_units = CASE WHEN EXISTS (SELECT 1 FROM media_file)
+                        THEN (SELECT COALESCE(SUM(MAX(size_bytes, 1)), 0) FROM media_file) ELSE NULL END,
+                    message = CASE WHEN EXISTS (SELECT 1 FROM media_file)
+                        THEN 'Restoring library media' ELSE '' END,
                     pending_blobs = (SELECT COUNT(*) FROM media_file), missing_blobs = 0
              WHERE singleton = 1",
             rusqlite::params![
@@ -704,7 +709,7 @@ async fn join_workers(workers: Vec<WorkerHandle>) {
 
 #[cfg(test)]
 mod tests {
-    use super::QUEUE_CLOUD_MEDIA_RECOVERY_SQL;
+    use super::{initialize_joined_database, QUEUE_CLOUD_MEDIA_RECOVERY_SQL};
 
     #[test]
     fn cloud_join_recovery_upsert_is_valid_sqlite() {
@@ -713,5 +718,63 @@ mod tests {
         connection
             .execute(QUEUE_CLOUD_MEDIA_RECOVERY_SQL, ["2026-08-31T00:00:00Z"])
             .unwrap();
+    }
+
+    #[test]
+    fn cloud_join_starts_blocking_byte_accurate_media_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        let mut connection = rusqlite::Connection::open(&database_path).unwrap();
+        picto_library::schema::create(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO media_file
+                     (file_id, content_hash, file_path, mime, size_bytes)
+                 VALUES (1, ?1, 'blobs/a', 'image/png', 12000)",
+                ["a".repeat(64)],
+            )
+            .unwrap();
+        drop(connection);
+
+        initialize_joined_database(
+            &database_path,
+            "google_drive",
+            "Personal",
+            "/Cloud/My Drive",
+        )
+        .unwrap();
+
+        let connection = rusqlite::Connection::open(database_path).unwrap();
+        let state = connection
+            .query_row(
+                "SELECT state, phase, blocking, completed_units, total_units,
+                        message, pending_blobs
+                 FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            state,
+            (
+                "idle".into(),
+                "blobs".into(),
+                1,
+                0,
+                12000,
+                "Restoring library media".into(),
+                1,
+            )
+        );
     }
 }

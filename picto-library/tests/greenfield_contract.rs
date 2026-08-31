@@ -200,6 +200,28 @@ fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
         .permanently_delete(&target, 1_700_000_000_100)
         .unwrap();
     assert!(library.ingest(&input).is_err());
+
+    let mut later_readd = input.clone();
+    later_readd.imported_at_ms = 1_700_000_000_200;
+    let (readded, _) = library.ingest(&later_readd).unwrap();
+    assert_ne!(readded, root_id);
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM deletion_tombstone WHERE stable_key = ?1",
+                        [&input.stable_key],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    0
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
 }
 
 #[test]
@@ -1531,7 +1553,10 @@ fn selection_image_compatibility_treats_a_collection_as_one_root_with_images() {
     let mixed_summary = library.selection_summary(&mixed_target).unwrap();
     assert!(!mixed_summary.all_selected_roots_have_images);
     assert_eq!(mixed_summary.taggable_root_count, 1);
-    assert_eq!(library.ordered_image_selection(&mixed_target).unwrap(), vec![collection]);
+    assert_eq!(
+        library.ordered_image_selection(&mixed_target).unwrap(),
+        vec![collection]
+    );
 }
 
 #[test]
@@ -3791,6 +3816,21 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let converted = library
         .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
         .unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::Cloud,
+            |transaction| {
+                transaction.execute(
+                    "INSERT INTO cloud_blob_state
+                         (file_hash, state, remote_present, remote_extension, updated_at)
+                     VALUES (?1, 'available', 1, 'png', '2026-08-31T00:00:00Z')",
+                    [shared_hash],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
     let first = converted[0].0;
     let second = converted[1].0;
 
@@ -3851,6 +3891,15 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
                     })?,
                     1
                 );
+                let (object_key, retention_days): (String, i64) = connection.query_row(
+                    "SELECT object_key,
+                            CAST(julianday(purge_after) - julianday(deleted_at) AS INTEGER)
+                     FROM cloud_tombstone WHERE object_kind = 'blob'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(object_key, format!("{shared_hash}.png"));
+                assert_eq!(retention_days, 7);
                 Ok(())
             },
         )

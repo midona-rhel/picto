@@ -1461,5 +1461,8 @@
   "Zoom Level": "Nivel de zoom",
   "Zoom out": "Fuera.",
   "Zoom Out": "Alejar",
-  "Zoom to fit": "Zoom para adaptarse"
+  "Zoom to fit": "Zoom para adaptarse",
+  "Keep deleted files": "Conservar archivos eliminados",
+  "days": "días",
+  "Recently deleted cloud files can be restored immediately during this period.": "Los archivos de la nube eliminados recientemente se pueden restaurar inmediatamente durante este período."
 }

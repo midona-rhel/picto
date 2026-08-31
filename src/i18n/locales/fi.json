@@ -1461,5 +1461,8 @@
   "Zoom Level": "Suurennustaso",
   "Zoom out": "Loitonna",
   "Zoom Out": "Loitonna",
-  "Zoom to fit": "Sovitettava zoomaus"
+  "Zoom to fit": "Sovitettava zoomaus",
+  "Keep deleted files": "Säilytä poistetut tiedostot",
+  "days": "päivää",
+  "Recently deleted cloud files can be restored immediately during this period.": "Äskettäin poistetut pilvitiedostot voidaan palauttaa heti tämän ajanjakson aikana."
 }
