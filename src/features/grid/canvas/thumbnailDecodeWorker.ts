@@ -90,10 +90,18 @@ function startLoad(entry: PlanEntry): void {
   inFlight.set(fileHash, controller);
 
   void (async () => {
+    let stage: 'fetch' | 'decode' = 'fetch';
+    let status: number | undefined;
+    let contentType: string | undefined;
+    let contentBytes: number | undefined;
     try {
       const response = await fetch(url, { signal: controller.signal });
+      status = response.status;
+      contentType = response.headers.get('content-type') ?? undefined;
       if (!response.ok) throw new Error(`fetch ${response.status}`);
+      stage = 'decode';
       const blob = await response.blob();
+      contentBytes = blob.size;
       const bitmap = await createImageBitmap(blob);
 
       if (controller.signal.aborted) { bitmap.close(); return; }
@@ -106,8 +114,23 @@ function startLoad(entry: PlanEntry): void {
     } catch (error) {
       inFlight.delete(fileHash);
       if ((error as Error)?.name === 'AbortError') return;
-      failCounts.set(fileHash, (failCounts.get(fileHash) ?? 0) + 1);
-      ctx.postMessage({ type: 'error', fileHash, quality });
+      const attempt = (failCounts.get(fileHash) ?? 0) + 1;
+      failCounts.set(fileHash, attempt);
+      ctx.postMessage({
+        type: 'error',
+        fileHash,
+        quality,
+        failure: {
+          url,
+          stage,
+          message: error instanceof Error ? error.message : String(error),
+          attempt,
+          terminal: attempt >= MAX_FAILURES,
+          status,
+          contentType,
+          contentBytes,
+        },
+      });
     } finally {
       pumpLoads();
     }

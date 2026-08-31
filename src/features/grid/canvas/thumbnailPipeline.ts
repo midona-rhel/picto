@@ -13,6 +13,7 @@
 
 import {
   ThumbnailDecodeClient,
+  type ThumbnailDecodeFailure,
   type ThumbnailDecodePlanEntry,
   type ThumbnailDecodeQuality,
 } from './thumbnailDecodeClient';
@@ -44,6 +45,8 @@ export class ThumbnailPipeline {
   private totalBytes = 0;
   private readonly decoder: ThumbnailDecodeClient;
   private readonly revisions = new Map<string, number>();
+  private readonly installedQuality = new Map<string, ThumbnailDecodeQuality>();
+  private readonly fullEligibleHashes = new Set<string>();
   private activeHashes = new Set<string>();
   private readonly pendingFullBitmaps = new Map<string, ImageBitmap>();
   private fullAdmissionFrame: number | null = null;
@@ -65,7 +68,7 @@ export class ThumbnailPipeline {
     this.onBitmapAvailable = onBitmapAvailable;
     this.decoder = new ThumbnailDecodeClient(
       (hash, bitmap, quality) => this.handleBitmap(hash, bitmap, quality),
-      (hash, quality) => this.handleError(hash, quality),
+      (hash, quality, failure) => this.handleError(hash, quality, failure),
     );
   }
 
@@ -101,7 +104,13 @@ export class ThumbnailPipeline {
     buf.length = tiles.length;
     for (let i = 0; i < tiles.length; i++) {
       const t = tiles[i];
-      const needsFull = shouldLoadFullQualityOriginal(t, FULL_QUALITY_THRESHOLD_PX);
+      const fullEligible = shouldLoadFullQualityOriginal(t, FULL_QUALITY_THRESHOLD_PX);
+      if (fullEligible) this.fullEligibleHashes.add(t.fileHash);
+      else this.fullEligibleHashes.delete(t.fileHash);
+      // Large tiles are progressive: show the inexpensive thumbnail first,
+      // then replace it with the original. A failed original decode must never
+      // leave a tile blank when its thumbnail is already available.
+      const needsFull = fullEligible && this.installedQuality.has(t.fileHash);
       const revision = this.revisions.get(t.fileHash) ?? 0;
       const url = needsFull
         ? mediaFileUrl(t.fileHash, t.mime)
@@ -153,6 +162,8 @@ export class ThumbnailPipeline {
         entry.bytes = 0;
       }
       entry.state = 'idle';
+      this.installedQuality.delete(hash);
+      this.fullEligibleHashes.delete(hash);
     }
   }
 
@@ -161,6 +172,8 @@ export class ThumbnailPipeline {
     this.destroyed = true;
     this.lastPlanFingerprint = -1;
     this.activeHashes.clear();
+    this.installedQuality.clear();
+    this.fullEligibleHashes.clear();
     this.decoder.clear();
     if (this.fullAdmissionFrame != null) {
       this.cancelFrame(this.fullAdmissionFrame);
@@ -191,10 +204,14 @@ export class ThumbnailPipeline {
       return;
     }
 
-    this.installBitmap(hash, bitmap);
+    this.installBitmap(hash, bitmap, quality);
   }
 
-  private installBitmap(hash: string, bitmap: ImageBitmap): void {
+  private installBitmap(
+    hash: string,
+    bitmap: ImageBitmap,
+    quality: ThumbnailDecodeQuality,
+  ): void {
     let entry = this.cache.get(hash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
@@ -211,6 +228,13 @@ export class ThumbnailPipeline {
     entry.bytes = bitmap.width * bitmap.height * 4;
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
+    this.installedQuality.set(hash, quality);
+
+    if (quality === 'thumbnail' && this.fullEligibleHashes.has(hash)) {
+      // The next draw upgrades this tile to the original. Resetting the
+      // fingerprint is necessary because its layout did not change.
+      this.lastPlanFingerprint = -1;
+    }
 
     if (!isUpgrade) this.onBitmapAvailable(hash);
     this.onDirty();
@@ -225,7 +249,7 @@ export class ThumbnailPipeline {
       const [hash, bitmap] = next;
       this.pendingFullBitmaps.delete(hash);
       if (this.destroyed) bitmap.close();
-      else this.installBitmap(hash, bitmap);
+      else this.installBitmap(hash, bitmap, 'full');
       this.scheduleFullAdmission();
     });
   }
@@ -241,7 +265,18 @@ export class ThumbnailPipeline {
     }
   }
 
-  private handleError(hash: string, quality: ThumbnailDecodeQuality): void {
+  private handleError(
+    hash: string,
+    quality: ThumbnailDecodeQuality,
+    failure?: ThumbnailDecodeFailure,
+  ): void {
+    if (failure?.terminal) {
+      console.warn('[grid] thumbnail decode exhausted retries', {
+        hash,
+        quality,
+        ...failure,
+      });
+    }
     let entry = this.cache.get(hash);
     if (quality === 'full' && entry?.thumb) return;
     if (!entry) {

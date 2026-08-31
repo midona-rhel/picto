@@ -4,6 +4,7 @@ import type { ThumbnailDecodeQuality } from './thumbnailDecodeClient';
 let deliverBitmap: ((hash: string, bitmap: ImageBitmap, quality: ThumbnailDecodeQuality) => void) | null = null;
 let deliverError: ((hash: string, quality: ThumbnailDecodeQuality) => void) | null = null;
 const invalidated: string[] = [];
+const plans: Array<Array<{ fileHash: string; url: string; quality: ThumbnailDecodeQuality }>> = [];
 
 vi.mock('./thumbnailDecodeClient', () => ({
   ThumbnailDecodeClient: class {
@@ -11,7 +12,9 @@ vi.mock('./thumbnailDecodeClient', () => ({
       deliverBitmap = onBitmap;
       deliverError = onError;
     }
-    sendPlan() {}
+    sendPlan(entries: Array<{ fileHash: string; url: string; quality: ThumbnailDecodeQuality }>) {
+      plans.push(entries.map((entry) => ({ ...entry })));
+    }
     invalidate(hash: string) { invalidated.push(hash); }
     clear() {}
     terminate() {}
@@ -29,6 +32,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     deliverBitmap = null;
     deliverError = null;
     invalidated.length = 0;
+    plans.length = 0;
   });
 
   it('installs at most one full-resolution bitmap per animation frame', () => {
@@ -71,6 +75,30 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     deliverError?.('item', 'full');
     expect(pipeline.get('item')?.thumb).toBe(thumbnail);
     expect(pipeline.get('item')?.state).toBe('shown');
+  });
+
+  it('loads a thumbnail before upgrading a large tile to the original', () => {
+    const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const tile = { fileHash: 'large', mime: 'image/png', w: 1200, h: 900, cy: 100 };
+
+    pipeline.updatePlan([tile], 100);
+    expect(plans[plans.length - 1]?.[0]).toMatchObject({
+      fileHash: 'large',
+      quality: 'thumbnail',
+      url: 'media://localhost/thumb/large.jpg?v=0',
+    });
+
+    deliverBitmap?.('large', bitmap(512, 384), 'thumbnail');
+    pipeline.updatePlan([tile], 100);
+    expect(plans[plans.length - 1]?.[0]).toMatchObject({
+      fileHash: 'large',
+      quality: 'full',
+      url: 'media://localhost/file/large.png',
+    });
+
+    deliverError?.('large', 'full');
+    expect(pipeline.get('large')?.thumb).not.toBeNull();
+    expect(pipeline.get('large')?.state).toBe('shown');
   });
 
   it('closes queued full-resolution bitmaps during teardown', () => {

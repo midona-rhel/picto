@@ -4,6 +4,17 @@ import ThumbnailWorker from './thumbnailDecodeWorker?worker';
 
 export type ThumbnailDecodeQuality = 'thumbnail' | 'full';
 
+export interface ThumbnailDecodeFailure {
+  url: string;
+  stage: 'fetch' | 'decode';
+  message: string;
+  attempt: number;
+  terminal: boolean;
+  status?: number;
+  contentType?: string;
+  contentBytes?: number;
+}
+
 export interface ThumbnailDecodePlanEntry {
   fileHash: string;
   url: string;
@@ -15,7 +26,11 @@ type BitmapCallback = (
   bitmap: ImageBitmap,
   quality: ThumbnailDecodeQuality,
 ) => void;
-type ErrorCallback = (fileHash: string, quality: ThumbnailDecodeQuality) => void;
+type ErrorCallback = (
+  fileHash: string,
+  quality: ThumbnailDecodeQuality,
+  failure: ThumbnailDecodeFailure,
+) => void;
 
 type WorkerFactory = () => Worker;
 
@@ -37,10 +52,16 @@ export class ThumbnailDecodeClient {
         if (message.type === 'bitmap') {
           this.onBitmap(message.fileHash, message.bitmap, message.quality);
         } else if (message.type === 'error') {
-          this.onError(message.fileHash, message.quality);
+          this.onError(message.fileHash, message.quality, message.failure);
         }
       };
-      worker.onerror = () => {
+      worker.onerror = (event) => {
+        console.error('[grid] thumbnail decoder worker crashed', {
+          message: event.message,
+          filename: event.filename,
+          line: event.lineno,
+          column: event.colno,
+        });
         worker.terminate();
         if (this.worker === worker) this.worker = null;
       };

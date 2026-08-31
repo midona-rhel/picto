@@ -41,4 +41,24 @@ describe('ThumbnailDecodeClient', () => {
     expect(firstWorker.terminate).toHaveBeenCalledOnce();
     expect(secondWorker.terminate).not.toHaveBeenCalled();
   });
+
+  it('forwards actionable decode failure details', () => {
+    const worker = fakeWorker();
+    const onError = vi.fn();
+    const client = new ThumbnailDecodeClient(vi.fn(), onError, () => worker as unknown as Worker);
+    client.sendPlan([]);
+    const failure = {
+      url: 'media://localhost/file/deadbeef.png',
+      stage: 'decode',
+      message: 'The source image could not be decoded',
+      attempt: 2,
+      terminal: true,
+    } as const;
+
+    worker.onmessage?.({
+      data: { type: 'error', fileHash: 'deadbeef', quality: 'full', failure },
+    } as MessageEvent);
+
+    expect(onError).toHaveBeenCalledWith('deadbeef', 'full', failure);
+  });
 });
