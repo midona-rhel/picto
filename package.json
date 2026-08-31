@@ -2,7 +2,7 @@
   "name": "picto",
   "productName": "Picto",
   "private": true,
-  "version": "0.6.4-alpha",
+  "version": "0.6.5-alpha",
   "description": "Media library manager",
   "author": "Picto <noreply@picto.app>",
   "license": "MIT",
