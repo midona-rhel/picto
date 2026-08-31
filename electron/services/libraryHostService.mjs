@@ -649,13 +649,12 @@ export function createLibraryHostService({
       throw new Error('Invalid cloud folder location');
     }
     const config = getCachedConfig();
-    const cloudRoots = Array.isArray(config.cloudRoots) ? config.cloudRoots : [];
-    config.cloudRoots = [
-      { provider, account_label: accountLabel, path: rootPath },
-      ...cloudRoots.filter((entry) => entry?.provider !== provider || entry?.path !== rootPath),
-    ];
+    config.cloudLocations = {
+      ...(config.cloudLocations ?? {}),
+      [provider]: { provider, account_label: accountLabel, path: rootPath },
+    };
     await saveGlobalConfig(config);
-    return config.cloudRoots;
+    return config.cloudLocations;
   }
 
   async function failActiveLibrary(message) {

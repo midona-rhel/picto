@@ -12,6 +12,14 @@
   overflow: hidden;
 }
 
+/* The BrowserWindow is transparent on Windows. The global body background
+   would otherwise remain visible as square pixels outside this clipped shell. */
+:global(html),
+:global(body),
+:global(#root) {
+  background: transparent;
+}
+
 /* Keep the directional highlight above all window content. */
 .root::after {
   content: '';

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 test('remembers a manually selected cloud root once', async () => {
-  const config = { cloudRoots: [] };
+  const config = { cloudLocations: {} };
   let saved = null;
   const service = createLibraryHostService({
     fs: {}, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
@@ -20,7 +20,24 @@ test('remembers a manually selected cloud root once', async () => {
   await service.rememberCloudRoot(root);
   await service.rememberCloudRoot(root);
 
-  expect(saved.cloudRoots).toEqual([root]);
+  expect(saved.cloudLocations).toEqual({ google_drive: root });
+});
+
+test('keeps only one selected root for each cloud provider', async () => {
+  const dropbox = { provider: 'dropbox', account_label: 'Dropbox', path: 'D:\\Dropbox' };
+  const oldDrive = { provider: 'google_drive', account_label: 'Old', path: 'G:\\My Drive' };
+  const newDrive = { provider: 'google_drive', account_label: 'New', path: 'H:\\My Drive' };
+  const config = { cloudLocations: { google_drive: oldDrive, dropbox } };
+  const service = createLibraryHostService({
+    fs: {}, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+    addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+    getCachedConfig: () => config,
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {}, getCurrentLibraryRoot: () => null, setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {}, sendToAllWindows: () => {}, buildAppMenu: () => {},
+  });
+
+  await expect(service.rememberCloudRoot(newDrive)).resolves.toEqual({ google_drive: newDrive, dropbox });
 });
 
 test('an initial navigation failure closes the library and preserves its error for Library Manager', async () => {

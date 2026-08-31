@@ -83,8 +83,8 @@ impl DirectoryProvider {
         Ok(Self { root })
     }
 
-    pub fn open_provider_root(provider: &str, root: impl Into<PathBuf>) -> Result<Self, String> {
-        Self::open_existing(canonical_provider_root(provider, root.into()))
+    pub fn open_provider_root(_provider: &str, root: impl Into<PathBuf>) -> Result<Self, String> {
+        Self::open_existing(root)
     }
 
     pub fn verify_writable(&self) -> Result<(), String> {
@@ -266,6 +266,8 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
         return roots;
     };
 
+    detect_dropbox_roots(&mut roots, &home);
+
     #[cfg(target_os = "macos")]
     {
         let cloud_storage = home.join("Library").join("CloudStorage");
@@ -273,7 +275,7 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
             for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if let Some(account) = name.strip_prefix("GoogleDrive-") {
-                    push_provider_directory(&mut roots, "google_drive", account, entry.path());
+                    push_google_content_roots(&mut roots, account, &entry.path());
                 } else if name == "Dropbox" || name.starts_with("Dropbox-") {
                     let account = name.strip_prefix("Dropbox-").unwrap_or("Dropbox");
                     push_provider_directory(&mut roots, "dropbox", account, entry.path());
@@ -282,16 +284,25 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
-        push_provider_directory(&mut roots, "dropbox", "Dropbox", home.join("Dropbox"));
-        push_provider_directory(
-            &mut roots,
-            "google_drive",
-            "Google Drive",
-            home.join("Google Drive"),
-        );
+        // Drive for desktop assigns each streamed account its own drive letter.
+        // Enumerating the mounted roots also handles non-default letters and
+        // multiple signed-in accounts without relying on a display name.
+        for letter in b'A'..=b'Z' {
+            let drive = PathBuf::from(format!("{}:\\", letter as char));
+            if is_google_drive_volume(&drive) || drive.join("My Drive").is_dir() {
+                push_google_content_roots(
+                    &mut roots,
+                    &format!("Google Drive ({})", letter as char),
+                    &drive,
+                );
+            }
+        }
     }
+
+    // Google does not ship Drive for desktop on Linux. An explicitly mounted
+    // location remains available there through PICTO_GOOGLE_DRIVE_ROOT.
     roots.sort_by(|left, right| {
         (&left.provider, &left.account_label, &left.path).cmp(&(
             &right.provider,
@@ -303,14 +314,30 @@ pub fn detect_roots() -> Vec<DetectedProviderRoot> {
     roots
 }
 
-pub fn canonical_provider_root(provider: &str, root: PathBuf) -> PathBuf {
-    if provider == "google_drive" {
-        let my_drive = root.join("My Drive");
-        if my_drive.is_dir() {
-            return my_drive;
-        }
+/// Resolve a user choice to an installed provider root. A writable arbitrary
+/// directory is deliberately not enough: otherwise Picto can claim cloud sync
+/// while writing to a location no provider uploads.
+pub fn validate_root(
+    provider: &str,
+    root: impl Into<PathBuf>,
+) -> Result<DetectedProviderRoot, String> {
+    if !matches!(provider, "google_drive" | "dropbox") {
+        return Err(format!("Unsupported cloud folder provider: {provider}"));
     }
-    root
+    let selected = root.into();
+    let selected_identity = path_identity(&selected);
+    let detected = detect_roots().into_iter().find(|candidate| {
+        candidate.provider == provider
+            && path_identity(Path::new(&candidate.path)) == selected_identity
+    });
+    detected.ok_or_else(|| {
+        let name = if provider == "google_drive" {
+            "Google Drive"
+        } else {
+            "Dropbox"
+        };
+        format!("The selected folder is not the root of an installed {name} account")
+    })
 }
 
 fn home_directory() -> Option<PathBuf> {
@@ -320,6 +347,116 @@ fn home_directory() -> Option<PathBuf> {
         "HOME"
     })
     .map(PathBuf::from)
+}
+
+fn path_identity(path: &Path) -> String {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let value = resolved
+        .to_string_lossy()
+        .trim_end_matches(['/', '\\'])
+        .to_string();
+    if cfg!(target_os = "windows") {
+        value.to_lowercase()
+    } else {
+        value
+    }
+}
+
+fn detect_dropbox_roots(roots: &mut Vec<DetectedProviderRoot>, home: &Path) {
+    let mut info_files = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        for variable in ["APPDATA", "LOCALAPPDATA"] {
+            if let Some(directory) = std::env::var_os(variable) {
+                info_files.push(PathBuf::from(directory).join("Dropbox").join("info.json"));
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    info_files.push(home.join(".dropbox").join("info.json"));
+
+    for info_file in info_files {
+        let Ok(contents) = std::fs::read(&info_file) else {
+            continue;
+        };
+        let Ok(accounts) =
+            serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&contents)
+        else {
+            continue;
+        };
+        for (kind, account) in accounts {
+            let Some(path) = account.get("path").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let label = if kind == "business" {
+                "Dropbox Business"
+            } else {
+                "Dropbox"
+            };
+            push_provider_directory(roots, "dropbox", label, PathBuf::from(path));
+        }
+    }
+
+    // Older/simple installations may not expose info.json yet. This fallback
+    // remains constrained to Dropbox's documented default folder.
+    push_provider_directory(roots, "dropbox", "Dropbox", home.join("Dropbox"));
+}
+
+fn push_google_content_roots(
+    roots: &mut Vec<DetectedProviderRoot>,
+    account_label: &str,
+    account_container: &Path,
+) {
+    let Ok(entries) = std::fs::read_dir(account_container) else {
+        return;
+    };
+    for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        push_if_directory(
+            roots,
+            "google_drive",
+            &format!("{account_label} · {name}"),
+            entry.path(),
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_google_drive_volume(root: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    let path = root
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut volume_name = [0_u16; 128];
+    let result = unsafe {
+        GetVolumeInformationW(
+            path.as_ptr(),
+            volume_name.as_mut_ptr(),
+            volume_name.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result == 0 {
+        return false;
+    }
+    let length = volume_name
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(volume_name.len());
+    String::from_utf16_lossy(&volume_name[..length])
+        .to_lowercase()
+        .contains("google drive")
 }
 
 fn push_if_directory(
@@ -343,12 +480,7 @@ fn push_provider_directory(
     account_label: &str,
     path: PathBuf,
 ) {
-    push_if_directory(
-        roots,
-        provider,
-        account_label,
-        canonical_provider_root(provider, path),
-    );
+    push_if_directory(roots, provider, account_label, path);
 }
 
 impl CloudProvider for DirectoryProvider {
@@ -543,22 +675,6 @@ mod tests {
     }
 
     #[test]
-    fn google_drive_account_container_resolves_to_my_drive() {
-        let account_root = tempfile::tempdir().unwrap();
-        let my_drive = account_root.path().join("My Drive");
-        std::fs::create_dir(&my_drive).unwrap();
-
-        assert_eq!(
-            canonical_provider_root("google_drive", account_root.path().to_path_buf()),
-            my_drive
-        );
-        assert_eq!(
-            canonical_provider_root("dropbox", account_root.path().to_path_buf()),
-            account_root.path()
-        );
-    }
-
-    #[test]
     fn writable_probe_does_not_leave_a_test_file() {
         let root = tempfile::tempdir().unwrap();
         let provider = DirectoryProvider::open_existing(root.path()).unwrap();
@@ -571,5 +687,42 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn google_content_roots_keep_provider_supplied_names() {
+        let container = tempfile::tempdir().unwrap();
+        for name in ["Min enhet", "Shared folders"] {
+            std::fs::create_dir(container.path().join(name)).unwrap();
+        }
+        std::fs::create_dir(container.path().join(".internal")).unwrap();
+        let mut roots = Vec::new();
+
+        push_google_content_roots(&mut roots, "account", container.path());
+
+        assert_eq!(roots.len(), 2);
+        assert!(roots.iter().any(|root| root.path.ends_with("Min enhet")));
+        assert!(roots
+            .iter()
+            .any(|root| root.path.ends_with("Shared folders")));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn dropbox_uses_its_documented_account_metadata() {
+        let home = tempfile::tempdir().unwrap();
+        let dropbox = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".dropbox")).unwrap();
+        std::fs::write(
+            home.path().join(".dropbox/info.json"),
+            serde_json::json!({ "personal": { "path": dropbox.path() } }).to_string(),
+        )
+        .unwrap();
+        let mut roots = Vec::new();
+
+        detect_dropbox_roots(&mut roots, home.path());
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(Path::new(&roots[0].path), dropbox.path());
     }
 }

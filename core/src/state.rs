@@ -158,12 +158,29 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
     if command == "cloud.libraries.discover" {
         #[derive(serde::Deserialize)]
         struct Input {
+            provider: String,
             root_path: String,
         }
         let input: Input = serde_json::from_str(args_json)
             .map_err(|error| format!("Invalid command arguments: {error}"))?;
-        return serde_json::to_string(&crate::cloud::discover_libraries(&input.root_path).await?)
-            .map_err(|error| error.to_string());
+        return serde_json::to_string(
+            &crate::cloud::discover_libraries(&input.provider, &input.root_path).await?,
+        )
+        .map_err(|error| error.to_string());
+    }
+    if command == "cloud.provider.validate" {
+        #[derive(serde::Deserialize)]
+        struct Input {
+            provider: String,
+            root_path: String,
+        }
+        let input: Input = serde_json::from_str(args_json)
+            .map_err(|error| format!("Invalid command arguments: {error}"))?;
+        return serde_json::to_string(&crate::cloud::provider::validate_root(
+            &input.provider,
+            input.root_path,
+        )?)
+        .map_err(|error| error.to_string());
     }
     if command == "cloud.restore.start" || command == "cloud.library.join" {
         let _invocations = invocation_lock().write().await;
@@ -355,10 +372,8 @@ async fn join_cloud_library(args_json: &str) -> Result<String, String> {
     if database_path.exists() {
         return Err("The destination already contains a Picto library".to_string());
     }
-    let provider = crate::cloud::provider::DirectoryProvider::open_provider_root(
-        &input.provider,
-        &input.root_path,
-    )?;
+    let validated = crate::cloud::provider::validate_root(&input.provider, &input.root_path)?;
+    let provider = crate::cloud::provider::DirectoryProvider::open_existing(&validated.path)?;
     let prepared =
         crate::cloud::snapshot::prepare_join(&provider, &input.library_id, &target_root).await?;
 
@@ -379,7 +394,7 @@ async fn join_cloud_library(args_json: &str) -> Result<String, String> {
         &database_path,
         &input.provider,
         &input.account_label,
-        &input.root_path,
+        &validated.path,
     ) {
         let failed = target_root.join(format!("failed-cloud-join-{}.sqlite", uuid::Uuid::new_v4()));
         let _ = std::fs::rename(&database_path, failed);

@@ -44,4 +44,5 @@ test('clips the transparent Library Manager surface to rounded corners', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/features/library/LibraryManager.module.css'), 'utf8');
   expect(source).toContain('border-radius: 10px');
   expect(source).toContain('clip-path: inset(0 round 10px)');
+  expect(source).toMatch(/:global\(body\)[\s\S]*?background: transparent/);
 });

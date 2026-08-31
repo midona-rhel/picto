@@ -25,6 +25,10 @@ env:
 jobs:
   alpha-verify:
     name: alpha:verify
+    # Release branches are the gate. A tag points at that already-gated commit;
+    # rerunning the entire test suite before the three platform builds only
+    # duplicated the slowest work.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,7 +97,7 @@ jobs:
     needs: alpha-verify
     # Release branches are preflight-only. Packaging them as well as their tag
     # doubled every platform build and encouraged tagging before CI was green.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && (startsWith(github.ref, 'refs/tags/') || needs.alpha-verify.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:

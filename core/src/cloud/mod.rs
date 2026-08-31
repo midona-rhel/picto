@@ -157,10 +157,8 @@ pub fn configure_library(
             input.provider
         ));
     }
-    let root = provider::canonical_provider_root(
-        &input.provider,
-        std::path::PathBuf::from(&input.root_path),
-    );
+    let validated = provider::validate_root(&input.provider, &input.root_path)?;
+    let root = std::path::PathBuf::from(validated.path);
     let provider = provider::DirectoryProvider::open_existing(&root)?;
     provider.verify_writable()?;
     let root_path = root.to_string_lossy().into_owned();
@@ -256,8 +254,12 @@ pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Res
         .map_err(|error| error.to_string())
 }
 
-pub async fn discover_libraries(root_path: &str) -> Result<Vec<CloudLibraryOption>, String> {
-    let provider = provider::DirectoryProvider::open_existing(root_path)?;
+pub async fn discover_libraries(
+    provider_name: &str,
+    root_path: &str,
+) -> Result<Vec<CloudLibraryOption>, String> {
+    let validated = provider::validate_root(provider_name, root_path)?;
+    let provider = provider::DirectoryProvider::open_existing(validated.path)?;
     let mut libraries = Vec::new();
     for manifest in provider.library_manifests()? {
         let value: serde_json::Value = serde_json::from_slice(&provider.read_local(&manifest)?)

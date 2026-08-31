@@ -5,7 +5,7 @@ import path from 'node:path';
 const DEFAULT_CONFIG = {
   libraryHistory: [],
   pinnedLibraries: [],
-  cloudRoots: [],
+  cloudLocations: {},
   lastLibrary: null,
   theme: null,
   windowState: {
@@ -21,11 +21,27 @@ export function getConfigPath() {
 
 export async function loadGlobalConfig() {
   const configPath = getConfigPath();
+  let migratedLegacyCloudRoots = false;
   try {
     const raw = await fs.readFile(configPath, 'utf-8');
-    cachedConfig = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    cachedConfig = { ...DEFAULT_CONFIG, ...parsed, cloudLocations: parsed.cloudLocations ?? {} };
+    // cloudRoots allowed several arbitrary locations per provider. Do not
+    // migrate ambiguous/unvalidated choices into the stricter configuration.
+    if (Object.hasOwn(cachedConfig, 'cloudRoots')) {
+      delete cachedConfig.cloudRoots;
+      migratedLegacyCloudRoots = true;
+    }
   } catch {
     cachedConfig = { ...DEFAULT_CONFIG };
+  }
+  if (migratedLegacyCloudRoots) {
+    try {
+      await saveGlobalConfig(cachedConfig);
+    } catch {
+      // Keep the usable in-memory configuration even if migration persistence
+      // must be retried on the next launch.
+    }
   }
   return cachedConfig;
 }

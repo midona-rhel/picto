@@ -54,7 +54,7 @@ interface LibraryConfigResult {
   }>;
   currentPath: string | null;
   libraryFailure?: { path?: string | null; message: string } | null;
-  cloudRoots?: DetectedCloudRoot[];
+  cloudLocations?: Partial<Record<DetectedCloudRoot['provider'], DetectedCloudRoot>>;
   existsMap: Record<string, boolean>;
 }
 
@@ -166,13 +166,31 @@ export function LibraryManager() {
         invoke<DetectedCloudRoot[]>('cloud.providers.detect'),
         pictoLibrary().getConfig() as Promise<LibraryConfigResult>,
       ]);
-      const roots = [...(globalConfig.cloudRoots ?? []), ...detectedRoots].filter(
-        (root, index, all) => all.findIndex((candidate) => candidate.provider === root.provider && candidate.path === root.path) === index,
+      const remembered = await Promise.all(Object.values(globalConfig.cloudLocations ?? {}).map(async (root) => {
+        try {
+          return await invoke<DetectedCloudRoot>('cloud.provider.validate', {
+            provider: root.provider,
+            root_path: root.path,
+          });
+        } catch {
+          return null;
+        }
+      }));
+      const selectedByProvider = new Map(
+        remembered.filter((root): root is DetectedCloudRoot => root !== null)
+          .map((root) => [root.provider, root]),
       );
+      const roots = (['google_drive', 'dropbox'] as const).flatMap((provider) => {
+        const selected = selectedByProvider.get(provider);
+        return selected ? [selected] : detectedRoots.filter((root) => root.provider === provider);
+      });
       setCloudRoots(roots);
       const discovered = await Promise.all(roots.map(async (root) => {
         try {
-          const libraries = await invoke<Omit<CloudLibraryChoice, 'root'>[]>('cloud.libraries.discover', { root_path: root.path });
+          const libraries = await invoke<Omit<CloudLibraryChoice, 'root'>[]>('cloud.libraries.discover', {
+            provider: root.provider,
+            root_path: root.path,
+          });
           return libraries.map((library) => ({ ...library, root }));
         } catch {
           return [];
@@ -403,6 +421,7 @@ export function LibraryManager() {
 
   const configureCloud = (root: DetectedCloudRoot) =>
     run(`cloud:${root.path}`, async () => {
+      await pictoLibrary().rememberCloudRoot(root);
       await invoke('cloud.configure', {
         provider: root.provider,
         account_label: root.account_label,
@@ -422,14 +441,11 @@ export function LibraryManager() {
       });
       const rootPath = Array.isArray(result) ? result[0] : result;
       if (!rootPath) return;
-      const root: DetectedCloudRoot = {
+      const root = await invoke<DetectedCloudRoot>('cloud.provider.validate', {
         provider,
-        account_label: baseName(rootPath) || providerName,
-        path: rootPath,
-      };
-      // Discovery validates that the selected location exists before it is
-      // remembered. Configuration performs the stronger writable check.
-      await invoke('cloud.libraries.discover', { root_path: root.path });
+        root_path: rootPath,
+      });
+      await invoke('cloud.libraries.discover', { provider, root_path: root.path });
       await pictoLibrary().rememberCloudRoot(root);
       const configuredCurrentLibrary = Boolean(selectedEntry?.current && !cloudConfiguration?.root_path);
       if (configuredCurrentLibrary) {
