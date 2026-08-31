@@ -13,6 +13,7 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { IconSearch, IconCheck } from '@tabler/icons-react';
 import { GlassModal } from '../../shared/ui/GlassModal';
+import { TabKeyHint } from '../../shared/ui/OverlayShell';
 import { tagSelectModalAtom } from '../../state/modals';
 import { selectionCountAtom, selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
@@ -284,7 +285,7 @@ export function TagSelectModal() {
             {!summaryText && (
               <span className={shellStyles.kbdHint}>
                 <span className={shellStyles.kbd}>↑↓</span>
-                <span className={shellStyles.kbd}>↩</span> {t("Select")}<span className={shellStyles.kbd}>{t("Tab")}</span> {t("Switch")}</span>
+                <span className={shellStyles.kbd}>↩</span> {t("Select")}<TabKeyHint /> {t("Switch")}</span>
             )}
           </span>
           <div className={btnStyles.btnGroup}>

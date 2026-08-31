@@ -20,7 +20,7 @@ import {
   IconStar,
   IconX,
 } from '@tabler/icons-react';
-import { OverlayShell } from '../../shared/ui/OverlayShell';
+import { OverlayShell, TabKeyHint } from '../../shared/ui/OverlayShell';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
@@ -461,7 +461,7 @@ export function TagSelectPanel() {
       }
       footer={
         <>
-          {showSidebar ? <span className={shellStyles.kbdHint}>{t("Switch ")}<span className={shellStyles.kbd}>{t("Tab")}</span></span> : null}
+          {showSidebar ? <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span> : null}
           <span className={shellStyles.kbdHint}>
             {t("Move ")}<span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
             {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}

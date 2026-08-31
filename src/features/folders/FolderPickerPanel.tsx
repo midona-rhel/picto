@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { OverlayShell } from '../../shared/ui/OverlayShell';
+import { OverlayShell, TabKeyHint } from '../../shared/ui/OverlayShell';
 import { FolderTree, buildTree, flattenVisibleIds } from '../../shared/ui/FolderTree';
 import {
   IconCheck,
@@ -289,7 +289,7 @@ export function FolderPickerPanel() {
       footer={
         <>
           <div className={styles.footerHints}>
-            <span className={shellStyles.kbdHint}>{t("Switch ")}<span className={shellStyles.kbd}>{t("Tab")}</span></span>
+            <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span>
             <span className={shellStyles.kbdHint}>{t("Move ")}<span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
             <span className={shellStyles.kbdHint}>{t("Select ")}<span className={shellStyles.kbd}>↵</span></span>
           </div>

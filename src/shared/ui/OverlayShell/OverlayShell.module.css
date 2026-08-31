@@ -221,6 +221,12 @@
   color: var(--color-text-primary);
 }
 
+.tabKeyIcon {
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+}
+
 /* ── Check item row (shared by tag/folder lists) ── */
 
 .checkRow {
