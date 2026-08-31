@@ -471,6 +471,17 @@ fn settle_blob_page(
     application: &LibraryApplication,
     settled: &[(String, String, Result<(), String>)],
 ) -> Result<(), String> {
+    let missing_thumbnails = settled
+        .iter()
+        .filter_map(|(hash, _, result)| result.as_ref().ok().map(|_| hash))
+        .filter_map(|hash| match application.blobs().find_thumbnail_path(hash) {
+            Ok(None) => Some(Ok(hash.clone())),
+            Ok(Some(_)) => None,
+            Err(error) => Some(Err(format!(
+                "Failed to inspect restored thumbnail {hash}: {error}"
+            ))),
+        })
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
     application
         .library()
         .database()
@@ -505,6 +516,27 @@ fn settle_blob_page(
                              updated_at = excluded.updated_at",
                         rusqlite::params![hash, state, remote_present, extension, error, now],
                     )?;
+                    if result.is_ok() && missing_thumbnails.contains(hash) {
+                        transaction.execute(
+                            "INSERT INTO work_item
+                                 (file_id, file_hash, work_type, status, priority,
+                                  attempt_count, available_at, created_at, updated_at)
+                             SELECT file_id, content_hash, 'thumbnail', 'pending', ?2,
+                                    0, ?3, ?3, ?3
+                             FROM media_file WHERE content_hash = ?1
+                             ON CONFLICT(file_id, work_type) WHERE file_id IS NOT NULL
+                             DO UPDATE SET
+                                 status = 'pending', priority = excluded.priority,
+                                 attempt_count = 0, available_at = excluded.available_at,
+                                 last_error = NULL, updated_at = excluded.updated_at
+                             WHERE work_item.status = 'failed'",
+                            rusqlite::params![
+                                hash,
+                                picto_library::MediaWorkKind::Thumbnail.priority(),
+                                now
+                            ],
+                        )?;
+                    }
                 }
                 Ok(())
             },
@@ -1150,6 +1182,10 @@ mod tests {
                 picto_library::database::WorkPriority::Cloud,
                 |transaction| {
                     transaction.execute(
+                        "DELETE FROM work_item WHERE file_id = 1 AND work_type = 'thumbnail'",
+                        [],
+                    )?;
+                    transaction.execute(
                         "UPDATE cloud_blob_state SET state = 'queued' WHERE file_hash = ?1",
                         [&hash],
                     )?;
@@ -1159,5 +1195,22 @@ mod tests {
             .unwrap();
         publish_library(&application, &provider).await.unwrap();
         assert_eq!(std::fs::read(local_path).unwrap(), bytes);
+        let thumbnail_work = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT status, attempt_count FROM work_item
+                             WHERE file_id = 1 AND work_type = 'thumbnail'",
+                            [],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(thumbnail_work, ("pending".into(), 0));
     }
 }

@@ -31,6 +31,7 @@ pub fn drain_blob_cleanup(application: &LibraryApplication, limit: usize) -> Res
 pub struct CanonicalMediaWorkReport {
     pub claimed: usize,
     pub succeeded: usize,
+    pub thumbnails_changed: Vec<String>,
     pub perceptual_hashes_updated: usize,
     pub retried: usize,
     pub failed: usize,
@@ -69,9 +70,12 @@ pub async fn drain_batch(
     let mut completed = Vec::new();
     for item in work {
         match execute(application, &item, now.timestamp_millis()).await {
-            Ok(perceptual_hash_updated) => {
+            Ok((perceptual_hash_updated, thumbnail_changed)) => {
                 completed.push(item.work_id);
                 report.succeeded += 1;
+                if let Some(content_hash) = thumbnail_changed {
+                    report.thumbnails_changed.push(content_hash);
+                }
                 report.perceptual_hashes_updated += usize::from(perceptual_hash_updated);
             }
             Err(error) => {
@@ -127,7 +131,7 @@ async fn execute(
     application: &LibraryApplication,
     work: &ClaimedMediaWork,
     changed_at_ms: i64,
-) -> Result<bool, String> {
+) -> Result<(bool, Option<String>), String> {
     let file_id = work
         .file_id
         .ok_or_else(|| format!("work {} has no physical file", work.work_id))?;
@@ -143,11 +147,11 @@ async fn execute(
     match work.kind {
         MediaWorkKind::Thumbnail => {
             ensure_thumbnail(application, &target, &mut source).await?;
-            Ok(false)
+            Ok((false, Some(target.content_hash)))
         }
         MediaWorkKind::DominantColors => {
             if !source.caps.can_dominant_colors {
-                return Ok(false);
+                return Ok((false, None));
             }
             let image = derivative_image(application, &target, &mut source).await?;
             let palette = crate::media_processing::colors::extract_dominant_colors(&image, 10)
@@ -170,11 +174,11 @@ async fn execute(
                     changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
-            Ok(false)
+            Ok((false, None))
         }
         MediaWorkKind::PerceptualHash => {
             if !source.caps.can_perceptual_hash {
-                return Ok(false);
+                return Ok((false, None));
             }
             let image = derivative_image(application, &target, &mut source).await?;
             let hash = crate::media_processing::compute_phash_base64_from_image(&image)
@@ -190,7 +194,7 @@ async fn execute(
                     changed_at_ms,
                 )
                 .map_err(|error| error.to_string())?;
-            Ok(true)
+            Ok((true, None))
         }
         MediaWorkKind::AiTag | MediaWorkKind::BlobDelete => Err(format!(
             "work {} is not derivative media work",
@@ -381,6 +385,7 @@ mod tests {
         let report = drain_batch(&application, 8).await.unwrap();
         assert_eq!(report.claimed, 3);
         assert_eq!(report.succeeded, 3);
+        assert_eq!(report.thumbnails_changed, vec![content_hash.clone()]);
         assert_eq!(report.perceptual_hashes_updated, 1);
         assert_eq!(report.retried, 0);
         assert!(application

@@ -307,6 +307,12 @@ fn start_derivative_worker(
                     match crate::library_media_runtime::drain_batch(&application, 8).await {
                         Err(error) => tracing::warn!(%error, "Canonical derivative batch failed"),
                         Ok(report) => {
+                            for file_hash in &report.thumbnails_changed {
+                                crate::events::emit(
+                                    "picto:thumbnail-changed",
+                                    &serde_json::json!({ "fileHash": file_hash }),
+                                );
+                            }
                             duplicate_scan_dirty |= report.perceptual_hashes_updated != 0;
                             if duplicate_scan_dirty {
                                 match crate::library_media_runtime::settle_new_perceptual_hashes(
