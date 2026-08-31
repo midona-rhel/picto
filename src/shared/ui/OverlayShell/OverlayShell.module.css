@@ -266,7 +266,7 @@
 }
 
 .checkBoxFilterChecked {
-  background: var(--color-success, #5fb56b);
+  background: var(--color-primary);
   outline: 1px solid transparent;
   color: var(--color-on-primary);
 }

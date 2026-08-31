@@ -10,6 +10,13 @@ const folder = {
   parent_id: 'section:folders',
 } as SidebarNodeDto;
 
+const childFolder = {
+  id: 'folder:8',
+  kind: 'folder',
+  name: 'Child',
+  parent_id: 'folder:7',
+} as SidebarNodeDto;
+
 describe('FolderTree context target', () => {
   it('routes normal row context actions without changing selection', () => {
     const onToggle = vi.fn();
@@ -44,5 +51,19 @@ describe('FolderTree context target', () => {
     fireEvent.contextMenu(screen.getByText('Reference'));
     expect(onExclude).toHaveBeenCalledWith(7, expect.anything());
     expect(onContextMenu).not.toHaveBeenCalled();
+  });
+
+  it('keeps selected-row highlighting out of the tree indentation', () => {
+    render(
+      <FolderTree
+        nodes={[folder, childFolder]}
+        selected={new Set([8])}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    const childRow = screen.getByText('Child').closest('[style]') as HTMLElement;
+    expect(childRow.style.getPropertyValue('--folder-row-indent')).toBe('28px');
+    expect(childRow.querySelector('[data-folder-tree-branch]')).toHaveAttribute('data-folder-tree-branch', 'last');
   });
 });

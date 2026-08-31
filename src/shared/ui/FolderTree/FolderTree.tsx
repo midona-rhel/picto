@@ -10,6 +10,7 @@ import { IconChevronRight, IconFolder, IconCheck, IconX } from '@tabler/icons-re
 import type { SidebarNodeDto } from '../../types/canonical';
 import checkStyles from '../OverlayShell/OverlayShell.module.css';
 import styles from './FolderTree.module.css';
+import { t } from '../../../i18n';
 
 // ── Tree types ──
 
@@ -94,7 +95,7 @@ export interface FolderTreeProps {
   /** Folder IDs the entity is already a member of — shown as non-toggleable context. */
   memberOf?: Set<number>;
   excluded?: Set<number>;
-  /** Use filter-specific green/red selection semantics instead of ordinary add-selection color. */
+  /** Use filter-specific include/exclude selection semantics. */
   filterSelection?: boolean;
   onExclude?: (folderId: number, event: React.MouseEvent) => void;
   onContextMenu?: (folderId: number, event: React.MouseEvent) => void;
@@ -139,7 +140,11 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     });
   }, []);
 
-  function renderNode(treeNode: TreeNode): ReactNode[] {
+  function renderNode(
+    treeNode: TreeNode,
+    ancestorContinues: boolean[] = [],
+    isLastChild = true,
+  ): ReactNode[] {
     const { node, folderId, children, depth } = treeNode;
     const hasChildren = children.length > 0;
     const isExpanded = effectiveExpanded.has(node.id);
@@ -154,7 +159,10 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
       <div
         key={node.id}
         className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
-        style={{ paddingLeft: 4 + depth * 24 }}
+        style={{
+          paddingLeft: 4 + depth * 24,
+          '--folder-row-indent': `${4 + depth * 24}px`,
+        } as React.CSSProperties}
         onClick={isMember ? undefined : (e) => onToggle(folderId, e)}
         onContextMenu={onExclude || onContextMenu ? (event) => {
           event.preventDefault();
@@ -163,7 +171,31 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
           else onContextMenu?.(folderId, event);
         } : undefined}
       >
-        {depth > 0 && <span className={styles.guidelines} style={{ '--folder-depth': depth } as React.CSSProperties} />}
+        {depth > 1 && ancestorContinues.map((continues, index) => continues ? (
+          <span
+            key={index}
+            className={styles.treeGuide}
+            style={{ left: 16 + index * 24 }}
+            data-folder-tree-guide
+          />
+        ) : null)}
+        {depth > 0 && (
+          <svg
+            className={styles.treeBranch}
+            style={{ left: 16 + (depth - 1) * 24 }}
+            viewBox="0 0 16 26"
+            preserveAspectRatio="none"
+            fill="none"
+            aria-hidden="true"
+            data-folder-tree-branch={isLastChild ? 'last' : 'middle'}
+          >
+            {isLastChild ? (
+              <path d="M0 0 V9.5 A3.5 3.5 0 0 0 3.5 13 H16" />
+            ) : (
+              <path d="M0 0 V26 M0 13 H16" />
+            )}
+          </svg>
+        )}
         {checkable && (
           <div className={styles.checkSlot}>
             {isMember ? (
@@ -182,11 +214,11 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
           {searchLower ? highlightMatch(node.name, searchLower) : node.name}
         </span>
         <span className={styles.right}>
-          {isMember ? <span className={styles.memberBadge}>Member</span> : parentName ? <span className={styles.parentName}>{parentName}</span> : null}
+          {isMember ? <span className={styles.memberBadge}>{t("Member")}</span> : parentName ? <span className={styles.parentName}>{parentName}</span> : null}
           {hasChildren ? (
             <button
               type="button"
-              aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+              aria-label={isExpanded ? t("Collapse {value0}", { value0: node.name }) : t("Expand {value0}", { value0: node.name })}
               className={`${styles.expandBtn} ${isExpanded ? styles.expandBtnExpanded : ''}`}
               onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
             >
@@ -198,17 +230,22 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     ];
 
     if (isExpanded) {
-      for (const child of children) result.push(...renderNode(child));
+      const childAncestors = depth > 0
+        ? [...ancestorContinues, !isLastChild]
+        : ancestorContinues;
+      children.forEach((child, index) => {
+        result.push(...renderNode(child, childAncestors, index === children.length - 1));
+      });
     }
 
     return result;
   }
 
-  if (tree.length === 0) return <div className={styles.empty}>No folders</div>;
+  if (tree.length === 0) return <div className={styles.empty}>{t("No folders")}</div>;
 
   return (
     <div className={styles.tree}>
-      {tree.flatMap((root) => renderNode(root))}
+      {tree.flatMap((root, index) => renderNode(root, [], index === tree.length - 1))}
     </div>
   );
 }
