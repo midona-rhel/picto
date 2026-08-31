@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { invoke } from '../../platform/ipc';
 import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
-import styles from './HeavyJobBar.module.css';
+import { ProgressDialog } from '../../shared/ui/ProgressDialog';
+import styles from './CloudSyncBar.module.css';
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -16,7 +17,7 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[unit]}`;
 }
 
-export function HeavyJobBar() {
+export function CloudSyncBar() {
   const [status, setStatus] = useState<CloudSyncStatus | null>(null);
 
   useEffect(() => {
@@ -43,19 +44,39 @@ export function HeavyJobBar() {
       ? `${formatBytes(status.completed_units)} / ${formatBytes(status.total_units ?? 0)}`
       : `${status.completed_units} / ${status.total_units}`
     : null;
+  const message = status?.message || 'Working…';
+  const barActive = Boolean(active && !status?.blocking);
 
   return (
-    <div className={styles.root} data-open={active || undefined} role="status" aria-live="polite">
-      <div className={styles.summary}>
-        <span className={styles.label}>{status?.message || 'Working…'}</span>
-        {detail ? <span className={styles.detail}>{detail}</span> : null}
-      </div>
-      <ProgressBar
+    <>
+      <ProgressDialog
+        open={Boolean(active && status?.blocking)}
+        message={message}
+        detail={detail}
         done={status?.completed_units ?? 0}
         total={status?.total_units ?? 0}
         indeterminate={!exact}
-        height={3}
       />
-    </div>
+      <div
+        className={styles.root}
+        data-open={barActive || undefined}
+        role="status"
+        aria-live="polite"
+        aria-hidden={!barActive}
+      >
+        <div className={styles.progress}>
+          <ProgressBar
+            done={status?.completed_units ?? 0}
+            total={status?.total_units ?? 0}
+            indeterminate={!exact}
+            height={4}
+          />
+        </div>
+        <div className={styles.message}>
+          <span className={styles.label}>{message}</span>
+          {detail ? <span className={styles.detail}>{detail}</span> : null}
+        </div>
+      </div>
+    </>
   );
 }
