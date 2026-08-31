@@ -1,23 +1,42 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { gridFilterLockedAtom, gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { gridController } from '../../controllers/gridController';
 import { tagSelectPortalAtom } from '../../state/portals';
-import { listAcceptedMediaFormats } from '../../platform/mediaFormatApi';
+import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 
 vi.mock('../../shared/ui/KbdTooltip', () => ({
   KbdTooltip: ({ children }: { children: unknown }) => children,
 }));
 
-vi.mock('../../platform/mediaFormatApi', () => ({
-  listAcceptedMediaFormats: vi.fn(() => new Promise(() => {})),
-}));
-
 const emptyFilters: ItemFilters = createEmptyItemFilters();
+
+function gridItem(id: number, mime: string): CanonicalEntityGridItem {
+  return {
+    root_id: id,
+    kind: 'media',
+    lifecycle: 'active',
+    name: `Item ${id}`,
+    cover_media_id: id,
+    content_hash: `file-${id}`,
+    mime,
+    width: 100,
+    height: 100,
+    duration_ms: null,
+    frame_count: null,
+    palette: [],
+    imported_at_ms: id,
+    captured_at_ms: null,
+    modified_at_ms: id,
+    media_count: 1,
+    total_size_bytes: 100,
+    rating: 'unrated',
+  };
+}
 
 describe('countActiveGridFilters', () => {
   it('counts each active replacement filter represented by the toolbar badge', () => {
@@ -50,10 +69,6 @@ describe('countActiveGridFilters', () => {
 });
 
 describe('GridFilterToolbar', () => {
-  beforeEach(() => {
-    vi.mocked(listAcceptedMediaFormats).mockImplementation(() => new Promise(() => {}));
-  });
-
   afterEach(() => {
     cleanup();
     window.localStorage.removeItem('picto:grid:pinned-filters');
@@ -139,21 +154,29 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ min_size_bytes: 2_000_000n }));
   });
 
-  it('keeps every supported type available while a type filter is active', async () => {
-    vi.mocked(listAcceptedMediaFormats).mockResolvedValue([
-      { extension: 'jpg', mime_type: 'image/jpeg' },
-      { extension: 'gif', mime_type: 'image/gif' },
-      { extension: 'mp4', mime_type: 'video/mp4' },
-      { extension: 'pdf', mime_type: 'application/pdf' },
-    ]);
+  it('keeps initial-grid types available while a type filter is active', async () => {
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      filters: { ...emptyFilters, include_mime_types: ['image/gif'] },
+      items: [
+        gridItem(1, 'image/gif'),
+        gridItem(2, 'image/jpeg'),
+        gridItem(3, 'video/mp4'),
+      ],
+      filters: emptyFilters,
     });
     const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
-    render(<GridFilterToolbar />);
+    const view = render(<GridFilterToolbar />);
+
+    act(() => {
+      store.set(gridSessionAtom, {
+        ...store.get(gridSessionAtom),
+        items: [gridItem(1, 'image/gif')],
+        filters: { ...emptyFilters, include_mime_types: ['image/gif'] },
+      });
+    });
+    view.rerender(<GridFilterToolbar />);
 
     fireEvent.click(screen.getByRole('button', { name: 'GIF' }));
     fireEvent.click(await screen.findByText('JPG'));
@@ -162,7 +185,7 @@ describe('GridFilterToolbar', () => {
       include_mime_types: ['image/gif', 'image/jpeg'],
     }));
     expect(screen.getByText('Videos')).toBeTruthy();
-    expect(screen.getByText('PDF')).toBeTruthy();
+    expect(screen.queryByText('PDF')).toBeNull();
   });
 
   it('commits date presets as canonical half-open ranges', () => {
