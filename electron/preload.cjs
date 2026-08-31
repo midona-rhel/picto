@@ -160,23 +160,39 @@ const webview = {
       handler({ payload: { type: 'leave' } });
       void (async () => {
         try {
-          const entries = await Promise.all(files.map(async (file) => {
-            const path = webUtils.getPathForFile(file);
-            if (path) return { path, temporary: false, sourceUrl: null };
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            const materialized = await ipcRenderer.invoke('picto:drop:materialize', {
-              bytes,
-              name: file.name,
-              mimeType: file.type,
-            });
-            return { ...materialized, temporary: true };
-          }));
-          if (entries.length === 0 && urls[0]) {
-            const materialized = await ipcRenderer.invoke('picto:drop:materialize', { url: urls[0] });
-            entries.push({ ...materialized, temporary: true });
+          const entries = [];
+          let lastError = null;
+          for (const file of files) {
+            try {
+              const path = webUtils.getPathForFile(file);
+              if (path) {
+                entries.push({ path, temporary: false, sourceUrl: null });
+                continue;
+              }
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              const materialized = await ipcRenderer.invoke('picto:drop:materialize', {
+                bytes,
+                name: file.name,
+                mimeType: file.type,
+              });
+              entries.push({ ...materialized, temporary: true });
+            } catch (error) {
+              lastError = error;
+            }
           }
           if (entries.length === 0) {
-            throw new Error('The dropped browser item did not contain an importable image.');
+            for (const url of urls) {
+              try {
+                const materialized = await ipcRenderer.invoke('picto:drop:materialize', { url });
+                entries.push({ ...materialized, temporary: true });
+                break;
+              } catch (error) {
+                lastError = error;
+              }
+            }
+          }
+          if (entries.length === 0) {
+            throw lastError ?? new Error('The dropped browser item did not contain an importable image.');
           }
           handler({
             payload: {
