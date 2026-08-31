@@ -415,6 +415,7 @@ fn detect_dropbox_roots(roots: &mut Vec<DetectedProviderRoot>, home: &Path) {
     push_provider_directory(roots, "dropbox", "Dropbox", home.join("Dropbox"));
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn push_google_content_roots(
     roots: &mut Vec<DetectedProviderRoot>,
     account_label: &str,
