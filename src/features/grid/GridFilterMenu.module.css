@@ -2,6 +2,15 @@
   position: relative;
   z-index: var(--layer-overlay);
   flex: 0 0 auto;
+  /* Keep the filter rail aligned with the stable titlebar geometry when the
+     body sidebar or inspector is hidden. The grid itself may use the freed
+     space; only this chrome retains the stored panel boundaries. */
+  margin-left: calc(
+    var(--sidebar-panel-width, 0px) - var(--sidebar-body-width, 0px)
+  );
+  margin-right: calc(
+    var(--titlebar-inspector-width, 0px) - var(--inspector-width, 0px)
+  );
   min-height: 38px;
   box-sizing: border-box;
   padding: 6px 12px 0;
