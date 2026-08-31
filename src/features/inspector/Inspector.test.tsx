@@ -54,12 +54,14 @@ describe('InspectorSkeleton', () => {
 
       const expectedAnchors = ['folder', 'smart-folder', 'system'].includes(state)
         ? ['name', 'notes']
-        : state === 'multi' ? ['notes', 'source'] : ['name', 'notes', 'source'];
+        : ['name', 'notes', 'source'];
       expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
         .toEqual(expectedAnchors);
       expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
         .toEqual(state === 'multi' ? [] : ['Items']);
-      if (state === 'multi') expect(screen.getByText('2 items selected')).toBeInTheDocument();
+      if (state === 'multi') {
+        expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
+      }
       expect(screen.getByText('Properties')).toBeInTheDocument();
 
       const applicable = state === 'entity' || state === 'multi';
