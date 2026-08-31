@@ -41,8 +41,6 @@ describe('compileGridQuery text boundary', () => {
       include_tags: [{ tag_id: 17, name: 'creator:example' }],
       include_folder_ids: [23],
       ratings: [5],
-      notes_contains: 'no',
-      source_url_contains: 'xy',
     };
     const query = compileGridQuery({ kind: 'inbox' }, filters, sort, 'ab');
 
@@ -59,6 +57,32 @@ describe('compileGridQuery text boundary', () => {
     expect(clauses(query)).toContainEqual({
       kind: 'clause',
       value: { clause: 'ratings', ratings: ['five'] },
+    });
+  });
+});
+
+describe('compileGridQuery MIME facets', () => {
+  it('combines broad families and concrete formats in one additive clause', () => {
+    const query = compileGridQuery(
+      { kind: 'all' },
+      {
+        ...createEmptyItemFilters(),
+        include_mime_types: ['image/png', 'video/*'],
+        exclude_mime_types: ['image/gif'],
+      },
+      sort,
+    );
+
+    expect(clauses(query)).toContainEqual({
+      kind: 'clause',
+      value: { clause: 'mime', values: ['image/png'], families: ['video'] },
+    });
+    expect(clauses(query)).toContainEqual({
+      kind: 'not',
+      value: {
+        kind: 'clause',
+        value: { clause: 'mime', values: ['image/gif'], families: [] },
+      },
     });
   });
 });

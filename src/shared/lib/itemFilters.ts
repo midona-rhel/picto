@@ -49,10 +49,6 @@ export interface ItemFilters {
   max_width: bigint | null;
   min_height: bigint | null;
   max_height: bigint | null;
-  notes_present: boolean | null;
-  notes_contains: string | null;
-  source_url_present: boolean | null;
-  source_url_contains: string | null;
 }
 
 /** One canonical empty filter shape for every query owner. */
@@ -82,10 +78,6 @@ export function createEmptyItemFilters(): ItemFilters {
     max_width: null,
     min_height: null,
     max_height: null,
-    notes_present: null,
-    notes_contains: null,
-    source_url_present: null,
-    source_url_contains: null,
   };
 }
 
@@ -140,10 +132,10 @@ export function compileGridQuery(
     values.push(clause({ clause: 'ratings', ratings: filters.ratings.map(ratingFromNumber) }));
   }
   if (filters.include_mime_types.length > 0) {
-    values.push(clause({ clause: 'mime', values: filters.include_mime_types, families: [] }));
+    values.push(clause(mimeClause(filters.include_mime_types)));
   }
   if (filters.exclude_mime_types.length > 0) {
-    values.push(negate(clause({ clause: 'mime', values: filters.exclude_mime_types, families: [] })));
+    values.push(negate(clause(mimeClause(filters.exclude_mime_types))));
   }
 
   addDateRange(values, 'imported_at', filters.imported_after, filters.imported_before);
@@ -153,20 +145,6 @@ export function compileGridQuery(
   addNumericRange(values, 'width', filters.min_width, filters.max_width, 'minimum', 'maximum');
   addNumericRange(values, 'height', filters.min_height, filters.max_height, 'minimum', 'maximum');
 
-  if (filters.notes_present != null) {
-    values.push(clause({ clause: 'notes_present', present: filters.notes_present }));
-  }
-  if (filters.source_url_present != null) {
-    values.push(clause({ clause: 'source_urls_present', present: filters.source_url_present }));
-  }
-  const notesQuery = textSearchQuery(filters.notes_contains);
-  if (notesQuery) {
-    values.push(clause({ clause: 'text', field: 'notes', query: notesQuery }));
-  }
-  const sourceUrlQuery = textSearchQuery(filters.source_url_contains);
-  if (sourceUrlQuery) {
-    values.push(clause({ clause: 'text', field: 'source_url', query: sourceUrlQuery }));
-  }
   const text = textSearchQuery(searchText.trim() || filters.text);
   if (text) values.push(clause({ clause: 'text', field: 'global', query: text }));
   if (filters.color_hex) {
@@ -184,6 +162,16 @@ export function compileGridQuery(
     ? { field: 'imported_at' as const, direction: 'descending' as const, random_seed: null }
     : sort;
   return { scope: queryScope, view: { filter: { kind: 'all', value: values }, sort: querySort } };
+}
+
+function mimeClause(entries: string[]): Extract<FilterExpr, { kind: 'clause' }>['value'] {
+  const values: string[] = [];
+  const families: string[] = [];
+  for (const entry of entries) {
+    if (entry.endsWith('/*')) families.push(entry.slice(0, -2));
+    else values.push(entry);
+  }
+  return { clause: 'mime', values, families };
 }
 
 function addDateRange(

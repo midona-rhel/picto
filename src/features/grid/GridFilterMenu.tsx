@@ -2,13 +2,13 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   IconBookmark, IconCalendar, IconClock, IconDeviceFloppy, IconDimensions,
-  IconFile, IconFilterPlus, IconFolder, IconLink, IconLock, IconLockOpen, IconNotes,
+  IconFile, IconFilterPlus, IconFolder, IconLock, IconLockOpen,
   IconPhoto, IconRestore, IconStar, IconX,
 } from '@tabler/icons-react';
 import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { ContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { gridController } from '../../controllers/gridController';
-import { gridFilterLockedAtom, gridFiltersAtom, gridFilterToolbarOpenAtom, gridItemsAtom } from '../../state/grid';
+import { gridFilterLockedAtom, gridFiltersAtom, gridFilterToolbarOpenAtom } from '../../state/grid';
 import { folderNodesAtom } from '../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
@@ -17,15 +17,17 @@ import { ColorFilterEditor } from '../../shared/ui/ColorFilterEditor';
 import { IconChangeColor } from '../../shared/ui/icons/sidebar-menu-icons';
 import styles from './GridFilterMenu.module.css';
 import { t } from '../../i18n';
+import { DatePickerButton } from '../../shared/ui/DatePickerButton';
+import { listAcceptedMediaFormats } from '../../platform/mediaFormatApi';
 
 type PinnedFilter = 'color' | 'tags' | 'folders' | 'rating' | 'type'
-  | 'imported' | 'modified' | 'duration' | 'size' | 'resolution' | 'notes' | 'url';
+  | 'imported' | 'modified' | 'duration' | 'size' | 'resolution';
 type FilterMenuKind = 'rating' | 'type' | 'pin' | 'imported' | 'modified'
-  | 'color' | 'duration' | 'size' | 'resolution' | 'notes' | 'url' | 'saved';
+  | 'color' | 'duration' | 'size' | 'resolution' | 'saved';
 const DEFAULT_PINNED_FILTERS: PinnedFilter[] = ['color', 'tags', 'folders', 'rating', 'type'];
 const ALL_FILTERS: PinnedFilter[] = [
   'color', 'tags', 'folders', 'rating', 'type', 'imported', 'modified',
-  'resolution', 'duration', 'size', 'notes', 'url',
+  'resolution', 'duration', 'size',
 ];
 const PINNED_FILTERS_KEY = 'picto:grid:pinned-filters';
 const SAVED_FILTERS_KEY = 'picto:grid:saved-filters';
@@ -46,7 +48,12 @@ function deserializeFilters(value: string): ItemFilters {
   const parsed = JSON.parse(value, (_key, item) => item && typeof item === 'object' && '$bigint' in item
     ? BigInt(item.$bigint)
     : item) as Partial<ItemFilters>;
-  return { ...createEmptyItemFilters(), ...parsed };
+  const legacy = parsed as Partial<ItemFilters> & Record<string, unknown>;
+  delete legacy.notes_present;
+  delete legacy.notes_contains;
+  delete legacy.source_url_present;
+  delete legacy.source_url_contains;
+  return { ...createEmptyItemFilters(), ...legacy };
 }
 
 function loadSavedFilters(): SavedFilter[] {
@@ -87,13 +94,19 @@ export function countActiveGridFilters(filters: ItemFilters): number {
     + (filters.min_duration_ms != null || filters.max_duration_ms != null ? 1 : 0)
     + (filters.min_size_bytes != null || filters.max_size_bytes != null ? 1 : 0)
     + (filters.min_width != null || filters.max_width != null
-      || filters.min_height != null || filters.max_height != null ? 1 : 0)
-    + (filters.notes_present != null || Boolean(filters.notes_contains) ? 1 : 0)
-    + (filters.source_url_present != null || Boolean(filters.source_url_contains) ? 1 : 0);
+      || filters.min_height != null || filters.max_height != null ? 1 : 0);
 }
 
 function mimeLabel(mimeType: string): string {
   const aliases: Record<string, string> = {
+    'image/*': 'Images',
+    'video/*': 'Videos',
+    'audio/*': 'Audio',
+    'application/*': 'Documents & Files',
+    'text/*': 'Text',
+    'model/*': '3D Models',
+    'font/*': 'Fonts',
+    'multipart/*': 'Web Archives',
     'image/jpeg': 'JPG',
     'image/svg+xml': 'SVG',
     'video/quicktime': 'MOV',
@@ -280,35 +293,9 @@ function DateRangeEditor({ after, before, onCommit }: {
   const [start, setStart] = useState(dateValue(after));
   const [end, setEnd] = useState(before ? dateValue(new Date(new Date(before).getTime() - 86_400_000).toISOString()) : '');
   return <div className={styles.dateEditor}>
-    <label>{t("From")}<input aria-label={t("From")} type="date" value={start} onChange={(event) => { setStart(event.target.value); onCommit(event.target.value ? `${event.target.value}T00:00:00Z` : null, nextDate(end)); }} /></label>
-    <label>{t("To")}<input aria-label={t("To")} type="date" value={end} onChange={(event) => { setEnd(event.target.value); onCommit(start ? `${start}T00:00:00Z` : null, nextDate(event.target.value)); }} /></label>
+    <label>{t("From")}<DatePickerButton ariaLabel={t("From")} value={start} onChange={(value) => { setStart(value); onCommit(value ? `${value}T00:00:00Z` : null, nextDate(end)); }} /></label>
+    <label>{t("To")}<DatePickerButton ariaLabel={t("To")} value={end} onChange={(value) => { setEnd(value); onCommit(start ? `${start}T00:00:00Z` : null, nextDate(value)); }} /></label>
   </div>;
-}
-
-function PresenceKeywordEditor({
-  value,
-  enabled,
-  placeholder,
-  onChange,
-}: {
-  value: string | null;
-  enabled: boolean;
-  placeholder: string;
-  onChange: (value: string | null) => void;
-}) {
-  const [text, setText] = useState(value ?? '');
-  const scheduleCommit = useDeferredFilterCommit(onChange);
-  return <textarea
-    className={styles.keywordEditor}
-    aria-label={placeholder}
-    placeholder={placeholder}
-    disabled={!enabled}
-    value={text}
-    onChange={(event) => {
-      setText(event.target.value);
-      scheduleCommit(event.target.value.trim() || null);
-    }}
-  />;
 }
 
 export function GridFilterToolbar() {
@@ -316,13 +303,13 @@ export function GridFilterToolbar() {
   const filters = useAtomValue(gridFiltersAtom);
   const filterLocked = useAtomValue(gridFilterLockedAtom);
   const setFilterLocked = useSetAtom(gridFilterLockedAtom);
-  const items = useAtomValue(gridItemsAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
   const setTagPortal = useSetAtom(tagSelectPortalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const [pinnedFilters, setPinnedFilters] = useState(loadPinnedFilters);
   const [savedFilters, setSavedFilters] = useState(loadSavedFilters);
   const [saveName, setSaveName] = useState('');
+  const [supportedMimeTypes, setSupportedMimeTypes] = useState<string[]>([]);
   const [activeMenu, setActiveMenu] = useState<{
     kind: FilterMenuKind;
     position: { x: number; y: number };
@@ -396,6 +383,17 @@ export function GridFilterToolbar() {
     setSaveName('');
   }, [filters, persistSavedFilters, saveName, savedFilters]);
 
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void listAcceptedMediaFormats().then((formats) => {
+      if (active) setSupportedMimeTypes([...new Set(formats.map((format) => format.mime_type))]);
+    }).catch(() => {
+      if (active) setSupportedMimeTypes([]);
+    });
+    return () => { active = false; };
+  }, [open]);
+
   if (!open) return null;
 
   const tagLabels = [
@@ -408,10 +406,15 @@ export function GridFilterToolbar() {
     ...filters.exclude_folder_ids.map((id) => `Not ${folderNames.get(id) ?? `Folder ${id}`}`),
   ];
   const mimeTypes = [...new Set([
-    ...items.map((item) => item.mime),
-    ...filters.include_mime_types,
-    ...filters.exclude_mime_types,
+    ...supportedMimeTypes,
+    ...filters.include_mime_types.filter((value) => !value.endsWith('/*')),
+    ...filters.exclude_mime_types.filter((value) => !value.endsWith('/*')),
   ])].filter(Boolean).sort((left, right) => mimeLabel(left).localeCompare(mimeLabel(right)));
+  const mimeFamilies = [...new Set([
+    ...supportedMimeTypes.map((mime) => `${mime.split('/', 1)[0]}/*`),
+    ...filters.include_mime_types.filter((value) => value.endsWith('/*')),
+    ...filters.exclude_mime_types.filter((value) => value.endsWith('/*')),
+  ])].sort((left, right) => mimeLabel(left).localeCompare(mimeLabel(right)));
   const typeLabels = [
     ...filters.include_mime_types.map(mimeLabel),
     ...filters.exclude_mime_types.map((mimeType) => `-${mimeLabel(mimeType)}`),
@@ -427,7 +430,7 @@ export function GridFilterToolbar() {
         : [...filters.ratings, rating],
     }),
   }));
-  const typeEntries: MenuEntry[] = mimeTypes.map((mimeType) => ({
+  const mimeEntry = (mimeType: string): MenuEntry => ({
     label: mimeLabel(mimeType),
     keywords: mimeType,
     checked: filters.include_mime_types.includes(mimeType),
@@ -445,7 +448,12 @@ export function GridFilterToolbar() {
         ? filters.exclude_mime_types.filter((value) => value !== mimeType)
         : [...filters.exclude_mime_types, mimeType],
     }),
-  }));
+  });
+  const typeEntries: MenuEntry[] = [
+    ...mimeFamilies.map(mimeEntry),
+    ...(mimeFamilies.length > 0 && mimeTypes.length > 0 ? [{ separator: true } as MenuEntry] : []),
+    ...mimeTypes.map(mimeEntry),
+  ];
   const pinEntries: MenuEntry[] = [
     ['color', 'Color', <IconChangeColor size={15} />],
     ['tags', 'Tags', <IconBookmark size={15} />],
@@ -457,8 +465,6 @@ export function GridFilterToolbar() {
     ['resolution', 'Resolution', <IconDimensions size={15} />],
     ['duration', 'Duration', <IconClock size={15} />],
     ['size', 'File Size', <IconFile size={15} />],
-    ['notes', 'Notes', <IconNotes size={15} />],
-    ['url', 'URL', <IconLink size={15} />],
   ].map(([value, label, icon]) => ({
     label: label as string,
     icon: icon as ReactNode,
@@ -498,36 +504,6 @@ export function GridFilterToolbar() {
       },
     ];
   };
-  const presenceEntries = (
-    kind: 'notes' | 'url',
-    presentKey: 'notes_present' | 'source_url_present',
-    containsKey: 'notes_contains' | 'source_url_contains',
-  ): MenuEntry[] => [
-    {
-      label: t("Has {value0}", { value0: kind === 'notes' ? 'Notes' : 'URL' }),
-      checked: filters[presentKey] === true,
-      keepOpen: true,
-      action: () => update(filters[presentKey] === true
-        ? { [presentKey]: null, [containsKey]: null }
-        : { [presentKey]: true }),
-    },
-    {
-      label: t("Has No {value0}", { value0: kind === 'notes' ? 'Notes' : 'URL' }),
-      checked: filters[presentKey] === false,
-      keepOpen: true,
-      action: () => update({ [presentKey]: filters[presentKey] === false ? null : false, [containsKey]: null }),
-    },
-    {
-      custom: true,
-      key: `${kind}-keyword`,
-      render: () => <PresenceKeywordEditor
-        value={filters[containsKey]}
-        enabled={filters[presentKey] === true}
-        placeholder={kind === 'notes' ? t("Search notes") : t("Search URLs")}
-        onChange={(value) => update({ [containsKey]: value })}
-      />,
-    },
-  ];
   const editorEntries: Record<Exclude<FilterMenuKind, 'rating' | 'type' | 'pin' | 'color' | 'saved'>, MenuEntry[]> = {
     imported: dateEntries('imported'),
     modified: dateEntries('modified'),
@@ -558,8 +534,6 @@ export function GridFilterToolbar() {
       key: 'resolution-range',
       render: () => <ResolutionEditor filters={filters} update={update} />,
     }],
-    notes: presenceEntries('notes', 'notes_present', 'notes_contains'),
-    url: presenceEntries('url', 'source_url_present', 'source_url_contains'),
   };
 
   const savedFilterEntries: MenuEntry[] = [
@@ -611,8 +585,7 @@ export function GridFilterToolbar() {
     : editorEntries[activeMenu.kind];
   const activeMenuWidth = activeMenu?.kind === 'saved' ? 250
     : activeMenu?.kind === 'color' ? 230
-    : activeMenu?.kind === 'notes' || activeMenu?.kind === 'url' ? 240
-    : activeMenu?.kind === 'imported' || activeMenu?.kind === 'modified' ? 220
+    : activeMenu?.kind === 'imported' || activeMenu?.kind === 'modified' ? 310
     : activeMenu?.kind === 'duration' || activeMenu?.kind === 'size' || activeMenu?.kind === 'resolution' ? 210
     : undefined;
 
@@ -693,20 +666,6 @@ export function GridFilterToolbar() {
           active={filters.min_size_bytes != null || filters.max_size_bytes != null}
           onOpen={(element) => openMenu(element, 'size')}
           onClear={() => update({ min_size_bytes: null, max_size_bytes: null })}
-        /> : null}
-        {(pinnedFilters.has('notes') || filters.notes_present != null || filters.notes_contains) ? <FilterControl
-          label={filters.notes_present === false ? t("Has No Notes") : filters.notes_contains ? t("Notes: {value0}", { value0: filters.notes_contains }) : filters.notes_present ? t("Has Notes") : t("Notes")}
-          icon={<IconNotes size={16} stroke={1.6} />}
-          active={filters.notes_present != null || Boolean(filters.notes_contains)}
-          onOpen={(element) => openMenu(element, 'notes')}
-          onClear={() => update({ notes_present: null, notes_contains: null })}
-        /> : null}
-        {(pinnedFilters.has('url') || filters.source_url_present != null || filters.source_url_contains) ? <FilterControl
-          label={filters.source_url_present === false ? t("Has No URL") : filters.source_url_contains ? t("URL: {value0}", { value0: filters.source_url_contains }) : filters.source_url_present ? t("Has URL") : t("URL")}
-          icon={<IconLink size={16} stroke={1.6} />}
-          active={filters.source_url_present != null || Boolean(filters.source_url_contains)}
-          onOpen={(element) => openMenu(element, 'url')}
-          onClear={() => update({ source_url_present: null, source_url_contains: null })}
         /> : null}
         <KbdTooltip label={t("Add or remove filter fields")}>
           <button

@@ -1,15 +1,20 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { gridFilterLockedAtom, gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { gridController } from '../../controllers/gridController';
 import { tagSelectPortalAtom } from '../../state/portals';
+import { listAcceptedMediaFormats } from '../../platform/mediaFormatApi';
 
 vi.mock('../../shared/ui/KbdTooltip', () => ({
   KbdTooltip: ({ children }: { children: unknown }) => children,
+}));
+
+vi.mock('../../platform/mediaFormatApi', () => ({
+  listAcceptedMediaFormats: vi.fn(() => new Promise(() => {})),
 }));
 
 const emptyFilters: ItemFilters = createEmptyItemFilters();
@@ -31,7 +36,7 @@ describe('countActiveGridFilters', () => {
     expect(countActiveGridFilters({ ...emptyFilters, text: 'portrait' })).toBe(0);
   });
 
-  it('counts each applicable range or presence family once', () => {
+  it('counts each applicable range family once', () => {
     expect(countActiveGridFilters({
       ...emptyFilters,
       imported_after: '2026-01-01T00:00:00Z',
@@ -40,14 +45,15 @@ describe('countActiveGridFilters', () => {
       max_duration_ms: 5000n,
       min_width: 800n,
       max_height: 1200n,
-      notes_present: true,
-      notes_contains: 'caption',
-      source_url_present: false,
-    })).toBe(5);
+    })).toBe(3);
   });
 });
 
 describe('GridFilterToolbar', () => {
+  beforeEach(() => {
+    vi.mocked(listAcceptedMediaFormats).mockImplementation(() => new Promise(() => {}));
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.removeItem('picto:grid:pinned-filters');
@@ -72,9 +78,11 @@ describe('GridFilterToolbar', () => {
     expect(screen.getByRole('button', { name: 'Lock filters' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Add filter'));
-    for (const label of ['Date Imported', 'Date Modified', 'Resolution', 'Duration', 'File Size', 'Notes', 'URL']) {
+    for (const label of ['Date Imported', 'Date Modified', 'Resolution', 'Duration', 'File Size']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+    expect(screen.queryByText('Notes')).toBeNull();
+    expect(screen.queryByText('URL')).toBeNull();
   });
 
   it('locks filter navigation and clears every active filter through the right actions', () => {
@@ -131,27 +139,30 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ min_size_bytes: 2_000_000n }));
   });
 
-  it('uses presence plus keyword semantics for notes', () => {
-    vi.useFakeTimers();
-    window.localStorage.setItem('picto:grid:pinned-filters', JSON.stringify(['notes']));
+  it('keeps every supported type available while a type filter is active', async () => {
+    vi.mocked(listAcceptedMediaFormats).mockResolvedValue([
+      { extension: 'jpg', mime_type: 'image/jpeg' },
+      { extension: 'gif', mime_type: 'image/gif' },
+      { extension: 'mp4', mime_type: 'video/mp4' },
+      { extension: 'pdf', mime_type: 'application/pdf' },
+    ]);
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      filters: { ...emptyFilters, notes_present: true },
+      filters: { ...emptyFilters, include_mime_types: ['image/gif'] },
     });
     const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
     render(<GridFilterToolbar />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Has Notes' }));
-    const keyword = screen.getByLabelText('Search notes');
-    fireEvent.change(keyword, { target: { value: 'caption' } });
-    act(() => vi.advanceTimersByTime(300));
+    fireEvent.click(screen.getByRole('button', { name: 'GIF' }));
+    fireEvent.click(await screen.findByText('JPG'));
 
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({
-      notes_present: true,
-      notes_contains: 'caption',
+      include_mime_types: ['image/gif', 'image/jpeg'],
     }));
+    expect(screen.getByText('Videos')).toBeTruthy();
+    expect(screen.getByText('PDF')).toBeTruthy();
   });
 
   it('commits date presets as canonical half-open ranges', () => {
@@ -169,6 +180,19 @@ describe('GridFilterToolbar', () => {
       imported_after: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/),
       imported_before: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/),
     }));
+  });
+
+  it('uses the shared calendar picker for custom date ranges', () => {
+    window.localStorage.setItem('picto:grid:pinned-filters', JSON.stringify(['imported']));
+    const store = getDefaultStore();
+    store.set(gridFilterToolbarOpenAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: emptyFilters });
+    render(<GridFilterToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Date Imported' }));
+
+    expect(screen.getByRole('button', { name: 'From' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'To' })).toBeTruthy();
   });
 
   it('anchors tag filtering directly below the tag control', () => {
