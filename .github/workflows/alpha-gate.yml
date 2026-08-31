@@ -21,17 +21,16 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
-  alpha-verify:
-    name: alpha:verify
+  verify-renderer:
+    name: verify:renderer
     # Release branches are the gate. A tag points at that already-gated commit;
     # rerunning the entire test suite before the three platform builds only
     # duplicated the slowest work.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -39,9 +38,39 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            native/picto-node/package-lock.json
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Check localization
+        run: npm run check:localization
+
+      - name: Typecheck renderer
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Test renderer
+        run: npm run test -- --run
+
+      - name: Check command parity
+        run: npm run check:command-parity
+
+  verify-rust:
+    name: verify:rust
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # release-audit is a Node script, but this job does not install the
+      # renderer dependency tree.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
@@ -58,41 +87,20 @@ jobs:
       # units when a source change prevents an exact target-cache hit.
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
-      - name: Install Linux deps
+      - name: Install Rust system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
             libdbus-1-dev \
             libssl-dev \
-            libclang-dev \
-            libfuse2 \
-            xvfb
-
-      - name: Download FFmpeg binaries
-        run: bash scripts/download-ffmpeg.sh
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install NAPI CLI deps
-        working-directory: native/picto-node
-        run: npm ci
+            libclang-dev
 
       - name: Fetch locked Rust dependencies
         run: cargo fetch --manifest-path core/Cargo.toml --locked
 
       - name: Audit release inputs
-        run: npm run release:audit
-
-      - name: Typecheck renderer
-        run: npx tsc -p tsconfig.json --noEmit
-
-      - name: Test renderer
-        run: npm run test -- --run
-
-      - name: Check command parity
-        run: npm run check:command-parity
+        run: node scripts/release-audit.mjs
 
       # Keep strict lint ahead of the long Rust test suite. A new compiler lint
       # should fail one named step immediately, not surface after every test has run.
@@ -104,10 +112,13 @@ jobs:
 
   alpha-package:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})
-    needs: alpha-verify
+    needs:
+      - verify-renderer
+      - verify-rust
     # Release branches are preflight-only. Packaging them as well as their tag
     # doubled every platform build and encouraged tagging before CI was green.
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && (startsWith(github.ref, 'refs/tags/') || needs.alpha-verify.result == 'success') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && (startsWith(github.ref, 'refs/tags/') || (needs.verify-renderer.result == 'success' && needs.verify-rust.result == 'success')) }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -147,21 +158,14 @@ jobs:
             package-lock.json
             native/picto-node/package-lock.json
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
-
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.98.0
-          components: clippy
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: . -> target
           cache-on-failure: true
-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
@@ -232,6 +236,7 @@ jobs:
     # ancestor from suppressing publication after every package job succeeds.
     if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.alpha-package.result == 'success' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
