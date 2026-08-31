@@ -1661,12 +1661,15 @@ fn normalize_destination_policy(
     let mut automatic_tags = Vec::new();
     for tag in &policy.automatic_tags {
         let tag = tag.trim();
-        if tag.is_empty() || automatic_tags.iter().any(|current| current == tag) {
+        if tag.is_empty() {
             continue;
         }
-        crate::tag_name::parse_local(tag)
+        let (namespace, subtag) = crate::tag_name::parse_local(tag)
             .map_err(|error| format!("invalid automatic tag '{tag}': {error}"))?;
-        automatic_tags.push(tag.to_string());
+        let tag = crate::tag_name::format(&namespace, &subtag);
+        if !automatic_tags.contains(&tag) {
+            automatic_tags.push(tag);
+        }
     }
     let mut target_folder_ids = policy.target_folder_ids.clone();
     if let Some(folder_id) = policy.target_folder_id {

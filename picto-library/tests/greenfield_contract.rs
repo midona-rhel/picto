@@ -792,9 +792,133 @@ fn tag_rename_changes_only_the_dictionary() {
 }
 
 #[test]
+fn explicit_general_tags_share_the_unnamespaced_identity() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported(
+            "canonical-general",
+            Lifecycle::Active,
+            &["1girl", "general:1girl"],
+        ))
+        .unwrap();
+
+    let matching = library
+        .tags()
+        .unwrap()
+        .into_iter()
+        .filter(|tag| tag.subname == "1girl")
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].namespace, "");
+    assert_eq!(matching[0].assignment_count, 1);
+    assert!(library.projections().snapshot().tags[&matching[0].tag_id].contains(root.0));
+}
+
+#[test]
+fn canonicalization_removes_an_empty_explicit_general_group() {
+    let directory = TempDir::new().unwrap();
+    let database_path = directory.path().join("library.sqlite");
+    let library = Library::create(&database_path).unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute(
+                    "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+                     VALUES (4294967000, 'legacy-general-empty-test', 'general')",
+                    [],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+    let library = Library::open(&database_path).unwrap();
+
+    assert!(library
+        .canonicalize_general_tag_namespace()
+        .unwrap()
+        .is_some());
+    assert!(!library
+        .tag_namespaces()
+        .unwrap()
+        .iter()
+        .any(|namespace| namespace.name.eq_ignore_ascii_case("general")));
+    assert!(!library.history().state().can_undo);
+}
+
+#[test]
+fn canonicalization_merges_existing_general_memberships() {
+    let directory = TempDir::new().unwrap();
+    let database_path = directory.path().join("library.sqlite");
+    let library = Library::create(&database_path).unwrap();
+    let (first, _) = library
+        .ingest(&imported("bare-general", Lifecycle::Active, &["1girl"]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported(
+            "explicit-general",
+            Lifecycle::Active,
+            &["temporary"],
+        ))
+        .unwrap();
+    let temporary_id = library.projections().snapshot().tag_ids_by_name["temporary"];
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute(
+                    "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+                     VALUES (4294967000, 'legacy-general-members-test', 'general')",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE tag_definition
+                     SET namespace_id = 4294967000, subname = '1girl'
+                     WHERE tag_id = ?1",
+                    [temporary_id.0],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+
+    let library = Library::open(&database_path).unwrap();
+    assert_eq!(
+        library
+            .tags()
+            .unwrap()
+            .iter()
+            .filter(|tag| tag.subname == "1girl")
+            .count(),
+        2
+    );
+    library.canonicalize_general_tag_namespace().unwrap();
+
+    let matching = library
+        .tags()
+        .unwrap()
+        .into_iter()
+        .filter(|tag| tag.subname == "1girl")
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].namespace, "");
+    assert_eq!(matching[0].assignment_count, 2);
+    let members = &library.projections().snapshot().tags[&matching[0].tag_id];
+    assert!(members.contains(first.0));
+    assert!(members.contains(second.0));
+}
+
+#[test]
 fn empty_tag_namespace_creation_is_published_and_undoable() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+
+    assert!(library.create_tag_namespace("general").is_err());
 
     let receipt = library.create_tag_namespace("creator").unwrap();
     assert!(receipt.resources.contains(&"tags".to_string()));

@@ -55,6 +55,28 @@ impl Library {
         Self::from_database(LibraryDatabase::open(path)?)
     }
 
+    /// Merge the legacy explicit `general` namespace into the canonical
+    /// unnamespaced group. This is safe to run on every open and publishes the
+    /// merge so cloud peers converge on the repaired tag identities as well.
+    pub fn canonicalize_general_tag_namespace(&self) -> Result<Option<MutationReceipt>> {
+        let namespace_ids = self
+            .tag_namespaces()?
+            .into_iter()
+            .filter(|namespace| namespace.name.eq_ignore_ascii_case("general"))
+            .map(|namespace| namespace.namespace_id)
+            .collect::<Vec<_>>();
+        let mut receipt = None;
+        for namespace_id in namespace_ids {
+            receipt = Some(self.rename_or_merge_tag_namespace(namespace_id, "")?);
+        }
+        if receipt.is_some() {
+            // Opening a library must not expose automatic data repair as a
+            // user action that can be undone back into the invalid state.
+            self.history.clear();
+        }
+        Ok(receipt)
+    }
+
     fn from_database(database: LibraryDatabase) -> Result<Self> {
         let database = Arc::new(database);
         database.maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
@@ -2473,8 +2495,9 @@ impl Library {
         for assignment in assignments {
             requested_roots.insert(assignment.root_id.0);
             for tag in &assignment.tags {
+                let tag = ingest::canonical_tag_name(tag)?;
                 roots_by_tag
-                    .entry(required_name("tag", tag)?)
+                    .entry(tag)
                     .or_default()
                     .insert(assignment.root_id.0);
             }
@@ -2601,7 +2624,7 @@ impl Library {
     }
 
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
-        let name = required_name("tag", name)?;
+        let name = ingest::canonical_tag_name(name)?;
         let changed_at_ms = now_ms();
         let projections = self.projections.clone();
         let publication = self.publication.clone();
@@ -2671,6 +2694,9 @@ impl Library {
         name: &str,
     ) -> Result<MutationReceipt> {
         let name = required_name("tag namespace", name)?;
+        if name.eq_ignore_ascii_case("general") {
+            return self.rename_or_merge_tag_namespace(namespace_id, "");
+        }
         if name.contains(':') {
             return Err(LibraryError::InvalidInput(
                 "tag namespace cannot contain a colon".into(),
@@ -2727,6 +2753,11 @@ impl Library {
 
     pub fn create_tag_namespace(&self, name: &str) -> Result<MutationReceipt> {
         let name = required_name("tag namespace", name)?;
+        if name.eq_ignore_ascii_case("general") {
+            return Err(LibraryError::InvalidInput(
+                "General is the built-in unnamespaced tag group".into(),
+            ));
+        }
         if name.contains(':') {
             return Err(LibraryError::InvalidInput(
                 "tag namespace cannot contain a colon".into(),
@@ -2808,7 +2839,7 @@ impl Library {
     ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
         let names = names
             .iter()
-            .map(|name| required_name("tag", name))
+            .map(|name| ingest::canonical_tag_name(name))
             .collect::<Result<BTreeSet<_>>>()?;
         if names.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -2877,7 +2908,12 @@ impl Library {
         namespace_id: TagNamespaceId,
         name: &str,
     ) -> Result<MutationReceipt> {
-        let name = name.trim().to_owned();
+        let name = name.trim();
+        let name = if name.eq_ignore_ascii_case("general") {
+            String::new()
+        } else {
+            name.to_owned()
+        };
         if name.contains(':') {
             return Err(LibraryError::InvalidInput(
                 "tag namespace cannot contain a colon".into(),
@@ -4331,11 +4367,10 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let names = names
             .iter()
-            .map(|name| name.trim())
-            .filter(|name| !name.is_empty())
-            .collect::<BTreeSet<_>>()
+            .filter_map(|name| (!name.trim().is_empty()).then_some(name))
+            .map(|name| ingest::canonical_tag_name(name))
+            .collect::<Result<BTreeSet<_>>>()?
             .into_iter()
-            .map(str::to_owned)
             .collect::<Vec<_>>();
         if names.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -6804,13 +6839,14 @@ fn rename_tag_definition(
     tag_id: crate::TagId,
     name: &str,
 ) -> Result<()> {
-    let (namespace, subname) = name.split_once(':').unwrap_or(("", name));
+    let name = ingest::canonical_tag_name(name)?;
+    let (namespace, subname) = name.split_once(':').unwrap_or(("", name.as_str()));
     if subname.trim().is_empty() {
         return Err(LibraryError::InvalidInput("tag name is empty".into()));
     }
     if snapshot
         .tag_ids_by_name
-        .get(name)
+        .get(&name)
         .is_some_and(|existing| *existing != tag_id)
     {
         return Err(LibraryError::InvalidInput(format!(
@@ -6829,7 +6865,7 @@ fn rename_tag_definition(
     )?;
     let names = Arc::make_mut(&mut snapshot.tag_ids_by_name);
     names.remove(&old_name);
-    names.insert(name.to_owned(), tag_id);
+    names.insert(name, tag_id);
     Ok(())
 }
 

@@ -92,6 +92,15 @@ impl LibraryApplication {
     }
 
     fn from_library(root: PathBuf, library: Library) -> Result<Self, String> {
+        if let Some(receipt) = library
+            .canonicalize_general_tag_namespace()
+            .map_err(|error| format!("Failed to canonicalize General tags: {error}"))?
+        {
+            tracing::info!(
+                revision = receipt.revision,
+                "Merged explicit General tags into the canonical unnamespaced group"
+            );
+        }
         let blobs = BlobStore::open(&root)
             .map_err(|error| format!("Failed to open blob store: {error}"))?;
         Ok(Self {

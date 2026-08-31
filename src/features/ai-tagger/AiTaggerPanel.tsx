@@ -81,7 +81,9 @@ function predictionTags(prediction: RootPrediction | undefined, runModels: Set<s
   const byKey = new Map<string, ReviewTag>();
   for (const tag of prediction.predictions as AiTagPrediction[]) {
     if (!runModels.has(tag.model)) continue;
-    const key = tag.namespace ? `${tag.namespace}:${tag.tag}` : tag.tag;
+    const key = !tag.namespace || tag.namespace === 'general' || tag.namespace === 'default'
+      ? tag.tag
+      : `${tag.namespace}:${tag.tag}`;
     const current = byKey.get(key) ?? {
       key,
       namespace: tag.namespace,

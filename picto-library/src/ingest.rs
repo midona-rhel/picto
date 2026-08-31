@@ -44,12 +44,13 @@ pub(crate) fn insert_one(
                 RoaringBitmap::from_iter([existing.root_id.0])
             };
             let mut bitmap_keys = Vec::new();
-            for name in &input.tags {
-                let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(name).copied() {
+            for raw_name in &input.tags {
+                let name = canonical_tag_name(raw_name)?;
+                let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
                     tag_id
                 } else {
-                    let tag_id = ensure_tag(transaction, name)?;
-                    Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name.clone(), tag_id);
+                    let tag_id = ensure_tag(transaction, &name)?;
+                    Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name, tag_id);
                     tag_id
                 };
                 let added_roots = {
@@ -259,12 +260,13 @@ pub(crate) fn insert_one(
 
     let mut assigned_tags = 0u64;
     let mut bitmap_keys = vec![lifecycle_key, rating_key];
-    for name in &input.tags {
-        let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(name).copied() {
+    for raw_name in &input.tags {
+        let name = canonical_tag_name(raw_name)?;
+        let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
             tag_id
         } else {
-            let tag_id = ensure_tag(transaction, name)?;
-            Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name.clone(), tag_id);
+            let tag_id = ensure_tag(transaction, &name)?;
+            Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name, tag_id);
             tag_id
         };
         let tags = Arc::make_mut(&mut snapshot.tags);
@@ -811,7 +813,8 @@ pub(crate) fn persist_touched(
 }
 
 pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<TagId> {
-    let (namespace, subname) = name.split_once(':').unwrap_or(("", name));
+    let name = canonical_tag_name(name)?;
+    let (namespace, subname) = name.split_once(':').unwrap_or(("", name.as_str()));
     if subname.trim().is_empty() {
         return Err(LibraryError::InvalidInput("tag name is empty".into()));
     }
@@ -835,7 +838,29 @@ pub(crate) fn ensure_tag(transaction: &Transaction<'_>, name: &str) -> Result<Ta
     Ok(TagId(tag_id))
 }
 
+pub(crate) fn canonical_tag_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(LibraryError::InvalidInput("tag name is empty".into()));
+    }
+    match name.split_once(':') {
+        Some((namespace, subname)) if namespace.trim().eq_ignore_ascii_case("general") => {
+            let subname = subname.trim();
+            if subname.is_empty() {
+                return Err(LibraryError::InvalidInput("tag name is empty".into()));
+            }
+            Ok(subname.to_owned())
+        }
+        _ => Ok(name.to_owned()),
+    }
+}
+
 pub(crate) fn ensure_namespace(transaction: &Transaction<'_>, name: &str) -> Result<u32> {
+    let name = if name.eq_ignore_ascii_case("general") {
+        ""
+    } else {
+        name
+    };
     let namespace_id = if let Some(id) = transaction
         .query_row(
             "SELECT namespace_id FROM tag_namespace WHERE display_name = ?1",
