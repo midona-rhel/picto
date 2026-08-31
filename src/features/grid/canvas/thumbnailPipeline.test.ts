@@ -65,6 +65,35 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     expect(onDirty).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves the browser receiver when scheduling full-resolution admission', () => {
+    const frames: FrameRequestCallback[] = [];
+    const schedule = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(function schedule(
+      this: Window,
+      callback: FrameRequestCallback,
+    ) {
+      expect(this).toBe(window);
+      frames.push(callback);
+      return 17;
+    });
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(function cancel(
+      this: Window,
+      handle: number,
+    ) {
+      expect(this).toBe(window);
+      expect(handle).toBe(17);
+    });
+    const pipeline = new ThumbnailPipeline();
+
+    expect(() => deliverBitmap?.('receiver', bitmap(1600, 1200), 'full')).not.toThrow();
+    expect(frames).toHaveLength(1);
+    pipeline.destroy();
+    expect(schedule).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+
+    schedule.mockRestore();
+    cancel.mockRestore();
+  });
+
   it('keeps a usable thumbnail when a full-resolution replacement fails', () => {
     const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn());
     const thumbnail = bitmap(512, 512);

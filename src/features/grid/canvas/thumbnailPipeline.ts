@@ -61,8 +61,10 @@ export class ThumbnailPipeline {
   constructor(
     onDirty: () => void = () => {},
     onBitmapAvailable: (hash: string) => void = () => {},
-    private readonly scheduleFrame: (callback: FrameRequestCallback) => number = requestAnimationFrame,
-    private readonly cancelFrame: (handle: number) => void = cancelAnimationFrame,
+    private readonly scheduleFrame: (callback: FrameRequestCallback) => number =
+      (callback) => window.requestAnimationFrame(callback),
+    private readonly cancelFrame: (handle: number) => void =
+      (handle) => window.cancelAnimationFrame(handle),
   ) {
     this.onDirty = onDirty;
     this.onBitmapAvailable = onBitmapAvailable;
