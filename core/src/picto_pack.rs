@@ -623,6 +623,13 @@ fn import_folders(
     let mut pending = folders.to_vec();
     pending.sort_by_key(|folder| folder.display_order);
     let mut ids = HashMap::new();
+    let existing = application
+        .library()
+        .folders()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|folder| (folder.stable_key.clone(), folder))
+        .collect::<HashMap<_, _>>();
     while !pending.is_empty() {
         let before = pending.len();
         let mut next = Vec::new();
@@ -637,10 +644,31 @@ fn import_folders(
                     }
                 },
             };
-            let (id, _) = application
-                .library()
-                .create_folder(&folder.name, parent_id)
-                .map_err(|error| error.to_string())?;
+            let id = if let Some(existing) = existing.get(&folder.stable_key) {
+                if existing.parent_id != parent_id {
+                    application
+                        .library()
+                        .move_folder(existing.folder_id, parent_id)
+                        .map_err(|error| error.to_string())?;
+                }
+                if existing.name != folder.name {
+                    application
+                        .library()
+                        .rename_folder(existing.folder_id, &folder.name)
+                        .map_err(|error| error.to_string())?;
+                }
+                existing.folder_id
+            } else {
+                application
+                    .library()
+                    .create_folder_with_stable_key(
+                        &folder.name,
+                        parent_id,
+                        folder.stable_key.clone(),
+                    )
+                    .map_err(|error| error.to_string())?
+                    .0
+            };
             application
                 .library()
                 .set_folder_metadata(
@@ -1048,7 +1076,8 @@ mod tests {
             exported.summary
         );
 
-        let imported = import(&destination, &PictoPackImportRequest { path: pack }).unwrap();
+        let imported =
+            import(&destination, &PictoPackImportRequest { path: pack.clone() }).unwrap();
         assert_eq!(imported.imported_roots, 2);
         assert_eq!(imported.imported_media, 3);
         assert_eq!(imported.imported_folders, 1);
@@ -1057,6 +1086,10 @@ mod tests {
         assert_eq!(folders[0].name, "Portfolio");
         assert_eq!(folders[0].notes.as_deref(), Some("folder notes"));
         assert_eq!(folders[0].watch_path, None);
+        assert_eq!(
+            folders[0].stable_key,
+            source.library().folders().unwrap()[0].stable_key
+        );
         assert_eq!(
             destination
                 .library()
@@ -1079,6 +1112,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(roots.len(), 2);
+
+        let imported_again = import(&destination, &PictoPackImportRequest { path: pack }).unwrap();
+        assert_eq!(imported_again.imported_roots, 2);
+        assert_eq!(destination.library().folders().unwrap().len(), 1);
+        assert_eq!(
+            destination
+                .library()
+                .auxiliary_read(
+                    picto_library::database::WorkPriority::VisibleRead,
+                    |connection| connection
+                        .query_row("SELECT COUNT(*) FROM library_root", [], |row| row
+                            .get::<_, i64>(0))
+                        .map_err(Into::into),
+                )
+                .unwrap(),
+            2
+        );
         let details = roots
             .into_iter()
             .map(|id| destination.library().details(RootId(id)).unwrap())

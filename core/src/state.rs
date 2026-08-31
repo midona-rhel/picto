@@ -210,7 +210,7 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         }
     }
 
-    let result = crate::ipc::dispatch_library_async(state.application(), command, args_json)
+    let result = crate::ipc::dispatch_library_async(&state.application, command, args_json)
         .await?
         .ok_or_else(|| format!("Unknown schema-1 command: {command}"));
     if let (Some(cache_key), Ok(serialized)) = (cache_key, result.as_ref()) {

@@ -3172,8 +3172,22 @@ impl Library {
         name: &str,
         parent_id: Option<FolderId>,
     ) -> Result<(FolderId, MutationReceipt)> {
+        self.create_folder_with_stable_key(name, parent_id, uuid::Uuid::new_v4().to_string())
+    }
+
+    pub fn create_folder_with_stable_key(
+        &self,
+        name: &str,
+        parent_id: Option<FolderId>,
+        stable_key: String,
+    ) -> Result<(FolderId, MutationReceipt)> {
         if name.trim().is_empty() {
             return Err(LibraryError::InvalidInput("folder name is empty".into()));
+        }
+        if stable_key.trim().is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "folder stable key is empty".into(),
+            ));
         }
         let name = name.trim().to_owned();
         let changed_at_ms = now_ms();
@@ -3198,7 +3212,7 @@ impl Library {
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     rusqlite::params![
                         folder_id.0,
-                        uuid::Uuid::new_v4().to_string(),
+                        stable_key,
                         parent_id.map(|id| id.0),
                         name,
                         display_order

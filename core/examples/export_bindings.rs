@@ -60,7 +60,7 @@ fn main() {
     };
     use picto_core::library_import::FolderTreeAnalysis;
     use picto_core::media_io::{
-        ExportFormat, ExportResult, RequestThumbnailResult, ResolvedFilePath, ThumbnailQueueResult,
+        ExportFormat, ExportResult, ResolvedFilePath, ThumbnailQueueResult,
     };
     use picto_core::settings::SettingsSnapshot;
     use picto_core::subscription_activity::{
@@ -118,7 +118,6 @@ fn main() {
         TaskIssue,
         TaskSnapshot,
         ResolvedFilePath,
-        RequestThumbnailResult,
         ThumbnailQueueResult,
         ExportFormat,
         ExportResult,

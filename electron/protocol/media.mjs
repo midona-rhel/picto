@@ -86,7 +86,6 @@ export function createMediaProtocolService({
   onThumbnailReady = () => {},
 }) {
   const thumbRequestInFlight = new Map();
-  const thumbRequestsQueued = new Set();
   const thumbMetaCache = new Map();
   const fileMetaCache = new Map();
   let cachedRoot = null;
@@ -98,7 +97,6 @@ export function createMediaProtocolService({
     thumbMetaCache.clear();
     fileMetaCache.clear();
     thumbRequestInFlight.clear();
-    thumbRequestsQueued.clear();
     return root;
   }
 
@@ -203,7 +201,6 @@ export function createMediaProtocolService({
         if (!stat) continue;
         const meta = buildMeta(filePath, stat, extension);
         thumbMetaCache.set(hash, meta);
-        thumbRequestsQueued.delete(hash);
         return meta;
       }
     }
@@ -213,7 +210,6 @@ export function createMediaProtocolService({
   function invalidateThumbnail(hash) {
     thumbMetaCache.delete(hash);
     thumbRequestInFlight.delete(hash);
-    thumbRequestsQueued.delete(hash);
   }
 
   async function resolveLibraryCoverMeta(libraryRoot) {
@@ -265,32 +261,12 @@ export function createMediaProtocolService({
   }
 
   function scheduleThumbnailAfterMiss(hash) {
-    if (thumbRequestInFlight.has(hash) || thumbRequestsQueued.has(hash)) return;
-    const task = (async () => {
-      try {
-        const requested = await invoke('media.request_thumbnail', { file_hash: hash });
-        if (requested?.ready) {
-          onThumbnailReady(hash);
-          return;
-        }
-        if (requested?.supported) {
-          thumbRequestsQueued.add(hash);
-          if (requested.queued) {
-            forwardLog('DEBUG', 'media', `Thumbnail queued: ${hash.slice(0, 12)}`);
-          }
-          return;
-        }
-      } catch {}
-
-      // Browser-backed formats are also generated off the request path. The
-      // failed image response remains a placeholder until this event retries it.
-      if (await renderExternalThumbnail(hash)) onThumbnailReady(hash);
-    })().catch((error) => {
+    if (thumbRequestInFlight.has(hash)) return;
+    void renderThumbnailNow(hash).then(async () => {
+      if (await resolveThumbMeta(hash)) onThumbnailReady(hash);
+    }).catch((error) => {
       forwardWarn('media', `Deferred thumbnail failed: ${error?.message ?? String(error)}`);
-    }).finally(() => {
-      thumbRequestInFlight.delete(hash);
     });
-    thumbRequestInFlight.set(hash, task);
   }
 
   async function renderExternalThumbnail(hash) {

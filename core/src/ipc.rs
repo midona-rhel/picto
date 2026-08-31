@@ -7,7 +7,7 @@
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use ts_rs::TS;
 
 use crate::dto::FileHash;
@@ -16,6 +16,8 @@ use crate::subscription_catalog::{
     SubscriptionCoverSelection, SubscriptionDestinationPolicy,
 };
 use crate::subscriptions::sites::normalize_ehentai_gallery_url;
+
+const PICTO_PACK_IMPORT_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 fn gallery_start_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -274,10 +276,6 @@ pub fn dispatch_library(
             application,
             &parse::<crate::picto_pack::PictoPackExportRequest>(args_json)?,
         )?),
-        "picto_pack.import" => read(crate::picto_pack::import(
-            application,
-            &parse::<crate::picto_pack::PictoPackImportRequest>(args_json)?,
-        )?),
         "sources.list" => read(crate::auth::sources()),
         "auth.credentials.list" => read(crate::auth::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth::list_library_health(application)?),
@@ -509,7 +507,7 @@ pub fn dispatch_library(
 }
 
 pub async fn dispatch_library_async(
-    application: &crate::library_application::LibraryApplication,
+    application: &Arc<crate::library_application::LibraryApplication>,
     command: &str,
     args_json: &str,
 ) -> Result<Option<String>, String> {
@@ -526,22 +524,22 @@ pub async fn dispatch_library_async(
         "ai.status" => read(crate::ai_runtime::model_status_library(application).await?),
         "ai.models.download" => {
             let input: ModelInput = parse(args_json)?;
-            crate::ai_models::download(application, &input.slug).await?;
+            crate::ai_models::download(application.as_ref(), &input.slug).await?;
             read(crate::ai_runtime::model_status_library(application).await?)
         }
         "ai.models.cancel" => {
             let input: ModelInput = parse(args_json)?;
-            crate::ai_models::cancel_download(application, &input.slug).await?;
+            crate::ai_models::cancel_download(application.as_ref(), &input.slug).await?;
             read(EmptyOutput {})
         }
         "ai.models.delete" => {
             let input: ModelInput = parse(args_json)?;
-            crate::ai_models::delete(application, &input.slug).await?;
+            crate::ai_models::delete(application.as_ref(), &input.slug).await?;
             read(crate::ai_runtime::model_status_library(application).await?)
         }
         "ai.models.optimize" => {
             let input: ModelInput = parse(args_json)?;
-            crate::ai_models::optimize(application, &input.slug).await?;
+            crate::ai_models::optimize(application.as_ref(), &input.slug).await?;
             read(crate::ai_runtime::model_status_library(application).await?)
         }
         "ai.review.predict" => {
@@ -724,13 +722,6 @@ pub async fn dispatch_library_async(
                 Err(error) => Err(error),
             }
         }
-        "media.request_thumbnail" => {
-            let input: FileHashInput = parse(args_json)?;
-            read(crate::media_io::request_thumbnail_library(
-                application,
-                &input.file_hash,
-            )?)
-        }
         "media.render_thumbnail_now" => {
             let input: FileHashInput = parse(args_json)?;
             read(
@@ -749,6 +740,10 @@ pub async fn dispatch_library_async(
                 &input,
             )?)
         }
+        "picto_pack.import" => {
+            let input: crate::picto_pack::PictoPackImportRequest = parse(args_json)?;
+            read(run_picto_pack_import(Arc::clone(application), input).await?)
+        }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
             read(
@@ -760,6 +755,23 @@ pub async fn dispatch_library_async(
         _ => return dispatch_library(application, command, args_json),
     }?;
     Ok(Some(output))
+}
+
+async fn run_picto_pack_import(
+    application: Arc<crate::library_application::LibraryApplication>,
+    input: crate::picto_pack::PictoPackImportRequest,
+) -> Result<crate::picto_pack::PictoPackImportResult, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("picto-pack-import".into())
+        .stack_size(PICTO_PACK_IMPORT_STACK_BYTES)
+        .spawn(move || {
+            let _ = sender.send(crate::picto_pack::import(&application, &input));
+        })
+        .map_err(|error| format!("Could not start Picto Pack import worker: {error}"))?;
+    receiver
+        .await
+        .map_err(|_| "Picto Pack import worker terminated unexpectedly".to_string())?
 }
 
 #[derive(Deserialize)]
