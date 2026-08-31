@@ -496,9 +496,9 @@ export function AiTaggerPanel() {
       footer={
         <>
           <div className={styles.confidenceControl}>
-            <span>{t("Confidence")}</span>
+            <span>{t("Minimum confidence · All images")}</span>
             <TitlebarRangeSlider
-              aria-label={t("Run confidence")}
+              aria-label={t("Minimum confidence · All images")}
               min={MIN_REVIEW_CONFIDENCE}
               max={MAX_REVIEW_CONFIDENCE}
               step={1}

@@ -427,7 +427,7 @@ describe('AiTaggerPanel', () => {
     expect(await screen.findByText('miku')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Apply 1 tag' })).not.toBeInTheDocument();
 
-    const slider = screen.getByRole('slider', { name: 'Run confidence' });
+    const slider = screen.getByRole('slider', { name: 'Minimum confidence · All images' });
     fireEvent.change(slider, { target: { value: '25' } });
     expect(screen.getByText('25%')).toBeInTheDocument();
     expect(screen.getByText('miku')).toBeInTheDocument();
@@ -447,12 +447,32 @@ describe('AiTaggerPanel', () => {
     await user.click(screen.getByText('Below cutoff'));
     await user.click(await screen.findByText('miku'));
 
-    const slider = screen.getByRole('slider', { name: 'Run confidence' });
+    const slider = screen.getByRole('slider', { name: 'Minimum confidence · All images' });
     fireEvent.change(slider, { target: { value: '25' } });
     fireEvent.pointerUp(slider);
     await user.click(screen.getByText('Suggested'));
 
     expect(screen.getByRole('button', { name: 'Apply 1 tag' })).toBeInTheDocument();
+  });
+
+  it('applies the minimum confidence to every image in the run', async () => {
+    mocks.predict.mockImplementation(async (targets: Array<{ rootId: number }>) => ({
+      predictions: targets.map((target) => prediction(target.rootId, `tag-${target.rootId}`, 0.3)),
+      thresholds: { general: 0.35, character: 0.9 },
+    }));
+    await renderPanel([1, 2]);
+    await startRun();
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+
+    const slider = screen.getByRole('slider', { name: 'Minimum confidence · All images' });
+    fireEvent.change(slider, { target: { value: '25' } });
+    fireEvent.pointerUp(slider);
+
+    await setupUser().click(screen.getByRole('button', { name: 'Apply 2 tags' }));
+    await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
+      { root_id: 1, tags: ['character:tag-1'] },
+      { root_id: 2, tags: ['character:tag-2'] },
+    ]));
   });
 
   it('uses the inspector preview frame for the reviewed image', async () => {
