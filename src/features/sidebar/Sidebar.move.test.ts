@@ -58,6 +58,27 @@ describe('planSidebarTreeDrop', () => {
     });
   });
 
+  it('moves an unselected descendant as part of its selected parent subtree', () => {
+    const nodes = [
+      folder(1, null, 0),
+      folder(2, 1, 0),
+      folder(3, 2, 0),
+      folder(4, null, 1),
+    ];
+
+    expect(planSidebarTreeDrop(
+      nodes,
+      ['folder:1'],
+      'folder:1',
+      'folder:4',
+      'inside',
+    )).toEqual({
+      movingIds: ['folder:1'],
+      parentId: 'folder:4',
+      orderedChildIds: ['folder:1'],
+    });
+  });
+
   it('moves selected roots from different parents before one target', () => {
     const nodes = [
       folder(1, null, 0),

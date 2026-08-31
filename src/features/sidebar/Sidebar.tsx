@@ -142,6 +142,18 @@ export interface SidebarTreeMovePlan {
   orderedChildIds: string[];
 }
 
+interface SidebarFolderDragState {
+  active: boolean;
+  draggedNodeId: string;
+  dropTargetId: string | null;
+  dropPosition: 'before' | 'inside' | 'after' | null;
+  ghostX: number;
+  ghostY: number;
+  ghostLabel: string;
+  ghostIcon: string | null;
+  ghostColor: string | null;
+}
+
 export function planSidebarTreeDrop(
   nodes: SidebarNodeDto[],
   selectedIds: Iterable<string>,
@@ -325,39 +337,46 @@ export function Sidebar() {
   }, [contextMenu.state, contextMenuNodeId]);
 
   // ── Folder drag reorder ──
-  const folderDragRef = useRef<{ nodeId: string; startY: number } | null>(null);
-  const [folderDragState, setFolderDragState] = useState<{
-    active: boolean;
-    draggedNodeId: string;
-    dropTargetId: string | null;
-    dropPosition: 'before' | 'inside' | 'after' | null;
-    ghostX: number;
-    ghostY: number;
-    ghostLabel: string;
-    ghostIcon: string | null;
-    ghostColor: string | null;
+  const folderDragRef = useRef<{
+    nodeId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    source: HTMLElement;
   } | null>(null);
+  const folderDragStateRef = useRef<SidebarFolderDragState | null>(null);
+  const [folderDragState, setFolderDragState] = useState<SidebarFolderDragState | null>(null);
+
+  const commitFolderDragState = useCallback((state: SidebarFolderDragState | null) => {
+    folderDragStateRef.current = state;
+    setFolderDragState(state);
+  }, []);
 
   // Global pointer listeners for folder/smart folder drag
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const drag = folderDragRef.current;
-      if (!drag) return;
-      const dy = e.clientY - drag.startY;
-      if (!folderDragState?.active && Math.abs(dy) < 5) return;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const current = folderDragStateRef.current;
+      if (!current?.active && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 5) return;
 
       const isSmartDrag = drag.nodeId.startsWith('smart:');
       const nodePool = isSmartDrag ? smartFolderNodes : folderNodes;
+      const resolved = resolveSidebarTreeDrop(
+        document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null,
+        e.clientY,
+        drag.nodeId,
+        nodePool,
+      );
 
-      // Activate drag
       const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === drag.nodeId);
-      if (!folderDragState?.active) {
+      if (!current?.active) {
         document.documentElement.setAttribute('data-sidebar-drag-active', 'true');
-        setFolderDragState({
+        commitFolderDragState({
           active: true,
           draggedNodeId: drag.nodeId,
-          dropTargetId: null,
-          dropPosition: null,
+          dropTargetId: resolved?.targetId ?? null,
+          dropPosition: resolved?.position ?? null,
           ghostX: e.clientX,
           ghostY: e.clientY,
           ghostLabel: sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
@@ -368,32 +387,29 @@ export function Sidebar() {
         });
         document.body.style.cursor = 'grabbing';
       } else {
-        // Find drop target via elementFromPoint
-        const resolved = resolveSidebarTreeDrop(
-          document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null,
-          e.clientY,
-          drag.nodeId,
-          nodePool,
-        );
-
-        setFolderDragState((prev) => prev ? {
-          ...prev,
+        commitFolderDragState({
+          ...current,
           ghostX: e.clientX,
           ghostY: e.clientY,
           dropTargetId: resolved?.targetId ?? null,
           dropPosition: resolved?.position ?? null,
-        } : null);
+        });
       }
     };
 
-    const onUp = () => {
+    const finishDrag = (e: PointerEvent, applyDrop: boolean) => {
       const drag = folderDragRef.current;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const completedState = folderDragStateRef.current;
       folderDragRef.current = null;
+      if (drag.source.hasPointerCapture(drag.pointerId)) {
+        drag.source.releasePointerCapture(drag.pointerId);
+      }
       document.body.style.cursor = '';
       document.documentElement.removeAttribute('data-sidebar-drag-active');
 
-      if (folderDragState?.active && drag) {
-        const { dropTargetId, dropPosition } = folderDragState;
+      if (applyDrop && completedState?.active) {
+        const { dropTargetId, dropPosition } = completedState;
         const isSmartDrag = drag.nodeId.startsWith('smart:');
 
         if (dropTargetId && dropPosition) {
@@ -409,7 +425,12 @@ export function Sidebar() {
               const orderedIds = plan.orderedChildIds
                 .map(parseSmartFolderIdNum)
                 .filter((id): id is number => id != null);
-              void smartFoldersController.moveMany(movingIds, parentId, orderedIds);
+              void smartFoldersController.moveMany(movingIds, parentId, orderedIds).catch((reason) => {
+                showErrorNotification({
+                  title: 'Could not move smart folder',
+                  message: reason instanceof Error ? reason.message : String(reason),
+                });
+              });
             }
           } else {
             const plan = planSidebarTreeDrop(
@@ -423,22 +444,32 @@ export function Sidebar() {
               const orderedIds = plan.orderedChildIds
                 .map(parseFolderId)
                 .filter((id): id is number => id != null);
-              void foldersController.moveMany(movingIds, parentId, orderedIds);
+              void foldersController.moveMany(movingIds, parentId, orderedIds).catch((reason) => {
+                const message = reason instanceof Error ? reason.message : String(reason);
+                if (!message.includes('folders may be nested at most 8 levels deep')) {
+                  showErrorNotification({ title: 'Could not move folder', message });
+                }
+              });
             }
           }
         }
       }
-      setFolderDragState(null);
+      commitFolderDragState(null);
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    const onUp = (e: PointerEvent) => finishDrag(e, true);
+    const onCancel = (e: PointerEvent) => finishDrag(e, false);
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
     return () => {
       document.documentElement.removeAttribute('data-sidebar-drag-active');
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
-  }, [folderDragState, folderNodes, smartFolderNodes, sidebarSelection]);
+  }, [commitFolderDragState, folderNodes, smartFolderNodes, sidebarSelection]);
 
   const folderRename = useInlineRename({
     onCommit: (id, name) => {
@@ -1316,7 +1347,14 @@ export function Sidebar() {
             onContextMenu={(e) => handleFolderContextMenu(e, node)}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              folderDragRef.current = { nodeId: node.id, startY: e.clientY };
+              e.currentTarget.setPointerCapture(e.pointerId);
+              folderDragRef.current = {
+                nodeId: node.id,
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                source: e.currentTarget as unknown as HTMLElement,
+              };
             }}
             dropDataAttr={{ key: 'folder-drop-id', value: String(parseFolderId(node.id) ?? '') }}
             dataHelpRegion="sidebar-folders"
@@ -1402,7 +1440,14 @@ export function Sidebar() {
             onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              folderDragRef.current = { nodeId: node.id, startY: e.clientY };
+              e.currentTarget.setPointerCapture(e.pointerId);
+              folderDragRef.current = {
+                nodeId: node.id,
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                source: e.currentTarget as unknown as HTMLElement,
+              };
             }}
             dropDataAttr={{ key: 'smart-drop-id', value: String(parseSmartFolderIdNum(node.id) ?? '') }}
             dataHelpRegion="sidebar-smart-folders"
