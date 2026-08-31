@@ -6,9 +6,10 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-native-sources";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-31-duplicate-folder-names";
 
-const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
+const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-native-sources";
+const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
 
@@ -59,7 +60,12 @@ pub fn migrate_for_open(connection: &mut Connection, database_path: &Path) -> Re
     if generation == SCHEMA_GENERATION && fingerprint == SCHEMA_FINGERPRINT {
         return Ok(());
     }
-    if generation != SCHEMA_GENERATION || fingerprint != PREVIOUS_SCHEMA_FINGERPRINT {
+    if generation != SCHEMA_GENERATION
+        || !matches!(
+            fingerprint.as_str(),
+            PREVIOUS_SCHEMA_FINGERPRINT | LEGACY_SCHEMA_FINGERPRINT
+        )
+    {
         return Err(LibraryError::Incompatible(format!(
             "no migration to generation {SCHEMA_GENERATION} ({SCHEMA_FINGERPRINT}) from generation {generation} ({fingerprint})"
         )));
@@ -68,9 +74,10 @@ pub fn migrate_for_open(connection: &mut Connection, database_path: &Path) -> Re
     let backup_path = migration_backup_path(database_path);
     connection.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
 
-    connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;")?;
+    connection.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
     let result = (|| {
-        connection.execute_batch(
+        if fingerprint == LEGACY_SCHEMA_FINGERPRINT {
+            connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS source_post_attempt (
                 attempt_id INTEGER PRIMARY KEY,
                 run_query_id INTEGER NOT NULL REFERENCES subscription_run_query(run_query_id) ON DELETE CASCADE,
@@ -108,6 +115,33 @@ pub fn migrate_for_open(connection: &mut Connection, database_path: &Path) -> Re
                 ON source_post_attempt(run_query_id, attempt_id);
             CREATE INDEX IF NOT EXISTS idx_source_file_attempt_progress
                 ON source_file_attempt(attempt_id, state, file_attempt_id);",
+            )?;
+        }
+        connection.execute_batch(
+            "ALTER TABLE folder_definition RENAME TO folder_definition_unique_names;
+             CREATE TABLE folder_definition (
+                 folder_id INTEGER PRIMARY KEY CHECK (folder_id BETWEEN 1 AND 4294967295),
+                 stable_key TEXT NOT NULL UNIQUE,
+                 parent_id INTEGER REFERENCES folder_definition(folder_id) ON DELETE RESTRICT,
+                 name TEXT NOT NULL,
+                 icon TEXT,
+                 color TEXT,
+                 notes TEXT,
+                 auto_tag_ids BLOB NOT NULL DEFAULT X'',
+                 cover_root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
+                 watch_path TEXT UNIQUE,
+                 watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
+                 watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),
+                 display_order INTEGER NOT NULL
+             ) STRICT;
+             INSERT INTO folder_definition (
+                 folder_id, stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
+                 cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
+             )
+             SELECT folder_id, stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
+                    cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
+             FROM folder_definition_unique_names;
+             DROP TABLE folder_definition_unique_names;",
         )?;
         require_columns(
             connection,
@@ -157,11 +191,11 @@ pub fn migrate_for_open(connection: &mut Connection, database_path: &Path) -> Re
     })();
     match result {
         Ok(()) => {
-            connection.execute_batch("COMMIT")?;
+            connection.execute_batch("COMMIT; PRAGMA foreign_keys = ON;")?;
             Ok(())
         }
         Err(error) => {
-            let _ = connection.execute_batch("ROLLBACK");
+            let _ = connection.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
             Err(error)
         }
     }
@@ -215,8 +249,47 @@ fn require_columns(connection: &Connection, table: &str, required: &[&str]) -> R
 mod tests {
     use rusqlite::Connection;
 
-    use super::{PREVIOUS_SCHEMA_FINGERPRINT, SCHEMA_FINGERPRINT};
+    use super::{LEGACY_SCHEMA_FINGERPRINT, PREVIOUS_SCHEMA_FINGERPRINT, SCHEMA_FINGERPRINT};
     use crate::{LibraryDatabase, LibraryError};
+
+    #[test]
+    fn open_migrates_the_immediately_previous_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                [PREVIOUS_SCHEMA_FINGERPRINT],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&database_path).unwrap());
+        let migrated = Connection::open(&database_path).unwrap();
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            SCHEMA_FINGERPRINT,
+        );
+        migrated
+            .execute_batch(
+                "INSERT INTO folder_definition
+                     (folder_id, stable_key, parent_id, name, display_order)
+                 VALUES (100, 'duplicate-name-1', NULL, 'Same name', 0);
+                 INSERT INTO folder_definition
+                     (folder_id, stable_key, parent_id, name, display_order)
+                 VALUES (101, 'duplicate-name-2', NULL, 'Same name', 1);",
+            )
+            .unwrap();
+    }
 
     #[test]
     fn open_migrates_the_previous_alpha_schema_and_keeps_a_backup() {
@@ -241,7 +314,7 @@ mod tests {
         connection
             .execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
-                [PREVIOUS_SCHEMA_FINGERPRINT],
+                [LEGACY_SCHEMA_FINGERPRINT],
             )
             .unwrap();
         drop(connection);
@@ -306,7 +379,7 @@ mod tests {
                     |row| row.get::<_, String>(0),
                 )
                 .unwrap(),
-            PREVIOUS_SCHEMA_FINGERPRINT
+            LEGACY_SCHEMA_FINGERPRINT
         );
     }
 

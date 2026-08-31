@@ -1108,6 +1108,31 @@ fn folder_hierarchy_is_capped_at_eight_levels() {
 }
 
 #[test]
+fn sibling_folders_may_share_display_names() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+
+    let (destination, _) = library.create_folder("Destination", None).unwrap();
+    library
+        .create_folder("New Folder", Some(destination))
+        .unwrap();
+
+    let (moved, _) = library.create_folder("New Folder", None).unwrap();
+    library.move_folder(moved, Some(destination)).unwrap();
+
+    let (renamed, _) = library.create_folder("Other", Some(destination)).unwrap();
+    library.rename_folder(renamed, "New Folder").unwrap();
+
+    let matching = library
+        .folders()
+        .unwrap()
+        .into_iter()
+        .filter(|folder| folder.parent_id == Some(destination) && folder.name == "New Folder")
+        .count();
+    assert_eq!(matching, 3);
+}
+
+#[test]
 fn folder_hierarchy_metadata_and_item_order_use_one_reversible_path() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

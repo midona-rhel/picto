@@ -91,8 +91,7 @@ CREATE TABLE folder_definition (
     watch_path TEXT UNIQUE,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
     watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),
-    display_order INTEGER NOT NULL,
-    UNIQUE(parent_id, name)
+    display_order INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE smart_folder_definition (

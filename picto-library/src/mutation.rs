@@ -3450,31 +3450,6 @@ impl Library {
             folder_id,
             move |transaction| {
                 validate_folder_parent(transaction, parent_id, Some(folder_id))?;
-                let name = transaction
-                    .query_row(
-                        "SELECT name FROM folder_definition WHERE folder_id = ?1",
-                        [folder_id.0],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(|error| match error {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            LibraryError::NotFound(format!("folder {folder_id}"))
-                        }
-                        error => error.into(),
-                    })?;
-                let duplicate = transaction.query_row(
-                    "SELECT EXISTS(
-                     SELECT 1 FROM folder_definition
-                     WHERE parent_id IS ?1 AND name = ?2 AND folder_id != ?3
-                 )",
-                    rusqlite::params![parent_id.map(|id| id.0), name, folder_id.0],
-                    |row| row.get::<_, bool>(0),
-                )?;
-                if duplicate {
-                    return Err(LibraryError::InvalidInput(format!(
-                        "a sibling folder named {name} already exists"
-                    )));
-                }
                 let display_order = transaction.query_row(
                     "SELECT COALESCE(MAX(display_order) + 1, 0)
                  FROM folder_definition WHERE parent_id IS ?1 AND folder_id != ?2",
@@ -7004,23 +6979,6 @@ fn rename_folder_definition(
     folder_id: FolderId,
     name: &str,
 ) -> Result<()> {
-    let duplicate = transaction.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM folder_definition candidate
-             JOIN folder_definition current ON current.folder_id = ?1
-             WHERE candidate.parent_id IS current.parent_id
-               AND candidate.name = ?2
-               AND candidate.folder_id != current.folder_id
-         )",
-        rusqlite::params![folder_id.0, name],
-        |row| row.get::<_, bool>(0),
-    )?;
-    if duplicate {
-        return Err(LibraryError::InvalidInput(format!(
-            "a sibling folder named {name} already exists"
-        )));
-    }
     if transaction.execute(
         "UPDATE folder_definition SET name = ?2 WHERE folder_id = ?1",
         rusqlite::params![folder_id.0, name],
