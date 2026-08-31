@@ -13,6 +13,14 @@ describe('normalizeInvokeError', () => {
     expect(normalizeInvokeError(error).message).toBe('This subscription is already running.');
   });
 
+  it('normalizes dedicated Electron channels as well as the generic invoke channel', () => {
+    const error = new Error(
+      "Error invoking remote method 'picto:library:joinCloud': Error: The selected destination already exists.",
+    );
+
+    expect(normalizeInvokeError(error).message).toBe('The selected destination already exists.');
+  });
+
   it('keeps direct product messages intact', () => {
     expect(normalizeInvokeError(new Error('Open a library first.')).message).toBe(
       'Open a library first.',

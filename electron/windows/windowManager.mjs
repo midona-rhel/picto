@@ -207,8 +207,9 @@ export function createWindowManager({
   ) {
     const isSettings = label === 'settings';
     const isSubscriptions = label === 'subscriptions';
-    const isDetail = (hash != null || detailItemId != null) && !isSettings && !isSubscriptions;
-    const isMain = !isSettings && !isSubscriptions && !isDetail;
+    const isLibraryManager = label === 'library-manager';
+    const isDetail = (hash != null || detailItemId != null) && !isSettings && !isSubscriptions && !isLibraryManager;
+    const isMain = !isSettings && !isSubscriptions && !isLibraryManager && !isDetail;
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
     const initialHeight = savedMainState?.height ?? height;
@@ -241,7 +242,25 @@ export function createWindowManager({
             transparent: useTransparent,
             backgroundColor: useTransparent ? '#00000000' : (themeBg === '#00000000' ? '#1a1a1e' : themeBg),
           }
-        : isSubscriptions
+        : isLibraryManager
+          ? {
+              minWidth: 600,
+              minHeight: 400,
+              maxWidth: 700,
+              maxHeight: 550,
+              resizable: false,
+              maximizable: false,
+              fullscreenable: false,
+              ...(isMac
+                ? {
+                    frame: true,
+                    titleBarStyle: 'hiddenInset',
+                  }
+                : { frame: false }),
+              transparent: false,
+              backgroundColor: themeBg === '#00000000' ? '#1a1a1e' : themeBg,
+            }
+          : isSubscriptions
           ? {
               minWidth: 860,
               minHeight: 700,
@@ -280,7 +299,7 @@ export function createWindowManager({
       show: false,
       ...(isMac && { roundedCorners: true }),
       // macOS vibrancy — applied at creation time (zero-frame)
-      ...(useVibrancy && {
+      ...(useVibrancy && !isLibraryManager && {
         vibrancy: 'under-window',
         visualEffectState: 'active',
       }),
@@ -309,7 +328,7 @@ export function createWindowManager({
 
     // Settings owns its close control, but retaining the hidden native frame
     // gives macOS its normal, forgiving edge and corner resize hit areas.
-    if (isSettings && isMac) {
+    if ((isSettings || isLibraryManager) && isMac) {
       win.setWindowButtonVisibility(false);
     }
 
@@ -437,21 +456,25 @@ export function createWindowManager({
 
     const page = label === 'settings'
       ? 'settings'
-      : label === 'subscriptions'
-        ? 'subscriptions'
-        : isDetail
-          ? 'detail'
-          : 'main';
+      : label === 'library-manager'
+        ? 'library-manager'
+        : label === 'subscriptions'
+          ? 'subscriptions'
+          : isDetail
+            ? 'detail'
+            : 'main';
     if (isDev) {
       const url = page === 'settings'
         ? `${DEV_URL}/settings.html`
-        : page === 'subscriptions'
-          ? `${DEV_URL}/subscriptions.html`
-          : page === 'detail'
-            ? hash != null
-              ? `${DEV_URL}/detail.html?hash=${encodeURIComponent(hash)}`
-              : `${DEV_URL}/detail.html?item_id=${encodeURIComponent(detailItemId)}`
-            : DEV_URL;
+        : page === 'library-manager'
+          ? `${DEV_URL}/library-manager.html`
+          : page === 'subscriptions'
+            ? `${DEV_URL}/subscriptions.html`
+            : page === 'detail'
+              ? hash != null
+                ? `${DEV_URL}/detail.html?hash=${encodeURIComponent(hash)}`
+                : `${DEV_URL}/detail.html?item_id=${encodeURIComponent(detailItemId)}`
+              : DEV_URL;
       void win.loadURL(url).catch((err) => {
         console.error(`[main] window '${label}' loadURL failed`, err);
       });
@@ -461,6 +484,7 @@ export function createWindowManager({
     } else {
       const htmlMap = {
         settings: 'settings.html',
+        'library-manager': 'library-manager.html',
         subscriptions: 'subscriptions.html',
         detail: 'detail.html',
         main: 'index.html',
@@ -555,49 +579,7 @@ export function createWindowManager({
       existing.focus();
       return;
     }
-    const mainWin = windowsByLabel.get('main');
-    const hasParent = Boolean(mainWin && !mainWin.isDestroyed());
-    const useTransparentManager = isMac || isWin;
-    const win = new BrowserWindow({
-      width: 700,
-      height: 550,
-      minWidth: 600,
-      minHeight: 400,
-      resizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      frame: false,
-      transparent: useTransparentManager,
-      backgroundColor: useTransparentManager ? '#00000000' : getThemeInfo(getCachedConfig).bgColor,
-      ...(hasParent ? { parent: mainWin, modal: true } : {}),
-      show: false,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    windowsByLabel.set(label, win);
-    const forcedShowTimer = setTimeout(() => {
-      if (!win.isDestroyed() && !win.isVisible()) win.show();
-    }, 5000);
-    win.once('show', () => clearTimeout(forcedShowTimer));
-    win.on('closed', () => {
-      clearTimeout(forcedShowTimer);
-      windowsByLabel.delete(label);
-    });
-
-    if (isDev) {
-      void win.loadURL(`${DEV_URL}/library-manager.html`);
-      if (shouldOpenDevTools) {
-        win.webContents.openDevTools({ mode: 'detach', activate: false });
-      }
-    } else {
-      void win.loadFile(path.join(__dirname, '..', 'dist', 'library-manager.html'));
-    }
+    createWindow(label, null, 700, 550);
   }
 
 

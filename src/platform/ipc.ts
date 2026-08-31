@@ -36,7 +36,7 @@ function requireDesktop() {
 
 export function normalizeInvokeError(error: unknown): Error {
   const message = (error instanceof Error ? error.message : String(error))
-    .replace(/^Error invoking remote method ['"]picto:invoke['"]:\s*/i, '')
+    .replace(/^Error invoking remote method ['"]picto:[^'"]+['"]:\s*/i, '')
     .replace(/^Error:\s*/i, '')
     .trim();
   return new Error(message || 'The request failed.');

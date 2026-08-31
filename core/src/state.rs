@@ -458,17 +458,33 @@ fn initialize_joined_database(
         .execute("DELETE FROM view_pref", [])
         .map_err(|error| format!("Failed to clear device-local views: {error}"))?;
     transaction
-        .execute(
-            "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-             SELECT content_hash, 'queued', ?1 FROM media_file
-             ON CONFLICT(file_hash) DO UPDATE SET
-                 state = 'queued', priority = 0, last_error = NULL, updated_at = excluded.updated_at",
-            [&now],
-        )
+        .execute(QUEUE_CLOUD_MEDIA_RECOVERY_SQL, [&now])
         .map_err(|error| format!("Failed to queue cloud media recovery: {error}"))?;
     transaction
         .commit()
         .map_err(|error| format!("Failed to commit joined cloud library: {error}"))
+}
+
+// SQLite otherwise parses `ON` as a possible JOIN clause after `FROM media_file`.
+// The always-true predicate unambiguously terminates the SELECT before the UPSERT.
+const QUEUE_CLOUD_MEDIA_RECOVERY_SQL: &str =
+    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
+     SELECT content_hash, 'queued', ?1 FROM media_file WHERE 1
+     ON CONFLICT(file_hash) DO UPDATE SET
+         state = 'queued', priority = 0, last_error = NULL, updated_at = excluded.updated_at";
+
+#[cfg(test)]
+mod tests {
+    use super::QUEUE_CLOUD_MEDIA_RECOVERY_SQL;
+
+    #[test]
+    fn cloud_join_recovery_upsert_is_valid_sqlite() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        picto_library::schema::create(&mut connection).unwrap();
+        connection
+            .execute(QUEUE_CLOUD_MEDIA_RECOVERY_SQL, ["2026-08-31T00:00:00Z"])
+            .unwrap();
+    }
 }
 
 fn initialize_restored_database(

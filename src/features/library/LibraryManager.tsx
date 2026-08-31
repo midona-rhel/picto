@@ -22,7 +22,7 @@ import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { ContextMenu, type MenuEntry, useContextMenu } from '../../shared/ui/ContextMenu';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import { invoke, listen } from '../../platform/ipc';
+import { invoke, listen, normalizeInvokeError } from '../../platform/ipc';
 import { MediaCoverDialog } from '../subscriptions/components/SubscriptionCoverDialog';
 import { loadLibraryCoverCandidates, saveLibraryCover } from './libraryAppearance';
 import type { CloudConfiguration } from '../../shared/types/generated/application/CloudConfiguration';
@@ -76,6 +76,14 @@ interface CloudLibraryChoice {
 
 const pictoLibrary = () => (window as any).picto.library;
 const pictoShell = () => (window as any).picto.shell;
+
+export function libraryManagerErrorMessage(reason: unknown): string {
+  const message = normalizeInvokeError(reason).message;
+  if (/A library named .+ already exists at that location/i.test(message)) {
+    return 'A library with that name already exists in the selected folder. Choose another location or open the existing library.';
+  }
+  return message;
+}
 
 function baseName(path: string): string {
   const last = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -135,7 +143,7 @@ export function LibraryManager() {
       if (nextConfig.libraryFailure?.message) setError(nextConfig.libraryFailure.message);
       return nextConfig;
     } catch (e) {
-      setError(String(e));
+      setError(libraryManagerErrorMessage(e));
       return null;
     }
   }, []);
@@ -356,7 +364,7 @@ export function LibraryManager() {
         await action();
         await refresh();
       } catch (e) {
-        setError(String(e));
+        setError(libraryManagerErrorMessage(e));
       } finally {
         setBusy(null);
       }
@@ -901,7 +909,15 @@ export function LibraryManager() {
             )}
 
             {message ? <div className={styles.message}>{message}</div> : null}
-            {error ? <div className={styles.error}>{error}</div> : null}
+            {error ? (
+              <div className={styles.error} role="alert">
+                <IconAlertTriangle size={16} />
+                <span>{error}</span>
+                <button type="button" className={styles.errorDismiss} aria-label={t('Dismiss notification')} onClick={() => setError(null)}>
+                  <IconX size={14} />
+                </button>
+              </div>
+            ) : null}
           </main>
         </div>
 
@@ -936,7 +952,7 @@ export function LibraryManager() {
             await refresh();
             return true;
           } catch (reason) {
-            setError(reason instanceof Error ? reason.message : String(reason));
+            setError(libraryManagerErrorMessage(reason));
             return false;
           }
         }}

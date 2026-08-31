@@ -35,14 +35,16 @@ test('uses the opened media aspect ratio for detail windows', () => {
 test('keeps settings on the native macOS resize path', () => {
   const source = readFileSync(resolve(process.cwd(), 'electron/windows/windowManager.mjs'), 'utf8');
   expect(source).toContain("titleBarStyle: 'hiddenInset'");
-  expect(source).toContain('if (isSettings && isMac)');
+  expect(source).toContain('if ((isSettings || isLibraryManager) && isMac)');
   expect(source).toContain('win.setWindowButtonVisibility(false)');
   expect(source).toMatch(/minHeight: 650,[\s\S]*?resizable: true/);
 });
 
-test('clips the transparent Library Manager surface to rounded corners', () => {
+test('uses the same solid standalone window treatment for Library Manager as Settings', () => {
+  const manager = readFileSync(resolve(process.cwd(), 'electron/windows/windowManager.mjs'), 'utf8');
   const source = readFileSync(resolve(process.cwd(), 'src/features/library/LibraryManager.module.css'), 'utf8');
-  expect(source).toContain('border-radius: 10px');
-  expect(source).toContain('clip-path: inset(0 round 10px)');
-  expect(source).toMatch(/:global\(body\)[\s\S]*?background: transparent/);
+  expect(manager).toMatch(/isLibraryManager[\s\S]*?transparent: false/);
+  expect(manager).not.toMatch(/parent: mainWin, modal: true/);
+  expect(source).toContain('--manager-shell-bg');
+  expect(source).not.toContain('backdrop-filter: var(--glass-blur)');
 });

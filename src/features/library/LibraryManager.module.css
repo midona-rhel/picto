@@ -1,27 +1,22 @@
 .root {
+  --manager-shell-bg: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
   width: 100vw;
   height: 100vh;
   box-sizing: border-box;
   color: var(--color-text-primary);
   font: var(--font-weight-regular) var(--font-size-md)/1.4 var(--font-family-ui);
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-radius: 10px;
-  clip-path: inset(0 round 10px);
+  background: var(--manager-shell-bg);
   overflow: hidden;
 }
 
-/* The BrowserWindow is transparent on Windows. The global body background
-   would otherwise remain visible as square pixels outside this clipped shell. */
 :global(html),
 :global(body),
 :global(#root) {
-  background: transparent;
+  background: var(--theme-background);
 }
 
-/* Keep the directional highlight above all window content. */
-.root::after {
+/* Match the Settings window rim on macOS. */
+:global(html[data-platform='mac']) .root::after {
   content: '';
   position: fixed;
   z-index: var(--layer-drag-overlay);
@@ -68,7 +63,7 @@
   padding: 14px 8px;
   overflow-y: auto;
   border-right: 1px solid var(--color-border-secondary);
-  background: color-mix(in srgb, var(--color-surface-1) 60%, transparent);
+  background: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
 }
 
 .sectionTitle {
@@ -322,7 +317,35 @@
 .emptyDetail { height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; }
 .message, .error { margin-top: 14px; font-size: var(--font-size-sm); white-space: pre-wrap; }
 .message { color: var(--color-text-secondary); }
-.error { color: var(--color-negative); }
+.error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-negative) 45%, var(--color-border-secondary));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-negative) 9%, var(--color-control-surface));
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.error > svg { margin-top: 1px; color: var(--color-negative); }
+
+.errorDismiss {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  place-items: center;
+}
+
+.errorDismiss:hover { background: var(--color-surface-hover); color: var(--color-text-primary); }
 
 .footer {
   flex-shrink: 0;

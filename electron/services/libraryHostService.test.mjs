@@ -1,8 +1,22 @@
 import { expect, test } from 'vitest';
-import { createLibraryHostService } from './libraryHostService.mjs';
+import { createLibraryHostService, isFailedCloudJoinDirectory } from './libraryHostService.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+test('recognizes only disposable remnants from an interrupted cloud join', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-failed-cloud-join-'));
+  try {
+    await fs.mkdir(path.join(root, 'blobs'));
+    await fs.writeFile(path.join(root, 'failed-cloud-join-1234.sqlite'), 'restored database');
+    await expect(isFailedCloudJoinDirectory(fs, root)).resolves.toBe(true);
+
+    await fs.writeFile(path.join(root, 'library.sqlite'), 'active database');
+    await expect(isFailedCloudJoinDirectory(fs, root)).resolves.toBe(false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test('remembers a manually selected cloud root once', async () => {
   const config = { cloudLocations: {} };

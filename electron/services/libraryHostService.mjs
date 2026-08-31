@@ -3,6 +3,15 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+export async function isFailedCloudJoinDirectory(fs, targetRoot) {
+  const entries = await fs.readdir(targetRoot, { withFileTypes: true }).catch(() => null);
+  if (!entries || entries.length === 0) return false;
+  return entries.every((entry) =>
+    (entry.isDirectory() && entry.name === 'blobs')
+    || (entry.isFile() && /^failed-cloud-join-[\w-]+\.sqlite$/.test(entry.name)),
+  );
+}
+
 export function createLibraryHostService({
   fs,
   path,
@@ -459,12 +468,17 @@ export function createLibraryHostService({
     if (picked.canceled || picked.filePaths.length === 0) return null;
     const targetRoot = path.join(picked.filePaths[0], `${cleanName}.library`);
     if (await fs.access(targetRoot).then(() => true, () => false)) {
-      throw new Error(`A library named "${cleanName}" already exists at that location`);
+      if (await isFailedCloudJoinDirectory(fs, targetRoot)) {
+        await fs.rm(targetRoot, { recursive: true, force: true });
+      } else {
+        throw new Error(`A library named "${cleanName}" already exists at that location`);
+      }
     }
 
     const previousPath = getCurrentLibraryRoot();
     openingLibraryPath = targetRoot;
     libraryFailure = null;
+    let joined = false;
     sendToAllWindows('library-switching', { path: targetRoot });
     try {
       const serialized = await invokeSerialized('cloud.library.join', {
@@ -475,6 +489,7 @@ export function createLibraryHostService({
         target_root: targetRoot,
       });
       const result = JSON.parse(serialized);
+      joined = true;
       await applyPlatformLibraryIcon(targetRoot);
       setCurrentLibraryRoot(targetRoot);
       openingLibraryPath = null;
@@ -485,6 +500,7 @@ export function createLibraryHostService({
       return result;
     } catch (error) {
       openingLibraryPath = null;
+      if (!joined) await fs.rm(targetRoot, { recursive: true, force: true }).catch(() => {});
       sendToAllWindows('library-open-failed', {
         path: targetRoot,
         message: error?.message ?? String(error),
