@@ -96,6 +96,9 @@ jobs:
             libssl-dev \
             libclang-dev
 
+      - name: Download FFmpeg test binaries
+        run: bash scripts/download-ffmpeg.sh
+
       - name: Fetch locked Rust dependencies
         run: cargo fetch --manifest-path core/Cargo.toml --locked
 
