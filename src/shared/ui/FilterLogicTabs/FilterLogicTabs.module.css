@@ -15,7 +15,7 @@
   padding: 0;
   border: 0;
   border-radius: 4px;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
   background: transparent;
   cursor: pointer;
 }
@@ -28,4 +28,9 @@
 .active {
   color: var(--color-text-primary);
   background: var(--color-surface-active);
+}
+
+.button:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
 }

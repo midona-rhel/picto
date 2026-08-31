@@ -76,6 +76,7 @@ const store = getDefaultStore();
 
 function cloneFilters(filters: QueryFilters): QueryFilters {
   return {
+    ...createEmptyItemFilters(),
     ...filters,
     include_tags: [...filters.include_tags],
     exclude_tags: [...filters.exclude_tags],

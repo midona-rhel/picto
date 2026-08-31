@@ -69,4 +69,20 @@ describe('FolderTree context target', () => {
     expect(branch.style.left).toBe('14px');
     expect(branch.querySelector('path')).toHaveAttribute('d', expect.stringContaining('H13'));
   });
+
+  it('uses the row-height disclosure target to collapse and expand paths', () => {
+    render(
+      <FolderTree
+        nodes={[folder, childFolder]}
+        selected={new Set()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Reference' }));
+    expect(screen.queryByText('Child')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Reference' }));
+    expect(screen.getByText('Child')).toBeInTheDocument();
+  });
 });

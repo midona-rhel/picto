@@ -265,14 +265,16 @@ function FolderRow({ node, folderId: _fid, isMember, isChecked, isUnchecked, onC
     >
       {hasChildren != null ? (
         hasChildren ? (
-          <div
+          <button
+            type="button"
+            aria-label={isExpanded ? t("Collapse {value0}", { value0: node.name }) : t("Expand {value0}", { value0: node.name })}
             className={`${styles.expandBtn} ${isExpanded ? styles.expandBtnOpen : ''}`}
             onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
           >
             <svg width="12" height="12" viewBox="0 0 12 12">
               <path d="M4.5 2.5L8 6L4.5 9.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          </div>
+          </button>
         ) : (
           <div className={styles.expandPlaceholder} />
         )

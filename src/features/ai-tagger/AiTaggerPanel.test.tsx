@@ -172,17 +172,25 @@ beforeEach(() => {
 });
 
 describe('AiTaggerPanel', () => {
+  it('places Run with the model-selection controls', async () => {
+    await renderPanel();
+    const sidebar = screen.getByRole('button', { name: /^Suggested\b/ }).parentElement;
+    expect(sidebar).toContainElement(screen.getByRole('button', { name: 'Run' }));
+  });
+
   it('keeps the sidebar mounted while collapsing it', async () => {
     const user = setupUser();
     await renderPanel();
     expect(mocks.predict).not.toHaveBeenCalled();
     const sidebar = screen.getByRole('button', { name: /^Suggested\b/ }).parentElement;
     expect(sidebar?.className).not.toContain('sidebarHidden');
+    expect(screen.getByRole('button', { name: 'Hide sidebar' }).className).toContain('pinBtnActive');
 
     await user.click(screen.getByRole('button', { name: 'Hide sidebar' }));
 
     expect(screen.getByRole('button', { name: /^Suggested\b/ }).parentElement).toBe(sidebar);
     expect(sidebar?.className).toContain('sidebarHidden');
+    expect(screen.getByRole('button', { name: 'Show sidebar' }).className).not.toContain('pinBtnActive');
   });
 
   it('unloads the active model when the review portal closes', async () => {

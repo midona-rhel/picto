@@ -63,11 +63,33 @@ describe('theme surface ownership', () => {
     expect(tags).toContain('.tagRowSelected {\n  background: var(--color-selection-bg);');
     expect(tags).toContain('font: var(--font-weight-regular) var(--font-size-md)/24px var(--font-family-ui);');
     expect(tags).toContain('font: var(--font-weight-regular) var(--font-size-md)/25px var(--font-family-ui);');
+    expect(overlay).toContain('.header {\n  height: 40px;');
+    expect(overlay).toMatch(/\.header \{[\s\S]*?color: var\(--color-text-primary\);[\s\S]*?font-size: var\(--font-size-md\);/);
+    expect(tags).toContain('font-family: var(--font-family-ui);\n  color: var(--color-text-tertiary);');
+    expect(tags).toContain('opacity: 0.7;');
     expect(tags).not.toContain('opacity: 0.95;');
     expect(tags).not.toContain('--tag-text-dark');
     expect(tagPanel).not.toContain('tagGroupTextColor');
-    expect(tagPanel).toContain('fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}');
+    expect(tags).toContain('color: color-mix(in srgb, var(--tag-color, var(--color-text-primary)) 12%, var(--color-text-primary));');
+    expect(tags).toContain(':global(:root[data-mantine-color-scheme="light"]) .tagName');
+    expect(tagPanel).toContain("fill={showChecked ? 'currentColor' : 'none'}");
+    expect(tagPanel).toContain('fillOpacity={showChecked ? 1 : 0}');
+    expect(tags).toContain('.tagBookmark {\n  width: 14px;\n  height: 14px;');
     expect(folders).toContain('.checkSelected {\n  background: var(--color-primary);');
+    expect(folders).toMatch(/\.expandBtn \{[\s\S]*?width: 26px;[\s\S]*?height: 26px;/);
+    expect(folders).toContain('.expandBtn:hover,\n.expandBtn:focus-visible {\n  color: var(--color-text-primary);\n  background: var(--color-surface-active);');
+  });
+
+  it('aligns enabled portal and filter toolbar icon actions', () => {
+    const overlay = readFileSync(resolve(process.cwd(), 'src/shared/ui/OverlayShell/OverlayShell.module.css'), 'utf8');
+    const filterLogic = readFileSync(resolve(process.cwd(), 'src/shared/ui/FilterLogicTabs/FilterLogicTabs.module.css'), 'utf8');
+    const gridFilters = readFileSync(resolve(process.cwd(), 'src/features/grid/GridFilterMenu.module.css'), 'utf8');
+    expect(overlay).toMatch(/\.pinBtn \{[\s\S]*?color: var\(--color-text-primary\);/);
+    expect(overlay).toMatch(/\.viewTab \{[\s\S]*?color: var\(--color-text-primary\);/);
+    expect(filterLogic).toMatch(/\.button \{[\s\S]*?color: var\(--color-text-primary\);/);
+    expect(gridFilters).toMatch(/\.filterRight \{[\s\S]*?height: 32px;[\s\S]*?padding-top: 6px;/);
+    expect(gridFilters).toMatch(/\.filterAction \{[\s\S]*?width: 24px;[\s\S]*?height: 24px;/);
+    expect(gridFilters).toMatch(/\.addButton \{[\s\S]*?width: 24px;/);
   });
 
   it('uses the canonical typography roles for application chrome', () => {

@@ -76,7 +76,7 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.9;
 }
 
 .sidebarName {
@@ -91,13 +91,26 @@
   margin-left: auto;
   flex-shrink: 0;
   color: var(--color-text-tertiary);
-  font: var(--font-size-caption) var(--font-family-mono);
+  font: var(--font-size-caption) var(--font-family-ui);
 }
 
 .sidebarSep {
   height: 1px;
   margin: 4px 10px;
   background: var(--color-border-secondary);
+}
+
+.sidebarRun {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.runButton.runButton {
+  width: 100%;
+  height: var(--control-height-sm);
+  justify-content: center;
+  font-size: var(--font-size-sm);
 }
 
 .reviewPane {
@@ -133,7 +146,7 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   cursor: pointer;
 }
 
@@ -287,7 +300,7 @@
   height: 13px;
   flex-shrink: 0;
   color: var(--tag-color, var(--color-text-secondary));
-  opacity: 0.72;
+  opacity: 1;
   filter: saturate(0.9);
 }
 
@@ -301,9 +314,13 @@
   max-width: 44%;
   min-width: 0;
   overflow: hidden;
-  color: var(--color-text-primary);
+  color: color-mix(in srgb, var(--tag-color, var(--color-text-primary)) 12%, var(--color-text-primary));
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:global(:root[data-mantine-color-scheme="light"]) .tagName {
+  color: color-mix(in srgb, var(--tag-color, var(--color-text-primary)) 20%, var(--color-text-primary));
 }
 
 .tagNamespace {

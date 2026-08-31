@@ -7,7 +7,12 @@ import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
-import { compileGridQuery, itemFiltersEqual, textSearchQuery } from '../shared/lib/itemFilters';
+import {
+  compileGridQuery,
+  createEmptyItemFilters,
+  itemFiltersEqual,
+  textSearchQuery,
+} from '../shared/lib/itemFilters';
 import {
   currentGridQueryAtom,
   gridSessionAtom,
@@ -133,6 +138,7 @@ function stateFromPreferences(
 
 function cloneFilters(filters: QueryFilters): QueryFilters {
   return {
+    ...createEmptyItemFilters(),
     ...filters,
     include_tags: [...filters.include_tags],
     exclude_tags: [...filters.exclude_tags],

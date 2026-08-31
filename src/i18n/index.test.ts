@@ -22,6 +22,13 @@ describe('localization runtime', () => {
     expect(result).not.toContain('{value0}');
   });
 
+  it('translates rename actions in Spanish', () => {
+    localStorage.setItem('picto:locale', 'es');
+    expect(t('Rename')).toBe('Renombrar');
+    expect(t('Rename Group…')).toBe('Renombrar grupo…');
+    expect(t('Rename selected file')).toBe('Renombrar el archivo seleccionado');
+  });
+
   it('sets the document language', () => {
     applyDocumentLocale('fi');
     expect(document.documentElement.lang).toBe('fi');

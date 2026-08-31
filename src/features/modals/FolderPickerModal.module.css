@@ -49,15 +49,30 @@
 .folderCount { composes: itemBadge from './SelectionModalShell.module.css'; }
 
 .expandBtn {
-  width: 16px;
-  height: 16px;
+  width: var(--control-height-md);
+  height: var(--control-height-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: transform 120ms ease;
+  transition: transform 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.expandBtn:hover,
+.expandBtn:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-surface-active);
+}
+
+.expandBtn:focus-visible {
+  outline: 1px solid var(--color-border-focus);
+  outline-offset: -1px;
 }
 
 .expandBtnOpen {
@@ -65,7 +80,8 @@
 }
 
 .expandPlaceholder {
-  width: 16px;
+  width: var(--control-height-md);
+  height: var(--control-height-md);
   flex-shrink: 0;
 }
 

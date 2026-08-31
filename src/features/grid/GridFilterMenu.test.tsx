@@ -276,7 +276,7 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ color_hex: '#00FF00' }));
   });
 
-  it('exposes a debounced strict-to-broad color match range', () => {
+  it('exposes a debounced color tolerance control', () => {
     vi.useFakeTimers();
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
@@ -288,7 +288,7 @@ describe('GridFilterToolbar', () => {
     render(<GridFilterToolbar />);
 
     fireEvent.click(screen.getByRole('button', { name: '#FF0000' }));
-    const range = screen.getByLabelText('Color match range');
+    const range = screen.getByRole('slider', { name: 'Tolerance' });
     expect(range).toHaveValue('16');
     fireEvent.change(range, { target: { value: '24' } });
     act(() => vi.advanceTimersByTime(249));

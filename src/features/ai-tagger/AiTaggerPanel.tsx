@@ -422,7 +422,7 @@ export function AiTaggerPanel() {
             <input ref={searchRef} className={shellStyles.searchInput} placeholder={t("Filter suggestions...")} value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
           {running && <span className={styles.runCounter}>{t("Analyzing ")}{Math.min(progress.done + 1, progress.total)} {t("of ")}{progress.total}</span>}
-          <KbdTooltip label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}><button className={shellStyles.pinBtn} onClick={() => setShowSidebar((value) => !value)} type="button" aria-label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}>
+          <KbdTooltip label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}><button className={`${shellStyles.pinBtn} ${showSidebar ? shellStyles.pinBtnActive : ''}`} onClick={() => setShowSidebar((value) => !value)} type="button" aria-label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}>
             <IconLayoutSidebar size={14} />
           </button></KbdTooltip>
         </>
@@ -448,12 +448,6 @@ export function AiTaggerPanel() {
           </div>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>{t("Esc")}</span></span>
-            <button
-              className={`${btnStyles.btn} ${styles.footerButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
-              onClick={() => void runPredict(runModels, reviewRoots, true)}
-              disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
-              type="button"
-            >{running ? t("Running…") : t("Run")}</button>
             {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.footerButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? t("Applying…") : t("Apply {value0} {value1}", { value0: checkedCount, value1: checkedCount === 1 ? 'tag' : 'tags' })}</button>}
           </div>
         </>
@@ -479,6 +473,14 @@ export function AiTaggerPanel() {
               </button></KbdTooltip>
             );
           })}
+          <div className={styles.sidebarRun}>
+            <button
+              className={`${btnStyles.btn} ${styles.runButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
+              onClick={() => void runPredict(runModels, reviewRoots, true)}
+              disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
+              type="button"
+            >{running ? t("Running…") : t("Run")}</button>
+          </div>
         </div>
 
         <section className={styles.reviewPane} aria-label={t("Media review")}>
@@ -524,9 +526,15 @@ export function AiTaggerPanel() {
                       .map((entry) => modelLabel(entry.slug))
                       .join(', ');
                     return (
-                      <button type="button" key={tag.key} className={`${styles.tagRow} ${checked ? styles.tagRowSelected : ''}`} onClick={() => setOverrides((previous) => new Map(previous).set(overrideKey(itemId, tag.key), !checked))}>
+                      <button
+                        type="button"
+                        key={tag.key}
+                        className={`${styles.tagRow} ${checked ? styles.tagRowSelected : ''}`}
+                        style={{ '--tag-color': tagGroupColor(tag.namespace) } as React.CSSProperties}
+                        onClick={() => setOverrides((previous) => new Map(previous).set(overrideKey(itemId, tag.key), !checked))}
+                      >
                         <div className={`${shellStyles.checkBox} ${checked ? shellStyles.checkBoxChecked : ''}`}>{checked && <IconCheck size={10} />}</div>
-                        <IconBookmark className={styles.tagBookmark} style={{ '--tag-color': tagGroupColor(tag.namespace) } as React.CSSProperties} />
+                        <IconBookmark className={styles.tagBookmark} />
                         <span className={styles.tagName}>
                           {tag.namespace && tag.namespace !== 'general' && tag.namespace !== 'default' && <span className={styles.tagNamespace}>{tag.namespace}:</span>}
                           <span>{tag.subtag}</span>

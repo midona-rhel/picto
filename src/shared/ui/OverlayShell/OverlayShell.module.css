@@ -48,8 +48,8 @@
   padding: 0 10px;
   gap: 4px;
   cursor: grab;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
   box-shadow: 0 -1px 0 var(--color-border-secondary) inset;
 }
 
@@ -94,7 +94,7 @@
   border: none;
   border-radius: 5px;
   background: none;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
   cursor: pointer;
   padding: 0;
   margin-left: auto;
@@ -109,6 +109,11 @@
 
 .pinBtnActive {
   color: var(--color-text-primary);
+}
+
+.pinBtn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
 }
 
 /* ── Search area (same pattern as context menu) ── */
@@ -133,14 +138,13 @@
 
 .searchIcon {
   flex-shrink: 0;
-  color: var(--color-text-tertiary);
-  opacity: 0.6;
+  color: var(--color-text-secondary);
 }
 
 .searchIcon:global(.tabler-icon) :is(path, rect, circle, line, polyline),
 .pinBtn > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline),
 .viewTab > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline) {
-  stroke-width: 1.25;
+  stroke-width: 1.5;
 }
 
 .searchInput {
@@ -182,7 +186,7 @@
   display: grid;
   place-items: center;
   background: transparent;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
   cursor: pointer;
 }
 
@@ -193,6 +197,11 @@
 .viewTabActive {
   color: var(--color-text-primary);
   background: var(--color-surface-active);
+}
+
+.viewTab:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
 }
 
 /* ── Footer buttons: use shared actionButton.module.css directly ── */
@@ -292,7 +301,7 @@
 
 .checkBadge {
   font-size: var(--font-size-caption);
-  font-family: var(--font-family-mono);
-  color: var(--color-text-tertiary);
+  font-family: var(--font-family-ui);
+  color: var(--color-text-secondary);
   flex-shrink: 0;
 }

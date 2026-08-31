@@ -72,6 +72,8 @@ describe('FolderPickerPanel row context actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
     expect(onApplyFolderFilter).toHaveBeenCalledWith([7], [], 'all');
+    expect(screen.getByText('L-Click')).toBeInTheDocument();
+    expect(screen.getByText('R-Click')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
   });
 
@@ -134,6 +136,64 @@ describe('FolderPickerPanel row context actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Selected folders' }));
     expect(screen.getByText('Reference')).toBeInTheDocument();
     expect(screen.queryByText('Archive')).not.toBeInTheDocument();
+  });
+
+  it('cycles folder views with Tab from the search field', () => {
+    localStorage.setItem('picto-recent-folders:/test/Recent.library', JSON.stringify([8]));
+    store.set(sidebarNodesAtom, [
+      { id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders' } as SidebarNodeDto,
+      { id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders' } as SidebarNodeDto,
+    ]);
+    store.set(folderPickerPortalAtom, { open: true, selectedFolderIds: [7], onApplyFolders: vi.fn() });
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+    const search = screen.getByPlaceholderText('Search...');
+
+    fireEvent.keyDown(search, { key: 'Tab' });
+    expect(screen.getByText('Archive')).toBeInTheDocument();
+    expect(screen.queryByText('Reference')).not.toBeInTheDocument();
+    fireEvent.keyDown(search, { key: 'Tab' });
+    expect(screen.getByText('Reference')).toBeInTheDocument();
+    expect(screen.queryByText('Archive')).not.toBeInTheDocument();
+    fireEvent.keyDown(search, { key: 'Tab' });
+    expect(screen.getByText('Reference')).toBeInTheDocument();
+    expect(screen.getByText('Archive')).toBeInTheDocument();
+  });
+
+  it('moves and toggles the focused folder with the advertised keys', () => {
+    const onApplyFolders = vi.fn();
+    store.set(sidebarNodesAtom, [
+      { id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders', sort_order: 0 } as SidebarNodeDto,
+      { id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders', sort_order: 1 } as SidebarNodeDto,
+    ]);
+    store.set(folderPickerPortalAtom, { open: true, selectedFolderIds: [], onApplyFolders });
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+    const search = screen.getByPlaceholderText('Search...');
+
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+
+    expect(onApplyFolders).toHaveBeenLastCalledWith([8]);
+    expect(document.querySelector('[data-folder-id="8"]')?.className).toContain('rowFocused');
+  });
+
+  it('keeps keyboard selection single-choice when moving a folder', () => {
+    const onApplyFolderParent = vi.fn();
+    store.set(sidebarNodesAtom, [
+      { id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders', sort_order: 0 } as SidebarNodeDto,
+      { id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders', sort_order: 1 } as SidebarNodeDto,
+    ]);
+    store.set(folderPickerPortalAtom, { open: true, selectedFolderIds: [], onApplyFolderParent });
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+    const search = screen.getByPlaceholderText('Search...');
+
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+    expect(onApplyFolderParent).toHaveBeenCalledWith(7);
   });
 
   it('keeps the selector compact and scrolls its folder tree internally', () => {

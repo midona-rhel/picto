@@ -46,16 +46,17 @@ import {
   useTagPreferences,
 } from './tagPreferences';
 import { t } from '../../i18n';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 
 type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
 type TagLayout = 'grid' | 'list';
 const PAGE_SIZE = 100;
 
 
-function tagRecord(name: string): CanonicalTagRecord {
+function tagRecord(name: string, tagId = 0): CanonicalTagRecord {
   const separator = name.indexOf(':');
   return {
-    tag_id: 0,
+    tag_id: tagId,
     namespace_id: 0,
     namespace: separator < 0 ? 'general' : name.slice(0, separator),
     subname: separator < 0 ? name : name.slice(separator + 1),
@@ -89,7 +90,8 @@ export function TagSelectPanel() {
   const [showCounts, setShowCounts] = useState(() => localStorage.getItem('picto-tag-picker-counts') !== 'false');
   const [query, setQuery] = useState('');
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
-  const [assignedTagKeys, setAssignedTagKeys] = useState<Set<string>>(new Set());
+  const [assignedTagRecords, setAssignedTagRecords] = useState<CanonicalTagRecord[]>([]);
+  const [openingSelectedTagNames, setOpeningSelectedTagNames] = useState<string[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasSettledRemoteResult, setHasSettledRemoteResult] = useState(false);
@@ -109,29 +111,40 @@ export function TagSelectPanel() {
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingCursorRef = useRef<string | null>(null);
   const requestGenerationRef = useRef(0);
+  const selectionDirtyRef = useRef(false);
   const contextMenu = useContextMenu();
   const tagPreferences = useTagPreferences();
 
   // Tags already on the selected entity (for "Selected" sidebar mode)
+  const resolvedEntityTagRecords = entityData?.resolved_tag_records;
+  const entityTagRecords = resolvedEntityTagRecords && resolvedEntityTagRecords.length > 0
+    ? resolvedEntityTagRecords
+    : assignedTagRecords;
   const entityTagKeys = useMemo(() => selectedTagFilters
     ? new Set(selectedTagFilters.map((tag) => tag.name))
-    : customTags ? new Set(customTags) : assignedTagKeys,
-  [assignedTagKeys, customTags, selectedTagFilters]);
+    : customTags ? new Set(customTags) : new Set(entityTagRecords.map(tagName)),
+  [customTags, entityTagRecords, selectedTagFilters]);
 
   useEffect(() => {
     let cancelled = false;
     const tagIds = entityData?.tag_ids ?? [];
-    if (!open || customTags || selectedTagFilters || tagIds.length === 0) {
-      setAssignedTagKeys(new Set());
+    if (!open || customTags || selectedTagFilters || tagIds.length === 0 || (resolvedEntityTagRecords?.length ?? 0) > 0) {
+      setAssignedTagRecords([]);
       return;
     }
     void tagsController.getById(tagIds).then((records) => {
-      if (!cancelled) setAssignedTagKeys(new Set(records.map(tagName)));
+      if (cancelled) return;
+      setAssignedTagRecords(records);
+      if (!selectionDirtyRef.current) {
+        const names = records.map(tagName);
+        setSelectedTags(new Set(names));
+        setOpeningSelectedTagNames(names);
+      }
     }).catch(() => {
-      if (!cancelled) setAssignedTagKeys(new Set());
+      if (!cancelled) setAssignedTagRecords([]);
     });
     return () => { cancelled = true; };
-  }, [customTags, entityData?.tag_ids.join(','), open, selectedTagFilters]);
+  }, [customTags, entityData?.tag_ids.join(','), open, resolvedEntityTagRecords?.length, selectedTagFilters]);
 
   const tagChoices = useMemo(() => new Map([
     ...(selectedTagFilters ?? []).map((tag) => [tag.name, tag] as const),
@@ -219,10 +232,13 @@ export function TagSelectPanel() {
   // Reset on open
   useEffect(() => {
     if (open) {
+      const openingNames = [...entityTagKeys];
+      selectionDirtyRef.current = false;
       setQuery('');
       setHasSettledRemoteResult(false);
       setSettingsOpen(false);
-      setSelectedTags(new Set(entityTagKeys));
+      setSelectedTags(new Set(openingNames));
+      setOpeningSelectedTagNames(openingNames);
       setExcluded(new Set(excludedTagFilters?.map((tag) => tag.name) ?? customExcludedTags ?? []));
       setMatchMode(portalState.filterMatchMode ?? 'any');
       setSidebarMode('all');
@@ -247,7 +263,20 @@ export function TagSelectPanel() {
         formatTag(left).localeCompare(formatTag(right))
       ));
     } else {
-      candidates = tags;
+      const availableRecords = new Map<string, CanonicalTagRecord>();
+      for (const choice of selectedTagFilters ?? []) {
+        availableRecords.set(choice.name, tagRecord(choice.name, choice.tag_id));
+      }
+      for (const tag of entityTagRecords) availableRecords.set(formatTag(tag), tag);
+      for (const tag of tags) availableRecords.set(formatTag(tag), tag);
+      const openingRecords = openingSelectedTagNames
+        .map((name) => availableRecords.get(name) ?? tagRecord(name))
+        .filter((tag) => sidebarMode !== 'namespace' || tag.namespace === activeNamespace);
+      const openingNames = new Set(openingRecords.map(formatTag));
+      candidates = [
+        ...openingRecords,
+        ...tags.filter((tag) => !openingNames.has(formatTag(tag))),
+      ];
     }
 
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
@@ -262,7 +291,7 @@ export function TagSelectPanel() {
         : visibleName;
       return !normalizedQuery || searchableName.includes(normalizedQuery);
     });
-  }, [tags, sidebarMode, entityTagKeys, query, settledRemoteView.query, tagPreferences.starredTags]);
+  }, [activeNamespace, entityTagKeys, entityTagRecords, openingSelectedTagNames, query, selectedTagFilters, settledRemoteView.query, sidebarMode, tagPreferences.starredTags, tags]);
 
   const createTag = useMemo(() => {
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
@@ -282,7 +311,8 @@ export function TagSelectPanel() {
       .sort((a, b) => tagGroupOrder(a.name) - tagGroupOrder(b.name));
   }, [namespaces]);
 
-  const columnCount = layout === 'grid' ? 2 : 1;
+  const effectiveLayout: TagLayout = onApplyTagFilter ? 'list' : layout;
+  const columnCount = effectiveLayout === 'grid' ? 2 : 1;
   const navigableTags = createTag ? [createTag, ...displayTags] : displayTags;
   const displayedQuery = sidebarMode === 'selected' || sidebarMode === 'starred'
     ? query
@@ -311,7 +341,7 @@ export function TagSelectPanel() {
   useEffect(() => {
     if (focusIdx < 0) return;
     listRef.current?.querySelector<HTMLElement>(`[data-tag-index="${focusIdx}"]`)
-      ?.scrollIntoView({ block: 'nearest' });
+      ?.scrollIntoView?.({ block: 'nearest' });
   }, [focusIdx]);
 
   const changeLayout = useCallback((next: TagLayout) => {
@@ -333,6 +363,7 @@ export function TagSelectPanel() {
   const toggleTag = useCallback((tag: CanonicalTagRecord) => {
     const name = formatTag(tag);
     if (onApplyTagFilter && tag.tag_id <= 0) return;
+    selectionDirtyRef.current = true;
     const nextSelected = new Set(selectedTags);
     const nextExcluded = new Set(excluded);
     const removing = nextSelected.delete(name);
@@ -362,6 +393,7 @@ export function TagSelectPanel() {
 
   const toggleExcludedTag = useCallback((tag: CanonicalTagRecord) => {
     if (!onApplyTagFilter || tag.tag_id <= 0) return;
+    selectionDirtyRef.current = true;
     const name = formatTag(tag);
     const nextSelected = new Set(selectedTags);
     const nextExcluded = new Set(excluded);
@@ -378,25 +410,26 @@ export function TagSelectPanel() {
   }, [excluded, onApplyTagFilter, selectedChoices, selectedTags]);
 
   // Keyboard
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setFocusIdx((i) => Math.min(i + columnCount, navigableTags.length - 1));
+      setFocusIdx((i) => i < 0 ? 0 : Math.min(i + columnCount, navigableTags.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setFocusIdx((i) => Math.max(i - columnCount, -1));
+      setFocusIdx((i) => i < 0 ? 0 : Math.max(i - columnCount, 0));
     } else if (e.key === 'ArrowRight' && columnCount > 1) {
       e.preventDefault();
-      setFocusIdx((i) => Math.min(i + 1, navigableTags.length - 1));
+      setFocusIdx((i) => i < 0 ? 0 : Math.min(i + 1, navigableTags.length - 1));
     } else if (e.key === 'ArrowLeft' && columnCount > 1) {
       e.preventDefault();
-      setFocusIdx((i) => Math.max(i - 1, -1));
+      setFocusIdx((i) => i < 0 ? 0 : Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const idx = focusIdx >= 0 ? focusIdx : 0;
       if (navigableTags[idx]) toggleTag(navigableTags[idx]);
-    } else if (e.key === 'Tab') {
+    } else if (e.key === 'Tab' && showSidebar) {
       e.preventDefault();
+      setFocusIdx(-1);
       if (sidebarMode === 'all') {
         if (nsGroups.length > 0) { setSidebarMode('namespace'); setActiveNamespace(nsGroups[0].name); }
         else setSidebarMode('selected');
@@ -404,11 +437,22 @@ export function TagSelectPanel() {
         const idx = nsGroups.findIndex((g) => g.name === activeNamespace);
         if (idx < nsGroups.length - 1) setActiveNamespace(nsGroups[idx + 1].name);
         else setSidebarMode('selected');
+      } else if (sidebarMode === 'selected') {
+        setSidebarMode('starred');
       } else {
         setSidebarMode('all');
       }
     }
-  }, [activeNamespace, columnCount, focusIdx, navigableTags, nsGroups, sidebarMode, toggleTag]);
+  }, [activeNamespace, columnCount, focusIdx, navigableTags, nsGroups, showSidebar, sidebarMode, toggleTag]);
+
+  useShortcutScope((event) => {
+    handleKeyDown(event);
+    return event.defaultPrevented;
+  }, {
+    enabled: open && !settingsOpen && contextMenu.state == null,
+    priority: 110,
+    allowInEditable: true,
+  });
 
   if (!open) return null;
 
@@ -418,10 +462,10 @@ export function TagSelectPanel() {
       onClose={closePortal}
       width={showSidebar ? 540 : 340}
       height={480}
-      pinned={pinned}
+      pinned={!onApplyTagFilter && pinned}
       anchorPosition={anchorPosition}
       anchorPlacement={portalState.anchorPlacement}
-      onPinnedChange={setPinned}
+      onPinnedChange={onApplyTagFilter ? undefined : setPinned}
       header={
         <>
           <div
@@ -439,34 +483,38 @@ export function TagSelectPanel() {
               placeholder={t("Search...")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={handleKeyDown}
             />
           </div>
           {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
           <KbdTooltip label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}><button
-            className={shellStyles.pinBtn}
+            className={`${shellStyles.pinBtn} ${showSidebar ? shellStyles.pinBtnActive : ''}`}
             onClick={() => setShowSidebar((v) => !v)}
             type="button"
             aria-label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}
           >
             <IconLayoutSidebar size={14} />
           </button></KbdTooltip>
-          <KbdTooltip label={t("Tag picker settings")}><button
+          {!onApplyTagFilter && <KbdTooltip label={t("Tag picker settings")}><button
             className={`${shellStyles.pinBtn} ${settingsOpen ? shellStyles.pinBtnActive : ''}`}
             onClick={() => setSettingsOpen((current) => !current)}
             type="button"
             aria-label={t("Tag picker settings")}
-          ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>
+          ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>}
         </>
       }
       footer={
         <>
-          {showSidebar ? <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span> : null}
-          <span className={shellStyles.kbdHint}>
-            {t("Move ")}<span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
-            {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}
-            {t("Select ")}<span className={shellStyles.kbd}>↵</span>
-          </span>
+          {onApplyTagFilter ? <>
+            <span className={shellStyles.kbdHint}>{t("Select")}<span className={shellStyles.kbd}>{t("L-Click")}</span></span>
+            <span className={shellStyles.kbdHint}>{t("Exclude")}<span className={shellStyles.kbd}>{t("R-Click")}</span></span>
+          </> : <>
+            {showSidebar ? <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span> : null}
+            <span className={shellStyles.kbdHint}>
+              {t("Move ")}<span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
+              {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}
+              {t("Select ")}<span className={shellStyles.kbd}>↵</span>
+            </span>
+          </>}
           <span className={shellStyles.kbdHint}>{t("Close ")}<span className={shellStyles.kbd}>{t("Esc")}</span></span>
         </>
       }
@@ -478,7 +526,7 @@ export function TagSelectPanel() {
             className={`${styles.sidebarItem} ${sidebarMode === 'all' ? styles.sidebarItemActive : ''}`}
             onClick={() => { setSidebarMode('all'); setActiveNamespace(null); }}
           >
-            <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
+            <IconBookmark className={styles.sidebarIcon} size={12} fill={sidebarMode === 'all' ? 'currentColor' : 'none'} fillOpacity={sidebarMode === 'all' ? 1 : 0} />
             <span className={styles.sidebarName}>{t("All")}</span>
             <span className={styles.sidebarBadge}>
               {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
@@ -500,7 +548,7 @@ export function TagSelectPanel() {
             className={`${styles.sidebarItem} ${sidebarMode === 'selected' ? styles.sidebarItemActive : ''}`}
             onClick={() => { setSidebarMode('selected'); setActiveNamespace(null); }}
           >
-            <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
+            <IconBookmark className={styles.sidebarIcon} size={12} fill={sidebarMode === 'selected' ? 'currentColor' : 'none'} fillOpacity={sidebarMode === 'selected' ? 1 : 0} />
             <span className={styles.sidebarName}>{t("Selected")}</span>
             <span className={styles.sidebarBadge}>{entityTagKeys.size}</span>
           </div>
@@ -599,10 +647,10 @@ export function TagSelectPanel() {
                             <IconBookmark
                               aria-hidden="true"
                               className={styles.tagBookmark}
-                              size={10}
-                              stroke={showChecked && !onApplyTagFilter ? 2 : 1.6}
-                              fill="currentColor"
-                              fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}
+                              size={14}
+                              stroke={showChecked ? 1.8 : 1.6}
+                              fill={showChecked ? 'currentColor' : 'none'}
+                              fillOpacity={showChecked ? 1 : 0}
                             />
                           )}
                           <span className={styles.tagName}>
@@ -620,7 +668,7 @@ export function TagSelectPanel() {
             ) : null}
           </div>
         </div>
-        {settingsOpen ? (
+        {settingsOpen && !onApplyTagFilter ? (
           <>
             <button className={styles.settingsBackdrop} type="button" aria-label={t("Close tag picker settings")} onClick={() => setSettingsOpen(false)} />
             <div className={styles.settingsPanel}>

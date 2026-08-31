@@ -5,7 +5,7 @@
  * search filtering with ancestor auto-expansion, and checkbox selection.
  */
 
-import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
 import { IconChevronRight, IconFolder, IconCheck, IconX } from '@tabler/icons-react';
 import type { SidebarNodeDto } from '../../types/canonical';
 import checkStyles from '../OverlayShell/OverlayShell.module.css';
@@ -88,6 +88,7 @@ function highlightMatch(text: string, q: string): ReactNode {
 export interface FolderTreeProps {
   nodes: SidebarNodeDto[];
   selected: Set<number>;
+  focusedId?: number | null;
   onToggle: (folderId: number, event: React.MouseEvent) => void;
   search?: string;
   /** Show checkboxes. Default true. */
@@ -119,8 +120,9 @@ export function flattenVisibleIds(
   return ids;
 }
 
-export function FolderTree({ nodes, selected, onToggle, search = '', checkable = true, memberOf, excluded, filterSelection = false, onExclude, onContextMenu }: FolderTreeProps) {
+export function FolderTree({ nodes, selected, focusedId = null, onToggle, search = '', checkable = true, memberOf, excluded, filterSelection = false, onExclude, onContextMenu }: FolderTreeProps) {
   const tree = useMemo(() => buildTree(nodes), [nodes]);
+  const treeRef = useRef<HTMLDivElement>(null);
   const namesById = useMemo(() => new Map(nodes.map((node) => [node.id, node.name])), [nodes]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -140,6 +142,12 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     });
   }, []);
 
+  useEffect(() => {
+    if (focusedId == null) return;
+    treeRef.current?.querySelector<HTMLElement>(`[data-folder-id="${focusedId}"]`)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [focusedId]);
+
   function renderNode(
     treeNode: TreeNode,
     ancestorContinues: boolean[] = [],
@@ -158,7 +166,8 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     const result: ReactNode[] = [
       <div
         key={node.id}
-        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
+        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${focusedId === folderId ? styles.rowFocused : ''} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
+        data-folder-id={folderId}
         style={{
           paddingLeft: 4 + depth * 24,
           '--folder-row-indent': `${4 + depth * 24}px`,
@@ -244,7 +253,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
   if (tree.length === 0) return <div className={styles.empty}>{t("No folders")}</div>;
 
   return (
-    <div className={styles.tree}>
+    <div ref={treeRef} className={styles.tree}>
       {tree.flatMap((root, index) => renderNode(root, [], index === tree.length - 1))}
     </div>
   );

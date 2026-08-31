@@ -59,18 +59,18 @@
   flex-shrink: 0;
   margin-right: 6px;
   margin-left: 6px;
-  opacity: 0.6;
+  opacity: 0.85;
   transition: opacity 120ms ease;
 }
 
 .sidebarIcon {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 10px;
-  margin-right: 6px;
-  margin-left: 6px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  margin-right: 5px;
+  margin-left: 5px;
   color: var(--color-text-secondary);
-  opacity: 0.55;
+  opacity: 1;
 }
 
 .sidebarStar {
@@ -102,11 +102,11 @@
 
 .sidebarBadge {
   font-size: var(--font-size-caption);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-ui);
   color: var(--color-text-tertiary);
   flex-shrink: 0;
   margin-left: auto;
-  opacity: 0.5;
+  opacity: 0.7;
 }
 
 .sidebarItem:hover .sidebarBadge,
@@ -210,11 +210,11 @@
 }
 
 .tagBookmark {
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   color: var(--tag-color, var(--color-text-secondary));
-  opacity: 0.72;
+  opacity: 1;
   filter: saturate(0.9);
   transition: opacity 120ms ease;
 }
@@ -232,10 +232,6 @@
   height: 10px;
   flex-shrink: 0;
   color: var(--color-text-primary);
-}
-
-.tagRow:has(.tagStar) .tagName {
-  color: #f8f0e1;
 }
 
 .tagRow:has(.createTagIcon) .tagName {
@@ -263,17 +259,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-text-primary);
+  color: color-mix(in srgb, var(--tag-color, var(--color-text-primary)) 12%, var(--color-text-primary));
+}
+
+:global(:root[data-mantine-color-scheme="light"]) .tagName {
+  color: color-mix(in srgb, var(--tag-color, var(--color-text-primary)) 20%, var(--color-text-primary));
 }
 
 .tagBadge {
   font-size: var(--font-size-caption);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-ui);
   color: var(--color-text-tertiary);
   flex-shrink: 0;
   margin-left: auto;
   text-align: right;
-  opacity: 0.5;
+  opacity: 0.7;
 }
 
 .tagRow:hover .tagBadge {

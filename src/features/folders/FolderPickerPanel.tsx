@@ -35,8 +35,10 @@ import type { FilterMatchMode } from '../../shared/types/generated/application/F
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import styles from './FolderPickerPanel.module.css';
 import { t } from '../../i18n';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 
 type FolderView = 'all' | 'recent' | 'selected';
+type FolderSelectionModifiers = Pick<React.MouseEvent, 'shiftKey' | 'metaKey' | 'ctrlKey'>;
 
 export function FolderPickerPanel() {
   const portalState = useAtomValue(folderPickerPortalAtom);
@@ -57,6 +59,7 @@ export function FolderPickerPanel() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [rootSelected, setRootSelected] = useState(false);
+  const [focusIdx, setFocusIdx] = useState(-1);
   const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -74,11 +77,6 @@ export function FolderPickerPanel() {
   }, [folderNodes, portalState.availableFolderIds]);
   const tree = useMemo(() => buildTree(availableFolders), [availableFolders]);
   const searchLower = query.trim().toLowerCase();
-  const flatIds = useMemo(
-    () => flattenVisibleIds(tree, expanded, searchLower),
-    [tree, expanded, searchLower],
-  );
-
   const displayedFolders = useMemo(() => {
     if (view === 'all') return availableFolders;
     const byId = new Map(availableFolders.map((node) => [Number(node.id.slice(7)), node]));
@@ -90,6 +88,15 @@ export function FolderPickerPanel() {
       return node ? [{ ...node, parent_id: 'section:folders', sort_order: index }] : [];
     });
   }, [availableFolders, recentFolderIds, selected, view]);
+  const displayedTree = useMemo(() => buildTree(displayedFolders), [displayedFolders]);
+  const flatIds = useMemo(
+    () => flattenVisibleIds(displayedTree, expanded, searchLower),
+    [displayedTree, expanded, searchLower],
+  );
+  const keyboardTargets = useMemo<Array<number | null>>(
+    () => parentSelection ? [null, ...flatIds] : flatIds,
+    [flatIds, parentSelection],
+  );
 
   // Sync expanded state when tree changes (auto-expand all)
   useEffect(() => {
@@ -106,6 +113,7 @@ export function FolderPickerPanel() {
       setRootSelected(parentSelection && (portalState.selectedFolderIds?.length ?? 0) === 0);
       setExcluded(filterSelection ? new Set(portalState.excludedFolderIds ?? []) : new Set());
       setMatchMode(portalState.filterMatchMode ?? 'any');
+      setFocusIdx(-1);
       lastClickedRef.current = null;
       setTimeout(() => searchRef.current?.focus(), 50);
     }
@@ -124,7 +132,7 @@ export function FolderPickerPanel() {
     portalState.onApplyFolderFilter?.([...nextSelected], [...nextExcluded], mode);
   }, [matchMode, portalState.onApplyFolderFilter]);
 
-  const handleToggle = useCallback((folderId: number, event: React.MouseEvent) => {
+  const handleToggle = useCallback((folderId: number, event: FolderSelectionModifiers) => {
     if (parentSelection) {
       setSelected(new Set([folderId]));
       setRootSelected(false);
@@ -241,6 +249,45 @@ export function FolderPickerPanel() {
     commitFilterSelection(selected, excluded, mode);
   }, [commitFilterSelection, excluded, selected]);
 
+  const handlePortalKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      setFocusIdx(-1);
+      setView((current) => current === 'all' ? 'recent' : current === 'recent' ? 'selected' : 'all');
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setFocusIdx((current) => Math.min(current + 1, keyboardTargets.length - 1));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setFocusIdx((current) => current <= 0 ? 0 : current - 1);
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const targetIndex = focusIdx >= 0 ? focusIdx : 0;
+    const folderId = keyboardTargets[targetIndex];
+    if (folderId === undefined) return;
+    if (folderId === null) {
+      setSelected(new Set());
+      setRootSelected(true);
+      return;
+    }
+    handleToggle(folderId, { shiftKey: false, metaKey: false, ctrlKey: false });
+  }, [focusIdx, handleToggle, keyboardTargets]);
+
+  useShortcutScope((event) => {
+    handlePortalKeyDown(event);
+    return event.defaultPrevented;
+  }, {
+    enabled: open && createTarget == null && contextMenu.state == null,
+    priority: 110,
+    allowInEditable: true,
+  });
+
   if (!open) return null;
 
   return (
@@ -289,9 +336,14 @@ export function FolderPickerPanel() {
       footer={
         <>
           <div className={styles.footerHints}>
-            <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span>
-            <span className={shellStyles.kbdHint}>{t("Move ")}<span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
-            <span className={shellStyles.kbdHint}>{t("Select ")}<span className={shellStyles.kbd}>↵</span></span>
+            {filterSelection ? <>
+              <span className={shellStyles.kbdHint}>{t("Select")}<span className={shellStyles.kbd}>{t("L-Click")}</span></span>
+              <span className={shellStyles.kbdHint}>{t("Exclude")}<span className={shellStyles.kbd}>{t("R-Click")}</span></span>
+            </> : <>
+              <span className={shellStyles.kbdHint}>{t("Switch ")}<TabKeyHint /></span>
+              <span className={shellStyles.kbdHint}>{t("Move ")}<span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
+              <span className={shellStyles.kbdHint}>{t("Select ")}<span className={shellStyles.kbd}>↵</span></span>
+            </>}
           </div>
           <div className={`${btnStyles.btnGroup} ${styles.footerEnd}`}>
             {parentSelection && (
@@ -309,7 +361,7 @@ export function FolderPickerPanel() {
     >
       {parentSelection && (!query || 'Library'.toLowerCase().includes(query.toLowerCase())) ? (
         <div
-          className={`${shellStyles.checkRow} ${rootSelected ? shellStyles.checkRowActive : ''}`}
+          className={`${shellStyles.checkRow} ${rootSelected ? shellStyles.checkRowActive : ''} ${focusIdx === 0 ? styles.keyboardFocused : ''}`}
           onClick={() => { setSelected(new Set()); setRootSelected(true); }}
         >
           <div className={`${shellStyles.checkBox} ${rootSelected ? shellStyles.checkBoxChecked : ''}`}>
@@ -322,6 +374,7 @@ export function FolderPickerPanel() {
       <FolderTree
         nodes={displayedFolders}
         selected={selected}
+        focusedId={keyboardTargets[focusIdx] ?? null}
         onToggle={handleToggle}
         excluded={filterSelection ? excluded : undefined}
         filterSelection={filterSelection}

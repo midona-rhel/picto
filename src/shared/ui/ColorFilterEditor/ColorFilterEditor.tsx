@@ -140,23 +140,26 @@ export function ColorFilterEditor({
       <input className={styles.hue} type="range" min="0" max="359" value={Math.round(hsv.hue)} aria-label={t("Color hue")} onChange={(event) => applyHsv({ ...hsv, hue: Number(event.target.value) })} />
       {showSensitivity && <label className={styles.sensitivity}>
         <span className={styles.sensitivityHeader}>
-          <span>{t("Color match range")}</span>
-          <output>{t("{value0}{value1}", { value0: 'ΔE ', value1: matchDeltaE })}</output>
+          <span>{t("Tolerance")}</span>
+          <output>{matchDeltaE}</output>
         </span>
         <input
+          className={styles.toleranceSlider}
           type="range"
           min={MINIMUM_COLOR_DELTA_E}
           max={MAXIMUM_COLOR_DELTA_E}
           step="1"
           value={matchDeltaE}
-          aria-label={t("Color match range")}
+          aria-label={t("Tolerance")}
+          style={{
+            '--tolerance-progress': `${((matchDeltaE - MINIMUM_COLOR_DELTA_E) / (MAXIMUM_COLOR_DELTA_E - MINIMUM_COLOR_DELTA_E)) * 100}%`,
+          } as CSSProperties}
           onChange={(event) => {
             const next = Number(event.target.value);
             setMatchDeltaE(next);
             scheduleCommit(hasColor ? hex : null, next);
           }}
         />
-        <span className={styles.sensitivityEnds}><span>{t("Strict")}</span><span>{t("Broad")}</span></span>
       </label>}
       <div className={styles.presets}>
         {allowClear && <button type="button" className={`${styles.preset} ${styles.none} ${value == null ? styles.active : ''}`} aria-label={t("No color")} onClick={() => { setHasColor(false); commitNow(null, matchDeltaE); }} />}
