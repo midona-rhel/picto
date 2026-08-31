@@ -228,6 +228,7 @@ mod tests {
             headers: Default::default(),
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
+            postprocess: None,
         };
         assert_eq!(
             destination_path(directory, &descriptor),

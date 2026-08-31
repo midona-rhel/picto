@@ -321,6 +321,7 @@ mod tests {
                     headers: BTreeMap::new(),
                     fallbacks: Vec::new(),
                     rejected_final_paths: Vec::new(),
+                    postprocess: None,
                 })
                 .collect(),
             resume_cursor_after: None,

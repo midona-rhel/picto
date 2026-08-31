@@ -32,6 +32,7 @@ impl MediaDescriptorBuilder {
                 headers: BTreeMap::new(),
                 fallbacks: Vec::new(),
                 rejected_final_paths: Vec::new(),
+                postprocess: None,
             },
         }
     }

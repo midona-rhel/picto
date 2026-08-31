@@ -18,6 +18,7 @@ mod query;
 mod segmented;
 mod tags;
 mod text;
+mod ugoira;
 
 pub use adapter::{
     AdapterFuture, MediaFuture, NativeSourceAdapter, PostFuture, ProviderDescriptor,
@@ -34,8 +35,8 @@ pub use json::{JsonPageSource, JsonSourceAdapter};
 pub use media::MediaDescriptorBuilder;
 pub use model::{
     CanonicalTag, DiscoveryBatch, DiscoveryRequest, DownloadedMedia, MediaDelivery,
-    MediaDescriptor, MediaFallback, OAuthTokenUpdater, RequestCredentials, SkipReason,
-    SourcePartition, SourcePost, SourcePostOutcome,
+    MediaDescriptor, MediaFallback, MediaPostprocess, OAuthTokenUpdater, RequestCredentials,
+    SkipReason, SourcePartition, SourcePost, SourcePostOutcome, UgoiraFrame,
 };
 pub use query::SearchQueryPolicy;
 pub use segmented::{FfmpegMuxer, MediaMuxer, MuxFuture, MuxInput, MuxInputKind};

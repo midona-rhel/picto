@@ -2987,6 +2987,7 @@ version = "0.6.1-alpha"
 dependencies = [
  "chrono",
  "futures-util",
+ "image 0.25.9",
  "md-5",
  "mime_guess",
  "rand 0.8.5",
@@ -3004,6 +3005,7 @@ dependencies = [
  "wreq",
  "wreq-util",
  "xitter-txid",
+ "zip",
 ]
 
 [[package]]

@@ -1739,6 +1739,7 @@ mod tests {
                 },
             ],
             rejected_final_paths: Vec::new(),
+            postprocess: None,
         };
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("media.jpg");

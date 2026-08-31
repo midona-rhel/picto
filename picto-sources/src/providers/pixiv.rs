@@ -11,8 +11,8 @@ use url::Url;
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
     HttpRuntime, MediaDescriptor, MediaDescriptorBuilder, MediaFallback, MediaFuture,
-    NativeSourceAdapter, OpaqueCursor, PageCursor, ProviderDescriptor, RequestCredentials,
-    SourceError, SourceErrorKind, SourcePost,
+    MediaPostprocess, NativeSourceAdapter, OpaqueCursor, PageCursor, ProviderDescriptor,
+    RequestCredentials, SourceError, SourceErrorKind, SourcePost, UgoiraFrame,
 };
 
 const API_ROOT: &str = "https://app-api.pixiv.net";
@@ -228,7 +228,7 @@ impl PixivApi {
 
     pub(super) async fn resolve_ugoira(
         &self,
-        mut media: MediaDescriptor,
+        media: MediaDescriptor,
         credentials: &RequestCredentials,
         http: &HttpRuntime,
         cancel: &CancellationToken,
@@ -246,18 +246,50 @@ impl PixivApi {
                 "Pixiv rejected ugoira metadata: {error}"
             )));
         }
-        let zip_url = ["original", "medium"]
-            .into_iter()
-            .find_map(|quality| {
-                response
-                    .pointer(&format!("/ugoira_metadata/zip_urls/{quality}"))
-                    .and_then(Value::as_str)
-                    .and_then(safe_pixiv_media_url)
-            })
-            .ok_or_else(|| invalid_response("Pixiv ugoira metadata omitted its frame archive"))?;
-        media.url = zip_url;
-        Ok(media)
+        apply_ugoira_metadata(media, &response)
     }
+}
+
+fn apply_ugoira_metadata(
+    mut media: MediaDescriptor,
+    response: &Value,
+) -> Result<MediaDescriptor, SourceError> {
+    let zip_url = ["original", "medium"]
+        .into_iter()
+        .find_map(|quality| {
+            response
+                .pointer(&format!("/ugoira_metadata/zip_urls/{quality}"))
+                .and_then(Value::as_str)
+                .and_then(safe_pixiv_media_url)
+        })
+        .ok_or_else(|| invalid_response("Pixiv ugoira metadata omitted its frame archive"))?;
+    let frames = response
+        .pointer("/ugoira_metadata/frames")
+        .cloned()
+        .ok_or_else(|| invalid_response("Pixiv ugoira metadata omitted its frame timings"))
+        .and_then(|frames| {
+            serde_json::from_value::<Vec<UgoiraFrame>>(frames).map_err(|error| {
+                invalid_response(format!(
+                    "Pixiv returned invalid ugoira frame timings: {error}"
+                ))
+            })
+        })?;
+    if frames.is_empty() {
+        return Err(invalid_response(
+            "Pixiv ugoira metadata contained no frames",
+        ));
+    }
+    media.url = zip_url;
+    let id = media
+        .stable_id
+        .strip_prefix("pixiv:")
+        .and_then(|value| value.strip_suffix(":ugoira"))
+        .expect("validated Pixiv ugoira stable ID");
+    media.file_name = Some(format!("{id}.webm"));
+    media.mime_hint = Some("video/webm".into());
+    media.expected_size = None;
+    media.postprocess = Some(MediaPostprocess::UgoiraToWebm { frames });
+    Ok(media)
 }
 
 pub(super) fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
@@ -982,6 +1014,32 @@ mod tests {
         assert!(media[0]
             .url
             .ends_with("/v1/ugoira/metadata?illust_id=12345678"));
+    }
+
+    #[test]
+    fn ugoira_metadata_resolves_to_a_timed_vp9_conversion() {
+        let descriptor = ugoira_descriptor("12345678", "https://www.pixiv.net/artworks/12345678");
+        let response = serde_json::json!({
+            "ugoira_metadata": {
+                "zip_urls": {
+                    "original": "https://i.pximg.net/img-zip-ugoira/12345678.zip"
+                },
+                "frames": [
+                    {"file": "000000.jpg", "delay": 60},
+                    {"file": "000001.jpg", "delay": 100}
+                ]
+            }
+        });
+
+        let resolved = apply_ugoira_metadata(descriptor, &response).unwrap();
+
+        assert_eq!(resolved.file_name.as_deref(), Some("12345678.webm"));
+        assert_eq!(resolved.mime_hint.as_deref(), Some("video/webm"));
+        assert!(matches!(
+            resolved.postprocess,
+            Some(MediaPostprocess::UgoiraToWebm { ref frames })
+                if frames.len() == 2 && frames[0].delay == 60 && frames[1].delay == 100
+        ));
     }
 
     #[test]

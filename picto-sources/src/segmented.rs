@@ -144,7 +144,7 @@ impl SegmentedDownloader {
         http: &HttpRuntime,
         cancel: &CancellationToken,
     ) -> Result<DownloadedMedia, SourceError> {
-        match descriptor.delivery() {
+        let downloaded = match descriptor.delivery() {
             MediaDelivery::Direct => {
                 http.download(descriptor, credentials, destination, cancel)
                     .await
@@ -153,7 +153,8 @@ impl SegmentedDownloader {
                 self.download_segmented(descriptor, credentials, destination, http, cancel)
                     .await
             }
-        }
+        }?;
+        crate::ugoira::postprocess(downloaded, cancel).await
     }
 
     async fn download_segmented(
@@ -301,6 +302,7 @@ async fn download_track(
             headers: descriptor.headers.clone(),
             fallbacks: Vec::new(),
             rejected_final_paths: descriptor.rejected_final_paths.clone(),
+            postprocess: None,
         };
         if let Some(range) = &segment.range {
             segment_descriptor
@@ -353,6 +355,7 @@ async fn fetch_manifest(
         headers: descriptor.headers.clone(),
         fallbacks: Vec::new(),
         rejected_final_paths: descriptor.rejected_final_paths.clone(),
+        postprocess: None,
     };
     let downloaded = http.download(&request, credentials, path, cancel).await?;
     if downloaded.size_bytes > MAX_MANIFEST_BYTES {
@@ -1051,6 +1054,7 @@ mod tests {
             headers: BTreeMap::from([("x-media-auth".into(), "allowed".into())]),
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
+            postprocess: None,
         };
         let runtime = HttpRuntime::new(HttpPolicy {
             maximum_concurrency: 1,

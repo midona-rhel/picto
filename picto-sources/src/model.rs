@@ -106,6 +106,19 @@ pub struct MediaDescriptor {
     pub headers: BTreeMap<String, String>,
     pub fallbacks: Vec<MediaFallback>,
     pub rejected_final_paths: Vec<String>,
+    #[serde(default)]
+    pub postprocess: Option<MediaPostprocess>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MediaPostprocess {
+    UgoiraToWebm { frames: Vec<UgoiraFrame> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UgoiraFrame {
+    pub file: String,
+    pub delay: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

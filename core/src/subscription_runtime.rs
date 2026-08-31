@@ -1928,6 +1928,7 @@ mod tests {
             headers: std::collections::BTreeMap::new(),
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
+            postprocess: None,
         };
         let source_post = picto_sources::SourcePost {
             site_id: "fanbox".into(),
