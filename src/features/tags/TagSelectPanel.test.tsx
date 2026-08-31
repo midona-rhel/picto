@@ -325,6 +325,39 @@ describe('TagSelectPanel assignment', () => {
     );
   });
 
+  it('applies an existing tag after searching for it', async () => {
+    const store = createStore();
+    const onApplyTagFilter = vi.fn();
+    store.set(tagSelectPortalAtom, {
+      open: true,
+      selectedTagFilters: [],
+      excludedTagFilters: [],
+      filterMatchMode: 'any',
+      onApplyTagFilter,
+    });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'bo' } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 170));
+      await Promise.resolve();
+    });
+    expect(mocks.getPaginated).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'bo' }));
+
+    const searchedTag = await screen.findByText((_content, element) =>
+      element?.className.toString().includes('tagName') === true
+      && element.textContent === 'bob');
+    fireEvent.click(searchedTag.closest('[data-tag-index]')!);
+    expect(onApplyTagFilter).toHaveBeenLastCalledWith(
+      [{ tag_id: 2, name: 'creator:bob' }],
+      [],
+      'any',
+    );
+  });
+
   it('uses the compact multi-column grid and keeps a list layout option', async () => {
     const store = createStore();
     store.set(tagSelectPortalAtom, { open: true, selectedTags: [] });
