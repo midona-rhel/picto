@@ -41,6 +41,26 @@ pub(crate) fn load(connection: &Connection, snapshot: &mut ProjectionSnapshot) -
     refresh_all(connection, snapshot)
 }
 
+pub(crate) fn projection_matches(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+) -> Result<bool> {
+    let definitions = load_definitions(connection)?;
+    let local_queries = definitions
+        .iter()
+        .map(|(id, definition)| (*id, definition.view.clone()))
+        .collect::<HashMap<_, _>>();
+    if *snapshot.smart_queries != local_queries
+        || *snapshot.smart_effective_queries != compile_effective_queries(&definitions)?
+    {
+        return Ok(false);
+    }
+    Ok(definitions.keys().all(|id| {
+        snapshot.smart_local_results.contains_key(id) && snapshot.smart_results.contains_key(id)
+    }) && snapshot.smart_local_results.len() == definitions.len()
+        && snapshot.smart_results.len() == definitions.len())
+}
+
 pub(crate) fn settle_affected(
     connection: &Connection,
     snapshot: &mut ProjectionSnapshot,

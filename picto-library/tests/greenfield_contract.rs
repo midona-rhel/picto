@@ -172,6 +172,134 @@ fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision(
 }
 
 #[test]
+fn stale_checkpoint_cannot_hide_tags_or_smart_folders() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported("checkpoint-recovery", Lifecycle::Active, &[]))
+        .unwrap();
+    library.write_projection_checkpoint().unwrap();
+
+    library
+        .add_tag(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            "artist:alice",
+        )
+        .unwrap();
+    let tag_id = library.projections().snapshot().tag_ids_by_name["artist:alice"];
+    let smart_folder = library
+        .create_smart_folder(smart_input(
+            "Alice",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Tags {
+                    tag_ids: vec![tag_id],
+                    mode: SetMatchMode::Any,
+                }),
+                sort: ItemSort::default(),
+            },
+        ))
+        .unwrap()
+        .0;
+
+    // Model a copied/interrupted checkpoint whose outer revision looks current
+    // even though its cached tag and smart-folder projections are stale.
+    let revision = library.database().revision().unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE projection_checkpoint SET database_revision = ?1 WHERE singleton = 1",
+                    [revision as i64],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+
+    let reopened = Library::open(path).unwrap();
+    assert_eq!(root_tag_count(&reopened, root), 1);
+    assert_eq!(
+        reopened
+            .query(
+                &query(ItemScope::SmartFolder {
+                    smart_folder_id: smart_folder,
+                }),
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[test]
+fn checkpoint_reloads_smart_folders_when_tag_projection_is_current() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    library
+        .ingest(&imported(
+            "checkpoint-smart-recovery",
+            Lifecycle::Active,
+            &["artist:alice"],
+        ))
+        .unwrap();
+    let tag_id = library.projections().snapshot().tag_ids_by_name["artist:alice"];
+    library.write_projection_checkpoint().unwrap();
+
+    let smart_folder = library
+        .create_smart_folder(smart_input(
+            "Alice",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Tags {
+                    tag_ids: vec![tag_id],
+                    mode: SetMatchMode::Any,
+                }),
+                sort: ItemSort::default(),
+            },
+        ))
+        .unwrap()
+        .0;
+    let revision = library.database().revision().unwrap();
+    library
+        .database()
+        .maintenance_write(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |transaction| {
+                transaction.execute(
+                    "UPDATE projection_checkpoint SET database_revision = ?1 WHERE singleton = 1",
+                    [revision as i64],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    drop(library);
+
+    let reopened = Library::open(path).unwrap();
+    assert_eq!(
+        reopened
+            .query(
+                &query(ItemScope::SmartFolder {
+                    smart_folder_id: smart_folder,
+                }),
+                &PageRequest::default(),
+            )
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[test]
 fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

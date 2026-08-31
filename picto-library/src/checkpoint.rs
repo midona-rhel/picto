@@ -207,3 +207,45 @@ pub fn read(connection: &Connection, revision: u64) -> Result<Option<Vec<u8>>> {
     }
     Ok(Some(payload))
 }
+
+pub(crate) fn tag_projection_matches(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+) -> Result<bool> {
+    let projected = snapshot
+        .tags
+        .iter()
+        .filter(|(_, roots)| !roots.is_empty())
+        .map(|(tag_id, roots)| (tag_id.0, roots.len()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut canonical = std::collections::HashMap::new();
+    let mut statement = connection.prepare(
+        "SELECT key_id, SUM(cardinality)
+         FROM canonical_bitmap
+         WHERE domain = ?1
+         GROUP BY key_id",
+    )?;
+    let rows = statement.query_map([crate::bitmap::BitmapDomain::Tag as u8], |row| {
+        Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?.max(0) as u64))
+    })?;
+    for row in rows {
+        let (tag_id, cardinality) = row?;
+        if cardinality != 0 {
+            canonical.insert(tag_id, cardinality);
+        }
+    }
+    if projected != canonical {
+        return Ok(false);
+    }
+
+    let projected_ids = snapshot
+        .tag_ids_by_name
+        .values()
+        .map(|tag_id| tag_id.0)
+        .collect::<std::collections::HashSet<_>>();
+    let mut statement = connection.prepare("SELECT tag_id FROM tag_definition")?;
+    let canonical_ids = statement
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    Ok(projected_ids == canonical_ids)
+}

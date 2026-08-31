@@ -490,7 +490,16 @@ impl ProjectionStore {
             |connection| {
                 let revision = crate::schema::validate(connection)?;
                 if let Some(payload) = crate::checkpoint::read(connection, revision)? {
-                    crate::checkpoint::decode(&payload, revision)
+                    let snapshot = crate::checkpoint::decode(&payload, revision)?;
+                    if crate::checkpoint::tag_projection_matches(connection, &snapshot)?
+                        && crate::smart::projection_matches(connection, &snapshot)?
+                    {
+                        Ok(snapshot)
+                    } else {
+                        // A copied or interrupted checkpoint may have a valid checksum and outer
+                        // revision while carrying stale derived state. Rebuild from canonical data.
+                        load(connection)
+                    }
                 } else {
                     load(connection)
                 }
