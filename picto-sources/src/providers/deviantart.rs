@@ -939,12 +939,15 @@ mod tests {
         let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
             "deviationid": "123456789",
             "url": "https://www.deviantart.com/artist/art/work-123456789",
-            "title": "Work",
+            "title": "Work &amp; title",
+            "description": "<p>Readable &amp; clear.</p>",
             "is_downloadable": true,
             "author": { "username": "artist" }
         }))
         .unwrap();
         let post = normalize_deviation(&request(None), "o1i0".into(), deviation).unwrap();
+        assert_eq!(post.name.as_deref(), Some("Work & title"));
+        assert_eq!(post.notes.as_deref(), Some("Readable & clear."));
         assert_eq!(post.media.len(), 1);
         assert_eq!(post.media[0].stable_id, "deviantart:123456789:download");
         assert_eq!(

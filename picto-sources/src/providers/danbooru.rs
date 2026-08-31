@@ -4,12 +4,13 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::{
-    BeforeIdCursor, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest, JsonPageSource,
-    JsonSourceAdapter, MediaDescriptorBuilder, NativeSourceAdapter, ProviderDescriptor, RatingMap,
-    SearchQueryPolicy, SourceError, SourcePost,
+    normalize_source_text, BeforeIdCursor, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
+    JsonPageSource, JsonSourceAdapter, MediaDescriptorBuilder, NativeSourceAdapter,
+    ProviderDescriptor, RatingMap, SearchQueryPolicy, SourceError, SourcePost,
 };
 
 const CURSOR: BeforeIdCursor = BeforeIdCursor::new("b");
+const ONLY_FIELDS: &str = "id,created_at,rating,file_url,large_file_url,file_ext,file_size,md5,tag_string_artist,tag_string_character,tag_string_copyright,tag_string_general,tag_string_meta,artist_commentary";
 const QUERY: SearchQueryPolicy = SearchQueryPolicy::new("Danbooru", &["page:", "limit:", "order:"]);
 const RATINGS: RatingMap = RatingMap::new(&[
     ("g", "general"),
@@ -55,6 +56,7 @@ impl JsonPageSource for DanbooruSource {
         let mut query = url.query_pairs_mut();
         query.append_pair("tags", request.query.trim());
         query.append_pair("limit", &request.page_size.clamp(1, 200).to_string());
+        query.append_pair("only", ONLY_FIELDS);
         if let Some(cursor) = request
             .cursor
             .as_deref()
@@ -135,14 +137,24 @@ fn normalize_post(request: &DiscoveryRequest, post: ApiPost) -> SourcePost {
         .into_iter()
         .collect();
 
+    let commentary_title = post
+        .artist_commentary
+        .as_ref()
+        .and_then(|commentary| commentary.original_title.as_deref())
+        .and_then(normalize_source_text);
+    let commentary_notes = post
+        .artist_commentary
+        .as_ref()
+        .and_then(|commentary| commentary.original_description.as_deref())
+        .and_then(normalize_source_text);
     SourcePost {
         site_id: "danbooru".into(),
         partition: request.partition.clone(),
         stable_id: post_id.clone(),
         canonical_url: Some(canonical_url),
         creator: first_word(&post.tag_string_artist),
-        name: Some(format!("danbooru_{post_id}")),
-        notes: None,
+        name: commentary_title.or_else(|| Some(format!("danbooru_{post_id}"))),
+        notes: commentary_notes,
         created_at: post.created_at,
         tags: tags.into_vec(),
         media,
@@ -200,6 +212,16 @@ struct ApiPost {
     tag_string_general: String,
     #[serde(default)]
     tag_string_meta: String,
+    #[serde(default)]
+    artist_commentary: Option<ArtistCommentary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtistCommentary {
+    #[serde(default)]
+    original_title: Option<String>,
+    #[serde(default)]
+    original_description: Option<String>,
 }
 
 #[cfg(test)]
@@ -229,9 +251,22 @@ mod tests {
             "tag_string_character": "character_name",
             "tag_string_copyright": "series_name",
             "tag_string_general": "solo canine",
-            "tag_string_meta": "highres"
+            "tag_string_meta": "highres",
+            "artist_commentary": {
+                "original_title": "A human title",
+                "original_description": "<p>Readable &amp; clear.</p>"
+            }
         }]))
         .unwrap();
+
+        let url = DanbooruSource.request_url(&request).unwrap();
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "only")
+                .map(|(_, value)| value.into_owned())
+                .as_deref(),
+            Some(ONLY_FIELDS)
+        );
 
         let batch = DanbooruSource.normalize(&request, response).unwrap();
         let post = &batch.posts[0];
@@ -249,6 +284,8 @@ mod tests {
         assert!(post.tags.contains(&CanonicalTag::new("rating", "explicit")));
         assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/png"));
         assert_eq!(post.media[0].url, "https://cdn.donmai.us/file.png");
+        assert_eq!(post.name.as_deref(), Some("A human title"));
+        assert_eq!(post.notes.as_deref(), Some("Readable & clear."));
     }
 
     #[test]

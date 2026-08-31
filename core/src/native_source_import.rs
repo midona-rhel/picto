@@ -73,11 +73,20 @@ pub async fn prepare_source_post(
     }
 
     Ok(PreparedSourcePost {
-        collection_name: (members.len() > 1).then(|| post.name.clone()).flatten(),
+        collection_name: (members.len() > 1).then(|| post_title(post)),
         members,
         cleanup_paths,
         rejected_media,
     })
+}
+
+pub(crate) fn post_title(post: &SourcePost) -> String {
+    post.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{}_{}", post.site_id, post.stable_id))
 }
 
 async fn prepare_downloaded_media(
@@ -330,6 +339,15 @@ mod tests {
             member_name(&collection, "media-1", Path::new("download.png")),
             "member-1",
         );
+    }
+
+    #[test]
+    fn titleless_social_collections_receive_a_deterministic_weak_name() {
+        let mut post = post(2);
+        post.site_id = "twitter".into();
+        post.stable_id = "2085395535410712592".into();
+        post.name = None;
+        assert_eq!(post_title(&post), "twitter_2085395535410712592");
     }
 
     #[test]

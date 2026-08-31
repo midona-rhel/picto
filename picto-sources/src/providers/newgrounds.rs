@@ -363,7 +363,9 @@ fn resolve_html(mut post: SourcePost, html: &str) -> Result<SourcePost, SourceEr
         .as_deref()
         .ok_or_else(|| invalid_response("Newgrounds post is missing its canonical URL"))?;
     let title = capture_attribute(html, "og:title").and_then(|value| normalize_source_text(&value));
-    let notes = element_body(html, "author_comments").and_then(normalize_source_text);
+    let notes = capture_attribute(html, "og:description")
+        .and_then(|value| normalize_source_text(&value))
+        .or_else(|| element_body(html, "author_comments").and_then(normalize_source_text));
     let created_at = capture(
         regex(
             &DATE_PUBLISHED,
@@ -733,7 +735,7 @@ mod tests {
 
         assert_eq!(post.creator.as_deref(), Some("artist-name"));
         assert_eq!(post.name.as_deref(), Some("First & Best Work"));
-        assert_eq!(post.notes.as_deref(), Some("Hello world & more."));
+        assert_eq!(post.notes.as_deref(), Some("Gallery summary & details."));
         assert_eq!(
             post.created_at.as_deref(),
             Some("2026-08-25T12:00:00-04:00")
@@ -751,6 +753,26 @@ mod tests {
         assert!(post
             .tags
             .contains(&CanonicalTag::new("rating", "questionable")));
+    }
+
+    #[test]
+    fn author_comments_are_the_notes_fallback_when_page_description_is_absent() {
+        let post = normalize_profile_page(
+            "artist_name",
+            decode_cursor(None).unwrap(),
+            profile_fixture(),
+        )
+        .unwrap()
+        .posts
+        .into_iter()
+        .next()
+        .unwrap();
+        let html = include_str!("../../tests/fixtures/newgrounds/post.html").replace(
+            "    <meta property=\"og:description\" content=\"Gallery summary &amp; details.\">\n",
+            "",
+        );
+        let post = resolve_html(post, &html).unwrap();
+        assert_eq!(post.notes.as_deref(), Some("Hello world & more."));
     }
 
     #[test]

@@ -253,6 +253,8 @@ mod tests {
         let batch = parse_posts(&request(), response);
         let post = &batch.posts[0];
         assert_eq!(post.stable_id, "6360238");
+        assert_eq!(post.name.as_deref(), Some("e621_6360238"));
+        assert_eq!(post.notes.as_deref(), Some("A post"));
         assert_eq!(post.resume_cursor_after.as_deref(), Some("b6360238"));
         assert!(post.tags.contains(&CanonicalTag::new("creator", "midna")));
         assert!(post

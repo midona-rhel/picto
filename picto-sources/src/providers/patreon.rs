@@ -683,6 +683,7 @@ mod tests {
         assert_eq!(batch.posts.len(), 1);
         assert!(!batch.exhausted);
         let post = &batch.posts[0];
+        assert_eq!(post.name.as_deref(), Some("Behind the scenes"));
         assert_eq!(post.media.len(), 4);
         assert!(post
             .tags

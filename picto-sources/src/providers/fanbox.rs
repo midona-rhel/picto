@@ -849,6 +849,7 @@ mod tests {
         .next()
         .unwrap();
         let post = normalize_post(discovered, fixture).unwrap();
+        assert_eq!(post.name.as_deref(), Some("A FANBOX post"));
         assert_eq!(post.media.len(), 4);
         assert_eq!(post.media[0].position, 0);
         assert_eq!(

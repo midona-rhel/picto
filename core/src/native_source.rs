@@ -722,7 +722,7 @@ fn normalize_post(post: &SourcePost) -> Result<NormalizedPost, RunnerFailure> {
         post_key: post.stable_id.clone(),
         canonical_url: post.canonical_url.clone(),
         creator_name: post.creator.clone(),
-        title: post.name.clone(),
+        title: Some(crate::native_source_import::post_title(post)),
         description: post.notes.clone(),
         captured_at: post.created_at.clone(),
         metadata_json: Some(metadata_json),

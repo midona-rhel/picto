@@ -1221,6 +1221,8 @@ mod tests {
             normalize_detail(ARCHIVE_FIXTURE, discovered, &creator, detail, profile).unwrap();
 
         assert_eq!(post.creator.as_deref(), Some("Rehab Room"));
+        assert_eq!(post.name.as_deref(), Some("Complete post"));
+        assert_eq!(post.notes.as_deref(), Some("Full notes"));
         assert_eq!(post.media.len(), 4);
         assert!(post.media.iter().any(|media| media.url.ends_with(".zip")));
         assert_eq!(post.media[0].position, 0);

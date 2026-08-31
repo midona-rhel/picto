@@ -1081,6 +1081,7 @@ mod tests {
         .unwrap();
         assert_eq!(post.stable_id, "9001");
         assert_eq!(post.creator.as_deref(), Some("fixturecreator"));
+        assert_eq!(post.name.as_deref(), Some("Hello & welcome bold text"));
         assert_eq!(post.notes.as_deref(), Some("Hello & welcome bold text"));
         assert_eq!(
             post.tags,
