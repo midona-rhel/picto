@@ -118,21 +118,21 @@ jobs:
             package-artifacts: |
               dist/*.dmg
               dist/*.zip
-              dist/*.yml
+              dist/latest-mac.yml
               dist/*.blockmap
           - os: ubuntu-24.04
             platform: linux
             artifact: linux-x64
             package-artifacts: |
               dist/*.AppImage
-              dist/*.yml
+              dist/latest-linux.yml
               dist/*.blockmap
           - os: windows-latest
             platform: windows
             artifact: windows-x64
             package-artifacts: |
               dist/*.exe
-              dist/*.yml
+              dist/latest.yml
               dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
