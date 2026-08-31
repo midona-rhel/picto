@@ -44,6 +44,7 @@ export class ThumbnailPipeline {
   private totalBytes = 0;
   private readonly decoder: ThumbnailDecodeClient;
   private readonly revisions = new Map<string, number>();
+  private activeHashes = new Set<string>();
   private readonly pendingFullBitmaps = new Map<string, ImageBitmap>();
   private fullAdmissionFrame: number | null = null;
 
@@ -86,6 +87,7 @@ export class ThumbnailPipeline {
     const fingerprint = computePlanFingerprint(tiles, FULL_QUALITY_THRESHOLD_PX);
     if (fingerprint === this.lastPlanFingerprint) return;
     this.lastPlanFingerprint = fingerprint;
+    this.activeHashes = new Set(tiles.map((tile) => tile.fileHash));
 
     // Plan-entry order is the worker's fetch priority — load tiles nearest
     // the viewport center first. In-place sort of the caller's reusable
@@ -123,6 +125,10 @@ export class ThumbnailPipeline {
   }
 
   invalidate(hash: string): void {
+    // Cloud restore can finish hundreds of off-screen derivatives per second.
+    // A future plan will request their final URL directly; only active tiles
+    // need cache busting and a repaint now.
+    if (!this.activeHashes.has(hash)) return;
     // Keep a usable bitmap on screen until its replacement has decoded.
     // Removing it here exposes a placeholder frame for every background
     // thumbnail refresh and makes active subscription grids visibly flash.
@@ -154,6 +160,7 @@ export class ThumbnailPipeline {
   clear(): void {
     this.destroyed = true;
     this.lastPlanFingerprint = -1;
+    this.activeHashes.clear();
     this.decoder.clear();
     if (this.fullAdmissionFrame != null) {
       this.cancelFrame(this.fullAdmissionFrame);

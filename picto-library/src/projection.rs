@@ -486,7 +486,7 @@ pub struct ProjectionStore {
 
 impl ProjectionStore {
     pub fn load(database: &LibraryDatabase) -> Result<Self> {
-        let snapshot = database.read(
+        let (snapshot, recovered_partitions) = database.read(
             crate::database::WorkPriority::CorrectnessRecovery,
             |connection| {
                 let revision = crate::schema::validate(connection)?;
@@ -496,7 +496,7 @@ impl ProjectionStore {
                         && crate::smart::projection_matches(connection, &snapshot)?
                         && snapshot_partitions_match(&snapshot)
                     {
-                        Ok(snapshot)
+                        Ok((snapshot, false))
                     } else {
                         // A copied or interrupted checkpoint may have a valid checksum and outer
                         // revision while carrying stale derived state. Rebuild from canonical data.
@@ -507,7 +507,9 @@ impl ProjectionStore {
                 }
             },
         )?;
-        persist_recovered_partitions(database, &snapshot)?;
+        if recovered_partitions {
+            persist_recovered_partitions(database, &snapshot)?;
+        }
         Ok(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
         })
@@ -525,7 +527,7 @@ impl ProjectionStore {
 fn load(
     connection: &Connection,
     checkpoint_fallback: Option<&ProjectionSnapshot>,
-) -> Result<ProjectionSnapshot> {
+) -> Result<(ProjectionSnapshot, bool)> {
     let revision = crate::schema::validate(connection)?;
     let canonical = bitmap::load_all(connection)?;
 
@@ -799,14 +801,14 @@ fn load(
     }
 
     let every_root = all_roots(&root_kinds);
-    recover_partition(
+    let recovered_lifecycle = recover_partition(
         "lifecycle",
         &mut lifecycle,
         checkpoint_fallback.map(|snapshot| snapshot.lifecycle.as_ref()),
         &every_root,
         Lifecycle::Active,
     )?;
-    recover_partition(
+    let recovered_rating = recover_partition(
         "rating",
         &mut ratings,
         checkpoint_fallback.map(|snapshot| snapshot.ratings.as_ref()),
@@ -851,7 +853,7 @@ fn load(
         smart_effective_queries: Arc::new(HashMap::new()),
     };
     crate::smart::load(connection, &mut snapshot)?;
-    Ok(snapshot)
+    Ok((snapshot, recovered_lifecycle || recovered_rating))
 }
 
 fn snapshot_partitions_match(snapshot: &ProjectionSnapshot) -> bool {
@@ -877,13 +879,13 @@ fn recover_partition<K: Copy + Eq + Hash>(
     fallback: Option<&HashMap<K, SharedBitmap>>,
     expected: &RoaringBitmap,
     default_key: K,
-) -> Result<()> {
+) -> Result<bool> {
     if partitions_match(current.values(), expected) {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(fallback) = fallback.filter(|values| partitions_match(values.values(), expected)) {
         *current = fallback.clone();
-        return Ok(());
+        return Ok(true);
     }
     validate_partitions(name, current.values())?;
     for partition in current.values_mut() {
@@ -898,7 +900,7 @@ fn recover_partition<K: Copy + Eq + Hash>(
         });
     let missing = expected - &present;
     current.entry(default_key).or_default().union(&missing);
-    Ok(())
+    Ok(true)
 }
 
 fn persist_recovered_partitions(

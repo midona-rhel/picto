@@ -3,6 +3,7 @@ import type { ThumbnailDecodeQuality } from './thumbnailDecodeClient';
 
 let deliverBitmap: ((hash: string, bitmap: ImageBitmap, quality: ThumbnailDecodeQuality) => void) | null = null;
 let deliverError: ((hash: string, quality: ThumbnailDecodeQuality) => void) | null = null;
+const invalidated: string[] = [];
 
 vi.mock('./thumbnailDecodeClient', () => ({
   ThumbnailDecodeClient: class {
@@ -11,7 +12,7 @@ vi.mock('./thumbnailDecodeClient', () => ({
       deliverError = onError;
     }
     sendPlan() {}
-    invalidate() {}
+    invalidate(hash: string) { invalidated.push(hash); }
     clear() {}
     terminate() {}
   },
@@ -27,6 +28,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
   beforeEach(() => {
     deliverBitmap = null;
     deliverError = null;
+    invalidated.length = 0;
   });
 
   it('installs at most one full-resolution bitmap per animation frame', () => {
@@ -87,5 +89,21 @@ describe('ThumbnailPipeline full-resolution admission', () => {
 
     expect(queued.close).toHaveBeenCalledOnce();
     expect(cancelFrame).toHaveBeenCalledWith(7);
+  });
+
+  it('ignores completion events for thumbnails outside the active decode zone', () => {
+    const onDirty = vi.fn();
+    const pipeline = new ThumbnailPipeline(onDirty, vi.fn(), vi.fn(), vi.fn());
+    pipeline.updatePlan([
+      { fileHash: 'visible', mime: 'image/png', w: 200, h: 200, cy: 100 },
+    ], 100);
+
+    pipeline.invalidate('offscreen');
+    expect(invalidated).toEqual([]);
+    expect(onDirty).not.toHaveBeenCalled();
+
+    pipeline.invalidate('visible');
+    expect(invalidated).toEqual(['visible']);
+    expect(onDirty).toHaveBeenCalledOnce();
   });
 });
