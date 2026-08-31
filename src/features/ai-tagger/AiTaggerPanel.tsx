@@ -19,6 +19,7 @@ import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { ProgressBar } from '../../shared/ui/ProgressBar/ProgressBar';
 import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { aiTaggerPortalAtom } from '../../state/portals';
+import { resolveImageSelection } from '../../platform/entityApi';
 import { selectionTargetAtom } from '../../state/selection';
 import {
   aiTagApply,
@@ -52,7 +53,7 @@ type ViewMode = 'suggested' | 'below';
 const MIN_REVIEW_CONFIDENCE = 5;
 const MAX_REVIEW_CONFIDENCE = 95;
 const DEFAULT_REVIEW_CONFIDENCE = 35;
-const PREDICTION_BATCH_SIZE = 4;
+const REVIEW_WINDOW_SIZE = 20;
 
 interface ReviewTag {
   key: string;
@@ -160,22 +161,56 @@ export function AiTaggerPanel() {
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
   const searchRef = useRef<HTMLInputElement>(null);
   const runGenerationRef = useRef(0);
+  const reviewWindowGenerationRef = useRef(0);
   const runningRef = useRef(false);
   const settingsWriteRef = useRef<Promise<unknown>>(Promise.resolve());
+  const reviewRootCacheRef = useRef(new Map<number, ReviewRoot>());
+  const reviewRootLoadsRef = useRef(new Map<number, Promise<ReviewRoot | null>>());
 
-  const itemIds = useMemo(() => (target?.kind === 'explicit' ? target.root_ids : []), [target]);
-  const itemFingerprint = itemIds.join('\n');
+  const [itemIds, setItemIds] = useState<number[]>([]);
+  const [selectionResolved, setSelectionResolved] = useState(false);
+  const targetFingerprint = JSON.stringify(target);
+
+  const loadReviewRoot = useCallback((rootId: number): Promise<ReviewRoot | null> => {
+    const cached = reviewRootCacheRef.current.get(rootId);
+    if (cached) return Promise.resolve(cached);
+    const pending = reviewRootLoadsRef.current.get(rootId);
+    if (pending) return pending;
+    const load = viewerController.getItemDetails(rootId)
+      .then(reviewRoot)
+      .then((root) => {
+        if (!root) return null;
+        const cache = reviewRootCacheRef.current;
+        cache.delete(rootId);
+        cache.set(rootId, root);
+        while (cache.size > REVIEW_WINDOW_SIZE) {
+          const oldest = cache.keys().next().value;
+          if (oldest == null) break;
+          cache.delete(oldest);
+        }
+        return root;
+      })
+      .finally(() => reviewRootLoadsRef.current.delete(rootId));
+    reviewRootLoadsRef.current.set(rootId, load);
+    return load;
+  }, []);
+
+  const loadReviewWindow = useCallback(async (rootIds: number[]): Promise<ReviewRoot[]> => {
+    const results = await Promise.allSettled(rootIds.map(loadReviewRoot));
+    return results.flatMap((result) => (
+      result.status === 'fulfilled' && result.value ? [result.value] : []
+    ));
+  }, [loadReviewRoot]);
 
   const closePortal = useCallback(() => {
     runGenerationRef.current += 1;
     runningRef.current = false;
     setRunning(false);
-    void aiTaggerUnload();
     setPortalState({ open: false });
   }, [setPortalState]);
 
-  const runPredict = useCallback(async (slugs: Set<string>, roots: ReviewRoot[], reset = false) => {
-    if (runningRef.current || slugs.size === 0 || roots.length === 0) return;
+  const runPredict = useCallback(async (slugs: Set<string>, rootIds: number[], reset = false) => {
+    if (runningRef.current || slugs.size === 0 || rootIds.length === 0) return;
     const generation = ++runGenerationRef.current;
     runningRef.current = true;
     setRunning(true);
@@ -184,34 +219,63 @@ export function AiTaggerPanel() {
     if (reset) setPredictions([]);
 
     try {
-      const targets: AiPredictionTarget[] = roots.flatMap((root) => root.imageMedia.map((media) => ({
-        rootId: root.rootItemId,
-        mediaItemId: media.media_id,
-      })));
-      const total = orderedSlugs.length * targets.length;
-      setProgress({ done: 0, total, currentItemId: targets[0]?.rootId ?? null });
+      const targetsByRoot = new Map<number, AiPredictionTarget[]>();
+      const total = orderedSlugs.length * rootIds.length;
+      setProgress({ done: 0, total, currentItemId: rootIds[0] ?? null });
       let failedAnalyses = 0;
+      let failedPreparation = 0;
       let firstFailure: string | null = null;
       let done = 0;
-      for (const slug of orderedSlugs) {
+      for (let modelIndex = 0; modelIndex < orderedSlugs.length; modelIndex += 1) {
+        const slug = orderedSlugs[modelIndex];
         if (generation !== runGenerationRef.current) return;
-        for (let offset = 0; offset < targets.length; offset += PREDICTION_BATCH_SIZE) {
-          const batch = targets.slice(offset, offset + PREDICTION_BATCH_SIZE);
-          setProgress({ done, total, currentItemId: batch[0]?.rootId ?? null });
-          const output = await aiTagPredict(batch, [slug]);
-          if (generation !== runGenerationRef.current) return;
-          setPredictions((previous) => mergePredictionResults(previous, output.predictions));
-          setActiveItemId((current) => current ?? batch[0]?.rootId ?? null);
-          const errors = new Map(output.predictions.flatMap((prediction) => (
-            prediction.error ? [[prediction.rootId, prediction.error] as const] : []
-          )));
-          failedAnalyses += batch.filter((target) => errors.has(target.rootId)).length;
-          firstFailure ??= errors.values().next().value ?? null;
-          done += batch.length;
-          setProgress({ done, total, currentItemId: null });
+        let prefetched = modelIndex === 0
+          ? loadReviewWindow(rootIds.slice(0, REVIEW_WINDOW_SIZE))
+          : null;
+        for (let offset = 0; offset < rootIds.length; offset += REVIEW_WINDOW_SIZE) {
+          const windowIds = rootIds.slice(offset, offset + REVIEW_WINDOW_SIZE);
+          if (modelIndex === 0) {
+            const roots = await prefetched!;
+            const nextOffset = offset + REVIEW_WINDOW_SIZE;
+            prefetched = nextOffset < rootIds.length
+              ? loadReviewWindow(rootIds.slice(nextOffset, nextOffset + REVIEW_WINDOW_SIZE))
+              : null;
+            const rootsById = new Map(roots.map((root) => [root.rootItemId, root]));
+            failedPreparation += windowIds.length - roots.length;
+            for (const rootId of windowIds) {
+              const root = rootsById.get(rootId);
+              targetsByRoot.set(rootId, root?.imageMedia.map((media) => ({
+                rootId,
+                mediaItemId: media.media_id,
+              })) ?? []);
+            }
+          }
+
+          for (const rootId of windowIds) {
+            if (generation !== runGenerationRef.current) return;
+            setProgress({ done, total, currentItemId: rootId });
+            const targets = targetsByRoot.get(rootId) ?? [];
+            for (const predictionTarget of targets) {
+              const output = await aiTagPredict([predictionTarget], [slug]);
+              if (generation !== runGenerationRef.current) return;
+              setPredictions((previous) => mergePredictionResults(previous, output.predictions));
+              const failure = output.predictions.find((prediction) => prediction.error)?.error;
+              if (failure) {
+                failedAnalyses += 1;
+                firstFailure ??= failure;
+              }
+            }
+            setActiveItemId((current) => current ?? rootId);
+            done += 1;
+            setProgress({ done, total, currentItemId: null });
+          }
         }
       }
-      if (failedAnalyses > 0) {
+      if (failedPreparation > 0) {
+        setError(t('{value0} selected items could not be prepared for AI review.', {
+          value0: failedPreparation,
+        }));
+      } else if (failedAnalyses > 0) {
         setError(t('{value0} of {value1} model/media analyses failed. {value2}', {
           value0: failedAnalyses,
           value1: total,
@@ -233,7 +297,7 @@ export function AiTaggerPanel() {
         setProgress((current) => ({ ...current, currentItemId: null }));
       }
     }
-  }, []);
+  }, [loadReviewWindow]);
 
   useEffect(() => {
     if (!open) return;
@@ -249,24 +313,21 @@ export function AiTaggerPanel() {
     setBackend(null);
     setRunning(false);
     setProgress({ done: 0, total: 0, currentItemId: null });
+    setItemIds([]);
+    setSelectionResolved(false);
+    reviewRootCacheRef.current.clear();
+    reviewRootLoadsRef.current.clear();
     setConfidence(DEFAULT_REVIEW_CONFIDENCE);
     setConfidenceDraft(DEFAULT_REVIEW_CONFIDENCE);
 
     void Promise.all([
       aiTaggerStatus(),
-      Promise.allSettled(itemIds.map((itemId) => viewerController.getItemDetails(itemId))),
+      target ? resolveImageSelection(target) : Promise.resolve([]),
       getSettings(),
-    ]).then(([status, detailResults, settings]) => {
+    ]).then(([status, resolvedItemIds, settings]) => {
       if (generation !== runGenerationRef.current) return;
-      const roots = detailResults.flatMap((result) => {
-        if (result.status !== 'fulfilled') return [];
-        const root = reviewRoot(result.value);
-        return root ? [root] : [];
-      });
-      const detailFailures = detailResults.filter((result) => result.status === 'rejected');
-      const unsupported = detailResults.filter((result) => (
-        result.status === 'fulfilled' && reviewRoot(result.value) == null
-      ));
+      setItemIds(resolvedItemIds);
+      setSelectionResolved(true);
       setModels(status.models);
       const initialConfidence = Math.min(
         MAX_REVIEW_CONFIDENCE,
@@ -275,15 +336,7 @@ export function AiTaggerPanel() {
       setConfidence(initialConfidence);
       setConfidenceDraft(initialConfidence);
       setBackend(status.cachedBackend);
-      setReviewRoots(roots);
-      setActiveItemId(roots[0]?.rootItemId ?? null);
-      if (detailFailures.length > 0) {
-        setError(t('{value0} selected items could not be prepared for AI review.', {
-          value0: detailFailures.length,
-        }));
-      } else if (unsupported.length > 0) {
-        setError(t('{value0} selected items contain no images.', { value0: unsupported.length }));
-      }
+      setActiveItemId(resolvedItemIds[0] ?? null);
       const downloaded = new Set(status.models.filter((model) => model.downloaded).map((model) => model.slug));
       const remembered = settings.aiTaggerManualModelSlugs;
       const previous = (remembered ?? status.configuredModelSlugs).filter((slug) => downloaded.has(slug));
@@ -304,13 +357,27 @@ export function AiTaggerPanel() {
       runningRef.current = false;
       void aiTaggerUnload();
     };
-  }, [open, itemFingerprint]);
+  }, [open, targetFingerprint]);
 
-  const reviewItemIds = useMemo(() => reviewRoots.length > 0
-    ? reviewRoots.map((root) => root.rootItemId)
-    : predictions.map((prediction) => prediction.rootId), [predictions, reviewRoots]);
+  useEffect(() => {
+    if (!open || itemIds.length === 0 || activeItemId == null) {
+      setReviewRoots([]);
+      return;
+    }
+    const generation = ++reviewWindowGenerationRef.current;
+    const activeIndex = Math.max(0, itemIds.indexOf(activeItemId));
+    const maximumStart = Math.max(0, itemIds.length - REVIEW_WINDOW_SIZE);
+    const start = Math.min(maximumStart, Math.max(0, activeIndex - Math.floor(REVIEW_WINDOW_SIZE / 2)));
+    const windowIds = itemIds.slice(start, start + REVIEW_WINDOW_SIZE);
+    void loadReviewWindow(windowIds).then((roots) => {
+      if (generation === reviewWindowGenerationRef.current) setReviewRoots(roots);
+    });
+    return () => { reviewWindowGenerationRef.current += 1; };
+  }, [activeItemId, itemIds, loadReviewWindow, open]);
+
+  const reviewItemIds = itemIds;
   const activeIndex = Math.max(0, reviewItemIds.indexOf(activeItemId ?? reviewItemIds[0]));
-  const activeRoot = reviewRoots.find((root) => root.rootItemId === activeItemId) ?? reviewRoots[activeIndex] ?? null;
+  const activeRoot = reviewRoots.find((root) => root.rootItemId === activeItemId) ?? null;
   const activeMedia = activeRoot?.previewMedia ?? null;
   const activePrediction = predictions.find((prediction) => prediction.rootId === activeItemId);
 
@@ -360,11 +427,10 @@ export function AiTaggerPanel() {
     const tags = predictionTags(prediction, runModels)
       .filter((tag) => isChecked(prediction.rootId, tag))
       .map((tag) => tag.key);
-    const root = reviewRoots.find((candidate) => candidate.rootItemId === prediction.rootId);
-    return tags.length > 0 && root
-      ? [{ root_id: root.rootItemId, tags }]
+    return tags.length > 0
+      ? [{ root_id: prediction.rootId, tags }]
       : [];
-  }), [isChecked, predictions, reviewRoots, runModels]);
+  }), [isChecked, predictions, runModels]);
   const checkedCount = assignments.reduce((total, assignment) => total + assignment.tags.length, 0);
 
   const applyChecked = useCallback(async () => {
@@ -476,7 +542,7 @@ export function AiTaggerPanel() {
           <div className={styles.sidebarRun}>
             <button
               className={`${btnStyles.btn} ${styles.runButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
-              onClick={() => void runPredict(runModels, reviewRoots, true)}
+              onClick={() => void runPredict(runModels, itemIds, true)}
               disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
               type="button"
             >{running ? t("Running…") : t("Run")}</button>
@@ -515,7 +581,8 @@ export function AiTaggerPanel() {
           {error && visibleTags.length > 0 && <div className={styles.partialError}>{error}</div>}
           <div className={styles.tagListScroller}>
             {error && visibleTags.length === 0 && !running ? <div className={styles.emptyState}><span className={styles.errorText}>{error}</span></div>
-              : itemIds.length === 0 ? <div className={styles.emptyState}>{t("Select specific library items to auto tag")}</div>
+              : !selectionResolved ? <div className={styles.emptyState}>{t("Preparing preview…")}</div>
+                : itemIds.length === 0 ? <div className={styles.emptyState}>{t("Select specific library items to auto tag")}</div>
                 : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? t("Analyzing this item…") : running ? t("Waiting for this item…") : runModels.size === 0 ? t("Select at least one downloaded model") : viewMode === 'below' ? t("Nothing below the cutoff") : predictions.length === 0 ? t("Choose models, then press Run") : t("No suggestions")}</div>
                   : visibleTags.map((tag) => {
                     const itemId = activeItemId ?? activePrediction?.rootId;

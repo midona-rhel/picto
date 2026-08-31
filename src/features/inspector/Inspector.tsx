@@ -161,7 +161,7 @@ function selectionSupportsAiTagging(
   target: EntityTarget | null | undefined,
   summary: SelectionSummary | null,
 ): boolean {
-  return Boolean(target && summary?.all_selected_roots_have_images);
+  return Boolean(target && summary && summary.taggable_root_count > 0);
 }
 
 // ── Portal opener ───────────────────────────────────────────────
@@ -900,7 +900,7 @@ export function Inspector() {
       onRemoveFolder={selTarget ? (folderId) => { void entityMutations.updateTargetFolderMembership(selTarget, folderId, 'remove'); } : undefined}
       onNavigateFolder={navigateToFolder}
       propertyAction={selTarget && count > 0 ? <InspectorExportAction target={selTarget} count={count} /> : undefined}
-      action={<InspectorAutoTagAction count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
+      action={<InspectorAutoTagAction count={summary?.taggable_root_count ?? count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
       summaryPending={summaryPending}
       showSummaryLoading={showSummaryLoading}
       status={summaryFailed ? { kind: 'error', message: t('Could not load selection details.') } : undefined}

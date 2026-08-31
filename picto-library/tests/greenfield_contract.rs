@@ -1510,7 +1510,28 @@ fn selection_image_compatibility_treats_a_collection_as_one_root_with_images() {
         })
         .unwrap();
     assert!(summary.all_selected_roots_have_images);
+    assert_eq!(summary.taggable_root_count, 1);
     assert_eq!(summary.sample_hashes, vec!["hash-image-member"]);
+
+    let (video_only, _) = library
+        .ingest(&imported_as(
+            "video-only",
+            "video/mp4",
+            LabColor {
+                l: 30.0,
+                a: 0.0,
+                b: 0.0,
+                weight: 1.0,
+            },
+        ))
+        .unwrap();
+    let mixed_target = SelectionTarget::Explicit {
+        root_ids: vec![collection, video_only],
+    };
+    let mixed_summary = library.selection_summary(&mixed_target).unwrap();
+    assert!(!mixed_summary.all_selected_roots_have_images);
+    assert_eq!(mixed_summary.taggable_root_count, 1);
+    assert_eq!(library.ordered_image_selection(&mixed_target).unwrap(), vec![collection]);
 }
 
 #[test]

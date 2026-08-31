@@ -63,6 +63,10 @@ export function getSelectionSummary(target: EntityTarget): Promise<SelectionSumm
   return invoke<SelectionSummary>('items.selection_summary', { target });
 }
 
+export function resolveImageSelection(target: EntityTarget): Promise<number[]> {
+  return invoke<number[]>('items.resolve_image_selection', { target });
+}
+
 export function getCollectionNoteDraft(target: EntityTarget): Promise<CollectionNoteDraft> {
   return invoke<CollectionNoteDraft>('items.collection_note_draft', { target });
 }

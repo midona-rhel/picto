@@ -43,6 +43,10 @@ pub fn dispatch_library(
             let input: TargetInput = parse(args_json)?;
             read(application.selection_summary(&input.target)?)
         }
+        "items.resolve_image_selection" => {
+            let input: TargetInput = parse(args_json)?;
+            read(application.ordered_image_selection(&input.target)?)
+        }
         "items.collection_note_draft" => {
             let input: TargetInput = parse(args_json)?;
             read(application.collection_note_draft(&input.target)?)

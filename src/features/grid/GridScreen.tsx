@@ -111,21 +111,6 @@ import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 import { t } from '../../i18n';
 
 const store = getDefaultStore();
-function supportsExplicitImageAutoTagging(
-  querySelectionActive: boolean,
-  itemIds: Set<number>,
-  items: Array<{ root_id: number; mime: string }>,
-): boolean {
-  if (querySelectionActive || itemIds.size === 0) {
-    return false;
-  }
-  const selectedItems = items.filter((item) => itemIds.has(item.root_id));
-  return (
-    selectedItems.length === itemIds.size &&
-    selectedItems.every((item) => item.mime.startsWith('image/'))
-  );
-}
-
 interface GridScreenProps {
   nodeId?: string;
   transitionPhase?: GridTransitionPhase;
@@ -628,11 +613,7 @@ export function GridScreen({
         ? null
         : curItems.find((item) => item.root_id === singleItemId) ?? null;
       const singleFileHash = singleItem?.content_hash ?? null;
-      const canAutoTag = supportsExplicitImageAutoTagging(
-        querySelectionActiveRef.current,
-        itemIds,
-        curItems,
-      );
+      const canAutoTag = count > 0;
 
       if (matchesShortcutDef(e, defs.pasteImport)
         && scope.kind !== 'trash'
@@ -1360,10 +1341,7 @@ export function GridScreen({
             && effectiveItemIds.has(item.root_id)
             ? item
             : null;
-          const canAutoTag = effectiveSelectionMode === 'explicit'
-            && selectedItems.length === effectiveItemIds.size
-            && selectedItems.every((selected) => selected.kind === 'media')
-            && selectedItems.every((selected) => selected.mime.startsWith('image/'));
+          const canAutoTag = selCount > 0;
           const containsGroup = selectedItems.some((selected) => selected.kind === 'collection');
           const effectiveTarget = resolveContextMenuTarget(
             effectiveQuerySelectionActive,

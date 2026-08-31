@@ -28,6 +28,7 @@ pub enum SelectionTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectionSummary {
     pub selected_count: u64,
+    pub taggable_root_count: u64,
     pub total_size_bytes: u128,
     pub media_count: u128,
     pub shared_rating: Option<Rating>,
@@ -148,6 +149,17 @@ pub fn resolve_ordered(
     }
 }
 
+pub fn resolve_ordered_image_roots(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    target: &SelectionTarget,
+) -> Result<Vec<RootId>> {
+    Ok(resolve_ordered(connection, snapshot, target)?
+        .into_iter()
+        .filter(|root_id| snapshot.roots_with_images.contains(root_id.0))
+        .collect())
+}
+
 pub fn summarize(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
@@ -209,6 +221,7 @@ pub fn summarize(
     let all_selected_roots_have_images = snapshot.roots_with_images.is_superset(selection);
     Ok(SelectionSummary {
         selected_count: selection.len(),
+        taggable_root_count: (&*snapshot.roots_with_images & selection).len(),
         total_size_bytes: snapshot.total_bytes.sum(selection),
         media_count: snapshot.media_count.sum(selection),
         shared_rating,

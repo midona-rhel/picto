@@ -501,6 +501,16 @@ impl Library {
         )
     }
 
+    pub fn ordered_image_selection(&self, target: &SelectionTarget) -> Result<Vec<RootId>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                crate::selection::resolve_ordered_image_roots(connection, &snapshot, target)
+            },
+        )
+    }
+
     pub fn collection_note_draft(
         &self,
         target: &SelectionTarget,

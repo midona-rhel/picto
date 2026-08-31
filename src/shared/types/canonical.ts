@@ -335,6 +335,7 @@ export interface SmartFolderCommandPayload {
 
 export interface SelectionSummary {
   selected_count: number;
+  taggable_root_count: number;
   total_size_bytes: number;
   media_count: number;
   shared_rating: Rating | null;

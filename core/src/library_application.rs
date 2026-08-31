@@ -184,6 +184,15 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn ordered_image_selection(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<Vec<RootId>, String> {
+        self.library
+            .ordered_image_selection(target)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn collection_note_draft(
         &self,
         target: &picto_library::selection::SelectionTarget,
