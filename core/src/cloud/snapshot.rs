@@ -471,6 +471,17 @@ fn settle_blob_page(
     application: &LibraryApplication,
     settled: &[(String, String, Result<(), String>)],
 ) -> Result<(), String> {
+    let canonical_paths = settled
+        .iter()
+        .filter_map(|(hash, extension, result)| result.as_ref().ok().map(|_| (hash, extension)))
+        .map(|(hash, extension)| {
+            application
+                .blobs()
+                .original_path_with_ext(hash, Some(extension))
+                .map(|path| (hash.clone(), path.to_string_lossy().into_owned()))
+                .map_err(|error| format!("Failed to resolve restored original {hash}: {error}"))
+        })
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
     let missing_thumbnails = settled
         .iter()
         .filter_map(|(hash, _, result)| result.as_ref().ok().map(|_| hash))
@@ -516,6 +527,13 @@ fn settle_blob_page(
                              updated_at = excluded.updated_at",
                         rusqlite::params![hash, state, remote_present, extension, error, now],
                     )?;
+                    if let Some(canonical_path) = canonical_paths.get(hash) {
+                        transaction.execute(
+                            "UPDATE media_file SET file_path = ?2
+                             WHERE content_hash = ?1 AND file_path != ?2",
+                            rusqlite::params![hash, canonical_path],
+                        )?;
+                    }
                     if result.is_ok() && missing_thumbnails.contains(hash) {
                         transaction.execute(
                             "INSERT INTO work_item
@@ -1189,12 +1207,33 @@ mod tests {
                         "UPDATE cloud_blob_state SET state = 'queued' WHERE file_hash = ?1",
                         [&hash],
                     )?;
+                    transaction.execute(
+                        "UPDATE media_file SET file_path = 'Z:\\OtherComputer\\missing.png'
+                         WHERE content_hash = ?1",
+                        [&hash],
+                    )?;
                     Ok(())
                 },
             )
             .unwrap();
         publish_library(&application, &provider).await.unwrap();
-        assert_eq!(std::fs::read(local_path).unwrap(), bytes);
+        assert_eq!(std::fs::read(&local_path).unwrap(), bytes);
+        let repaired_path = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT file_path FROM media_file WHERE content_hash = ?1",
+                            [&hash],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        assert_eq!(repaired_path, local_path.to_string_lossy());
         let thumbnail_work = application
             .library()
             .auxiliary_read(

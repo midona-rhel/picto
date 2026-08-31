@@ -47,11 +47,76 @@ struct WorkTarget {
 }
 
 pub fn recover(application: &LibraryApplication) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
     application
         .library()
-        .reset_running_media_work(&chrono::Utc::now().to_rfc3339())
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .reset_running_media_work(&now)
+        .map_err(|error| error.to_string())?;
+
+    let stored_originals = application.blobs().list_originals();
+    let mut recovered = Vec::with_capacity(stored_originals.len());
+    for (hash, extension) in stored_originals {
+        let canonical_path = application
+            .blobs()
+            .original_path_with_ext(&hash, Some(&extension))
+            .map_err(|error| format!("Failed to resolve stored original {hash}: {error}"))?;
+        let thumbnail_missing = application
+            .blobs()
+            .find_thumbnail_path(&hash)
+            .map_err(|error| format!("Failed to inspect thumbnail {hash}: {error}"))?
+            .is_none();
+        recovered.push((
+            hash,
+            canonical_path.to_string_lossy().into_owned(),
+            thumbnail_missing,
+        ));
+    }
+
+    let (paths_repaired, thumbnails_queued) = application
+        .library()
+        .database()
+        .maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
+            let mut paths_repaired = 0_usize;
+            let mut thumbnails_queued = 0_usize;
+            for (hash, canonical_path, thumbnail_missing) in &recovered {
+                paths_repaired += transaction.execute(
+                    "UPDATE media_file SET file_path = ?2
+                     WHERE content_hash = ?1 AND file_path != ?2",
+                    rusqlite::params![hash, canonical_path],
+                )?;
+                if !thumbnail_missing {
+                    continue;
+                }
+                thumbnails_queued += transaction.execute(
+                    "INSERT INTO work_item
+                         (file_id, file_hash, work_type, status, priority,
+                          attempt_count, available_at, created_at, updated_at)
+                     SELECT file_id, content_hash, 'thumbnail', 'pending', ?2,
+                            0, ?3, ?3, ?3
+                     FROM media_file WHERE content_hash = ?1
+                     ON CONFLICT(file_id, work_type) WHERE file_id IS NOT NULL
+                     DO UPDATE SET
+                         status = 'pending', priority = excluded.priority,
+                         attempt_count = 0, available_at = excluded.available_at,
+                         last_error = NULL, updated_at = excluded.updated_at
+                     WHERE work_item.status = 'failed'
+                        OR (work_item.status = 'pending' AND work_item.last_error IS NOT NULL)",
+                    rusqlite::params![hash, MediaWorkKind::Thumbnail.priority(), now],
+                )?;
+            }
+            Ok((paths_repaired, thumbnails_queued))
+        })
+        .map_err(|error| error.to_string())?;
+
+    if paths_repaired > 0 || thumbnails_queued > 0 {
+        tracing::info!(
+            stored_originals = recovered.len(),
+            paths_repaired,
+            thumbnails_queued,
+            "Recovered canonical media paths and thumbnail work"
+        );
+    }
+    Ok(())
 }
 
 pub async fn drain_batch(
@@ -83,6 +148,15 @@ pub async fn drain_batch(
                     .library()
                     .retry_media_work(item.work_id, item.attempt_count, &error, &now.to_rfc3339())
                     .map_err(|failure| failure.to_string())?;
+                tracing::warn!(
+                    work_id = item.work_id,
+                    file_hash = item.file_hash.as_deref().unwrap_or("<none>"),
+                    work_type = ?item.kind,
+                    attempt = item.attempt_count,
+                    terminal,
+                    error = %error,
+                    "Canonical media work failed"
+                );
                 if terminal {
                     report.failed += 1;
                 } else {
@@ -401,6 +475,76 @@ mod tests {
             .claim_derivative_work(8, &chrono::Utc::now().to_rfc3339())
             .unwrap()
             .is_empty());
+
+        let thumbnail_path = application
+            .blobs()
+            .find_thumbnail_path(&content_hash)
+            .unwrap()
+            .unwrap();
+        fs::remove_file(thumbnail_path).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                transaction.execute(
+                    "UPDATE media_file SET file_path = '/another-computer/missing.png'
+                     WHERE content_hash = ?1",
+                    [&content_hash],
+                )?;
+                transaction.execute(
+                    "INSERT INTO work_item
+                         (file_id, file_hash, work_type, status, priority,
+                          attempt_count, available_at, last_error, created_at, updated_at)
+                     SELECT file_id, content_hash, 'thumbnail', 'failed', 0,
+                            8, '2026-08-28T12:00:00Z', 'source missing',
+                            '2026-08-28T12:00:00Z', '2026-08-28T12:00:00Z'
+                     FROM media_file WHERE content_hash = ?1",
+                    [&content_hash],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        recover(&application).unwrap();
+        let repaired = application
+            .library()
+            .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                connection
+                    .query_row(
+                        "SELECT file.file_path, work.status, work.attempt_count, work.last_error
+                         FROM media_file file
+                         JOIN work_item work ON work.file_id = file.file_id
+                         WHERE file.content_hash = ?1 AND work.work_type = 'thumbnail'",
+                        [&content_hash],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, i64>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        let canonical_path = application
+            .blobs()
+            .original_path_with_ext(&content_hash, Some("png"))
+            .unwrap();
+        assert_eq!(repaired.0, canonical_path.to_string_lossy());
+        assert_eq!(repaired.1, "pending");
+        assert_eq!(repaired.2, 0);
+        assert_eq!(repaired.3, None);
+
+        let repaired_report = drain_batch(&application, 8).await.unwrap();
+        assert_eq!(repaired_report.claimed, 1);
+        assert_eq!(repaired_report.succeeded, 1);
+        assert!(application
+            .blobs()
+            .find_thumbnail_path(&content_hash)
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

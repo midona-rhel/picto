@@ -42,15 +42,20 @@ impl Library {
                 }
                 let enqueued = transaction.execute(
                     "INSERT INTO work_item (
-                         file_id, work_type, status, priority, attempt_count,
+                         file_id, file_hash, work_type, status, priority, attempt_count,
                          available_at, created_at, updated_at
                      )
-                     SELECT file.file_id, 'thumbnail', 'pending', ?2, 0, ?3, ?3, ?3
+                     SELECT file.file_id, file.content_hash, 'thumbnail', 'pending', ?2, 0,
+                            ?3, ?3, ?3
                      FROM json_each(?1) target
                      JOIN media_file file
                        ON file.content_hash = CAST(target.value AS TEXT)
                      ON CONFLICT(file_id, work_type) WHERE file_id IS NOT NULL
-                     DO NOTHING",
+                     DO UPDATE SET
+                         status = 'pending', priority = excluded.priority,
+                         attempt_count = 0, available_at = excluded.available_at,
+                         last_error = NULL, updated_at = excluded.updated_at
+                     WHERE work_item.status = 'failed'",
                     params![encoded, MediaWorkKind::Thumbnail.priority(), now],
                 )?;
                 Ok((enqueued != 0).then_some((known, enqueued)))

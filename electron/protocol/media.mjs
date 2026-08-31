@@ -83,9 +83,9 @@ export function createMediaProtocolService({
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,
-  onThumbnailReady = () => {},
 }) {
   const thumbRequestInFlight = new Map();
+  const thumbQueueRequested = new Set();
   const thumbMetaCache = new Map();
   const fileMetaCache = new Map();
   let cachedRoot = null;
@@ -97,6 +97,7 @@ export function createMediaProtocolService({
     thumbMetaCache.clear();
     fileMetaCache.clear();
     thumbRequestInFlight.clear();
+    thumbQueueRequested.clear();
     return root;
   }
 
@@ -210,6 +211,7 @@ export function createMediaProtocolService({
   function invalidateThumbnail(hash) {
     thumbMetaCache.delete(hash);
     thumbRequestInFlight.delete(hash);
+    thumbQueueRequested.delete(hash);
   }
 
   async function resolveLibraryCoverMeta(libraryRoot) {
@@ -261,11 +263,12 @@ export function createMediaProtocolService({
   }
 
   function scheduleThumbnailAfterMiss(hash) {
-    if (thumbRequestInFlight.has(hash)) return;
-    void renderThumbnailNow(hash).then(async () => {
-      if (await resolveThumbMeta(hash)) onThumbnailReady(hash);
-    }).catch((error) => {
-      forwardWarn('media', `Deferred thumbnail failed: ${error?.message ?? String(error)}`);
+    if (thumbQueueRequested.has(hash)) return;
+    thumbQueueRequested.add(hash);
+    void invoke('media.regenerate_thumbnails', { file_hashes: [hash] }).catch((error) => {
+      forwardWarn('media', `Failed to queue missing thumbnail ${hash.slice(0, 12)}: ${error?.message ?? String(error)}`);
+    }).finally(() => {
+      thumbQueueRequested.delete(hash);
     });
   }
 
@@ -407,6 +410,7 @@ export function createMediaProtocolService({
 
   return {
     buildBlobPath,
+    invalidateThumbnail,
     setThumbnail,
     regenerateThumbnail,
     registerMediaProtocol,

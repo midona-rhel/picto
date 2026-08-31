@@ -56,7 +56,8 @@ fn durable_workers(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Wo
         "SELECT
                  COALESCE(SUM(status = 'running'), 0),
                  COALESCE(SUM(status = 'pending'), 0),
-                 COALESCE(SUM(status = 'pending' AND last_error IS NOT NULL), 0)
+                 COALESCE(SUM(status = 'failed'
+                              OR (status = 'pending' AND last_error IS NOT NULL)), 0)
              FROM work_item",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -260,5 +261,40 @@ mod tests {
             .unwrap();
         assert_eq!(ai.state, "working");
         assert_eq!(ai.detail, "Running model · 3 roots");
+    }
+
+    #[test]
+    fn failed_media_work_is_reported_as_attention() {
+        let directory = tempfile::tempdir().unwrap();
+        let application =
+            crate::library_application::LibraryApplication::create(directory.path()).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Maintenance,
+                |transaction| {
+                    transaction.execute(
+                        "INSERT INTO work_item
+                             (file_hash, work_type, status, priority, attempt_count,
+                              available_at, last_error, created_at, updated_at)
+                         VALUES ('failed-thumbnail', 'thumbnail', 'failed', 0, 8,
+                                 '2026-08-31T00:00:00Z', 'source missing',
+                                 '2026-08-31T00:00:00Z', '2026-08-31T00:00:00Z')",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let diagnostics = snapshot_library(&application).unwrap();
+        let derivatives = diagnostics
+            .workers
+            .iter()
+            .find(|worker| worker.id == "derivatives")
+            .unwrap();
+        assert_eq!(derivatives.state, "attention");
+        assert_eq!(derivatives.attention, 1);
     }
 }

@@ -107,15 +107,12 @@ describe('media protocol helpers', () => {
     }
   });
 
-  it('renders a missing raster thumbnail and publishes readiness without blocking the response', async () => {
+  it('queues a missing raster thumbnail durably without blocking the response', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-deferred-thumb-'));
     const hash = 'c'.repeat(64);
     let handler;
     let releaseRequest;
     const commands = [];
-    const ready = [];
-    let publishReady;
-    const readyPublished = new Promise((resolve) => { publishReady = resolve; });
     try {
       const originalDirectory = path.join(root, 'blobs', 'f', 'cc', 'cc');
       await fs.mkdir(originalDirectory, { recursive: true });
@@ -123,34 +120,29 @@ describe('media protocol helpers', () => {
       const service = createMediaProtocolService({
         protocol: { handle(_scheme, next) { handler = next; } },
         path,
-        invoke: async (command) => {
-          commands.push(command);
+        invoke: async (command, args) => {
+          commands.push([command, args]);
           await new Promise((resolve) => { releaseRequest = resolve; });
-          const thumbnailDirectory = path.join(root, 'blobs', 't', 'cc', 'cc');
-          await fs.mkdir(thumbnailDirectory, { recursive: true });
-          await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'thumbnail');
-          return true;
+          return { queued: 1 };
         },
         isDev: true,
         getCurrentLibraryRoot: () => root,
-        onThumbnailReady: (fileHash) => {
-          ready.push(fileHash);
-          publishReady();
-        },
       });
       await service.registerMediaProtocol();
 
       const response = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
 
       expect(response.status).toBe(404);
-      expect(commands).toEqual(['media.render_thumbnail_now']);
+      expect(commands).toEqual([['media.regenerate_thumbnails', { file_hashes: [hash] }]]);
       releaseRequest();
-      await readyPublished;
-      expect(ready).toEqual([hash]);
+      const thumbnailDirectory = path.join(root, 'blobs', 't', 'cc', 'cc');
+      await fs.mkdir(thumbnailDirectory, { recursive: true });
+      await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'thumbnail');
+      service.invalidateThumbnail(hash);
       const generated = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
       expect(generated.status).toBe(200);
       expect(await generated.text()).toBe('thumbnail');
-      expect(commands).toEqual(['media.render_thumbnail_now']);
+      expect(commands).toEqual([['media.regenerate_thumbnails', { file_hashes: [hash] }]]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -218,9 +218,6 @@ const mediaProtocol = createMediaProtocolService({
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,
-  onThumbnailReady: (fileHash) => {
-    windowManager.sendToAllWindows('picto:thumbnail-changed', { fileHash });
-  },
 });
 
 
@@ -395,6 +392,9 @@ function wireNativeEvents() {
   onNativeEvent((name, payload) => {
     if (!name || typeof name !== 'string') return;
 
+    if (name === 'picto:thumbnail-changed' && isValidHash(payload?.fileHash)) {
+      mediaProtocol.invalidateThumbnail(payload.fileHash);
+    }
     subscriptionNotifications.handleNativeEvent(name, payload);
     windowManager.sendToAllWindows(name, payload);
   });
