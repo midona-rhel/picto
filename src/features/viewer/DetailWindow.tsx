@@ -128,7 +128,9 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const rendererKind = detailRendererKind(currentImage?.mime ?? '');
   const isImage = rendererKind === 'image';
   const usesRendererZoom = rendererKind === 'pdf' || rendererKind === 'jpeg-xl';
-  const supportsZoom = isImage || (usesRendererZoom && pdfZoomControls != null);
+  // Renderer controls arrive after a lazy viewer mounts. Reserve their toolbar
+  // space immediately so JPEG XL/PDF startup cannot shift the toolbar.
+  const supportsZoom = isImage || usesRendererZoom;
   const contextMenu = useViewerEntityContextMenu({
     hash: currentImage?.hash ?? null,
     name: currentImage?.name,
