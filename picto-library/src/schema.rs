@@ -141,7 +141,9 @@ pub fn migrate_for_open(connection: &mut Connection, database_path: &Path) -> Re
              SELECT folder_id, stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
                     cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
              FROM folder_definition_unique_names;
-             DROP TABLE folder_definition_unique_names;",
+             DROP TABLE folder_definition_unique_names;
+             CREATE INDEX idx_folder_parent_order
+                 ON folder_definition(parent_id, display_order, folder_id);",
         )?;
         require_columns(
             connection,
@@ -289,6 +291,17 @@ mod tests {
                  VALUES (101, 'duplicate-name-2', NULL, 'Same name', 1);",
             )
             .unwrap();
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_index_list('folder_definition')
+                     WHERE name = 'idx_folder_parent_order' AND \"unique\" = 0",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap(),
+            1,
+        );
     }
 
     #[test]

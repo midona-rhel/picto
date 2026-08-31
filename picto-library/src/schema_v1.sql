@@ -542,6 +542,7 @@ CREATE INDEX idx_root_modified ON library_root(modified_at_ms, root_id);
 CREATE INDEX idx_root_name ON library_root(name COLLATE NOCASE, root_id);
 CREATE INDEX idx_root_size ON library_root(total_size_bytes, root_id);
 CREATE INDEX idx_root_cover ON library_root(cover_media_id, root_id);
+CREATE INDEX idx_folder_parent_order ON folder_definition(parent_id, display_order, folder_id);
 CREATE INDEX idx_recent_viewed ON recent_view(viewed_at_ms DESC, root_id);
 CREATE INDEX idx_source_media ON source_provenance(media_id, source_key, source_item_key);
 CREATE INDEX idx_fts_dirty_order ON fts_dirty(category, queued_at_ms, root_id);
