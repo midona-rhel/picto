@@ -14,19 +14,22 @@ pixels or difference evidence.
 - Distinct hashes never auto-resolve through a stable file-ID tie.
 - Similarity, decoded equivalence, and quality direction are separate states.
 - Smart Merge uses source-blob, color-normalized evidence and explains every decision.
-- File size is format-aware supporting evidence, not a universal quality score.
+- File size is the fifth and final deterministic tie-break: after stronger evidence is exhausted,
+  the larger source file wins with an explicit low-confidence reason.
 - Intentional noise or high-frequency detail is not treated as degradation in isolation.
 - Difference view and Smart Merge consume the same native comparison result.
-- Ambiguous cases return `NeedsChoice` without mutation.
+- Equal-size, missing-size, and unsupported ambiguous cases return `NeedsChoice` without mutation.
 
 The research basis, decision ladder, corpus, and staged implementation are defined in
 [`../../DUPLICATE_QUALITY_RESEARCH.md`](../../DUPLICATE_QUALITY_RESEARCH.md).
 
 ## Acceptance
 
-1. The reported same-resolution 675 KB and 1,020 KB PNG pair cannot select the left file by ID.
+1. The reported same-resolution 675 KB and 1,020 KB PNG pair selects the 1,020 KB file through the
+   final size tie-break, never the left file by ID.
 2. Same-pixel PNGs with different compression sizes are classified as equivalent.
-3. Different-pixel lossless files do not select a winner from byte size alone.
+3. Different-pixel lossless files evaluate stronger comparison evidence before source byte size is
+   allowed to break the final tie.
 4. Known lossy derivation chains select the higher-fidelity source with measurements and reasons.
 5. Illustration, photographs, screenshots, alpha, animation, dithering, grain, blur, ringing,
    blocking, crop, and color-profile fixtures cover both safe winners and required choices.

@@ -13,7 +13,8 @@ Smart Merge should therefore use an evidence ladder:
 2. Apply strict, format-aware dominance rules.
 3. Use full-resolution, color-managed difference analysis for directional degradation evidence.
 4. Require independent signals and a meaningful confidence margin.
-5. Return `NeedsChoice` whenever the evidence is not decisive.
+5. If the evidence is otherwise tied, prefer the larger source file as Picto's final deterministic
+   quality heuristic. Equal-size and unsupported comparisons still return `NeedsChoice`.
 
 The Difference view should become the human-readable presentation of the same comparison that Smart
 Merge uses. It must not remain a separate browser-only visual effect.
@@ -128,9 +129,11 @@ File size has different meanings by format:
 - Byte counts are not comparable across codecs. A smaller modern-codec file may preserve more than
   a larger older-codec file.
 
-The correct response to the reported pair is therefore not "left wins". Until full-resolution
-analysis is available, it is `NeedsChoice`. The 51% size difference should be displayed as evidence,
-but cannot by itself prove that the larger PNG is better.
+File size therefore remains weaker evidence than decoded equality, strict dominance, and measured
+degradation. Picto nevertheless defines a deterministic product policy for the final unresolved
+tie: the larger source file wins. This is deliberately presented as a low-confidence size heuristic,
+not as proof of greater perceptual quality. Under that policy, the reported 1,020 KB PNG wins over
+the 675 KB PNG after the first four stages fail to distinguish them.
 
 ## Proposed evidence model
 
@@ -217,16 +220,30 @@ Raw high-frequency energy must not be a winner signal. A candidate with more ene
 detail, intentional grain, sharpening halos, or random noise. The system should measure whether the
 residual follows real edges and coherent structures, and fall back to the user when it cannot tell.
 
-### Tier 4: explicit choice
+### Tier 4: final file-size tie-break
+
+When the preceding stages establish that the candidates are comparable but cannot identify a
+winner, prefer the larger source file. This is the fifth and weakest ranking step.
+
+- Compare source-blob byte sizes, not thumbnail or cached derivative sizes.
+- Expose `larger_source_file` as the reason and mark the decision as low confidence.
+- Never allow size to override decoded equivalence, strict dominance, or stronger directional
+  evidence.
+- Do not compare sizes when a source blob is missing or its size is unknown.
+
+This rule intentionally makes Picto deterministic even for distinct same-resolution lossless files.
+It is a product preference for preservation over storage efficiency, not a claim that PNG byte size
+measures visual fidelity.
+
+### Tier 5: explicit choice
 
 Return `NeedsChoice` when:
 
-- the files are merely perceptually similar;
+- the comparison cannot establish that the files have comparable content and composition;
 - the difference is a coherent content edit;
-- direction signals disagree;
-- only file size or internal age separates them;
+- source sizes are equal or unavailable and only internal age separates them;
 - color/HDR/alpha normalization is unsupported;
-- the confidence threshold is not met.
+- the comparison cannot safely reach the size tie-break.
 
 There should be no automatic file-ID tie winner for distinct content hashes.
 
@@ -335,7 +352,8 @@ validation set. Coverage may grow gradually after precision is established.
 
 - Remove automatic file-ID tie winners for distinct hashes.
 - Stop calling a thresholded 96×96 distance of zero exact.
-- Return `NeedsChoice` for the reported same-geometry lossless case.
+- Prefer the larger source file for the reported same-geometry lossless case, with an explicit
+  low-confidence size reason.
 - Add a reason code to every existing decision.
 
 ### Phase 1 — native normalized comparison
@@ -362,7 +380,8 @@ validation set. Coverage may grow gradually after precision is established.
 
 - Enable strict dominance decisions first.
 - Add directional degradation only after corpus validation.
-- Treat file size and codec metadata as supporting evidence, never an overriding universal score.
+- Apply source file size as the fifth and final deterministic tie-break, never overriding stronger
+  evidence.
 - Preserve `NeedsChoice` as a normal successful outcome.
 
 ## Acceptance criteria
@@ -370,7 +389,8 @@ validation set. Coverage may grow gradually after precision is established.
 1. Distinct hashes can never auto-resolve solely because one file ID is lower.
 2. A 96×96 or thumbnail comparison cannot claim decoded equality.
 3. Same-pixel PNGs with different compression sizes are recognized as equivalent.
-4. Different-pixel PNGs with the same dimensions require evidence beyond file size.
+4. Different-pixel PNGs with the same dimensions use full comparison evidence first, then select
+   the larger source file only as the final low-confidence tie-break.
 5. Known JPEG quality chains select the higher-fidelity source with a recorded explanation.
 6. Intentional noise, dithering, line art, and pixel art do not lose solely for high-frequency
    content.
