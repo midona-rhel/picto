@@ -212,7 +212,25 @@ pub fn export(
     })
 }
 
+const IMPORT_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 pub fn import(
+    application: &LibraryApplication,
+    request: &PictoPackImportRequest,
+) -> Result<PictoPackImportResult, String> {
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("picto-pack-import".into())
+            .stack_size(IMPORT_STACK_BYTES)
+            .spawn_scoped(scope, || import_on_current_thread(application, request))
+            .map_err(|error| format!("Could not start Picto Pack import: {error}"))?;
+        worker
+            .join()
+            .map_err(|_| "Picto Pack import terminated unexpectedly".to_string())?
+    })
+}
+
+fn import_on_current_thread(
     application: &LibraryApplication,
     request: &PictoPackImportRequest,
 ) -> Result<PictoPackImportResult, String> {
