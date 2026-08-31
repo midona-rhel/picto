@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computePlanFingerprint, sortPlanTilesByViewportDistance, type PlanTile } from './thumbnailPlan';
+import {
+  computePlanFingerprint,
+  shouldLoadFullQualityOriginal,
+  sortPlanTilesByViewportDistance,
+  type PlanTile,
+} from './thumbnailPlan';
 
 const THRESHOLD = 752;
 
@@ -47,6 +52,19 @@ describe('computePlanFingerprint', () => {
     const base = Array.from({ length: 100 }, (_, i) => tile(`hash${String(i).padStart(4, '0')}`));
     const variant = base.map((t, i) => (i === 25 ? tile('zzzz9999') : t));
     expect(computePlanFingerprint(base, THRESHOLD)).not.toBe(computePlanFingerprint(variant, THRESHOLD));
+  });
+});
+
+describe('shouldLoadFullQualityOriginal', () => {
+  it('uses large browser-decodable image originals', () => {
+    expect(shouldLoadFullQualityOriginal(tile('png', { w: 800 }), THRESHOLD)).toBe(true);
+  });
+
+  it('keeps JPEG XL on its generated raster thumbnail at every size', () => {
+    expect(shouldLoadFullQualityOriginal(
+      tile('jxl', { mime: 'image/jxl', w: 1200, h: 1200 }),
+      THRESHOLD,
+    )).toBe(false);
   });
 });
 
