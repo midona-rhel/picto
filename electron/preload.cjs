@@ -158,6 +158,16 @@ const webview = {
       // Hide the overlay as soon as the browser completes the drop. In-memory
       // browser files still need to be written before they can enter ingestion.
       handler({ payload: { type: 'leave' } });
+      if (files.length === 0) {
+        handler({
+          payload: {
+            type: 'drop',
+            paths: [],
+            error: 'Links cannot be imported. Drop an image file instead.',
+          },
+        });
+        return;
+      }
       void (async () => {
         try {
           const entries = [];
@@ -178,17 +188,6 @@ const webview = {
               entries.push({ ...materialized, temporary: true });
             } catch (error) {
               lastError = error;
-            }
-          }
-          if (entries.length === 0) {
-            for (const url of urls) {
-              try {
-                const materialized = await ipcRenderer.invoke('picto:drop:materialize', { url });
-                entries.push({ ...materialized, temporary: true });
-                break;
-              } catch (error) {
-                lastError = error;
-              }
             }
           }
           if (entries.length === 0) {

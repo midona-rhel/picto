@@ -1,11 +1,11 @@
-import { net, shell } from 'electron';
+import { shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { arch, platform, release, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clipboardFilePaths, clipboardHasImport, writeClipboardFilePaths } from './clipboardImport.mjs';
-import { fetchWithBlockedClientFallback, materializeDroppedMedia } from './dropImport.mjs';
+import { materializeDroppedMedia } from './dropImport.mjs';
 import { createTrustedIpcHandle } from './trustedIpc.mjs';
 
 function createReverseSearchConfigs() {
@@ -536,14 +536,7 @@ export function registerIpcHandlers({
     return { paths: [path], temporary: true };
   });
 
-  handle('picto:drop:materialize', (_event, input) => materializeDroppedMedia(input, {
-    fetchImpl: (url, options) => fetchWithBlockedClientFallback(
-      (requestUrl, requestOptions) => net.fetch(requestUrl, requestOptions),
-      (requestUrl, requestOptions) => fetch(requestUrl, requestOptions),
-      url,
-      options,
-    ),
-  }));
+  handle('picto:drop:materialize', (_event, input) => materializeDroppedMedia(input));
 
   handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
     return runReverseImageSearch({ BrowserWindow, filePath, engine });
