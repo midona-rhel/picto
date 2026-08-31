@@ -21,6 +21,8 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   alpha-verify:
@@ -44,9 +46,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
-          workspaces: |
-            core -> target
-            native/picto-node -> target
+          workspaces: . -> target
+          cache-on-failure: true
+
+      # The workspace crates dominate clean CI builds. The target cache keeps
+      # Cargo's local dependency graph; sccache reuses unchanged compilation
+      # units when a source change prevents an exact target-cache hit.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Install Linux deps
         run: |
@@ -144,9 +150,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
-          workspaces: |
-            core -> target
-            native/picto-node -> target
+          workspaces: . -> target
+          cache-on-failure: true
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
