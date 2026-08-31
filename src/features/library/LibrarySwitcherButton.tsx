@@ -47,7 +47,7 @@ export function LibrarySwitcherButton() {
     return () => unlistens.forEach((un) => un());
   }, [refresh]);
 
-  if (!name) return null;
+  const ready = name.length > 0;
 
   return (
     <>
@@ -56,10 +56,13 @@ export function LibrarySwitcherButton() {
           ref={buttonRef}
           className={styles.button}
           data-help-id="sidebar-library-switcher"
+          data-loading={!ready || undefined}
           data-open={anchor != null || undefined}
+          aria-busy={!ready}
           aria-expanded={anchor != null}
+          disabled={!ready}
           onClick={() =>
-            setAnchor((prev) =>
+            ready && setAnchor((prev) =>
               prev ? null : buttonRef.current?.getBoundingClientRect() ?? null,
             )
           }
@@ -81,7 +84,7 @@ export function LibrarySwitcherButton() {
             />
           </svg>
           <LibraryAvatar appearance={meta} size={39} className={styles.icon} />
-          <span className={styles.name}>{name}</span>
+          <span className={styles.name}>{name || '\u00a0'}</span>
           <span className={styles.chevron}><IconSelector size={14} stroke={1.25} /></span>
         </button>
       </KbdTooltip>

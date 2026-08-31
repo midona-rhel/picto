@@ -16,6 +16,12 @@
   font-family: var(--sidebar-font-family, var(--font-family-ui));
 }
 
+/* Reserve the final switcher geometry while its async metadata is loading. */
+.button[data-loading='true'] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .highlight {
   position: absolute;
   z-index: 0;
