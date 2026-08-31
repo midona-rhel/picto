@@ -20,6 +20,7 @@ import {
 import type { MenuEntry, MenuSeparator } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
+import { t } from '../../i18n';
 
 function sep(): MenuSeparator {
   return { separator: true };
@@ -42,10 +43,10 @@ export interface SubscriptionMenuContext {
 }
 
 const SCHEDULES: Array<{ value: string; label: string }> = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
+  { value: 'manual', label: t("Manual") },
+  { value: 'daily', label: t("Daily") },
+  { value: 'weekly', label: t("Weekly") },
+  { value: 'monthly', label: t("Monthly") },
 ];
 
 export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[] {
@@ -56,20 +57,20 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
   return [
     active
       ? running
-        ? { label: 'Pause', icon: <IconPlayerPause size={14} />, action: ctx.onPauseRun }
+        ? { label: t("Pause"), icon: <IconPlayerPause size={14} />, action: ctx.onPauseRun }
         : { label: retryLabel, icon: paused ? <IconPlayerPlay size={14} /> : <IconRefresh size={14} />, action: ctx.onResumeRun }
-      : { label: 'Run Now', icon: <IconPlayerPlay size={14} />, action: ctx.onRun, disabled: subscription.paused },
+      : { label: t("Run Now"), icon: <IconPlayerPlay size={14} />, action: ctx.onRun, disabled: subscription.paused },
     active
-      ? { label: 'Stop', icon: <IconPlayerStop size={14} />, action: ctx.onStop }
+      ? { label: t("Stop"), icon: <IconPlayerStop size={14} />, action: ctx.onStop }
       : subscription.paused
-        ? { label: 'Release Hold', icon: <IconPlayerPlay size={14} />, action: () => ctx.onHold(false) }
-        : { label: 'Hold', icon: <IconHandStop size={14} />, action: () => ctx.onHold(true) },
+        ? { label: t("Release Hold"), icon: <IconPlayerPlay size={14} />, action: () => ctx.onHold(false) }
+        : { label: t("Hold"), icon: <IconHandStop size={14} />, action: () => ctx.onHold(true) },
     sep(),
-    { label: 'Rename', icon: <IconRename />, action: ctx.onRename },
-    { label: 'Set Cover Photo…', icon: <IconPhotoEdit size={14} />, action: ctx.onSetCover },
+    { label: t("Rename"), icon: <IconRename />, action: ctx.onRename },
+    { label: t("Set Cover Photo…"), icon: <IconPhotoEdit size={14} />, action: ctx.onSetCover },
     {
       submenu: true,
-      label: 'Schedule',
+      label: t("Schedule"),
       icon: <IconClock size={14} />,
       children: SCHEDULES.map((entry): MenuEntry => ({
         label: entry.label,
@@ -80,13 +81,13 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
     },
     sep(),
     {
-      label: 'Reset Sync History…',
+      label: t("Reset Sync History…"),
       icon: <IconRefresh size={14} />,
       action: ctx.onReset,
       disabled: active,
     },
     sep(),
-    { label: 'Delete Subscription…', icon: <IconTrash size={14} />, action: ctx.onDelete, danger: true },
+    { label: t("Delete Subscription…"), icon: <IconTrash size={14} />, action: ctx.onDelete, danger: true },
   ];
 }
 
@@ -105,16 +106,16 @@ export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
   const currentSchedule = new Set(ctx.schedules).size === 1 ? ctx.schedules[0] : null;
   return [
     {
-      label: `Run ${total} Now`,
+      label: t("Run {value0} Now", { value0: total }),
       icon: <IconPlayerPlay size={14} />,
       action: ctx.onRunSelected,
       disabled: ctx.anyActive,
     },
-    { label: `Hold ${total}`, icon: <IconHandStop size={14} />, action: () => ctx.onPauseSelected(true), disabled: ctx.anyActive },
-    { label: `Release Hold for ${total}`, icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseSelected(false), disabled: ctx.anyActive },
+    { label: t("Hold {value0}", { value0: total }), icon: <IconHandStop size={14} />, action: () => ctx.onPauseSelected(true), disabled: ctx.anyActive },
+    { label: t("Release Hold for {value0}", { value0: total }), icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseSelected(false), disabled: ctx.anyActive },
     {
       submenu: true,
-      label: 'Schedule',
+      label: t("Schedule"),
       icon: <IconClock size={14} />,
       children: SCHEDULES.map((entry): MenuEntry => ({
         label: entry.label,
@@ -124,6 +125,6 @@ export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
       })),
     },
     sep(),
-    { label: `Delete ${total}…`, icon: <IconTrash size={14} />, action: ctx.onDeleteSelected, danger: true },
+    { label: t("Delete {value0}…", { value0: total }), icon: <IconTrash size={14} />, action: ctx.onDeleteSelected, danger: true },
   ];
 }

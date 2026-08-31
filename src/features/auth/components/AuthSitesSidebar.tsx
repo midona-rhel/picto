@@ -2,6 +2,7 @@ import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorksp
 import { getAuthAccountStatus } from '../authUtils';
 import { SiteIcon } from './SiteIcon';
 import styles from '../AuthWorkspace.module.css';
+import { t } from '../../../i18n';
 
 export function AuthSitesSidebar({
   sites,
@@ -15,7 +16,7 @@ export function AuthSitesSidebar({
   return (
     <aside className={styles.sidebar}>
       <div className={styles.sidebarHeader}>
-        <span>Services</span>
+        <span>{t("Services")}</span>
         <span className={styles.sidebarCount}>{sites.length}</span>
       </div>
       <div className={styles.sidebarBody}>

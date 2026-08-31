@@ -3,6 +3,7 @@ import type { SubscriptionRunRecord } from '../../../shared/types/subscriptions'
 import { formatDateTime } from '../subscriptionUtils';
 import { StatusBadge } from './StatusBadge';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 const INITIAL_ROWS = 20;
 
@@ -11,7 +12,7 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
   const [showAll, setShowAll] = useState(false);
 
   if (runs.length === 0) {
-    return <div className={styles.sectionEmptyLine}>No runs yet.</div>;
+    return <div className={styles.sectionEmptyLine}>{t("No runs yet.")}</div>;
   }
 
   const visible = showAll ? runs : runs.slice(0, INITIAL_ROWS);
@@ -19,11 +20,11 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
   return (
     <div className={`${styles.subscriptionTable} ${styles.historyTable}`.trim()}>
       <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.historyRow}`}>
-        <span>Started</span>
-        <span>Status</span>
-        <span className={styles.qCellNum}>Fetched</span>
-        <span className={styles.qCellNum}>Reused</span>
-        <span>Notes</span>
+        <span>{t("Started")}</span>
+        <span>{t("Status")}</span>
+        <span className={styles.qCellNum}>{t("Fetched")}</span>
+        <span className={styles.qCellNum}>{t("Reused")}</span>
+        <span>{t("Notes")}</span>
       </div>
       {visible.map((run) => {
         const waiting = run.status === 'pending' && run.failure_kind === 'inbox_full';
@@ -65,8 +66,7 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
       })}
       {runs.length > INITIAL_ROWS && !showAll && (
         <button type="button" className={styles.historyMore} onClick={() => setShowAll(true)}>
-          Show all {runs.length} runs
-        </button>
+          {t("Show all ")}{runs.length} {t("runs")}</button>
       )}
     </div>
   );

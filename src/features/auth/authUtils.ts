@@ -1,7 +1,8 @@
 import type { AuthSiteSnapshot } from '../../shared/types/subscriptionsWorkspace';
+import { t } from '../../i18n';
 
 export function formatRelativeTime(value: string | null | undefined): string {
-  if (!value) return 'Never';
+  if (!value) return t('Never');
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return value;
   const deltaMinutes = Math.round((parsed - Date.now()) / 60000);
@@ -14,7 +15,7 @@ export function formatRelativeTime(value: string | null | undefined): string {
 }
 
 export function getAuthAccountStatus(entry: AuthSiteSnapshot): {
-  label: 'Signed in' | 'Needs attention' | 'Not signed in';
+  label: string;
   tone: 'success' | 'attention' | 'idle';
 } {
   const health = entry.health?.health_status.toLowerCase() ?? '';
@@ -24,7 +25,7 @@ export function getAuthAccountStatus(entry: AuthSiteSnapshot): {
     || health === 'missing'
     || entry.issues.length > 0;
 
-  if (entry.credential && unhealthy) return { label: 'Needs attention', tone: 'attention' };
-  if (entry.credential) return { label: 'Signed in', tone: 'success' };
-  return { label: 'Not signed in', tone: 'idle' };
+  if (entry.credential && unhealthy) return { label: t("Needs attention"), tone: 'attention' };
+  if (entry.credential) return { label: t("Signed in"), tone: 'success' };
+  return { label: t("Not signed in"), tone: 'idle' };
 }

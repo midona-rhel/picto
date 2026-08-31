@@ -77,6 +77,7 @@ import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 import { contentSortSubmenu } from '../folders/folderContextMenu';
 import { useScrollToTop } from '../../shared/hooks/useScrollToTop';
 import { ScrollToTopButton } from '../../shared/ui/ScrollToTopButton/ScrollToTopButton';
+import { t, translateMessage } from '../../i18n';
 
 const IC = 19;
 const SIDEBAR_RETURN_TO_TOP_THRESHOLD = 360;
@@ -102,15 +103,21 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
 
 const store = getDefaultStore();
 
-function scopeExportEntry(target: EntityTarget, fileCount: number): MenuEntry {
+function scopeExportEntry(
+  target: EntityTarget,
+  fileCount: number,
+  packSource: import('../../platform/pictoPackApi').PictoPackSource,
+  suggestedName: string,
+): MenuEntry {
   return buildExportContextEntry({
     onExportOriginals: () => {
       void filesController.chooseAndExportOriginals(target).catch((reason) => showErrorNotification({
-        title: 'Could not export originals',
+        title: t("Could not export originals"),
         message: reason instanceof Error ? reason.message : String(reason),
       }));
     },
     onExportAs: () => store.set(exportModalAtom, { open: true, fileCount, target }),
+    onExportPictoPack: () => filesController.requestPictoPackExport(packSource, fileCount, suggestedName),
   });
 }
 
@@ -237,7 +244,16 @@ const SYSTEM_SCOPE_ORDER = [
 ];
 
 const LABEL_OVERRIDES: Record<string, string> = {
-  'system:active': 'All',
+  'system:active': t('All'),
+  'system:inbox': t('Inbox'),
+  'system:recent_viewed': t('Recently Viewed'),
+  'system:uncategorized': t('Uncategorized'),
+  'system:untagged': t('Untagged'),
+  'system:tag_manager': t('Tags'),
+  'system:random': t('Random'),
+  'system:subscriptions': t('Subscriptions'),
+  'system:duplicates': t('Duplicates'),
+  'system:trash': t('Trash'),
 };
 
 const SYSTEM_HELP_IDS: Record<string, string> = {
@@ -319,7 +335,7 @@ export function Sidebar() {
     void subscriptionsController.pauseAll(paused)
       .then(refreshSubscriptionsWorkspace)
       .catch((reason) => showErrorNotification({
-        title: paused ? 'Could not pause subscriptions' : 'Could not resume subscriptions',
+        title: paused ? t('Could not pause subscriptions') : t('Could not resume subscriptions'),
         message: reason instanceof Error ? reason.message : String(reason),
       }))
       .finally(() => setSubscriptionsPauseBusy(false));
@@ -427,7 +443,7 @@ export function Sidebar() {
                 .filter((id): id is number => id != null);
               void smartFoldersController.moveMany(movingIds, parentId, orderedIds).catch((reason) => {
                 showErrorNotification({
-                  title: 'Could not move smart folder',
+                  title: t('Could not move smart folder'),
                   message: reason instanceof Error ? reason.message : String(reason),
                 });
               });
@@ -447,7 +463,7 @@ export function Sidebar() {
               void foldersController.moveMany(movingIds, parentId, orderedIds).catch((reason) => {
                 const message = reason instanceof Error ? reason.message : String(reason);
                 if (!message.includes('folders may be nested at most 8 levels deep')) {
-                  showErrorNotification({ title: 'Could not move folder', message });
+                  showErrorNotification({ title: t('Could not move folder'), message });
                 }
               });
             }
@@ -675,14 +691,14 @@ export function Sidebar() {
     const allExpandableIds = expandableNodeIds(folderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const entries: MenuEntry[] = [
-      { label: 'New Folder', icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'), action: () => { void createFolderAndRename(); } },
-      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, shortcut: kbd('file.newSubfolder'), action: () => { void createFolderAndRename(folderId); } },
+      { label: t("New Folder"), icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'), action: () => { void createFolderAndRename(); } },
+      { label: t("New Subfolder"), icon: <IconNewSubfolder size={14} />, shortcut: kbd('file.newSubfolder'), action: () => { void createFolderAndRename(folderId); } },
       { separator: true },
-      { label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
+      { label: quickAccessIds.includes(node.id) ? t("Remove from Quick Access") : t("Add to Quick Access"), icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
         void (quickAccessIds.includes(node.id) ? removeQuickAccess(node.id) : addQuickAccess(node.id));
       } },
-      { label: 'Rename', icon: <IconRename size={14} />, shortcut: kbd('edit.rename'), action: () => folderRename.startRename(node.id, node.name) },
-      { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: () => {
+      { label: t("Rename"), icon: <IconRename size={14} />, shortcut: kbd('edit.rename'), action: () => folderRename.startRename(node.id, node.name) },
+      { label: t("Move to..."), icon: <IconFolderOpen size={14} />, action: () => {
         const currentParentId = parseFolderId(node.parent_id ?? '');
         setFolderPortal({
           open: true,
@@ -692,51 +708,51 @@ export function Sidebar() {
           onApplyFolderParent: (parentId) => { void foldersController.move(folderId, parentId, []); },
         });
       } },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => {
+      { label: t("Duplicate"), icon: <IconCopy size={14} />, action: () => {
         void foldersController.duplicate(folderId).then((duplicateNodeId) => {
           const duplicateName = `${node.name} copy`;
           folderRename.startRename(duplicateNodeId, duplicateName);
         });
       } },
-      { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
+      { label: t("Set Auto Tags..."), icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
         void openFolderAutoTagsEditor([folderId]);
       } },
       { separator: true },
-      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
+      { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: () => {
         void chooseAndImportFolder({ kind: 'folder', folder_id: folderId });
       } },
-      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => {
+      { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: () => {
         store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
       } },
       ...((node.meta as Record<string, unknown> | null)?.watch_enabled ? [{
-        label: 'Remove Watched Folder', icon: <IconWatchFolder size={14} />,
+        label: t("Remove Watched Folder"), icon: <IconWatchFolder size={14} />,
         action: () => {
           store.set(confirmModalAtom, {
-            open: true, title: 'Remove Watch', danger: true, confirmLabel: 'Remove',
+            open: true, title: t("Remove Watch"), danger: true, confirmLabel: t("Remove"),
             message: `Stop watching the folder for "${node.name}"?`,
             onConfirm: () => { void foldersController.clearWatchConfig(folderId); },
           });
         },
       } as MenuEntry] : []),
       { separator: true },
-      { submenu: true, label: 'Sort Folders', icon: <IconSort size={14} />, children: [
-        { label: 'This Level A–Z', action: () => { void foldersController.sortTree(folderId, false, false); } },
-        { label: 'This Level Z–A', action: () => { void foldersController.sortTree(folderId, true, false); } },
-        { label: 'This Level and Descendants A–Z', action: () => { void foldersController.sortTree(folderId, false, true); } },
-        { label: 'This Level and Descendants Z–A', action: () => { void foldersController.sortTree(folderId, true, true); } },
+      { submenu: true, label: t("Sort Folders"), icon: <IconSort size={14} />, children: [
+        { label: t("This Level A–Z"), action: () => { void foldersController.sortTree(folderId, false, false); } },
+        { label: t("This Level Z–A"), action: () => { void foldersController.sortTree(folderId, true, false); } },
+        { label: t("This Level and Descendants A–Z"), action: () => { void foldersController.sortTree(folderId, false, true); } },
+        { label: t("This Level and Descendants Z–A"), action: () => { void foldersController.sortTree(folderId, true, true); } },
       ] },
       contentSortSubmenu((field) => { void foldersController.sortContents(folderId, field); }),
-      { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
+      { label: isExpanded ? t("Collapse Folder") : t("Expand Folder"), icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren },
       {
-        label: anyTreeExpanded ? 'Collapse All Folders' : 'Expand All Folders',
+        label: anyTreeExpanded ? t("Collapse All Folders") : t("Expand All Folders"),
         icon: anyTreeExpanded ? <IconCollapseAll size={14} /> : <IconExpandAll size={14} />,
         action: () => setNodesExpanded(allExpandableIds, !anyTreeExpanded),
         disabled: allExpandableIds.length === 0,
       },
       { separator: true },
-      { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
+      { submenu: true, label: t("Change Icon"), icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'folder-icon', render: () => (
           <IconPicker compact value={node.icon ?? null} onChange={(icon) => { void foldersController.applyIcon(folderId, icon); }} />
         ) },
@@ -745,11 +761,16 @@ export function Sidebar() {
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      scopeExportEntry(queryTarget({ kind: 'folder', folder_id: folderId }), node.count ?? 0),
+      scopeExportEntry(
+        queryTarget({ kind: 'folder', folder_id: folderId }),
+        node.count ?? 0,
+        { kind: 'folder', folder_id: folderId },
+        node.name,
+      ),
       { separator: true },
-      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
+      { label: t("Delete"), icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
-          open: true, title: 'Delete Folder', danger: true, confirmLabel: 'Delete',
+          open: true, title: t("Delete Folder"), danger: true, confirmLabel: t("Delete"),
           message: singleFolderDeletionMessage(node.name),
           onConfirm: () => foldersController.delete(folderId),
         });
@@ -772,16 +793,16 @@ export function Sidebar() {
     const moveTargets = availableTreeMoveTargetIds(smartFolderNodes, [node.id]);
     const entries: MenuEntry[] = [
       ...(!isGroup ? [{
-        label: 'Edit Smart Folder...',
+        label: t("Edit Smart Folder..."),
         icon: <IconFolderOpen size={14} />,
         action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node), 'details'),
       } satisfies MenuEntry, {
-        label: 'Edit Rules...',
+        label: t("Edit Rules..."),
         icon: <IconAdjustments size={14} />,
         action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node), 'rules'),
       } satisfies MenuEntry] : []),
       {
-        label: 'New Child Smart Folder',
+        label: t("New Child Smart Folder"),
         icon: <IconFolderPlus size={14} />,
         action: () => openSmartFolderModal('create', {
           name: 'New Smart Folder',
@@ -790,17 +811,17 @@ export function Sidebar() {
         }),
       },
       {
-        label: 'New Child Smart Folder Group',
+        label: t("New Child Smart Folder Group"),
         icon: <IconLayoutGrid size={14} />,
         action: () => { if (sfIdNum != null) void createSmartFolderGroupAndRename(sfIdNum); },
       },
       { separator: true },
-      ...(!isGroup ? [{ label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
+      ...(!isGroup ? [{ label: quickAccessIds.includes(node.id) ? t("Remove from Quick Access") : t("Add to Quick Access"), icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
         void (quickAccessIds.includes(node.id) ? removeQuickAccess(node.id) : addQuickAccess(node.id));
       } } satisfies MenuEntry] : []),
-      { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
-      { submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
-        { label: 'Top Level', action: () => { if (sfIdNum != null) void smartFoldersController.move(sfIdNum, null, []); } },
+      { label: t("Rename"), icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
+      { submenu: true, label: t("Move to..."), icon: <IconFolderOpen size={14} />, children: [
+        { label: t("Top Level"), action: () => { if (sfIdNum != null) void smartFoldersController.move(sfIdNum, null, []); } },
         ...moveTargets.map((targetNodeId) => {
           const target = smartFolderNodes.find((candidate) => candidate.id === targetNodeId)!;
           return {
@@ -812,7 +833,7 @@ export function Sidebar() {
           } as MenuEntry;
         }),
       ] },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => {
+      { label: t("Duplicate"), icon: <IconCopy size={14} />, action: () => {
         void (async () => {
           const name = `${node.name} copy`;
           const duplicateId = await smartFoldersController.create({
@@ -824,15 +845,15 @@ export function Sidebar() {
       } },
       { separator: true },
       ...(!isGroup ? [{
-        label: 'Refresh Results', icon: <IconRefresh size={14} />, action: () => {
+        label: t("Refresh Results"), icon: <IconRefresh size={14} />, action: () => {
           if (sfIdNum == null) return;
           void smartFoldersController.refresh(sfIdNum).catch((reason) => showErrorNotification({
-            title: 'Could not refresh smart folder',
+            title: t("Could not refresh smart folder"),
             message: reason instanceof Error ? reason.message : String(reason),
           }));
         },
       } satisfies MenuEntry, {
-        label: 'Sort Results by Name', icon: <IconSort size={14} />, action: () => {
+        label: t("Sort Results by Name"), icon: <IconSort size={14} />, action: () => {
           if (sfIdNum != null) void smartFoldersController.update(sfIdNum, {
             ...currentPayload,
             view: { ...currentPayload.view, sort: { field: 'name', direction: 'ascending', random_seed: null } },
@@ -840,19 +861,19 @@ export function Sidebar() {
         },
       } satisfies MenuEntry] : []),
       {
-        label: isExpanded ? 'Collapse Smart Folder' : 'Expand Smart Folder',
+        label: isExpanded ? t("Collapse Smart Folder") : t("Expand Smart Folder"),
         icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren,
       },
       {
-        label: anyTreeExpanded ? 'Collapse All Smart Folders' : 'Expand All Smart Folders',
+        label: anyTreeExpanded ? t("Collapse All Smart Folders") : t("Expand All Smart Folders"),
         icon: anyTreeExpanded ? <IconCollapseAll size={14} /> : <IconExpandAll size={14} />,
         action: () => setNodesExpanded(allExpandableIds, !anyTreeExpanded),
         disabled: allExpandableIds.length === 0,
       },
       { separator: true },
-      { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
+      { submenu: true, label: t("Change Icon"), icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'sf-icon', render: () => (
           <IconPicker compact value={node.icon ?? null} onChange={(icon) => {
             if (sfIdNum != null) {
@@ -872,11 +893,13 @@ export function Sidebar() {
       ...(sfIdNum == null || isGroup ? [] : [scopeExportEntry(
         queryTarget({ kind: 'smart_folder', smart_folder_id: sfIdNum }),
         node.count ?? 0,
+        { kind: 'smart_folder', smart_folder_id: sfIdNum },
+        node.name,
       )]),
       { separator: true },
-      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
+      { label: t("Delete"), icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
-          open: true, title: 'Delete Smart Folder', danger: true, confirmLabel: 'Delete',
+          open: true, title: t("Delete Smart Folder"), danger: true, confirmLabel: t("Delete"),
           message: isGroup
             ? `Delete "${node.name}" and its child smart folders? This does not delete any media.`
             : `Delete "${node.name}"? This only removes the smart folder, not its contents.`,
@@ -933,7 +956,7 @@ export function Sidebar() {
     });
 
     return [
-      { label: 'All', icon: <IconPhoto size={14} />, checked: true, disabled: true, action: () => {} },
+      { label: t("All"), icon: <IconPhoto size={14} />, checked: true, disabled: true, action: () => {} },
       systemEntry('Inbox', <IconInbox size={14} />, 'system:inbox', 'showSidebarInbox'),
       systemEntry('Recently Viewed', <IconClock size={14} />, 'system:recent_viewed', 'showSidebarRecentlyViewed'),
       systemEntry('Uncategorized', <IconFolderQuestionCustom size={14} />, 'system:uncategorized', 'showSidebarUncategorized'),
@@ -942,20 +965,20 @@ export function Sidebar() {
       systemEntry('Random', <IconArrowsShuffle size={14} />, 'system:random', 'showSidebarRandom'),
       systemEntry('Subscriptions', <IconDownload size={14} />, 'system:subscriptions', 'showSidebarSubscriptions'),
       systemEntry('Duplicates', <IconCopy size={14} />, 'system:duplicates', 'showSidebarDuplicates'),
-      { label: 'Trash', icon: <IconTrash size={14} />, checked: true, disabled: true, action: () => {} },
+      { label: t("Trash"), icon: <IconTrash size={14} />, checked: true, disabled: true, action: () => {} },
       { separator: true },
       {
-        label: 'Quick Access', icon: <IconStar size={14} />, checked: sidebarPreferences.showQuickAccess,
+        label: t("Quick Access"), icon: <IconStar size={14} />, checked: sidebarPreferences.showQuickAccess,
         keepOpen: true,
         action: () => persistSectionVisibility('showSidebarQuickAccess', 'showQuickAccess'),
       },
       {
-        label: 'Smart Folders', icon: <IconBookmark size={14} />, checked: sidebarPreferences.showSmartFolders,
+        label: t("Smart Folders"), icon: <IconBookmark size={14} />, checked: sidebarPreferences.showSmartFolders,
         keepOpen: true,
         action: () => persistSectionVisibility('showSidebarSmartFolders', 'showSmartFolders'),
       },
       {
-        label: 'Folders', icon: <IconFolder size={14} />, checked: sidebarPreferences.showFolders,
+        label: t("Folders"), icon: <IconFolder size={14} />, checked: sidebarPreferences.showFolders,
         keepOpen: true,
         action: () => persistSectionVisibility('showSidebarFolders', 'showFolders'),
       },
@@ -970,7 +993,7 @@ export function Sidebar() {
   const openSystemMenu = useCallback((event: React.MouseEvent, node: SidebarNodeDto) => {
     if (node.id === 'system:recent_viewed') {
       contextMenu.open(event, [{
-        label: 'Clear Recently Viewed',
+        label: t("Clear Recently Viewed"),
         icon: <IconTrash size={14} />,
         disabled: (node.count ?? 0) === 0,
         action: () => {
@@ -988,7 +1011,7 @@ export function Sidebar() {
     const disabled = (node.count ?? 0) === 0;
     contextMenu.open(event, [
       {
-        label: 'Empty Trash',
+        label: t("Empty Trash"),
         icon: <IconTrash size={14} />,
         disabled,
         danger: true,
@@ -996,16 +1019,16 @@ export function Sidebar() {
         action: () => {
           store.set(confirmModalAtom, {
             open: true,
-            title: 'Empty Trash',
+            title: t("Empty Trash"),
             message: 'Permanently delete every item in Trash? This cannot be undone.',
-            confirmLabel: 'Delete All',
+            confirmLabel: t("Delete All"),
             danger: true,
             onConfirm: () => entityMutations.permanentlyDeleteTarget(target),
           });
         },
       },
       {
-        label: 'Restore All',
+        label: t("Restore All"),
         icon: <IconDownload size={14} />,
         disabled,
         keywords: 'restore recover trash',
@@ -1029,18 +1052,18 @@ export function Sidebar() {
     const selectedNonQuickIds = selectedIds.filter((id) => !quickAccessIds.includes(id));
     if (selectedNonQuickIds.length > 0) {
       entries.push({
-        label: 'Add to Quick Access', icon: <IconStar size={14} />,
+        label: t("Add to Quick Access"), icon: <IconStar size={14} />,
         action: () => { void reorderQuickAccess([...quickAccessIds, ...selectedNonQuickIds]); },
       });
     }
     if (selectedQuickIds.length > 0) {
       entries.push({
-        label: 'Remove from Quick Access', icon: <IconStarOff size={14} />,
+        label: t("Remove from Quick Access"), icon: <IconStarOff size={14} />,
         action: () => { void reorderQuickAccess(quickAccessIds.filter((id) => !selectedQuickIds.includes(id))); },
       });
     }
     entries.push({
-      label: `Duplicate ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}`,
+      label: t("Duplicate {value0} item{value1}", { value0: selectedIds.length, value1: selectedIds.length === 1 ? '' : 's' }),
       icon: <IconCopy size={14} />,
       action: () => {
         void Promise.all([
@@ -1062,7 +1085,7 @@ export function Sidebar() {
     if (allFolders) {
       const autoTagFolderIds = folderIds.map(parseFolderId).filter((id): id is number => id != null);
       entries.push({
-        label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'),
+        label: t("Set Auto Tags..."), icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'),
         action: () => { void openFolderAutoTagsEditor(autoTagFolderIds); },
       });
     }
@@ -1077,7 +1100,7 @@ export function Sidebar() {
         ? parseFolderId(parentIds[0] ?? '')
         : null;
       entries.push({
-        label: 'Move to...', icon: <IconFolderOpen size={14} />, action: () => {
+        label: t("Move to..."), icon: <IconFolderOpen size={14} />, action: () => {
           setFolderPortal({
             open: true,
             anchor: { x: e.clientX, y: e.clientY },
@@ -1098,9 +1121,9 @@ export function Sidebar() {
       const movingIds = deduplicateParentChild(smartIds, smartFolderNodes);
       const availableIds = availableTreeMoveTargetIds(smartFolderNodes, movingIds);
       const movingSmartIds = movingIds.map(parseSmartFolderIdNum).filter((id): id is number => id != null);
-      entries.push({ submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
+      entries.push({ submenu: true, label: t("Move to..."), icon: <IconFolderOpen size={14} />, children: [
         {
-          label: 'Top Level',
+          label: t("Top Level"),
           action: () => { void smartFoldersController.moveMany(movingSmartIds, null, []); },
         },
         ...availableIds.map((targetNodeId) => {
@@ -1115,7 +1138,7 @@ export function Sidebar() {
         }),
       ] });
       entries.push({
-        label: 'Sort Results by Name', icon: <IconSort size={14} />,
+        label: t("Sort Results by Name"), icon: <IconSort size={14} />,
         action: () => {
           void Promise.all(movingIds.map((id) => {
             const node = smartFolderNodes.find((candidate) => candidate.id === id);
@@ -1139,12 +1162,12 @@ export function Sidebar() {
       const hasCollapsed = expandableSelected.some((id) => collapsed.has(id));
       const hasExpanded = expandableSelected.some((id) => !collapsed.has(id));
       entries.push({
-        label: 'Expand Selected', icon: <IconExpand size={14} />,
+        label: t("Expand Selected"), icon: <IconExpand size={14} />,
         action: () => setNodesExpanded(expandableSelected, true),
         disabled: !hasCollapsed,
       });
       entries.push({
-        label: 'Collapse Selected', icon: <IconCollapse size={14} />,
+        label: t("Collapse Selected"), icon: <IconCollapse size={14} />,
         action: () => setNodesExpanded(expandableSelected, false),
         disabled: !hasExpanded,
       });
@@ -1177,10 +1200,10 @@ export function Sidebar() {
     // Delete — always available
     const totalCount = sel.size;
     entries.push({
-      label: `Delete ${totalCount} items`, icon: <IconTrash size={14} />, danger: true,
+      label: t("Delete {value0} items", { value0: totalCount }), icon: <IconTrash size={14} />, danger: true,
       action: () => {
         store.set(confirmModalAtom, {
-          open: true, title: 'Delete Selected', danger: true, confirmLabel: 'Delete',
+          open: true, title: t("Delete Selected"), danger: true, confirmLabel: t("Delete"),
           message: bulkFolderDeletionMessage(totalCount),
           onConfirm: () => {
             const folderDeleteIds = folderIds
@@ -1233,7 +1256,7 @@ export function Sidebar() {
           aria-hidden="true"
         />
         {loading && nodes.length === 0 && (
-          <div className={styles.loadingMessage}>Loading…</div>
+          <div className={styles.loadingMessage}>{t("Loading…")}</div>
         )}
 
         {/* System scopes — fixed order */}
@@ -1249,7 +1272,7 @@ export function Sidebar() {
             <SidebarRow
               key={node.id}
               icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
-              label={LABEL_OVERRIDES[node.id] ?? node.name}
+              label={translateMessage(LABEL_OVERRIDES[node.id] ?? node.name)}
               count={sidebarPreferences.showCounts ? node.count : undefined}
               activity={node.id === 'system:subscriptions' && (subscriptionsRunning || subscriptionsGloballyPaused)
                 ? {
@@ -1272,7 +1295,7 @@ export function Sidebar() {
           <>
             <SidebarRow
               variant="section"
-              label="Quick Access"
+              label={t("Quick Access")}
               count={sidebarPreferences.showCounts ? quickAccessNodes.length : undefined}
               expanded={!collapsed.has('quick_access')}
               onToggle={() => toggleCollapse('quick_access')}
@@ -1301,7 +1324,7 @@ export function Sidebar() {
         {/* Folders */}
         {sidebarPreferences.showFolders && <SidebarRow
           variant="section"
-          label="Folders"
+          label={t("Folders")}
           count={sidebarPreferences.showCounts ? folderNodes.length : undefined}
           expanded={treeFilterActive || !collapsed.has('folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('folders'); }}
@@ -1309,11 +1332,11 @@ export function Sidebar() {
           onContextMenu={(event) => {
             contextMenu.open(event, [
               {
-                label: 'New Folder', icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'),
+                label: t("New Folder"), icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'),
                 action: () => { void createFolderAndRename(); },
               },
               {
-                label: 'Import Folder...', icon: <IconFolderPlus size={14} />,
+                label: t("Import Folder..."), icon: <IconFolderPlus size={14} />,
                 action: () => { void chooseAndImportFolder({ kind: 'all' }); },
               },
             ]);
@@ -1376,7 +1399,7 @@ export function Sidebar() {
         {/* Smart Folders */}
         {sidebarPreferences.showSmartFolders && <SidebarRow
           variant="section"
-          label="Smart Folders"
+          label={t("Smart Folders")}
           count={sidebarPreferences.showCounts ? smartFolderNodes.length : undefined}
           expanded={treeFilterActive || !collapsed.has('smart_folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('smart_folders'); }}
@@ -1384,11 +1407,11 @@ export function Sidebar() {
             const rect = event.currentTarget.getBoundingClientRect();
             contextMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, [
               {
-                label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
+                label: t("New Smart Folder"), icon: <IconFilterPlus size={14} />,
                 action: () => openSmartFolderModal('create', { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } }),
               },
               {
-                label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
+                label: t("New Smart Folder Group"), icon: <IconLayoutGrid size={14} />,
                 action: () => { void createSmartFolderGroupAndRename(); },
               },
             ], { showSearch: false });
@@ -1397,11 +1420,11 @@ export function Sidebar() {
           onContextMenu={(event) => {
             contextMenu.open(event, [
               {
-                label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
+                label: t("New Smart Folder"), icon: <IconFilterPlus size={14} />,
                 action: () => openSmartFolderModal('create', { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } }),
               },
               {
-                label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
+                label: t("New Smart Folder Group"), icon: <IconLayoutGrid size={14} />,
                 action: () => { void createSmartFolderGroupAndRename(); },
               },
             ]);
@@ -1467,7 +1490,7 @@ export function Sidebar() {
         ))}
 
         {treeFilterActive && ((sidebarPreferences.showFolders && folderList.length === 0) || !sidebarPreferences.showFolders) && ((sidebarPreferences.showSmartFolders && smartList.length === 0) || !sidebarPreferences.showSmartFolders) && (
-          <div className={styles.noFilterResults}>No matching folders</div>
+          <div className={styles.noFilterResults}>{t("No matching folders")}</div>
         )}
       </div>
 
@@ -1490,11 +1513,11 @@ export function Sidebar() {
                 setTreeFilter('');
               }
             }}
-            placeholder="Filter"
-            aria-label="Filter folders and smart folders"
+            placeholder={t("Filter")}
+            aria-label={t("Filter folders and smart folders")}
           />
           {treeFilter && (
-            <button className={styles.clearTreeFilter} type="button" onClick={() => setTreeFilter('')} aria-label="Clear folder filter">
+            <button className={styles.clearTreeFilter} type="button" onClick={() => setTreeFilter('')} aria-label={t("Clear folder filter")}>
               <IconX size={12} />
             </button>
           )}

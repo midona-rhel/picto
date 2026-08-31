@@ -4,6 +4,7 @@ import { VolumePanel } from '../video/VolumePanel';
 import videoStyles from '../video/VideoPlayer.module.css';
 import type { FlashPlaybackController } from './FlashPlayer';
 import styles from './FlashControls.module.css';
+import { t } from '../../../i18n';
 
 interface FlashControlsProps {
   controller: FlashPlaybackController | null;
@@ -21,20 +22,20 @@ export function FlashControls({ controller }: FlashControlsProps) {
     >
       <div className={videoStyles.buttonRow}>
         <div className={videoStyles.buttonRowLeft}>
-          <KbdTooltip label={isPlaying ? 'Pause' : 'Play'}>
+          <KbdTooltip label={isPlaying ? t("Pause") : t("Play")}>
             <button
               className={videoStyles.icBtn}
-              aria-label={isPlaying ? 'Pause Flash content' : 'Play Flash content'}
+              aria-label={isPlaying ? t("Pause Flash content") : t("Play Flash content")}
               disabled={!controller}
               onClick={() => controller?.togglePlay()}
             >
               {isPlaying ? <IconPlayerPause size={20} /> : <IconPlayerPlay size={20} />}
             </button>
           </KbdTooltip>
-          <KbdTooltip label="Stop">
+          <KbdTooltip label={t("Stop")}>
             <button
               className={videoStyles.icBtn}
-              aria-label="Stop Flash content"
+              aria-label={t("Stop Flash content")}
               disabled={!controller}
               onClick={() => controller?.stop()}
             >

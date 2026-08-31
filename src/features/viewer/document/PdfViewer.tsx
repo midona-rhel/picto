@@ -5,6 +5,7 @@ import type { ViewerZoomControls } from '../../../state/viewer';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import { documentCanvasGeometry, fitDocumentPage } from './documentPageGeometry';
 import styles from './PdfViewer.module.css';
+import { t } from '../../../i18n';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -49,7 +50,7 @@ export function PdfViewer({ src, onReady, onZoomControlsChange, onZoomPercentCha
       .then(setDocument)
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Could not open this PDF.');
+          setError(reason instanceof Error ? reason.message : t('Could not open this PDF.'));
           onReady?.();
         }
       });
@@ -123,7 +124,7 @@ export function PdfViewer({ src, onReady, onZoomControlsChange, onZoomPercentCha
       return renderTask.promise.then(() => { if (!cancelled) onReady?.(); });
     }).catch((reason: unknown) => {
       if (!cancelled && (reason as { name?: string }).name !== 'RenderingCancelledException') {
-        setError(reason instanceof Error ? reason.message : 'Could not render this PDF page.');
+        setError(reason instanceof Error ? reason.message : t('Could not render this PDF page.'));
         onReady?.();
       }
     });

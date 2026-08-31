@@ -15,6 +15,7 @@ import {
   formatDiagnosticEntry,
 } from './supportReport';
 import styles from './DiagnosticsPanel.module.css';
+import { t } from '../../i18n';
 
 const LEVELS: DiagnosticLevel[] = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'];
 const SOURCES: Array<'all' | DiagnosticSource> = ['all', 'core', 'main', 'renderer', 'ipc'];
@@ -109,7 +110,7 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
     <section
       ref={panelRef}
       className={styles.panel}
-      aria-label="Diagnostics"
+      aria-label={t("Diagnostics")}
       data-picto-text-shortcuts
       tabIndex={-1}
       style={height == null ? undefined : { height }}
@@ -117,7 +118,7 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
       <div
         className={styles.resizeHandle}
         role="separator"
-        aria-label="Resize diagnostics"
+        aria-label={t("Resize diagnostics")}
         aria-orientation="horizontal"
         tabIndex={0}
         onPointerDown={(event) => {
@@ -148,22 +149,22 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
         }}
       />
       <header className={styles.header}>
-        <strong className={styles.title}>Logs</strong>
-        <div className={styles.filters} aria-label="Log levels">
+        <strong className={styles.title}>{t("Logs")}</strong>
+        <div className={styles.filters} aria-label={t("Log levels")}>
           {LEVELS.map((level) => (
             <button key={level} className={levels.has(level) ? styles.filterActive : styles.filter} onClick={() => toggleLevel(level)}>{level}</button>
           ))}
         </div>
-        <div className={styles.filters} aria-label="Log sources">
+        <div className={styles.filters} aria-label={t("Log sources")}>
           {SOURCES.map((item) => (
             <button key={item} className={source === item ? styles.filterActive : styles.filter} onClick={() => setSource(item)}>{item}</button>
           ))}
         </div>
-        <input className={styles.search} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter logs" />
-        <KbdTooltip label="Copy visible logs"><button className={styles.iconButton} onClick={() => { void copy(); }} aria-label="Copy visible logs"><IconCopy size={14} /></button></KbdTooltip>
-        <KbdTooltip label="Save support report"><button className={styles.iconButton} onClick={() => { void saveSupportReport(); }} aria-label="Save support report"><IconDownload size={14} /></button></KbdTooltip>
-        <KbdTooltip label="Clear logs"><button className={styles.iconButton} onClick={clearDiagnostics} aria-label="Clear logs"><IconTrash size={14} /></button></KbdTooltip>
-        <KbdTooltip label="Close diagnostics"><button className={styles.iconButton} onClick={onClose} aria-label="Close diagnostics"><IconX size={15} /></button></KbdTooltip>
+        <input className={styles.search} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("Filter logs")} />
+        <KbdTooltip label={t("Copy visible logs")}><button className={styles.iconButton} onClick={() => { void copy(); }} aria-label={t("Copy visible logs")}><IconCopy size={14} /></button></KbdTooltip>
+        <KbdTooltip label={t("Save support report")}><button className={styles.iconButton} onClick={() => { void saveSupportReport(); }} aria-label={t("Save support report")}><IconDownload size={14} /></button></KbdTooltip>
+        <KbdTooltip label={t("Clear logs")}><button className={styles.iconButton} onClick={clearDiagnostics} aria-label={t("Clear logs")}><IconTrash size={14} /></button></KbdTooltip>
+        <KbdTooltip label={t("Close diagnostics")}><button className={styles.iconButton} onClick={onClose} aria-label={t("Close diagnostics")}><IconX size={15} /></button></KbdTooltip>
       </header>
       <div className={styles.content}>
         <div
@@ -180,8 +181,8 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </div>
-        <aside className={styles.workers} aria-label="Workers">
-          <div className={styles.workersTitle}>Workers</div>
+        <aside className={styles.workers} aria-label={t("Workers")}>
+          <div className={styles.workersTitle}>{t("Workers")}</div>
           {workers.map((worker) => (
             <div className={styles.worker} key={worker.id}>
               <span className={styles.workerDot} data-state={worker.state} />
@@ -191,7 +192,7 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
               </div>
               {worker.active + worker.queued > 0 ? (
                 <span className={styles.workerCount}>
-                  {worker.active > 0 ? `${worker.active} running` : `${worker.queued} queued`}
+                  {worker.active > 0 ? t("{value0} running", { value0: worker.active }) : t("{value0} queued", { value0: worker.queued })}
                 </span>
               ) : null}
             </div>

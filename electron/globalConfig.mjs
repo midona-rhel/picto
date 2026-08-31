@@ -14,6 +14,8 @@ const DEFAULT_CONFIG = {
 };
 
 let cachedConfig = null;
+let configWriteQueue = Promise.resolve();
+let configWriteSequence = 0;
 
 export function getConfigPath() {
   return path.join(app.getPath('appData'), 'picto', 'config.json');
@@ -49,8 +51,15 @@ export async function loadGlobalConfig() {
 export async function saveGlobalConfig(config) {
   cachedConfig = config;
   const configPath = getConfigPath();
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  const contents = JSON.stringify(config, null, 2);
+  const temporaryPath = `${configPath}.${process.pid}.${configWriteSequence += 1}.tmp`;
+  const write = configWriteQueue.catch(() => {}).then(async () => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(temporaryPath, contents, 'utf-8');
+    await fs.rename(temporaryPath, configPath);
+  });
+  configWriteQueue = write;
+  await write;
 }
 
 export async function addLibraryToHistory(libraryPath) {

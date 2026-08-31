@@ -1,6 +1,7 @@
 import { IconPlus } from '@tabler/icons-react';
 import { TagChip } from '../TagChip/TagChip';
 import styles from './TagAssignmentControl.module.css';
+import { t } from '../../../i18n';
 
 function splitTag(tag: string): { namespace: string; subtag: string } {
   const separator = tag.indexOf(':');
@@ -11,7 +12,7 @@ function splitTag(tag: string): { namespace: string; subtag: string } {
 
 export function TagAssignmentControl({
   tags,
-  label = 'Automatically add tags',
+  label,
   onRemove,
   onOpen,
 }: {
@@ -22,7 +23,7 @@ export function TagAssignmentControl({
 }) {
   return (
     <div className={styles.field}>
-      <span>{label}</span>
+      <span>{label ?? t('Automatically add tags')}</span>
       <div className={styles.values}>
         {tags.map((tag) => {
           const value = splitTag(tag);
@@ -41,7 +42,7 @@ export function TagAssignmentControl({
           onClick={(event) => onOpen(event.currentTarget)}
         >
           <IconPlus size={14} />
-          {tags.length === 0 && <span>Add tags</span>}
+          {tags.length === 0 && <span>{t("Add tags")}</span>}
         </button>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { tagsController } from '../../../controllers/tagsController';
 import type { CanonicalTagRecord } from '../../types/canonical';
 import { TagChip } from '../TagChip/TagChip';
 import styles from './TagTokenInput.module.css';
+import { t } from '../../../i18n';
 
 function splitTag(tag: string): { namespace: string; subtag: string } {
   const separator = tag.indexOf(':');
@@ -128,7 +129,7 @@ export function TagTokenInput({
               addTag(query);
             }
           }}
-          placeholder={values.length === 0 ? 'Search tags...' : ''}
+          placeholder={values.length === 0 ? t("Search tags...") : ''}
         />
       </div>
       {open && rect && createPortal(

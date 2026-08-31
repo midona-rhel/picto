@@ -45,6 +45,7 @@ import { TitlebarRangeSlider } from '../../shared/ui/TitlebarControls';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { labToHex } from '../../shared/lib/labColor';
 import { getSettings, patchSettings } from '../../platform/settingsApi';
+import { t } from '../../i18n';
 
 type ViewMode = 'suggested' | 'below';
 
@@ -211,7 +212,11 @@ export function AiTaggerPanel() {
         }
       }
       if (failedAnalyses > 0) {
-        setError(`${failedAnalyses} of ${total} model/media analyses failed. ${firstFailure}`);
+        setError(t('{value0} of {value1} model/media analyses failed. {value2}', {
+          value0: failedAnalyses,
+          value1: total,
+          value2: firstFailure ?? '',
+        }));
       }
       try {
         const status = await aiTaggerStatus();
@@ -273,9 +278,11 @@ export function AiTaggerPanel() {
       setReviewRoots(roots);
       setActiveItemId(roots[0]?.rootItemId ?? null);
       if (detailFailures.length > 0) {
-        setError(`${detailFailures.length} selected items could not be prepared for AI review.`);
+        setError(t('{value0} selected items could not be prepared for AI review.', {
+          value0: detailFailures.length,
+        }));
       } else if (unsupported.length > 0) {
-        setError(`${unsupported.length} selected items contain no images.`);
+        setError(t('{value0} selected items contain no images.', { value0: unsupported.length }));
       }
       const downloaded = new Set(status.models.filter((model) => model.downloaded).map((model) => model.slug));
       const remembered = settings.aiTaggerManualModelSlugs;
@@ -337,7 +344,7 @@ export function AiTaggerPanel() {
     settingsWriteRef.current = settingsWriteRef.current
       .catch(() => undefined)
       .then(() => patchSettings({ aiTaggerManualModelSlugs: selected }))
-      .catch((reason) => setError(`Could not remember model selection. ${String(reason)}`));
+      .catch((reason) => setError(t('Could not remember model selection. {value0}', { value0: String(reason) })));
   }, [runModels]);
 
   const confidenceCutoff = confidence / 100;
@@ -412,10 +419,10 @@ export function AiTaggerPanel() {
         <>
           <div className={shellStyles.searchRow} style={{ flex: 1 }}>
             <IconSearch size={14} className={shellStyles.searchIcon} />
-            <input ref={searchRef} className={shellStyles.searchInput} placeholder="Filter suggestions..." value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input ref={searchRef} className={shellStyles.searchInput} placeholder={t("Filter suggestions...")} value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
-          {running && <span className={styles.runCounter}>Analyzing {Math.min(progress.done + 1, progress.total)} of {progress.total}</span>}
-          <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}><button className={shellStyles.pinBtn} onClick={() => setShowSidebar((value) => !value)} type="button" aria-label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}>
+          {running && <span className={styles.runCounter}>{t("Analyzing ")}{Math.min(progress.done + 1, progress.total)} {t("of ")}{progress.total}</span>}
+          <KbdTooltip label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}><button className={shellStyles.pinBtn} onClick={() => setShowSidebar((value) => !value)} type="button" aria-label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}>
             <IconLayoutSidebar size={14} />
           </button></KbdTooltip>
         </>
@@ -423,9 +430,9 @@ export function AiTaggerPanel() {
       footer={
         <>
           <div className={styles.confidenceControl}>
-            <span>Confidence</span>
+            <span>{t("Confidence")}</span>
             <TitlebarRangeSlider
-              aria-label="Run confidence"
+              aria-label={t("Run confidence")}
               min={MIN_REVIEW_CONFIDENCE}
               max={MAX_REVIEW_CONFIDENCE}
               step={1}
@@ -437,17 +444,17 @@ export function AiTaggerPanel() {
               className={styles.confidenceSlider}
             />
             <span className={styles.confidenceValue}>{confidenceDraft}%</span>
-            <span className={styles.inferenceBackend}>· {backend ? `${backend} inference` : 'Local inference'}</span>
+            <span className={styles.inferenceBackend}>· {backend ? t("{value0} inference", { value0: backend }) : t("Local inference")}</span>
           </div>
           <div className={btnStyles.btnGroup}>
-            <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
+            <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>{t("Esc")}</span></span>
             <button
               className={`${btnStyles.btn} ${styles.footerButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
               onClick={() => void runPredict(runModels, reviewRoots, true)}
               disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
               type="button"
-            >{running ? 'Running…' : 'Run'}</button>
-            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.footerButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? 'Applying…' : `Apply ${checkedCount} ${checkedCount === 1 ? 'tag' : 'tags'}`}</button>}
+            >{running ? t("Running…") : t("Run")}</button>
+            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.footerButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? t("Applying…") : t("Apply {value0} {value1}", { value0: checkedCount, value1: checkedCount === 1 ? 'tag' : 'tags' })}</button>}
           </div>
         </>
       }
@@ -456,16 +463,16 @@ export function AiTaggerPanel() {
         {running && <div className={styles.progressHairline}><ProgressBar done={progress.done} total={progress.total} height={2} /></div>}
         <div className={`${styles.sidebar} ${!showSidebar ? styles.sidebarHidden : ''}`}>
           <button type="button" className={`${styles.sidebarItem} ${viewMode === 'suggested' ? styles.sidebarItemActive : ''}`} onClick={() => setViewMode('suggested')}>
-            <span className={styles.sidebarDot} style={{ background: 'var(--color-primary)' }} /><span className={styles.sidebarName}>Suggested</span><span className={styles.sidebarBadge}>{suggested.length}</span>
+            <span className={styles.sidebarDot} style={{ background: 'var(--color-primary)' }} /><span className={styles.sidebarName}>{t("Suggested")}</span><span className={styles.sidebarBadge}>{suggested.length}</span>
           </button>
           <button type="button" className={`${styles.sidebarItem} ${viewMode === 'below' ? styles.sidebarItemActive : ''}`} onClick={() => setViewMode('below')}>
-            <span className={styles.sidebarDot} style={{ background: 'var(--color-strong-overlay)' }} /><span className={styles.sidebarName}>Below cutoff</span><span className={styles.sidebarBadge}>{below.length}</span>
+            <span className={styles.sidebarDot} style={{ background: 'var(--color-strong-overlay)' }} /><span className={styles.sidebarName}>{t("Below cutoff")}</span><span className={styles.sidebarBadge}>{below.length}</span>
           </button>
           {models.length > 0 && <div className={styles.sidebarSep} />}
           {models.map((model) => {
             const active = runModels.has(model.slug);
             return (
-              <KbdTooltip key={model.slug} label={model.downloaded ? model.dataset : `${model.label} is not downloaded — get it in Settings`}><button type="button" className={`${styles.sidebarItem} ${active ? styles.sidebarItemSelected : ''} ${!model.downloaded ? styles.sidebarItemDisabled : ''}`} onClick={model.downloaded && !running ? () => toggleModel(model.slug) : undefined} disabled={!model.downloaded || running}>
+              <KbdTooltip key={model.slug} label={model.downloaded ? model.dataset : t("{value0} is not downloaded — get it in Settings", { value0: model.label })}><button type="button" className={`${styles.sidebarItem} ${active ? styles.sidebarItemSelected : ''} ${!model.downloaded ? styles.sidebarItemDisabled : ''}`} onClick={model.downloaded && !running ? () => toggleModel(model.slug) : undefined} disabled={!model.downloaded || running}>
                 <div className={`${shellStyles.checkBox} ${active ? shellStyles.checkBoxChecked : ''}`}>{active && <IconCheck size={10} />}</div>
                 <span className={styles.sidebarName}>{model.label}</span>
                 <span className={styles.sidebarBadge}>{model.downloaded ? modelCounts.get(model.slug) || '·' : '·'}</span>
@@ -474,28 +481,28 @@ export function AiTaggerPanel() {
           })}
         </div>
 
-        <section className={styles.reviewPane} aria-label="Media review">
+        <section className={styles.reviewPane} aria-label={t("Media review")}>
           <div className={styles.reviewNavigation}>
-            <KbdTooltip label="Previous item" shortcutId="view.prevImage">
-              <button type="button" className={styles.navButton} aria-label="Previous item" onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
+            <KbdTooltip label={t("Previous item")} shortcutId="view.prevImage">
+              <button type="button" className={styles.navButton} aria-label={t("Previous item")} onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
             </KbdTooltip>
             <span className={styles.reviewCounter}>{currentNumber} / {reviewItemIds.length}</span>
-            <KbdTooltip label="Next item" shortcutId="view.nextImage">
-              <button type="button" className={styles.navButton} aria-label="Next item" onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
+            <KbdTooltip label={t("Next item")} shortcutId="view.nextImage">
+              <button type="button" className={styles.navButton} aria-label={t("Next item")} onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
             </KbdTooltip>
           </div>
           <div className={inspectorStyles.preview}>
             <div className={inspectorStyles.previewFrame} style={{ background: labToHex(activeMedia?.facts.palette[0]) ?? undefined }}>
-              {activeMedia ? <ThumbnailImage src={mediaThumbnailUrl(activeMedia.facts.content_hash)} alt="" className={inspectorStyles.previewImage} draggable={false} /> : <div className={styles.previewEmpty}>Preparing preview…</div>}
+              {activeMedia ? <ThumbnailImage src={mediaThumbnailUrl(activeMedia.facts.content_hash)} alt="" className={inspectorStyles.previewImage} draggable={false} /> : <div className={styles.previewEmpty}>{t("Preparing preview…")}</div>}
               <div className={inspectorStyles.previewGlass} />
-              {activeIsRunning && <div className={styles.previewStatus}>Analyzing this item…</div>}
+              {activeIsRunning && <div className={styles.previewStatus}>{t("Analyzing this item…")}</div>}
             </div>
           </div>
           <div className={styles.mediaName}>{activeRoot?.label || `Item ${currentNumber || 1}`}</div>
-          <div className={styles.mediaMeta}>{activePrediction ? `${activePrediction.predictions.length} tag predictions` : running ? 'Waiting for analysis' : 'No prediction result'}</div>
-          <div className={styles.thumbnailRail} aria-label="Selected items">
+          <div className={styles.mediaMeta}>{activePrediction ? t("{value0} tag predictions", { value0: activePrediction.predictions.length }) : running ? t("Waiting for analysis") : t("No prediction result")}</div>
+          <div className={styles.thumbnailRail} aria-label={t("Selected items")}>
             {reviewRoots.map((root, index) => (
-              <KbdTooltip key={root.rootItemId} label={`Review item ${index + 1}`}><button type="button" className={`${styles.thumbnailButton} ${root.rootItemId === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(root.rootItemId)} aria-label={`Review item ${index + 1}`}>
+              <KbdTooltip key={root.rootItemId} label={t("Review item {value0}", { value0: index + 1 })}><button type="button" className={`${styles.thumbnailButton} ${root.rootItemId === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(root.rootItemId)} aria-label={t("Review item {value0}", { value0: index + 1 })}>
                 <ThumbnailImage src={mediaThumbnailUrl(root.previewMedia.facts.content_hash)} alt="" draggable={false} />
               </button></KbdTooltip>
             ))}
@@ -506,8 +513,8 @@ export function AiTaggerPanel() {
           {error && visibleTags.length > 0 && <div className={styles.partialError}>{error}</div>}
           <div className={styles.tagListScroller}>
             {error && visibleTags.length === 0 && !running ? <div className={styles.emptyState}><span className={styles.errorText}>{error}</span></div>
-              : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific library items to auto tag</div>
-                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this item…' : running ? 'Waiting for this item…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
+              : itemIds.length === 0 ? <div className={styles.emptyState}>{t("Select specific library items to auto tag")}</div>
+                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? t("Analyzing this item…") : running ? t("Waiting for this item…") : runModels.size === 0 ? t("Select at least one downloaded model") : viewMode === 'below' ? t("Nothing below the cutoff") : predictions.length === 0 ? t("Choose models, then press Run") : t("No suggestions")}</div>
                   : visibleTags.map((tag) => {
                     const itemId = activeItemId ?? activePrediction?.rootId;
                     if (itemId == null) return null;

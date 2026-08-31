@@ -3,6 +3,7 @@ import { IconEdit, IconLink, IconPlus, IconTrash } from '@tabler/icons-react';
 import { shellController } from '../../../controllers/shellController';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './InspectorField.module.css';
+import { t } from '../../../i18n';
 
 type HoverGroup = {
   activeId: string | null;
@@ -238,13 +239,13 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
           onClick={() => { if (primaryUrl) void shellController.openExternalUrl(primaryUrl); else handleAdd(); }}
           type="button"
           disabled={unavailable || (!primaryUrl && !canEdit)}
-          aria-label={primaryUrl ? `Open ${primaryUrl}` : 'Add source URL'}
+          aria-label={primaryUrl ? t("Open {value0}", { value0: primaryUrl }) : t("Add source URL")}
         >
           {unavailable
             ? '—'
             : primaryUrl
               ? <UrlLabel url={primaryUrl} />
-              : <span className={styles.fieldPlaceholder}>http://</span>}
+              : <span className={styles.fieldPlaceholder}>{t("http://")}</span>}
         </button>
         {urls.length > 1 && !unavailable && (
           <button
@@ -253,13 +254,13 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
             type="button"
             disabled={!canEdit}
             aria-expanded={open}
-            aria-label={`Show all ${urls.length} source URLs`}
+            aria-label={t("Show all {value0} source URLs", { value0: urls.length })}
           >
             +{urls.length - 1}
           </button>
         )}
         {!unavailable && (
-          <button className={styles.sourceAction} onClick={toggleOpen} type="button" disabled={!canEdit} aria-expanded={open} aria-label="Manage source URLs">
+          <button className={styles.sourceAction} onClick={toggleOpen} type="button" disabled={!canEdit} aria-expanded={open} aria-label={t("Manage source URLs")}>
             <IconLink size={14} stroke={1.5} />
           </button>
         )}
@@ -280,25 +281,25 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
                     if (event.key === 'Enter') event.currentTarget.blur();
                     if (event.key === 'Escape') { setEditIdx(null); setEditVal(''); }
                   }}
-                  placeholder="https://..."
+                  placeholder={t("https://...")}
                 />
               ) : (
                 <button
                   className={styles.urlText}
                   onClick={() => { void shellController.openExternalUrl(url); }}
                   type="button"
-                  aria-label={`Open ${url}`}
+                  aria-label={t("Open {value0}", { value0: url })}
                 >
                   <UrlLabel url={url} />
                 </button>
               )}
-              <KbdTooltip label="Edit URL">
-                <button className={styles.urlActionBtn} onClick={() => { setEditIdx(index); setEditVal(url); }} type="button" aria-label="Edit URL">
+              <KbdTooltip label={t("Edit URL")}>
+                <button className={styles.urlActionBtn} onClick={() => { setEditIdx(index); setEditVal(url); }} type="button" aria-label={t("Edit URL")}>
                   <IconEdit size={13} stroke={1.5} />
                 </button>
               </KbdTooltip>
-              <KbdTooltip label="Delete URL">
-                <button className={styles.urlActionBtn} onClick={() => handleRemove(index)} type="button" aria-label="Delete URL">
+              <KbdTooltip label={t("Delete URL")}>
+                <button className={styles.urlActionBtn} onClick={() => handleRemove(index)} type="button" aria-label={t("Delete URL")}>
                   <IconTrash size={13} stroke={1.5} />
                 </button>
               </KbdTooltip>
@@ -316,13 +317,13 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
                   if (event.key === 'Enter') event.currentTarget.blur();
                   if (event.key === 'Escape') { setEditIdx(null); setEditVal(''); }
                 }}
-                placeholder="https://..."
+                placeholder={t("https://...")}
               />
             </div>
           )}
           <button className={styles.addUrlBtn} onClick={handleAdd} type="button">
             <IconPlus size={13} stroke={1.5} />
-            <span>Add URL</span>
+            <span>{t("Add URL")}</span>
           </button>
         </div>
       )}

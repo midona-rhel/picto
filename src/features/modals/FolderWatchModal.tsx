@@ -10,11 +10,12 @@ import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { analyzeFolderTree } from '../../platform/folderApi';
 import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
 import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
+import { t } from '../../i18n';
 
 const STATUS_OPTIONS = [
-  { value: 'inherit', label: 'Inherit' },
-  { value: 'inbox', label: 'Inbox' },
-  { value: 'active', label: 'Active' },
+  { value: 'inherit', label: t("Inherit") },
+  { value: 'inbox', label: t("Inbox") },
+  { value: 'active', label: t("Active") },
 ];
 
 export interface FolderWatchConfig {
@@ -84,7 +85,7 @@ export function FolderWatchModal({
       const result = await (window as any).picto.dialog.open({
         properties: ['openDirectory'],
         multiple: false,
-        title: 'Select folder to watch',
+        title: t("Select folder to watch"),
       });
       if (result) setWatchPath(typeof result === 'string' ? result : result[0]);
     } catch {}
@@ -94,16 +95,15 @@ export function FolderWatchModal({
     <GlassModal
       open={open}
       onClose={onClose}
-      title="Auto-Import Folder"
+      title={t("Auto-Import Folder")}
       size="md"
       footer={
         <>
           {onRemove && (
             <button className={`${modalStyles.btn} ${modalStyles.btnDanger}`} onClick={onRemove} type="button" style={{ marginRight: 'auto' }}>
-              Remove Watch
-            </button>
+              {t("Remove Watch")}</button>
           )}
-          <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
+          <button className={modalStyles.btn} onClick={onClose} type="button">{t("Cancel")}</button>
           <button
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
@@ -111,31 +111,30 @@ export function FolderWatchModal({
             disabled={!watchPath || analyzing || analysisError != null}
             type="button"
           >
-            Save
-          </button>
+            {t("Save")}</button>
         </>
       }
     >
       <div className={modalStyles.stack}>
         <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Watch Folder</label>
+          <label className={modalStyles.fieldLabel}>{t("Watch Folder")}</label>
           <div className={modalStyles.fieldRow}>
-            <GlassInput value={watchPath} readOnly placeholder="Select a folder..." style={{ flex: 1 }} />
-            <button className={modalStyles.btn} onClick={browse} type="button">Browse</button>
+            <GlassInput value={watchPath} readOnly placeholder={t("Select a folder...")} style={{ flex: 1 }} />
+            <button className={modalStyles.btn} onClick={browse} type="button">{t("Browse")}</button>
           </div>
         </div>
 
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Enable Watch</span>
+          <span className={modalStyles.fieldLabel}>{t("Enable Watch")}</span>
           <ToggleSwitch on={enabled} onChange={() => setEnabled(!enabled)} />
         </div>
 
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Watch Subfolders</span>
+          <span className={modalStyles.fieldLabel}>{t("Watch Subfolders")}</span>
           <ToggleSwitch on={subfolders} onChange={() => setSubfolders(!subfolders)} />
         </div>
 
-        {analyzing && <p className={modalStyles.helpText}>Checking the folder structure...</p>}
+        {analyzing && <p className={modalStyles.helpText}>{t("Checking the folder structure...")}</p>}
         {consolidationMessage && (
           <div className={modalStyles.warningBox} role="status">
             {consolidationMessage}
@@ -143,18 +142,16 @@ export function FolderWatchModal({
         )}
         {analysisError && (
           <div className={modalStyles.warningBox} role="alert">
-            Picto could not inspect this folder. Choose it again or check that it is still available.
-          </div>
+            {t("Picto could not inspect this folder. Choose it again or check that it is still available.")}</div>
         )}
 
         <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Import Status</label>
+          <label className={modalStyles.fieldLabel}>{t("Import Status")}</label>
           <CmSelect value={importStatusMode} options={STATUS_OPTIONS} onChange={setImportStatusMode} width={160} />
         </div>
 
         <p className={modalStyles.helpText}>
-          New files added to this folder will be automatically imported into the library.
-        </p>
+          {t("New files added to this folder will be automatically imported into the library.")}</p>
       </div>
     </GlassModal>
   );

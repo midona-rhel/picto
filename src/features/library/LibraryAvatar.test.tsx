@@ -34,7 +34,34 @@ describe('LibraryAvatar', () => {
 
     expect(screen.getByRole('img', { hidden: true })).toHaveAttribute(
       'src',
-      'media://localhost/library-cover/cover?library=%2FPictures%2FArchive.library',
+      'media://localhost/library-cover/cover?library=%2FPictures%2FArchive.library&v=abc123',
+    );
+  });
+
+  it('changes the root cover URL when a different cover is selected', () => {
+    const { rerender } = render(<LibraryAvatar appearance={{
+      imageHash: 'first',
+      libraryPath: '/Pictures/Main.library',
+    }} size={26} />);
+    expect(screen.getByRole('img', { hidden: true }).getAttribute('src')).toContain('&v=first');
+
+    rerender(<LibraryAvatar appearance={{
+      imageHash: 'second',
+      libraryPath: '/Pictures/Main.library',
+    }} size={26} />);
+
+    expect(screen.getByRole('img', { hidden: true }).getAttribute('src')).toContain('&v=second');
+  });
+
+  it('uses the root cover when its global metadata was lost', () => {
+    render(<LibraryAvatar appearance={{
+      hasMaterializedCover: true,
+      libraryPath: '/Pictures/Main.library',
+    }} size={26} />);
+
+    expect(screen.getByRole('img', { hidden: true })).toHaveAttribute(
+      'src',
+      'media://localhost/library-cover/cover?library=%2FPictures%2FMain.library',
     );
   });
 

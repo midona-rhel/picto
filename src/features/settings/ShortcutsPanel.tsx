@@ -9,6 +9,7 @@ import { findShortcutConflict, formatKeysDisplay, getShortcutGroups, setShortcut
 import type { ShortcutGroup } from '../../shared/lib/shortcuts';
 import { useShortcutSuspension } from '../../shared/hooks/useShortcutScope';
 import styles from './ShortcutsPanel.module.css';
+import { t, translateMessage } from '../../i18n';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -37,7 +38,7 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
   const [temp, setTemp] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   useShortcutSuspension(editing);
-  const display = editing ? (temp || 'Press keys') : formatKeysDisplay(value);
+  const display = editing ? (temp || t('Press keys')) : formatKeysDisplay(value);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     e.preventDefault(); e.stopPropagation();
@@ -54,14 +55,14 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
         ref={inputRef}
         className={`${styles.shortcutInput} ${conflict ? styles.shortcutConflict : ''} ${!value && !editing ? styles.shortcutEmpty : ''}`}
         value={display}
-        placeholder="Click to bind"
+        placeholder={t("Click to bind")}
         readOnly
         onFocus={() => { setEditing(true); setTemp(''); }}
         onBlur={() => { setEditing(false); setTemp(''); }}
         onKeyDown={editing ? handleKeyDown : undefined}
       />
       {value && (
-        <button type="button" className={styles.clearBtn} aria-label="Clear shortcut"
+        <button type="button" className={styles.clearBtn} aria-label={t("Clear shortcut")}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => { e.preventDefault(); onChange(''); setEditing(false); inputRef.current?.blur(); }}>
           <IconX size={13} stroke={2} />
@@ -77,7 +78,7 @@ function filterGroups(groups: ShortcutGroup[], query: string): ShortcutGroup[] {
   return groups
     .map((g) => ({ ...g, items: g.items.filter((d) =>
       d.label.toLowerCase().includes(q) || d.group.toLowerCase().includes(q) ||
-      (d.description?.toLowerCase().includes(q) ?? false) || formatKeysDisplay(d.keys).toLowerCase().includes(q),
+      (d.description ? d.description.toLowerCase().includes(q) : false) || formatKeysDisplay(d.keys).toLowerCase().includes(q),
     ) }))
     .filter((g) => g.items.length > 0);
 }
@@ -121,15 +122,15 @@ export function ShortcutsPanel({ onDirty }: { onDirty?: () => void }) {
     <div className={styles.root}>
       <input
         className={styles.searchInput}
-        placeholder="Search shortcuts…"
+        placeholder={t("Search shortcuts…")}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
       <div className={styles.body}>
-        {filtered.length === 0 && <div className={styles.empty}>No shortcuts match your search.</div>}
+        {filtered.length === 0 && <div className={styles.empty}>{t("No shortcuts match your search.")}</div>}
         {filtered.map((group) => (
           <div key={group.name}>
-            <div className={styles.groupTitle}>{group.name} <span className={styles.groupCount}>({group.items.length})</span></div>
+            <div className={styles.groupTitle}>{translateMessage(group.name)} <span className={styles.groupCount}>({group.items.length})</span></div>
             <div className={styles.table}>
               {group.items.map((def) => (
                 <div key={def.id} className={styles.row}>

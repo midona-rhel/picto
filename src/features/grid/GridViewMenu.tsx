@@ -26,6 +26,7 @@ import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import type { CmSelectOption } from '../../shared/ui/CmSelect/CmSelect';
 import type { MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import s from './GridViewMenu.module.css';
+import { t } from '../../i18n';
 
 // ── Options ──────────────────────────────────────────────────────
 
@@ -36,18 +37,18 @@ function LayoutIcon({ mode }: { mode: string }) {
 }
 
 const LAYOUT_OPTIONS: CmSelectOption[] = [
-  { value: 'waterfall', label: 'Waterfall', icon: <LayoutIcon mode="waterfall" /> },
-  { value: 'grid', label: 'Grid', icon: <LayoutIcon mode="grid" /> },
-  { value: 'justified', label: 'Justified', icon: <LayoutIcon mode="justified" /> },
+  { value: 'waterfall', label: t("Waterfall"), icon: <LayoutIcon mode="waterfall" /> },
+  { value: 'grid', label: t("Grid"), icon: <LayoutIcon mode="grid" /> },
+  { value: 'justified', label: t("Justified"), icon: <LayoutIcon mode="justified" /> },
 ];
 
 const SORT_OPTIONS: CmSelectOption[] = [
-  { value: 'imported_at', label: 'Date Added' },
-  { value: 'captured_at', label: 'Date Created' },
-  { value: 'name', label: 'Name' },
-  { value: 'size', label: 'File Size' },
-  { value: 'rating', label: 'Rating' },
-  { value: 'random', label: 'Random' },
+  { value: 'imported_at', label: t("Date Added") },
+  { value: 'captured_at', label: t("Date Created") },
+  { value: 'name', label: t("Name") },
+  { value: 'size', label: t("File Size") },
+  { value: 'rating', label: t("Rating") },
+  { value: 'random', label: t("Random") },
 ];
 
 // ── Panel ────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ function ViewPanel() {
   return (
     <div className={s.panel}>
       <div className={s.headerRow}>
-        <span className={s.headerLabel}>Layout</span>
+        <span className={s.headerLabel}>{t("Layout")}</span>
         <CmSelect
           value={viewMode}
           options={LAYOUT_OPTIONS}
@@ -78,7 +79,7 @@ function ViewPanel() {
 
       {!hasFixedOrder && (
         <div className={s.headerRow}>
-          <span className={s.headerLabel}>Sort by</span>
+          <span className={s.headerLabel}>{t("Sort by")}</span>
           <div className={s.sortControls}>
             <CmSelect
               value={sortField}
@@ -165,7 +166,7 @@ export function buildContextMenuViewEntries(): MenuEntry[] {
   return [
     { custom: true, key: 'view-layout-sort', render: () => <ViewPanel /> },
     { separator: true },
-    { submenu: true, label: 'Display', icon: <IconAdjustments size={15} style={{ transform: 'rotate(90deg)' }} />, children: [
+    { submenu: true, label: t("Display"), icon: <IconAdjustments size={15} style={{ transform: 'rotate(90deg)' }} />, children: [
       { custom: true, key: 'display-toggles', render: () => <DisplayPanel /> },
     ] },
   ];

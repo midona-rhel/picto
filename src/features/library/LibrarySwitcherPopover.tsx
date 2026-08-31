@@ -6,6 +6,7 @@ import { LibraryAvatar } from './LibraryAvatar';
 import { rectToCSS, getViewportCSS } from '../../shared/lib/zoomCompensation';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import styles from './LibrarySwitcherPopover.module.css';
+import { t } from '../../i18n';
 
 interface Entry {
   path: string;
@@ -15,6 +16,7 @@ interface Entry {
   icon: string | null;
   color: string | null;
   imageHash: string | null;
+  hasMaterializedCover: boolean;
   imageFocusX: number | null;
   imageFocusY: number | null;
   imageZoomPercent: number | null;
@@ -57,6 +59,7 @@ export function LibrarySwitcherPopover({
                 icon: config.libraryMeta?.[path]?.icon ?? null,
                 color: config.libraryMeta?.[path]?.color ?? null,
                 imageHash: config.libraryMeta?.[path]?.imageHash ?? null,
+                hasMaterializedCover: config.coverExistsMap?.[path] === true,
                 imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
                 imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
                 imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
@@ -109,18 +112,18 @@ export function LibrarySwitcherPopover({
           <IconSearch className={styles.searchIcon} size={16} />
           <input
             className={styles.search}
-            placeholder="Search libraries…"
+            placeholder={t("Search libraries…")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
           />
-          <button className={styles.closeButton} type="button" onClick={onClose} aria-label="Close library switcher">
+          <button className={styles.closeButton} type="button" onClick={onClose} aria-label={t("Close library switcher")}>
             <IconX size={14} />
           </button>
         </div>
         <div className={styles.list}>
           {filtered.length === 0 ? (
-            <div className={styles.empty}>No Result</div>
+            <div className={styles.empty}>{t("No Result")}</div>
           ) : (
             filtered.map((entry) => (
               <button
@@ -151,8 +154,7 @@ export function LibrarySwitcherPopover({
               onClose();
             }}
           >
-            <IconPlus size={14} /> Create Library…
-          </button>
+            <IconPlus size={14} /> {t("Create Library…")}</button>
           <button
             className={styles.functionItem}
             onClick={() => {
@@ -160,8 +162,7 @@ export function LibrarySwitcherPopover({
               onClose();
             }}
           >
-            <IconFolderOpen size={14} /> Open Library…
-          </button>
+            <IconFolderOpen size={14} /> {t("Open Library…")}</button>
           <button
             className={styles.functionItem}
             onClick={() => {
@@ -169,8 +170,7 @@ export function LibrarySwitcherPopover({
               onClose();
             }}
           >
-            <IconAdjustments size={14} /> Library Manager…
-          </button>
+            <IconAdjustments size={14} /> {t("Library Manager…")}</button>
         </div>
       </div>
     </div>,

@@ -563,6 +563,41 @@ describe('gridController pagination', () => {
     vi.useRealTimers();
   });
 
+  it('settles text below three characters as an unfiltered query', async () => {
+    vi.useFakeTimers();
+    queryItemsMock
+      .mockResolvedValueOnce(page([item(2)], 1))
+      .mockResolvedValueOnce(page([item(3)], 1));
+
+    gridController.setSearchText('cat');
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(store.get(gridItemsAtom)).toEqual([item(2)]));
+
+    gridController.setSearchText('ca');
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(() => expect(store.get(gridItemsAtom)).toEqual([item(3)]));
+
+    expect(queryItemsMock).toHaveBeenCalledTimes(2);
+    expect(queryText(queryItemsMock.mock.calls[1][0])).toBeNull();
+    expect(store.get(gridTotalCountAtom)).toBe(1);
+    expect(store.get(gridTotalSizeBytesAtom)).toBe(100);
+    vi.useRealTimers();
+  });
+
+  it('does not re-query while short text leaves an unfiltered grid unchanged', async () => {
+    vi.useFakeTimers();
+
+    gridController.setSearchText('a');
+    await vi.advanceTimersByTimeAsync(250);
+    gridController.setSearchText('ab');
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(queryItemsMock).not.toHaveBeenCalled();
+    expect(store.get(gridItemsAtom)).toEqual([item(1)]);
+    expect(store.get(gridTotalCountAtom)).toBe(2);
+    vi.useRealTimers();
+  });
+
   it('coalesces settled text while a native search is still running', async () => {
     vi.useFakeTimers();
     let resolveFirst: ((value: EntityViewPage) => void) | undefined;

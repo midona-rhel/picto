@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { reorderFolderMembersMock, updateFolderMembershipMock, setTargetLifecycleMock, settleSelectionAfterMutationMock, useManualFolderOrderMock } = vi.hoisted(() => ({
+const { reorderFolderMembersMock, updateTargetFolderMembershipMock, setTargetLifecycleMock, settleSelectionAfterMutationMock, useManualFolderOrderMock } = vi.hoisted(() => ({
   reorderFolderMembersMock: vi.fn(),
-  updateFolderMembershipMock: vi.fn(),
+  updateTargetFolderMembershipMock: vi.fn(),
   setTargetLifecycleMock: vi.fn(),
   settleSelectionAfterMutationMock: vi.fn(),
   useManualFolderOrderMock: vi.fn(),
@@ -10,11 +10,11 @@ const { reorderFolderMembersMock, updateFolderMembershipMock, setTargetLifecycle
 
 vi.mock('../platform/folderApi', () => ({
   reorderFolderMembers: reorderFolderMembersMock,
-  updateFolderMembership: updateFolderMembershipMock,
 }));
 vi.mock('./entityMutations', () => ({
   setTargetLifecycle: setTargetLifecycleMock,
   settleSelectionAfterMutation: settleSelectionAfterMutationMock,
+  updateTargetFolderMembership: updateTargetFolderMembershipMock,
 }));
 vi.mock('./gridController', () => ({
   gridController: { useManualFolderOrder: useManualFolderOrderMock },
@@ -26,8 +26,8 @@ describe('dragController folder ordering', () => {
   beforeEach(() => {
     reorderFolderMembersMock.mockReset();
     reorderFolderMembersMock.mockResolvedValue(undefined);
-    updateFolderMembershipMock.mockReset();
-    updateFolderMembershipMock.mockResolvedValue(undefined);
+    updateTargetFolderMembershipMock.mockReset();
+    updateTargetFolderMembershipMock.mockResolvedValue(undefined);
     useManualFolderOrderMock.mockReset();
     setTargetLifecycleMock.mockReset();
     setTargetLifecycleMock.mockResolvedValue(undefined);
@@ -78,7 +78,7 @@ describe('dragController folder ordering', () => {
     );
 
     expect(settleSelectionAfterMutationMock).toHaveBeenCalledOnce();
-    expect(updateFolderMembershipMock).toHaveBeenCalledWith(
+    expect(updateTargetFolderMembershipMock).toHaveBeenCalledWith(
       { kind: 'explicit', root_ids: [2, 3] },
       9,
       'add',
@@ -86,7 +86,7 @@ describe('dragController folder ordering', () => {
   });
 
   it('keeps selection when the folder drop mutation fails', async () => {
-    updateFolderMembershipMock.mockRejectedValueOnce(new Error('drop failed'));
+    updateTargetFolderMembershipMock.mockRejectedValueOnce(new Error('drop failed'));
 
     await expect(dragController.executeDrop(
       [2, 3],

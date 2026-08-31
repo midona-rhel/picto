@@ -22,6 +22,7 @@ import actionStyles from '../../shared/styles/actionButton.module.css';
 import settingsStyles from './Settings.module.css';
 import styles from './AiTaggingPanel.module.css';
 import { tagGroupColor } from '../tags/tagGroupPresentation';
+import { t, translateMessage } from '../../i18n';
 
 const MODEL_SHORT_LABELS: Record<string, string> = {
   'wd14-swinv2-v3': 'WD14 SWN',
@@ -39,12 +40,12 @@ const AUTO_MODEL_SETTING_KEYS: Record<string, keyof AppSettings> = {
 
 /** Threshold settings keys with their tag-namespace dot colors. */
 const THRESHOLDS: Array<{ key: string; label: string; namespace: string }> = [
-  { key: 'aiThresholdGeneral', label: 'General', namespace: 'general' },
-  { key: 'aiThresholdCharacter', label: 'Character', namespace: 'character' },
-  { key: 'aiThresholdSpecies', label: 'Species', namespace: 'species' },
-  { key: 'aiThresholdCopyright', label: 'Series', namespace: 'series' },
-  { key: 'aiThresholdArtist', label: 'Creator', namespace: 'creator' },
-  { key: 'aiThresholdRating', label: 'Rating', namespace: 'rating' },
+  { key: 'aiThresholdGeneral', label: t("General"), namespace: 'general' },
+  { key: 'aiThresholdCharacter', label: t("Character"), namespace: 'character' },
+  { key: 'aiThresholdSpecies', label: t("Species"), namespace: 'species' },
+  { key: 'aiThresholdCopyright', label: t("Series"), namespace: 'series' },
+  { key: 'aiThresholdArtist', label: t("Creator"), namespace: 'creator' },
+  { key: 'aiThresholdRating', label: t("Rating"), namespace: 'rating' },
 ];
 
 function fmtSize(bytes: number): string {
@@ -139,7 +140,7 @@ export function AiTaggingPanel({
 
       <div className={settingsStyles.settingsBlock}>
         <div className={settingsStyles.blockContent}>
-          <div className={settingsStyles.blockTitle}>Models</div>
+          <div className={settingsStyles.blockTitle}>{t("Models")}</div>
           {status.models.map((m, index) => {
             const modelDownloading = downloading.has(m.slug);
             const modelOptimizing = optimizing.has(m.slug);
@@ -173,22 +174,21 @@ export function AiTaggingPanel({
                             void aiTaggerCancelDownload(m.slug).catch((e) => setError(String(e)));
                           }}
                         >
-                          Cancel
-                        </button>
+                          {t("Cancel")}</button>
                       </div>
                     ) : m.downloaded ? (
                       <>
                         <span className={styles.stateDownloaded}>
                           <IconCheck size={13} stroke={2.4} />
-                          {m.optimized ? 'Optimized' : 'Downloaded'}
+                          {m.optimized ? t("Optimized") : t("Downloaded")}
                         </span>
                         {m.optimizationSupported && !m.optimized && (
-                          <KbdTooltip label="Optimize for this Mac"><button
+                          <KbdTooltip label={t("Optimize for this Mac")}><button
                             className={`${actionStyles.btn} ${styles.modelAction}`}
                             type="button"
-                            aria-label="Optimize for this Mac"
+                            aria-label={t("Optimize for this Mac")}
                             onClick={() => optimize(m.slug)}
-                          >Optimize</button></KbdTooltip>
+                          >{t("Optimize")}</button></KbdTooltip>
                         )}
                         <button
                           className={`${actionStyles.btn} ${styles.modelAction}`}
@@ -197,8 +197,7 @@ export function AiTaggingPanel({
                             void aiTaggerDeleteModel(m.slug).then(refresh).catch((e) => setError(String(e)));
                           }}
                         >
-                          Delete
-                        </button>
+                          {t("Delete")}</button>
                       </>
                     ) : (
                       <button
@@ -206,8 +205,7 @@ export function AiTaggingPanel({
                         type="button"
                         onClick={() => startDownload(m.slug)}
                       >
-                        Download
-                      </button>
+                        {t("Download")}</button>
                     )}
                   </div>
                   <div
@@ -231,39 +229,38 @@ export function AiTaggingPanel({
           })}
           <div className={settingsStyles.rowSep} />
           <div className={settingsStyles.settingRow}>
-            <span className={settingsStyles.settingLabel}>Model storage</span>
+            <span className={settingsStyles.settingLabel}>{t("Model storage")}</span>
             <span className={settingsStyles.staticValue}>{fmtSize(status.storageBytes)}</span>
           </div>
         </div>
         <p className={settingsStyles.settingHint}>
-          Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.
-        </p>
+          {t("Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.")}</p>
       </div>
 
       <div className={settingsStyles.settingsBlock}>
         <div className={settingsStyles.blockContent}>
-          <div className={settingsStyles.blockTitle}>Confidence</div>
-          {THRESHOLDS.map((t, index) => {
-            const value = typeof settings[t.key] === 'number' ? (settings[t.key] as number) : 0.35;
+          <div className={settingsStyles.blockTitle}>{t("Confidence")}</div>
+          {THRESHOLDS.map((threshold, index) => {
+            const value = typeof settings[threshold.key] === 'number' ? (settings[threshold.key] as number) : 0.35;
             const pct = Math.round(value * 100);
             return (
-              <div key={t.key}>
+              <div key={threshold.key}>
                 {index > 0 && <div className={settingsStyles.rowSep} />}
                 <div className={settingsStyles.settingRow}>
                   <span className={`${settingsStyles.settingLabel} ${styles.thresholdLabel}`}>
-                    <span className={styles.thresholdDot} style={{ background: tagGroupColor(t.namespace) }} />
-                    {t.label}
+                    <span className={styles.thresholdDot} style={{ background: tagGroupColor(threshold.namespace) }} />
+                      {translateMessage(threshold.label)}
                   </span>
                   <div className={settingsStyles.settingControl}>
                     <input
-                      aria-label={`${t.label} confidence`}
+                      aria-label={t("{value0} confidence", { value0: threshold.label })}
                       className={settingsStyles.rangeInput}
                       type="range"
                       min={5}
                       max={95}
                       step={1}
                       value={pct}
-                      onChange={(e) => patchSettings({ [t.key]: Number(e.target.value) / 100 })}
+                      onChange={(e) => patchSettings({ [threshold.key]: Number(e.target.value) / 100 })}
                     />
                     <span className={`${settingsStyles.valueLabel} ${styles.thresholdValue}`}>{pct}%</span>
                   </div>
@@ -271,17 +268,17 @@ export function AiTaggingPanel({
               </div>
             );
           })}
-          <p className={settingsStyles.settingHint}>Tags below these confidence levels are hidden by default. You can adjust the cutoff for an individual run.</p>
+          <p className={settingsStyles.settingHint}>{t("Tags below these confidence levels are hidden by default. You can adjust the cutoff for an individual run.")}</p>
         </div>
       </div>
 
       <div className={settingsStyles.settingsBlock}>
         <div className={settingsStyles.blockContent}>
-          <div className={settingsStyles.blockTitle}>Behavior</div>
+          <div className={settingsStyles.blockTitle}>{t("Behavior")}</div>
           <div className={settingsStyles.settingRow}>
             <div className={styles.settingCopy}>
-              <div className={styles.settingName}>Auto-tag new imports</div>
-              <div className={styles.settingDescription}>Run selected models after import and apply tags above the confidence levels.</div>
+              <div className={styles.settingName}>{t("Auto-tag new imports")}</div>
+              <div className={styles.settingDescription}>{t("Run selected models after import and apply tags above the confidence levels.")}</div>
             </div>
             <div className={settingsStyles.settingControl}>
               <ToggleSwitch
@@ -333,8 +330,8 @@ export function AiTaggingPanel({
           <div className={settingsStyles.rowSep} />
           <div className={settingsStyles.settingRow}>
             <div className={styles.settingCopy}>
-              <div className={styles.settingName}>Write rating tags</div>
-              <div className={styles.settingDescription}>Store general, sensitive, questionable, or explicit as a rating tag.</div>
+              <div className={styles.settingName}>{t("Write rating tags")}</div>
+              <div className={styles.settingDescription}>{t("Store general, sensitive, questionable, or explicit as a rating tag.")}</div>
             </div>
             <div className={settingsStyles.settingControl}>
               <ToggleSwitch

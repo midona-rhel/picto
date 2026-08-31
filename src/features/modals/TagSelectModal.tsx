@@ -25,6 +25,7 @@ import btnStyles from '../../shared/styles/actionButton.module.css';
 import { tagGroupColor, tagGroupOrder } from '../tags/tagGroupPresentation';
 import styles from './TagSelectModal.module.css';
 import { tagName } from '../tags/tagContextMenu';
+import { t } from '../../i18n';
 
 type SidebarMode = 'recent' | 'selected' | 'all' | 'namespace';
 const PAGE_SIZE = 100;
@@ -273,7 +274,7 @@ export function TagSelectModal() {
     <GlassModal
       open={open}
       onClose={close}
-      title="Add Tags"
+      title={t("Add Tags")}
       size="lg"
       flush
       footer={
@@ -283,16 +284,14 @@ export function TagSelectModal() {
             {!summaryText && (
               <span className={shellStyles.kbdHint}>
                 <span className={shellStyles.kbd}>↑↓</span>
-                <span className={shellStyles.kbd}>↩</span> Select
-                <span className={shellStyles.kbd}>Tab</span> Switch
-              </span>
+                <span className={shellStyles.kbd}>↩</span> {t("Select")}<span className={shellStyles.kbd}>{t("Tab")}</span> {t("Switch")}</span>
             )}
           </span>
           <div className={btnStyles.btnGroup}>
-            <button className={btnStyles.btn} onClick={close} type="button">Cancel</button>
+            <button className={btnStyles.btn} onClick={close} type="button">{t("Cancel")}</button>
             {pendingCount > 0 && (
               <button data-modal-primary="true" className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyTags} type="button">
-                Apply ({pendingCount})
+                {t("Apply (")}{pendingCount})
               </button>
             )}
           </div>
@@ -306,7 +305,7 @@ export function TagSelectModal() {
           <input
             ref={searchRef}
             className={styles.searchInput}
-            placeholder="Search tags..."
+            placeholder={t("Search tags...")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -320,14 +319,14 @@ export function TagSelectModal() {
               className={`${styles.sidebarItem} ${sidebarMode === 'recent' ? styles.sidebarItemActive : ''}`}
               onClick={() => { setSidebarMode('recent'); setActiveNamespace(null); }}
             >
-              <span className={styles.sidebarName}>Recent</span>
+              <span className={styles.sidebarName}>{t("Recent")}</span>
               <span className={styles.sidebarBadge}>{recentTagKeys.length}</span>
             </div>
             <div
               className={`${styles.sidebarItem} ${sidebarMode === 'selected' ? styles.sidebarItemActive : ''}`}
               onClick={() => { setSidebarMode('selected'); setActiveNamespace(null); }}
             >
-              <span className={styles.sidebarName}>Selected</span>
+              <span className={styles.sidebarName}>{t("Selected")}</span>
               <span className={styles.sidebarBadge}>{entityTagKeys.size}</span>
             </div>
             <div className={styles.sidebarSep} />
@@ -335,7 +334,7 @@ export function TagSelectModal() {
               className={`${styles.sidebarItem} ${sidebarMode === 'all' ? styles.sidebarItemActive : ''}`}
               onClick={() => { setSidebarMode('all'); setActiveNamespace(null); }}
             >
-              <span className={styles.sidebarName}>All</span>
+              <span className={styles.sidebarName}>{t("All")}</span>
               <span className={styles.sidebarBadge}>
                 {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
               </span>
@@ -359,9 +358,9 @@ export function TagSelectModal() {
             <div ref={listRef} className={styles.tagListScroller}>
               {displayTags.length === 0 ? (
                 <div className={styles.emptyState}>
-                  {sidebarMode === 'selected' ? 'No tags on this entity'
-                    : sidebarMode === 'recent' ? 'No recently used tags'
-                    : 'No tags found'}
+                  {sidebarMode === 'selected' ? t("No tags on this entity")
+                    : sidebarMode === 'recent' ? t("No recently used tags")
+                    : t("No tags found")}
                 </div>
               ) : (
                 <div className={styles.tagListInner} style={{ height: virtualizer.getTotalSize() }}>

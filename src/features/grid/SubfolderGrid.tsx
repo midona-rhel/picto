@@ -9,6 +9,7 @@ import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { useAtomValue } from 'jotai';
 import { gridSpacingAtom } from '../../state/grid';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
+import { t } from '../../i18n';
 
 interface SubfolderGridProps {
   childFolders: SidebarNodeDto[];
@@ -115,7 +116,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
         <span className={`${styles.chevron} ${!expanded ? styles.chevronCollapsed : ''}`}>
           <IconChevronRight size={11} />
         </span>
-        Folders ({childFolders.length})
+        {t("Folders (")}{childFolders.length})
       </div>
 
       {expanded && (
@@ -174,7 +175,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
                 </div>
 
                 <div className={styles.metas}>
-                  {folder.count ?? 0} {(folder.count ?? 0) === 1 ? 'item' : 'items'}
+                  {folder.count ?? 0} {(folder.count ?? 0) === 1 ? t("item") : t("items")}
                 </div>
               </div>
             );
@@ -183,7 +184,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
       )}
 
       {totalImageCount > 0 && (
-        <div className={styles.contentLabel}>Content ({totalImageCount})</div>
+        <div className={styles.contentLabel}>{t("Content (")}{totalImageCount})</div>
       )}
     </div>
   );
@@ -207,7 +208,7 @@ function FolderRenameInput({
   return (
     <GlassInput
       autoFocus
-      aria-label={`Rename ${folder.name}`}
+      aria-label={t("Rename {value0}", { value0: folder.name })}
       value={value}
       style={{
         width: 'min(180px, 100%)',

@@ -78,6 +78,28 @@ function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePai
   };
 }
 
+function identifiedPair(
+  fileIdA: number,
+  fileIdB: number,
+  leftRootId: number,
+  rightRootId: number,
+  name: string,
+): DuplicatePair {
+  return {
+    ...pair(),
+    file_id_a: fileIdA,
+    file_id_b: fileIdB,
+    left: {
+      file: file(fileIdA, `${name}-left`),
+      occurrences: [{ media_item_id: leftRootId, root_item_id: leftRootId, collection_id: null }],
+    },
+    right: {
+      file: file(fileIdB, `${name}-right`),
+      occurrences: [{ media_item_id: rightRootId, root_item_id: rightRootId, collection_id: null }],
+    },
+  };
+}
+
 function details(itemId: number, hash: string, name: string): CanonicalEntityDetails {
   return {
     root: {
@@ -347,9 +369,11 @@ describe('DuplicatesScreen', () => {
     insertedPair.right.file = file(6, 'inserted-right');
     insertedPair.right.occurrences = [{ media_item_id: 66, root_item_id: 66, collection_id: null }];
 
+    const appendedPair = identifiedPair(7, 8, 77, 88, 'appended');
+
     vi.mocked(getDuplicatePairs)
       .mockResolvedValueOnce({ items: [pair(), activePair], next_cursor: null, has_more: false, total: 2 })
-      .mockResolvedValue({ items: [insertedPair, pair(), activePair], next_cursor: null, has_more: false, total: 3 });
+      .mockResolvedValue({ items: [insertedPair, pair(), activePair, appendedPair], next_cursor: null, has_more: false, total: 4 });
     vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
       const names: Record<number, [string, string]> = {
         11: ['left', 'Left image'],
@@ -358,6 +382,8 @@ describe('DuplicatesScreen', () => {
         44: ['active-right', 'Active right image'],
         55: ['inserted-left', 'Inserted left image'],
         66: ['inserted-right', 'Inserted right image'],
+        77: ['appended-left', 'Appended left image'],
+        88: ['appended-right', 'Appended right image'],
       };
       const [hash, name] = names[itemId];
       return details(itemId, hash, name);
@@ -377,6 +403,68 @@ describe('DuplicatesScreen', () => {
     expect(screen.getByText('Active left image')).toBeInTheDocument();
     expect(screen.getByText('Active right image')).toBeInTheDocument();
     expect(screen.queryByText('Inserted left image')).not.toBeInTheDocument();
+  });
+
+  it('selects the next surviving pair when the active pair disappears', async () => {
+    const activePair = identifiedPair(3, 4, 33, 44, 'active');
+    const nextPair = identifiedPair(5, 6, 55, 66, 'next');
+    vi.mocked(getDuplicatePairs)
+      .mockResolvedValueOnce({ items: [pair(), activePair, nextPair], next_cursor: null, has_more: false, total: 3 })
+      .mockResolvedValue({ items: [pair(), nextPair], next_cursor: null, has_more: false, total: 2 });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      const names: Record<number, [string, string]> = {
+        11: ['left', 'Left image'],
+        22: ['right', 'Right image'],
+        33: ['active-left', 'Active left image'],
+        44: ['active-right', 'Active right image'],
+        55: ['next-left', 'Next left image'],
+        66: ['next-right', 'Next right image'],
+      };
+      const [hash, name] = names[itemId];
+      return details(itemId, hash, name);
+    });
+
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    fireEvent.load(screen.getByTestId('pending-left-thumbnail'));
+    fireEvent.load(screen.getByTestId('pending-right-thumbnail'));
+    expect(await screen.findByText('Active left image')).toBeInTheDocument();
+
+    await act(async () => duplicateInvalidation.callback?.());
+
+    expect(await screen.findByText('Next left image')).toBeInTheDocument();
+    expect(screen.getByText('Next right image')).toBeInTheDocument();
+    expect(screen.queryByText('Left image')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the previous survivor when the removed pair was last', async () => {
+    const activePair = identifiedPair(3, 4, 33, 44, 'active');
+    vi.mocked(getDuplicatePairs)
+      .mockResolvedValueOnce({ items: [pair(), activePair], next_cursor: null, has_more: false, total: 2 })
+      .mockResolvedValue({ items: [pair()], next_cursor: null, has_more: false, total: 1 });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      if (itemId === 33) return details(itemId, 'active-left', 'Active left image');
+      if (itemId === 44) return details(itemId, 'active-right', 'Active right image');
+      return itemId === 11
+        ? details(itemId, 'left', 'Left image')
+        : details(itemId, 'right', 'Right image');
+    });
+
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    fireEvent.load(screen.getByTestId('pending-left-thumbnail'));
+    fireEvent.load(screen.getByTestId('pending-right-thumbnail'));
+    expect(await screen.findByText('Active left image')).toBeInTheDocument();
+
+    await act(async () => duplicateInvalidation.callback?.());
+
+    expect(await screen.findByText('Left image')).toBeInTheDocument();
+    expect(screen.getByText('Right image')).toBeInTheDocument();
+    expect(screen.queryByText('Active left image')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -545,6 +633,46 @@ describe('DuplicatesScreen', () => {
     fireEvent.transitionEnd(fullImage, { propertyName: 'opacity' });
     await waitFor(() => {
       expect(screen.getByTestId('left-preview-layers').querySelector('img[src*="/thumb/"]')).toBeNull();
+    });
+  });
+
+  it('does not let stale thumbnail readiness unlock the replacement pair', async () => {
+    const nextPair = identifiedPair(3, 4, 33, 44, 'next');
+    vi.mocked(getDuplicatePairs)
+      .mockResolvedValueOnce({ items: [pair(), nextPair], next_cursor: null, has_more: false, total: 2 })
+      .mockResolvedValue({ items: [nextPair], next_cursor: null, has_more: false, total: 1 });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      if (itemId === 33) return details(itemId, 'next-left', 'Next left image');
+      if (itemId === 44) return details(itemId, 'next-right', 'Next right image');
+      return itemId === 11
+        ? details(itemId, 'left', 'Left image')
+        : details(itemId, 'right', 'Right image');
+    });
+
+    await renderScreen();
+    await screen.findByText('Left image');
+    const staleLeft = screen.getByTestId('left-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/left.jpg"]')!;
+    const staleRight = screen.getByTestId('right-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/right.jpg"]')!;
+
+    await act(async () => duplicateInvalidation.callback?.());
+    expect(await screen.findByText('Next left image')).toBeInTheDocument();
+
+    fireEvent.load(staleLeft);
+    fireEvent.load(staleRight);
+    expect(document.querySelector('img[data-resolution="full"]')).toBeNull();
+
+    const nextLeft = screen.getByTestId('left-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-left.jpg"]')!;
+    const nextRight = screen.getByTestId('right-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-right.jpg"]')!;
+    fireEvent.load(nextLeft);
+    fireEvent.load(nextRight);
+
+    await waitFor(() => {
+      expect(document.querySelector('img[src="media://localhost/file/next-left.png"]')).not.toBeNull();
+      expect(document.querySelector('img[src="media://localhost/file/next-right.png"]')).not.toBeNull();
     });
   });
 

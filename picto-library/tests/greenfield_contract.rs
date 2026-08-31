@@ -2638,7 +2638,7 @@ fn large_prepared_collection_publishes_as_one_coherent_root() {
 }
 
 #[test]
-fn text_search_matches_prefixes_and_substrings() {
+fn text_search_requires_three_characters_and_matches_substrings() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     library
@@ -2674,8 +2674,9 @@ fn text_search_matches_prefixes_and_substrings() {
     let global = picto_library::predicate::TextField::Global;
 
     assert_eq!(total(global, "oldnew"), 1, "prefix is a substring");
-    assert_eq!(total(global, "ol"), 1, "one- and two-character prefixes");
-    assert_eq!(total(global, "ne"), 1, "short mid-word substring");
+    assert_eq!(total(global, "o"), 0, "one-character search is inactive");
+    assert_eq!(total(global, "ol"), 0, "two-character search is inactive");
+    assert_eq!(total(global, "new"), 1, "three-character search is active");
     assert_eq!(total(global, "newground"), 1, "mid-word substring");
     assert_eq!(total(global, "NEWGROUNDS"), 1, "case-insensitive substring");
     assert_eq!(total(global, "ärth"), 1, "Unicode lowercase normalization");

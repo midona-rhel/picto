@@ -195,6 +195,11 @@
   justify-content: flex-end;
 }
 
+.active .count,
+.selected .count {
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+}
+
 .activitySlot {
   position: relative;
   z-index: 1;

@@ -16,12 +16,13 @@ import { folderPickerModalAtom } from '../../state/modals';
 import { selectionCountAtom, selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import { folderNodesAtom } from '../../state/sidebar';
-import { useRecentItems } from '../../shared/hooks/useRecentItems';
+import { useRecentFolders } from '../../shared/hooks/useRecentFolders';
 import * as entityMutations from '../../controllers/entityMutations';
 import type { SidebarNodeDto } from '../../shared/types/canonical';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import checkStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import styles from './FolderPickerModal.module.css';
+import { t } from '../../i18n';
 
 type SidebarMode = 'recent' | 'members' | 'all';
 
@@ -35,7 +36,7 @@ export function FolderPickerModal() {
   const open = modalState.open;
   const close = useCallback(() => setModalState({ open: false }), [setModalState]);
 
-  const [recentFolderIds, recordRecent] = useRecentItems('picto-recent-folders', 15);
+  const [recentFolderIds] = useRecentFolders(15);
   const [query, setQuery] = useState('');
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [unchecked, setUnchecked] = useState<Set<number>>(new Set());
@@ -54,7 +55,7 @@ export function FolderPickerModal() {
   const recentFolders = useMemo(() => {
     const nodeById = new Map(folderNodes.map((n) => [parseInt(n.id.slice(7), 10), n]));
     return recentFolderIds
-      .map((id) => nodeById.get(parseInt(id, 10)))
+      .map((id) => nodeById.get(id))
       .filter((n): n is NonNullable<typeof n> => n != null);
   }, [recentFolderIds, folderNodes]);
 
@@ -104,11 +105,10 @@ export function FolderPickerModal() {
       ...[...unchecked].map((folderId) => entityMutations.updateTargetFolderMembership(target, folderId, 'remove')),
     ]);
     entityMutations.settleSelectionAfterMutation();
-    if (checked.size > 0) recordRecent([...checked].map(String));
     close();
     setChecked(new Set());
     setUnchecked(new Set());
-  }, [target, checked, unchecked, close, recordRecent]);
+  }, [target, checked, unchecked, close]);
 
   const toggleExpand = useCallback((nodeId: string) => {
     setExpanded((prev) => {
@@ -137,7 +137,7 @@ export function FolderPickerModal() {
     <GlassModal
       open={open}
       onClose={close}
-      title="Folders"
+      title={t("Folders")}
       size="md"
       flush
       footer={
@@ -146,10 +146,10 @@ export function FolderPickerModal() {
             {summaryText && <span className={styles.summaryText}>{summaryText}</span>}
           </span>
           <div className={btnStyles.btnGroup}>
-            <button className={btnStyles.btn} onClick={close} type="button">Cancel</button>
+            <button className={btnStyles.btn} onClick={close} type="button">{t("Cancel")}</button>
             {pendingCount > 0 && (
               <button data-modal-primary="true" className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyFolders} type="button">
-                Apply ({pendingCount})
+                {t("Apply (")}{pendingCount})
               </button>
             )}
           </div>
@@ -162,7 +162,7 @@ export function FolderPickerModal() {
           <input
             ref={searchRef}
             className={styles.searchInput}
-            placeholder="Search folders..."
+            placeholder={t("Search folders...")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -175,14 +175,14 @@ export function FolderPickerModal() {
               className={`${styles.sidebarItem} ${sidebarMode === 'recent' ? styles.sidebarItemActive : ''}`}
               onClick={() => setSidebarMode('recent')}
             >
-              <span className={styles.sidebarName}>Recent</span>
+              <span className={styles.sidebarName}>{t("Recent")}</span>
               <span className={styles.sidebarBadge}>{recentFolders.length}</span>
             </div>
             <div
               className={`${styles.sidebarItem} ${sidebarMode === 'members' ? styles.sidebarItemActive : ''}`}
               onClick={() => setSidebarMode('members')}
             >
-              <span className={styles.sidebarName}>Members</span>
+              <span className={styles.sidebarName}>{t("Members")}</span>
               <span className={styles.sidebarBadge}>{memberOf.size}</span>
             </div>
             <div className={styles.sidebarSep} />
@@ -190,7 +190,7 @@ export function FolderPickerModal() {
               className={`${styles.sidebarItem} ${sidebarMode === 'all' ? styles.sidebarItemActive : ''}`}
               onClick={() => setSidebarMode('all')}
             >
-              <span className={styles.sidebarName}>All</span>
+              <span className={styles.sidebarName}>{t("All")}</span>
               <span className={styles.sidebarBadge}>{folderNodes.length}</span>
             </div>
           </div>
@@ -202,7 +202,7 @@ export function FolderPickerModal() {
               <div className={styles.flatList}>
                 {displayFolders.length === 0 ? (
                   <div className={styles.emptyState}>
-                    {sidebarMode === 'recent' ? 'No recently used folders' : 'Not a member of any folders'}
+                    {sidebarMode === 'recent' ? t("No recently used folders") : t("Not a member of any folders")}
                   </div>
                 ) : (
                   displayFolders.map((node) => {
@@ -225,7 +225,7 @@ export function FolderPickerModal() {
               // Full tree (all mode)
               <div className={styles.treeContainer}>
                 {tree.length === 0 ? (
-                  <div className={styles.emptyState}>No folders</div>
+                  <div className={styles.emptyState}>{t("No folders")}</div>
                 ) : (
                   tree.flatMap((root) => renderTreeNode(root, {
                     expanded, toggleExpand, searchLower, memberOf, checked, unchecked, toggleFolder,

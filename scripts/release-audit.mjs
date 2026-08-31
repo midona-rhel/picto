@@ -48,6 +48,9 @@ const approvedReleaseIcons = new Set([
   'build/library-folder.png',
   'build/library.icns',
   'build/library.ico',
+  'build/picto-pack.png',
+  'build/picto-pack.icns',
+  'build/picto-pack.ico',
   'build/Picto.icon/Assets/01-spine.png',
   'build/Picto.icon/Assets/02-under-pages.png',
   'build/Picto.icon/Assets/03-open-book.png',
@@ -79,8 +82,13 @@ assert(packageManifest.build.mac.target.every((target) => target.arch?.length ==
 assert(packageManifest.build.mac.icon === 'build/Picto.icon', 'macOS packages must use the native Icon Composer asset');
 const libraryAssociation = packageManifest.build.fileAssociations?.find((association) => association.ext === 'library');
 assert(libraryAssociation?.name === 'Picto Library', 'macOS packages must identify Picto library packages');
-assert(libraryAssociation?.icon === 'library.icns', 'Picto library packages must use the custom library icon');
+assert(libraryAssociation?.icon === 'library', 'Picto library packages must use platform-specific custom icons');
 assert(libraryAssociation?.isPackage === true && libraryAssociation?.rank === 'Owner', 'Picto libraries must register as owned macOS document packages');
+assert(libraryAssociation?.mimeType === 'application/vnd.picto.library', 'Linux packages must register Picto library packages');
+const packAssociation = packageManifest.build.fileAssociations?.find((association) => association.ext === 'picto-pack');
+assert(packAssociation?.name === 'Picto Pack', 'packages must identify Picto Pack documents');
+assert(packAssociation?.icon === 'picto-pack', 'Picto Packs must use platform-specific custom icons');
+assert(packAssociation?.rank === 'Owner' && packAssociation?.mimeType === 'application/vnd.picto.pack+zip', 'Picto Packs must register as owned documents on every packaged platform');
 const windowsLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.ico');
 assert(windowsLibraryIcon?.from === 'build/library.ico', 'Windows packages must include the custom library folder icon');
 const macLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.icns');
@@ -167,6 +175,9 @@ if (checkArtifacts) {
     'build/library-folder.png',
     'build/library.icns',
     'build/library.ico',
+    'build/picto-pack.png',
+    'build/picto-pack.icns',
+    'build/picto-pack.ico',
     'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
     'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);

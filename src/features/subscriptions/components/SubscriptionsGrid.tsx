@@ -15,6 +15,7 @@ import { ProgressBar } from '../../../shared/ui/ProgressBar/ProgressBar';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 interface CardModel {
   selection: SubscriptionsSelection;
@@ -48,16 +49,16 @@ function FollowCard({
 
   useEffect(() => setCoverFailed(false), [card.cover?.file_hash]);
   const status = card.waitingForInbox
-    ? { tone: 'paused' as const, label: 'Inbox full' }
+    ? { tone: 'paused' as const, label: t("Inbox full") }
     : card.paused
-      ? { tone: 'paused' as const, label: 'Paused' }
+      ? { tone: 'paused' as const, label: t("Paused") }
       : card.running
-        ? { tone: 'running' as const, label: 'Syncing' }
+        ? { tone: 'running' as const, label: t("Syncing") }
         : card.attention
-          ? { tone: 'attention' as const, label: 'Warning' }
+          ? { tone: 'attention' as const, label: t("Warning") }
         : card.completed
-          ? { tone: 'success' as const, label: 'Complete' }
-          : { tone: 'idle' as const, label: 'Idle' };
+          ? { tone: 'success' as const, label: t("Complete") }
+          : { tone: 'idle' as const, label: t("Idle") };
 
   return (
     <button
@@ -95,7 +96,7 @@ function FollowCard({
         <StatusBadge tone={status.tone} label={status.label} />
       </span>
       <span className={styles.followMeta}>
-        {card.items.toLocaleString()} item{card.items === 1 ? '' : 's'}
+        {card.items.toLocaleString()} {t("item")}{card.items === 1 ? '' : t("s")}
         {card.sources > 0 && ` · ${card.sources} source${card.sources === 1 ? '' : 's'}`}
       </span>
     </button>
@@ -238,19 +239,15 @@ export function SubscriptionsGrid({
     <div className={styles.followingRoot}>
       <div className={styles.followingHeader}>
         <div className={styles.titleWrap}>
-          <span className={styles.heroTitle}>Subscriptions</span>
+          <span className={styles.heroTitle}>{t("Subscriptions")}</span>
           <span className={styles.muted}>
-            {cards.length === 0
-              ? 'No subscriptions yet'
-              : liveSelected.size > 1
-                ? `${liveSelected.size} of ${cards.length} selected`
-                : `${cards.length} subscription${cards.length === 1 ? '' : 's'}`}
+            {cards.length === 0 ? t("No subscriptions yet") : liveSelected.size > 1 ? t("{value0} of {value1} selected", { value0: liveSelected.size, value1: cards.length }) : t("{value0} subscription{value1}", { value0: cards.length, value1: cards.length === 1 ? '' : 's' })}
           </span>
         </div>
         <section
           className={styles.galleryJobs}
           data-active={galleryJobs.length > 0 || undefined}
-          aria-label="Gallery downloads"
+          aria-label={t("Gallery downloads")}
         >
           {galleryJobs.map((job) => {
             const progress = progressBySubscriptionId.get(job.id);
@@ -267,11 +264,7 @@ export function SubscriptionsGrid({
                   <div className={styles.galleryJobText}>
                     <span title={job.name}>{job.name}</span>
                     <span>
-                      {failure && !jobRunning
-                        ? describeGalleryFailure(failedQuery?.last_failure_kind ?? null, failure)
-                        : total != null
-                        ? `${downloaded.toLocaleString()} / ${total.toLocaleString()} images downloaded`
-                        : `${downloaded.toLocaleString()} images downloaded`}
+                      {failure && !jobRunning ? describeGalleryFailure(failedQuery?.last_failure_kind ?? null, failure) : total != null ? t("{value0} / {value1} images downloaded", { value0: downloaded.toLocaleString(), value1: total.toLocaleString() }) : t("{value0} images downloaded", { value0: downloaded.toLocaleString() })}
                     </span>
                   </div>
                   <ProgressBar
@@ -286,10 +279,10 @@ export function SubscriptionsGrid({
                     type="button"
                     className={styles.querySmallBtn}
                     aria-label={jobRunning
-                      ? 'Pause gallery download'
+                      ? t("Pause gallery download")
                       : jobPaused
-                        ? 'Resume gallery download'
-                        : 'Retry gallery download'}
+                        ? t("Resume gallery download")
+                        : t("Retry gallery download")}
                     onClick={() => jobRunning ? onPauseGallery(job.id) : onResumeGallery(job.id)}
                   >
                     {jobRunning
@@ -301,7 +294,7 @@ export function SubscriptionsGrid({
                   <button
                     type="button"
                     className={styles.querySmallBtn}
-                    aria-label="Stop gallery download"
+                    aria-label={t("Stop gallery download")}
                     onClick={() => onStopGallery(job.id)}
                   >
                     <IconPlayerStop size={14} />
@@ -313,21 +306,17 @@ export function SubscriptionsGrid({
         </section>
         <div className={styles.heroActions}>
           <ActionButton variant="primary" onClick={onAdd}>
-            <IconPlus size={14} /> Add
-          </ActionButton>
+            <IconPlus size={14} /> {t("Add")}</ActionButton>
           <ActionButton variant="secondary" disabled={galleryImportRunning} onClick={onAddGallery}>
-            <IconLibraryPlus size={14} /> Add Gallery
-          </ActionButton>
+            <IconLibraryPlus size={14} /> {t("Add Gallery")}</ActionButton>
           <ActionButton variant="ghost" onClick={onOpenAccounts}>
-            <IconShieldLock size={14} /> Accounts
-          </ActionButton>
+            <IconShieldLock size={14} /> {t("Accounts")}</ActionButton>
         </div>
       </div>
 
       {cards.length === 0 ? (
         <div className={styles.sectionEmptyLine}>
-          Create a subscription, then add the artists, tags, or accounts it should follow.
-        </div>
+          {t("Create a subscription, then add the artists, tags, or accounts it should follow.")}</div>
       ) : (
         <div
           className={styles.followingGrid}

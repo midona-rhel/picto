@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="paper" x1="178" y1="112" x2="846" y2="910" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f0f1f3"/>
+      <stop offset="1" stop-color="#bfc2c8"/>
+    </linearGradient>
+    <linearGradient id="parcel" x1="291" y1="395" x2="733" y2="783" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d5a55a"/>
+      <stop offset="1" stop-color="#aa7138"/>
+    </linearGradient>
+  </defs>
+  <path d="M218 90H648L826 268V894Q826 934 786 934H218Q178 934 178 894V130Q178 90 218 90Z" fill="url(#paper)"/>
+  <path d="M648 90V228Q648 268 688 268H826" fill="#aeb2ba"/>
+  <path d="M648 90L826 268" fill="none" stroke="#8c9098" stroke-width="24" stroke-linejoin="round"/>
+  <rect x="291" y="395" width="442" height="388" rx="48" fill="url(#parcel)" stroke="#35363b" stroke-width="28"/>
+  <path d="M512 400V778M296 514H728" fill="none" stroke="#f0d39a" stroke-width="54"/>
+  <g fill="none" stroke="#35363b" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 674C468 636 416 616 359 623L387 501C433 492 476 512 512 550C548 512 591 492 637 501L665 623C608 616 556 636 512 674Z" fill="#e9e3d8"/>
+    <path d="M512 550V674"/>
+  </g>
+</svg>

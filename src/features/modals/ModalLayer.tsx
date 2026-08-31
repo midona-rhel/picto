@@ -9,6 +9,7 @@ import {
   folderWatchModalAtom,
   folderAutoTagsModalAtom,
   exportModalAtom,
+  pictoPackModalAtom,
   batchRenameModalAtom,
   folderImportModalAtom,
   multiFileImportModalAtom,
@@ -32,6 +33,8 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import { FolderImportModal } from './FolderImportModal';
 import { UpdateModal } from './UpdateModal';
+import { PictoPackModal } from './PictoPackModal';
+import { t } from '../../i18n';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -47,6 +50,8 @@ export function ModalLayer() {
 
   const exportState = useAtomValue(exportModalAtom);
   const setExport = useSetAtom(exportModalAtom);
+  const pictoPack = useAtomValue(pictoPackModalAtom);
+  const setPictoPack = useSetAtom(pictoPackModalAtom);
   const batchRename = useAtomValue(batchRenameModalAtom);
   const setBatchRename = useSetAtom(batchRenameModalAtom);
 
@@ -72,7 +77,7 @@ export function ModalLayer() {
       group_files: groupFiles,
     }).catch((reason) => {
       showErrorNotification({
-        title: 'Could not import media',
+        title: t("Could not import media"),
         message: reason instanceof Error ? reason.message : String(reason),
       });
     });
@@ -173,6 +178,11 @@ export function ModalLayer() {
         fileCount={exportState.fileCount}
       />
 
+      <PictoPackModal
+        state={pictoPack}
+        onClose={() => setPictoPack({ open: false })}
+      />
+
       <BatchRenameModal
         open={batchRename.open}
         items={batchRename.items}
@@ -181,7 +191,7 @@ export function ModalLayer() {
           void setItemNames(renames)
             .then(() => setBatchRename({ open: false, items: [] }))
             .catch((reason) => showErrorNotification({
-              title: 'Could not rename items',
+              title: t("Could not rename items"),
               message: reason instanceof Error ? reason.message : String(reason),
             }));
         }}
@@ -204,7 +214,7 @@ export function ModalLayer() {
             lifecycle: folderImport.lifecycle,
           }).catch((reason) => {
             showErrorNotification({
-              title: 'Could not import folder',
+              title: t("Could not import folder"),
               message: reason instanceof Error ? reason.message : String(reason),
             });
           });
@@ -217,9 +227,9 @@ export function ModalLayer() {
         onClose={() => setMultiFileImport({ ...multiFileImport, open: false })}
         onCancel={() => submitMultiFileImport(false)}
         onConfirm={() => submitMultiFileImport(true)}
-        title="Import as Collection?"
-        cancelLabel="No"
-        confirmLabel="Yes"
+        title={t("Import as Collection?")}
+        cancelLabel={t('No')}
+        confirmLabel={t('Yes')}
         message={`Do you wish to import these ${multiFileImport.paths.length} media items as a collection?`}
       />
 

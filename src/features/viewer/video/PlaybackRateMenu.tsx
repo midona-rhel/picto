@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import { PLAYBACK_RATES } from './videoConstants';
 import styles from './VideoPlayer.module.css';
+import { t } from '../../../i18n';
 
 interface Props { rate: number; onRateChange: (r: number) => void; }
 
@@ -18,9 +19,9 @@ export function PlaybackRateMenu({ rate, onRateChange }: Props) {
 
   return (
     <div ref={ref} className={styles.rateMenuContainer}>
-      <KbdTooltip label="Playback speed">
+      <KbdTooltip label={t("Playback speed")}>
         <button className={`${styles.icBtn} ${styles.rateButton}`} onClick={(e) => { e.stopPropagation(); setOpen(p => !p); }}>
-          {rate === 1 ? '1x' : `${rate}x`}
+          {rate === 1 ? t("1x") : t("{value0}x", { value0: rate })}
         </button>
       </KbdTooltip>
       {open && (
@@ -28,8 +29,7 @@ export function PlaybackRateMenu({ rate, onRateChange }: Props) {
           {PLAYBACK_RATES.map(r => (
             <button key={r} className={`${styles.rateMenuItem} ${r === rate ? styles.rateMenuItemActive : ''}`}
               onClick={(e) => { e.stopPropagation(); onRateChange(r); setOpen(false); }}>
-              {r}x
-            </button>
+              {r}{t("x")}</button>
           ))}
         </div>
       )}

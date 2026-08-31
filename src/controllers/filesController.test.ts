@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
-import { chooseAndExportOriginals, chooseAndImportFolder, filesController, manualImportParamsForScope, requestMediaImport } from './filesController';
+import { chooseAndExportOriginals, chooseAndImportFolder, filesController, manualImportParamsForScope, openPictoPackImport, pictoPackPathFromDrop, requestMediaImport } from './filesController';
 import * as folderApi from '../platform/folderApi';
 import * as settingsApi from '../platform/settingsApi';
-import { folderImportModalAtom, multiFileImportModalAtom } from '../state/modals';
+import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
 
 const closedMultiFileImport = {
   open: false,
@@ -22,7 +22,44 @@ afterEach(() => {
   getDefaultStore().set(folderImportModalAtom, {
     open: false, path: '', targetFolderId: null, lifecycle: 'active',
   });
+  getDefaultStore().set(pictoPackModalAtom, { open: false });
   vi.restoreAllMocks();
+});
+
+describe('Picto Pack drop import', () => {
+  it('recognizes one dropped pack regardless of extension casing', () => {
+    expect(pictoPackPathFromDrop(['/tmp/Portfolio.PICTO-PACK'])).toBe('/tmp/Portfolio.PICTO-PACK');
+    expect(pictoPackPathFromDrop(['/tmp/photo.png'])).toBeNull();
+  });
+
+  it('rejects a pack mixed with other dropped files', () => {
+    expect(() => pictoPackPathFromDrop(['/tmp/portfolio.picto-pack', '/tmp/photo.png']))
+      .toThrow('Drop one Picto Pack at a time without other files.');
+  });
+
+  it('inspects a dropped pack before opening the shared confirmation modal', async () => {
+    const summary = {
+      name: 'Portfolio',
+      root_count: 2,
+      media_count: 3,
+      folder_count: 0,
+      smart_folder_count: 0,
+      total_bytes: 1024,
+    };
+    (window as any).picto = { api: { invoke: vi.fn().mockResolvedValue(summary) } };
+
+    await openPictoPackImport('/tmp/portfolio.picto-pack');
+
+    expect((window as any).picto.api.invoke).toHaveBeenCalledWith('picto_pack.inspect', {
+      path: '/tmp/portfolio.picto-pack',
+    });
+    expect(getDefaultStore().get(pictoPackModalAtom)).toEqual({
+      open: true,
+      mode: 'import',
+      path: '/tmp/portfolio.picto-pack',
+      summary,
+    });
+  });
 });
 
 describe('folder import choice', () => {

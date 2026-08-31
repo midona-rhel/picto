@@ -7,6 +7,14 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import styles from './ColorFilterEditor.module.css';
+import { t } from '../../../i18n';
+import {
+  DEFAULT_COLOR_DELTA_E,
+  MAXIMUM_COLOR_DELTA_E,
+  MINIMUM_COLOR_DELTA_E,
+} from '../../lib/itemFilters';
+
+const COLOR_FILTER_SETTLE_MS = 250;
 
 const PRESETS = [
   '#111111', '#FFFFFF', '#9E9E9E', '#A48057', '#FC85B3', '#FF2727',
@@ -49,38 +57,57 @@ function hsvToHex({ hue, saturation, value }: HsvColor): string {
   return `#${byte(red)}${byte(green)}${byte(blue)}`.toUpperCase();
 }
 
-function useDeferredCommit(onCommit: (value: string | null) => void) {
+function useDeferredCommit(onCommit: (value: string | null, deltaE: number) => void) {
   const callback = useRef(onCommit);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   callback.current = onCommit;
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  return useCallback((value: string) => {
+  const schedule = useCallback((value: string | null, deltaE: number) => {
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => callback.current(value), 80);
+    timer.current = setTimeout(() => callback.current(value, deltaE), COLOR_FILTER_SETTLE_MS);
   }, []);
+  const commitNow = useCallback((value: string | null, deltaE: number) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    callback.current(value, deltaE);
+  }, []);
+  return { schedule, commitNow };
 }
 
-export function ColorFilterEditor({ value, onCommit, allowClear = true }: {
+export function ColorFilterEditor({
+  value,
+  deltaE = DEFAULT_COLOR_DELTA_E,
+  onCommit,
+  allowClear = true,
+  showSensitivity = false,
+}: {
   value: string | null;
-  onCommit: (value: string | null) => void;
+  deltaE?: number;
+  onCommit: (value: string | null, deltaE: number) => void;
   allowClear?: boolean;
+  showSensitivity?: boolean;
 }) {
   const initial = value?.toUpperCase() ?? '#808080';
   const [hex, setHex] = useState(initial);
   const [hsv, setHsv] = useState(() => hexToHsv(initial));
-  const scheduleCommit = useDeferredCommit(onCommit);
+  const [matchDeltaE, setMatchDeltaE] = useState(deltaE);
+  const [hasColor, setHasColor] = useState(value != null);
+  const { schedule: scheduleCommit, commitNow } = useDeferredCommit(onCommit);
 
   useEffect(() => {
     const next = value?.toUpperCase() ?? '#808080';
     setHex(next);
     setHsv(hexToHsv(next));
+    setHasColor(value != null);
   }, [value]);
+  useEffect(() => setMatchDeltaE(deltaE), [deltaE]);
 
   const applyHsv = (next: HsvColor) => {
     const nextHex = hsvToHex(next);
     setHsv(next);
     setHex(nextHex);
-    scheduleCommit(nextHex);
+    setHasColor(true);
+    scheduleCommit(nextHex, matchDeltaE);
   };
   const selectSaturationValue = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -106,25 +133,46 @@ export function ColorFilterEditor({ value, onCommit, allowClear = true }: {
         onPointerUp={(event) => {
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
-        aria-label="Color saturation and brightness"
+        aria-label={t("Color saturation and brightness")}
       >
         <span className={styles.cursor} style={{ left: `${hsv.saturation * 100}%`, top: `${(1 - hsv.value) * 100}%` }} />
       </div>
-      <input className={styles.hue} type="range" min="0" max="359" value={Math.round(hsv.hue)} aria-label="Color hue" onChange={(event) => applyHsv({ ...hsv, hue: Number(event.target.value) })} />
+      <input className={styles.hue} type="range" min="0" max="359" value={Math.round(hsv.hue)} aria-label={t("Color hue")} onChange={(event) => applyHsv({ ...hsv, hue: Number(event.target.value) })} />
+      {showSensitivity && <label className={styles.sensitivity}>
+        <span className={styles.sensitivityHeader}>
+          <span>{t("Color match range")}</span>
+          <output>{t("{value0}{value1}", { value0: 'ΔE ', value1: matchDeltaE })}</output>
+        </span>
+        <input
+          type="range"
+          min={MINIMUM_COLOR_DELTA_E}
+          max={MAXIMUM_COLOR_DELTA_E}
+          step="1"
+          value={matchDeltaE}
+          aria-label={t("Color match range")}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            setMatchDeltaE(next);
+            scheduleCommit(hasColor ? hex : null, next);
+          }}
+        />
+        <span className={styles.sensitivityEnds}><span>{t("Strict")}</span><span>{t("Broad")}</span></span>
+      </label>}
       <div className={styles.presets}>
-        {allowClear && <button type="button" className={`${styles.preset} ${styles.none} ${value == null ? styles.active : ''}`} aria-label="No color" onClick={() => onCommit(null)} />}
+        {allowClear && <button type="button" className={`${styles.preset} ${styles.none} ${value == null ? styles.active : ''}`} aria-label={t("No color")} onClick={() => { setHasColor(false); commitNow(null, matchDeltaE); }} />}
         {PRESETS.map((preset) => (
-          <button type="button" key={preset} className={`${styles.preset} ${hex === preset ? styles.active : ''}`} style={{ background: preset }} aria-label={preset} onClick={() => onCommit(preset)} />
+          <button type="button" key={preset} className={`${styles.preset} ${hex === preset ? styles.active : ''}`} style={{ background: preset }} aria-label={preset} onClick={() => { setHasColor(true); setHex(preset); setHsv(hexToHsv(preset)); commitNow(preset, matchDeltaE); }} />
         ))}
       </div>
       <label className={styles.hexField}>
         <span className={styles.preview} style={{ background: /^#[0-9a-f]{6}$/i.test(hex) ? hex : 'transparent' }} />
-        <input aria-label="Hex color" value={hex} maxLength={7} onChange={(event) => {
+        <input aria-label={t("Hex color")} value={hex} maxLength={7} onChange={(event) => {
           const next = event.target.value.toUpperCase();
           setHex(next);
           if (/^#[0-9A-F]{6}$/.test(next)) {
             setHsv(hexToHsv(next));
-            scheduleCommit(next);
+            setHasColor(true);
+            scheduleCommit(next, matchDeltaE);
           }
         }} />
       </label>

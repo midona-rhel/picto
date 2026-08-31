@@ -5,6 +5,7 @@ import type { AuthSessionState, OnlyFansManualAuthInput } from '../../shared/typ
 import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../../shared/types/subscriptionsWorkspace';
 import { AuthSiteDetail } from './components/AuthSiteDetail';
 import { AuthSitesSidebar } from './components/AuthSitesSidebar';
+import { t } from '../../i18n';
 import styles from './AuthWorkspace.module.css';
 
 const IDLE_SESSION: AuthSessionState = {
@@ -99,7 +100,7 @@ export function AuthWorkspace({
   useEffect(() => {
     if (session.status !== 'completed') return;
     void refresh().then(() => authController.cancelSession()).then(() => {
-      setMessage('Login saved in the system credential store.');
+      setMessage(t('Login saved in the system credential store.'));
       setSession(IDLE_SESSION);
     }).catch((err) => {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -146,7 +147,7 @@ export function AuthWorkspace({
     try {
       await authController.deleteCredential(selectedEntry.site.credential_owner_site_id);
       await refresh();
-      setMessage('Credential removed.');
+      setMessage(t('Credential removed.'));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {

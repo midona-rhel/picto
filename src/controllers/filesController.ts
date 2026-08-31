@@ -1,6 +1,6 @@
 import {
   exportMedia,
-  addMedia,
+  addMedia as enqueueImport,
 } from '../platform/folderApi';
 import {
   clipboardCopyFile,
@@ -23,9 +23,12 @@ import type { ExportFormat } from '../shared/types/generated/application/ExportF
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import { getDefaultStore } from 'jotai';
-import { folderImportModalAtom, multiFileImportModalAtom } from '../state/modals';
+import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
 import { showErrorNotification } from '../shared/lib/notifications';
 import { getSettings, type AppSettings } from '../platform/settingsApi';
+import { t } from '../i18n';
+import { inspectPictoPack, type PictoPackSource } from '../platform/pictoPackApi';
+import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 
 export interface MediaImportParams {
   tags?: string[];
@@ -42,10 +45,16 @@ export interface MediaImportParams {
 
 const store = getDefaultStore();
 
+async function addMedia(paths: string[], params: MediaImportParams): Promise<ImportEnqueueReport> {
+  const report = await enqueueImport(paths, params);
+  if (params.parent_folder_id != null) recordRecentFolderUse([params.parent_folder_id]);
+  return report;
+}
+
 function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
   void addMedia(paths, params).catch((reason) => {
     showErrorNotification({
-      title: 'Could not import media',
+      title: t("Could not import media"),
       message: reason instanceof Error ? reason.message : String(reason),
     });
   });
@@ -99,7 +108,7 @@ export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
   const result = await (window as any).picto.dialog.open({
     properties: ['openFile'],
     multiple: true,
-    title: 'Import files',
+    title: t("Import files"),
     filters: MEDIA_IMPORT_FILTERS,
   });
   if (!result) return;
@@ -115,7 +124,7 @@ export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
   const result = await (window as any).picto.dialog.open({
     properties: ['openDirectory'],
     multiple: false,
-    title: 'Import folder',
+    title: t("Import folder"),
   });
   if (!result) return;
   const folderPath = typeof result === 'string' ? result : result[0];
@@ -126,6 +135,40 @@ export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
     targetFolderId: scope.kind === 'folder' ? scope.folder_id : null,
     lifecycle: manualImportParamsForScope(scope).lifecycle,
   });
+}
+
+export function requestPictoPackExport(
+  source: PictoPackSource,
+  itemCount: number,
+  suggestedName = 'Picto Pack',
+): void {
+  store.set(pictoPackModalAtom, { open: true, mode: 'export', source, itemCount, suggestedName });
+}
+
+export function pictoPackPathFromDrop(paths: string[]): string | null {
+  const packPaths = paths.filter((path) => /\.picto-pack$/i.test(path));
+  if (packPaths.length === 0) return null;
+  if (paths.length !== 1) {
+    throw new Error(t("Drop one Picto Pack at a time without other files."));
+  }
+  return packPaths[0];
+}
+
+export async function openPictoPackImport(path: string): Promise<void> {
+  const summary = await inspectPictoPack(path);
+  store.set(pictoPackModalAtom, { open: true, mode: 'import', path, summary });
+}
+
+export async function chooseAndImportPictoPack(): Promise<void> {
+  const result = await (window as any).picto.dialog.open({
+    properties: ['openFile'],
+    multiple: false,
+    title: t("Import Picto Pack"),
+    filters: [{ name: t("Picto Pack"), extensions: ['picto-pack'] }],
+  });
+  const path = typeof result === 'string' ? result : result?.[0];
+  if (!path) return;
+  await openPictoPackImport(path);
 }
 
 /** Import copied files or a copied bitmap through the durable ingest queue. */
@@ -150,7 +193,7 @@ export async function chooseAndExportOriginals(target: EntityTarget): Promise<vo
   const result = await (window as any).picto.dialog.open({
     properties: ['openDirectory'],
     multiple: false,
-    title: 'Export originals',
+    title: t("Export originals"),
   });
   const outputDir = typeof result === 'string' ? result : result?.[0];
   if (!outputDir) return;
@@ -161,6 +204,10 @@ export { hasClipboardImport };
 
 export const filesController = {
   chooseAndExportOriginals,
+  chooseAndImportPictoPack,
+  openPictoPackImport,
+  pictoPackPathFromDrop,
+  requestPictoPackExport,
   addMedia(
     paths: string[],
     params: MediaImportParams,

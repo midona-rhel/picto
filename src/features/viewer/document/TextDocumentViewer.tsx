@@ -2,6 +2,7 @@ import { marked } from 'marked';
 import { useEffect, useRef, useState } from 'react';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import styles from './TextDocumentViewer.module.css';
+import { t } from '../../../i18n';
 
 interface Props {
   src: string;
@@ -76,7 +77,7 @@ export function TextDocumentViewer({ src, mimeType, onReady }: Props) {
       })
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Could not open this document.');
+          setError(reason instanceof Error ? reason.message : t('Could not open this document.'));
           onReady?.();
         }
       });

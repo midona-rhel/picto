@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { ActionButton } from './ActionButton';
 import styles from './NewSubscriptionDialog.module.css';
+import { t } from '../../../i18n';
 
 export interface CreateSubscriptionInput {
   name: string;
@@ -43,25 +44,24 @@ export function NewSubscriptionDialog({
     <GlassModal
       open={open}
       onClose={close}
-      title="Add subscription"
+      title={t("Add subscription")}
       size="sm"
       footer={
         <>
-          <ActionButton variant="ghost" onClick={close}>Cancel</ActionButton>
+          <ActionButton variant="ghost" onClick={close}>{t("Cancel")}</ActionButton>
           <ActionButton variant="primary" disabled={!canCreate} onClick={submit}>
-            Add
-          </ActionButton>
+            {t("Add")}</ActionButton>
         </>
       }
     >
       <div className={styles.form}>
         <div className={styles.row}>
-          <span className={styles.rowLabel}>Name</span>
+          <span className={styles.rowLabel}>{t("Name")}</span>
           <div className={styles.rowControl}>
             <input
               className={styles.textInput}
               value={name}
-              placeholder="e.g. Favourite artists"
+              placeholder={t("e.g. Favourite artists")}
               autoFocus
               onChange={(e) => setName(e.target.value)}
             />

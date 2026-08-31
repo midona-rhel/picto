@@ -8,6 +8,7 @@ import { IconFolder, IconRotate2 } from '@tabler/icons-react';
 import { CURATED_ICONS } from './iconRegistry';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './IconPicker.module.css';
+import { t } from '../../../i18n';
 
 const ICON_SIZE = 19;
 
@@ -50,16 +51,16 @@ export function IconPicker({
       <div className={styles.searchRow}>
         <input
           type="text"
-          placeholder="Search icons..."
+          placeholder={t("Search icons...")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           autoFocus
           className={styles.searchInput}
         />
-        <KbdTooltip label="Reset to default">
+        <KbdTooltip label={t("Reset to default")}>
           <button
             disabled={!local}
-            aria-label="Reset to default"
+            aria-label={t("Reset to default")}
             onClick={() => handleSelect(null)}
             className={`${styles.resetBtn} ${local ? '' : styles.resetDisabled}`}
           >
@@ -79,7 +80,7 @@ export function IconPicker({
           </button>
         </KbdTooltip>
         {filtered.length === 0 && (
-          <div className={styles.empty}>No icons found</div>
+          <div className={styles.empty}>{t("No icons found")}</div>
         )}
         {filtered.map((icon) => {
           const Icon = icon.component;

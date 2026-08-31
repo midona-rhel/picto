@@ -19,6 +19,7 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { reverseImageSearch } from '../../platform/shellApi';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
+import { t } from '../../i18n';
 
 interface ViewerEntityContextMenuOptions {
   hash: string | null;
@@ -36,13 +37,13 @@ interface ViewerEntityContextMenuOptions {
 export function buildFlashPlaybackContextEntries(playback: FlashPlaybackController) {
   return [
     {
-      label: playback.isPlaying ? 'Pause' : 'Play',
+      label: playback.isPlaying ? t("Pause") : t("Play"),
       icon: playback.isPlaying ? <IconPlayerPause size={15} /> : <IconPlayerPlay size={15} />,
       action: playback.togglePlay,
     },
-    { label: 'Stop', icon: <IconPlayerStop size={15} />, action: playback.stop },
+    { label: t("Stop"), icon: <IconPlayerStop size={15} />, action: playback.stop },
     {
-      label: playback.muted ? 'Unmute' : 'Mute',
+      label: playback.muted ? t("Unmute") : t("Mute"),
       icon: playback.muted ? <IconVolume size={15} /> : <IconVolumeOff size={15} />,
       action: playback.toggleMute,
     },
@@ -160,7 +161,7 @@ export function useViewerEntityContextMenu({
       onExport: target ? () => setExportModal({ open: true, fileCount: 1, target }) : undefined,
       onSearchByImage: menuKind === 'media' ? (engine, fileHash) => {
         void reverseImageSearch(fileHash, engine).catch((reason) => showErrorNotification({
-          title: 'Reverse image search failed',
+          title: t("Reverse image search failed"),
           message: reason instanceof Error ? reason.message : String(reason),
         }));
       } : undefined,
@@ -177,7 +178,7 @@ export function useViewerEntityContextMenu({
               pixel_height: height ?? null,
               mime_type: mime ?? null,
             }).catch((reason) => showErrorNotification({
-              title: 'Could not set library cover',
+              title: t("Could not set library cover"),
               message: reason instanceof Error ? reason.message : String(reason),
             }));
           }
@@ -190,16 +191,16 @@ export function useViewerEntityContextMenu({
         : undefined,
       onPermanentDelete: target && lifecycle === 'trash' ? () => setConfirmModal({
         open: true,
-        title: 'Delete Permanently?',
+        title: t("Delete Permanently?"),
         message: 'This item and any unreferenced files will be deleted. This cannot be undone.',
-        confirmLabel: 'Delete Permanently',
+        confirmLabel: t("Delete Permanently"),
         danger: true,
         onConfirm: () => { void entityMutations.permanentlyDeleteTarget(target); },
       }) : undefined,
     });
     const playbackEntries = flashPlayback ? buildFlashPlaybackContextEntries(flashPlayback) : [];
     const thumbnailEntries = captureCurrentFrame ? [{
-      label: 'Set as Thumbnail',
+      label: t("Set as Thumbnail"),
       icon: <IconPhoto size={15} />,
       action: () => { void captureThumbnail().catch(() => {}); },
     }] : [];

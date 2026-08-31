@@ -24,6 +24,7 @@ pub mod media_io;
 pub mod media_processing;
 pub mod native_source;
 pub mod native_source_import;
+pub mod picto_pack;
 pub mod poison;
 pub mod settings;
 pub mod state;

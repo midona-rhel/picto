@@ -9,6 +9,7 @@ import { IconCopy, IconFilter } from '@tabler/icons-react';
 import { ContextMenu, type MenuEntry, useContextMenu } from '../ContextMenu/ContextMenu';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './ColorPalette.module.css';
+import { t } from '../../../i18n';
 
 interface ColorPaletteProps {
   /** Hex color strings in relevance order (most coverage first). */
@@ -68,14 +69,14 @@ function colorCopyEntries(hex: string, copy: (value: string) => void): MenuEntry
   const rgb = hexToRgb(hex);
   const [r, g, b] = rgb;
   return [
-    { label: 'Copy HEX', icon: <IconCopy size={15} />, action: () => copy(hex.toUpperCase()) },
-    { label: 'Copy RGB', icon: <IconCopy size={15} />, action: () => copy(`rgb(${r}, ${g}, ${b})`) },
-    { label: 'Copy RGBA', icon: <IconCopy size={15} />, action: () => copy(`rgba(${r}, ${g}, ${b}, 1)`) },
-    { label: 'Copy HSL', icon: <IconCopy size={15} />, action: () => copy(rgbToHsl(rgb)) },
+    { label: t("Copy HEX"), icon: <IconCopy size={15} />, action: () => copy(hex.toUpperCase()) },
+    { label: t("Copy RGB"), icon: <IconCopy size={15} />, action: () => copy(`rgb(${r}, ${g}, ${b})`) },
+    { label: t("Copy RGBA"), icon: <IconCopy size={15} />, action: () => copy(`rgba(${r}, ${g}, ${b}, 1)`) },
+    { label: t("Copy HSL"), icon: <IconCopy size={15} />, action: () => copy(rgbToHsl(rgb)) },
     { separator: true },
-    { label: 'Copy HSV', icon: <IconCopy size={15} />, action: () => copy(rgbToHsv(rgb)) },
-    { label: 'Copy HWB', icon: <IconCopy size={15} />, action: () => copy(rgbToHwb(rgb)) },
-    { label: 'Copy CMYK', icon: <IconCopy size={15} />, action: () => copy(rgbToCmyk(rgb)) },
+    { label: t("Copy HSV"), icon: <IconCopy size={15} />, action: () => copy(rgbToHsv(rgb)) },
+    { label: t("Copy HWB"), icon: <IconCopy size={15} />, action: () => copy(rgbToHwb(rgb)) },
+    { label: t("Copy CMYK"), icon: <IconCopy size={15} />, action: () => copy(rgbToCmyk(rgb)) },
   ];
 }
 
@@ -93,7 +94,7 @@ export function ColorPalette({ colors, onFilter }: ColorPaletteProps) {
   const openMenu = useCallback((event: React.MouseEvent, hex: string) => {
     const entries: MenuEntry[] = [
       ...(onFilter ? [{
-        label: 'Filter by color',
+        label: t("Filter by color"),
         icon: <IconFilter size={15} />,
         action: () => onFilter(hex),
       } satisfies MenuEntry, { separator: true } satisfies MenuEntry] : []),
@@ -106,7 +107,7 @@ export function ColorPalette({ colors, onFilter }: ColorPaletteProps) {
   return (
     <div className={styles.palette} style={colors.length === 0 ? { visibility: 'hidden' } : undefined}>
       {(colors.length === 0 ? ['#000000'] : colors).map((hex, i) => (
-        <KbdTooltip key={i} label={copiedColor === hex ? 'Copied!' : `${hex} · Click to filter · Right-click for actions`}><div
+        <KbdTooltip key={i} label={copiedColor === hex ? t("Copied!") : t("{value0} · Click to filter · Right-click for actions", { value0: hex })}><div
           className={styles.swatchWrap}
           onClick={() => onFilter?.(hex)}
           onContextMenu={(event) => {

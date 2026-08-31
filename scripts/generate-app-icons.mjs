@@ -85,6 +85,12 @@ async function main() {
   const libraryIcoImages = await Promise.all(icoSizes.map(async (size) => ({ size, png: await render(librarySource, size) })));
   await writeFile(path.join(build, 'library.ico'), createIco(libraryIcoImages));
 
+  const packSource = path.join(sources, 'picto-pack.svg');
+  const packPng = path.join(build, 'picto-pack.png');
+  await writeFile(packPng, await render(packSource, 1024));
+  const packIcoImages = await Promise.all(icoSizes.map(async (size) => ({ size, png: await render(packSource, size) })));
+  await writeFile(path.join(build, 'picto-pack.ico'), createIco(packIcoImages));
+
   if (process.platform === 'darwin') {
     const appBuilderArch = process.arch === 'arm64' ? 'arm64' : 'amd64';
     const appBuilder = path.join(root, 'node_modules', 'app-builder-bin', 'mac', `app-builder_${appBuilderArch}`);
@@ -94,6 +100,13 @@ async function main() {
     await execFileAsync(appBuilder, ['icon', '--format=icns', `--out=${output}`, `--input=${libraryPng}`, `--root=${root}`]);
     await rename(path.join(output, 'icon.icns'), path.join(build, 'library.icns'));
     await rm(output, { recursive: true, force: true });
+
+    const packOutput = path.join(build, 'picto-pack-icns-output');
+    await rm(packOutput, { recursive: true, force: true });
+    await mkdir(packOutput, { recursive: true });
+    await execFileAsync(appBuilder, ['icon', '--format=icns', `--out=${packOutput}`, `--input=${packPng}`, `--root=${root}`]);
+    await rename(path.join(packOutput, 'icon.icns'), path.join(build, 'picto-pack.icns'));
+    await rm(packOutput, { recursive: true, force: true });
   }
 
   await Promise.all(composerLayers.map(async ([name, source]) => {
@@ -109,7 +122,7 @@ async function main() {
     },
   }, null, 2)}\n`);
 
-  console.log('Generated Picto application and library package icons.');
+  console.log('Generated Picto application, library, and Picto Pack icons.');
 }
 
 await main();

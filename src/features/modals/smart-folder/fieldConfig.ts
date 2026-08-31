@@ -1,4 +1,5 @@
-/**
+
+import { t } from '../../../i18n';/**
  * Field definition registry for smart folder predicate rules.
  * Defines available fields, their operator sets, and value input types.
  */
@@ -13,134 +14,134 @@ export interface FieldDef {
 }
 
 const TAG_OPERATORS = [
-  { value: 'include_all', label: 'include all' },
-  { value: 'include_any', label: 'include any' },
-  { value: 'do_not_include', label: 'do not include' },
+  { value: 'include_all', label: t("include all") },
+  { value: 'include_any', label: t("include any") },
+  { value: 'do_not_include', label: t("do not include") },
 ];
 
 const NUMERIC_OPERATORS = [
-  { value: 'eq', label: 'equals' },
-  { value: 'neq', label: 'not equals' },
-  { value: 'gt', label: 'greater than' },
-  { value: 'gte', label: 'at least' },
-  { value: 'lt', label: 'less than' },
-  { value: 'lte', label: 'at most' },
-  { value: 'between', label: 'between' },
+  { value: 'eq', label: t("equals") },
+  { value: 'neq', label: t("not equals") },
+  { value: 'gt', label: t("greater than") },
+  { value: 'gte', label: t("at least") },
+  { value: 'lt', label: t("less than") },
+  { value: 'lte', label: t("at most") },
+  { value: 'between', label: t("between") },
 ];
 
 const TEXT_OPERATORS = [
-  { value: 'contains', label: 'contains' },
-  { value: 'is_empty', label: 'is empty' },
-  { value: 'is_not_empty', label: 'is not empty' },
+  { value: 'contains', label: t("contains") },
+  { value: 'is_empty', label: t("is empty") },
+  { value: 'is_not_empty', label: t("is not empty") },
 ];
 
 const DATE_OPERATORS = [
-  { value: 'eq', label: 'is' },
-  { value: 'gt', label: 'after' },
-  { value: 'gte', label: 'on or after' },
-  { value: 'lt', label: 'before' },
-  { value: 'lte', label: 'on or before' },
-  { value: 'between', label: 'between' },
+  { value: 'eq', label: t("is") },
+  { value: 'gt', label: t("after") },
+  { value: 'gte', label: t("on or after") },
+  { value: 'lt', label: t("before") },
+  { value: 'lte', label: t("on or before") },
+  { value: 'between', label: t("between") },
 ];
 
 export const FIELD_DEFS: FieldDef[] = [
   {
     key: 'tags',
-    label: 'Tags',
+    label: t("Tags"),
     operators: TAG_OPERATORS,
     valueType: 'tags',
   },
   {
     key: 'file_type',
-    label: 'File Type',
+    label: t("File Type"),
     operators: [
-      { value: 'is', label: 'is' },
-      { value: 'is_not', label: 'is not' },
+      { value: 'is', label: t("is") },
+      { value: 'is_not', label: t("is not") },
     ],
     valueType: 'select',
     selectOptions: [
-      { value: 'image', label: 'Image' },
-      { value: 'video', label: 'Video' },
-      { value: 'audio', label: 'Audio' },
-      { value: 'image/png', label: 'PNG' },
-      { value: 'image/jpeg', label: 'JPEG' },
-      { value: 'video/mp4', label: 'MP4' },
+      { value: 'image', label: t("Image") },
+      { value: 'video', label: t("Video") },
+      { value: 'audio', label: t("Audio") },
+      { value: 'image/png', label: t("PNG") },
+      { value: 'image/jpeg', label: t("JPEG") },
+      { value: 'video/mp4', label: t("MP4") },
     ],
   },
   {
     key: 'rating',
-    label: 'Rating',
+    label: t("Rating"),
     operators: NUMERIC_OPERATORS,
     valueType: 'number',
   },
   {
     key: 'file_size',
-    label: 'File Size',
+    label: t("File Size"),
     operators: NUMERIC_OPERATORS,
     valueType: 'filesize',
   },
   {
     key: 'date_added',
-    label: 'Date Imported',
+    label: t("Date Imported"),
     operators: DATE_OPERATORS,
     valueType: 'date',
   },
   {
     key: 'date_created',
-    label: 'Date Created',
+    label: t("Date Created"),
     operators: DATE_OPERATORS,
     valueType: 'date',
   },
   {
     key: 'date_modified',
-    label: 'Date Modified',
+    label: t("Date Modified"),
     operators: DATE_OPERATORS,
     valueType: 'date',
   },
   {
     key: 'name',
-    label: 'Name',
-    operators: [{ value: 'contains', label: 'contains' }],
+    label: t("Name"),
+    operators: [{ value: 'contains', label: t("contains") }],
     valueType: 'text',
   },
   {
     key: 'width',
-    label: 'Width',
+    label: t("Width"),
     operators: NUMERIC_OPERATORS,
     valueType: 'number',
     unit: 'px',
   },
   {
     key: 'height',
-    label: 'Height',
+    label: t("Height"),
     operators: NUMERIC_OPERATORS,
     valueType: 'number',
     unit: 'px',
   },
   {
     key: 'duration',
-    label: 'Duration',
+    label: t("Duration"),
     operators: NUMERIC_OPERATORS,
     valueType: 'number',
     unit: 's',
   },
   {
     key: 'notes',
-    label: 'Notes',
+    label: t("Notes"),
     operators: TEXT_OPERATORS,
     valueType: 'text',
   },
   {
     key: 'source_url',
-    label: 'Source URL',
+    label: t("Source URL"),
     operators: TEXT_OPERATORS,
     valueType: 'text',
   },
   {
     key: 'color',
-    label: 'Color',
+    label: t("Color"),
     operators: [
-      { value: 'contains', label: 'contains' },
+      { value: 'contains', label: t("contains") },
     ],
     valueType: 'color',
   },
@@ -189,14 +190,14 @@ export function isListField(fieldKey: string): boolean {
 
 /** Filesize unit options for the filesize value type. */
 export const FILESIZE_UNITS = [
-  { value: 'B', label: 'Bytes' },
-  { value: 'KB', label: 'Kilobytes' },
-  { value: 'MB', label: 'Megabytes' },
-  { value: 'GB', label: 'Gigabytes' },
+  { value: 'B', label: t("Bytes") },
+  { value: 'KB', label: t("Kilobytes") },
+  { value: 'MB', label: t("Megabytes") },
+  { value: 'GB', label: t("Gigabytes") },
 ];
 
 export const RATING_OPTIONS = [
-  { value: '0', label: 'Unrated' },
+  { value: '0', label: t("Unrated") },
   { value: '1', label: '★☆☆☆☆' },
   { value: '2', label: '★★☆☆☆' },
   { value: '3', label: '★★★☆☆' },

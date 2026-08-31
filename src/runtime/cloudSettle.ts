@@ -6,6 +6,7 @@ import {
 } from '../shared/lib/notifications';
 import { libraryInvalidation } from './libraryInvalidation';
 import type { CloudSyncStatus } from '../shared/types/generated/application/CloudSyncStatus';
+import { t } from '../i18n';
 
 let previous: CloudSyncStatus | null = null;
 let refreshInFlight: Promise<void> | null = null;
@@ -26,18 +27,18 @@ async function refresh(): Promise<void> {
       if (next.state === 'reconciling' && !next.blocking && before.state !== 'reconciling') {
         reconnectStartedAt = Date.now();
         showInfoNotification({
-          title: 'Cloud changes found',
+          title: t("Cloud changes found"),
           message: 'Picto is updating your library.',
-          action: { label: 'View progress', onClick: viewProgress },
+          action: { label: t("View progress"), onClick: viewProgress },
         });
         return;
       }
 
       if (next.state === 'error' && (before.state !== 'error' || before.message !== next.message)) {
         showErrorNotification({
-          title: 'Cloud sync needs attention',
+          title: t("Cloud sync needs attention"),
           message: next.message,
-          action: { label: 'View details', onClick: viewProgress },
+          action: { label: t("View details"), onClick: viewProgress },
         });
         return;
       }
@@ -47,7 +48,7 @@ async function refresh(): Promise<void> {
         reconnectStartedAt = 0;
         if (elapsed >= 5_000) {
           showSuccessNotification({
-            title: 'Cloud update complete',
+            title: t("Cloud update complete"),
             message: 'Your library is up to date.',
           });
         }

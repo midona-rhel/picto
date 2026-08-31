@@ -2,8 +2,20 @@
 
 import ThumbnailWorker from './thumbnailDecodeWorker?worker';
 
-type BitmapCallback = (fileHash: string, bitmap: ImageBitmap) => void;
-type ErrorCallback = (fileHash: string) => void;
+export type ThumbnailDecodeQuality = 'thumbnail' | 'full';
+
+export interface ThumbnailDecodePlanEntry {
+  fileHash: string;
+  url: string;
+  quality: ThumbnailDecodeQuality;
+}
+
+type BitmapCallback = (
+  fileHash: string,
+  bitmap: ImageBitmap,
+  quality: ThumbnailDecodeQuality,
+) => void;
+type ErrorCallback = (fileHash: string, quality: ThumbnailDecodeQuality) => void;
 
 type WorkerFactory = () => Worker;
 
@@ -22,8 +34,11 @@ export class ThumbnailDecodeClient {
       const worker = this.createWorker();
       worker.onmessage = (event: MessageEvent) => {
         const message = event.data;
-        if (message.type === 'bitmap') this.onBitmap(message.fileHash, message.bitmap);
-        else if (message.type === 'error') this.onError(message.fileHash);
+        if (message.type === 'bitmap') {
+          this.onBitmap(message.fileHash, message.bitmap, message.quality);
+        } else if (message.type === 'error') {
+          this.onError(message.fileHash, message.quality);
+        }
       };
       worker.onerror = () => {
         worker.terminate();
@@ -36,7 +51,7 @@ export class ThumbnailDecodeClient {
     }
   }
 
-  sendPlan(entries: Array<{ fileHash: string; url: string }>): void {
+  sendPlan(entries: ThumbnailDecodePlanEntry[]): void {
     this.ensureWorker()?.postMessage({ type: 'plan', entries });
   }
 

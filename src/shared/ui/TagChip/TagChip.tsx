@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { InspectorRemoveIcon } from '../icons/toolbar-icons';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './TagChip.module.css';
+import { t } from '../../../i18n';
 
 const NS_COLORS: Record<string, [number, number, number]> = {
   creator: [255, 102, 103],
@@ -91,12 +92,12 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, 
       {showNamespace && <span className={styles.namespace}>{namespace}:</span>}
       <span className={styles.subtag}>{subtag}</span>
       {onRemove && (
-        <KbdTooltip label="Remove">
+        <KbdTooltip label={t("Remove")}>
           <button
             className={styles.removeBtn}
             onClick={(e) => { e.stopPropagation(); onRemove(); }}
             type="button"
-            aria-label="Remove"
+            aria-label={t("Remove")}
           >
             <InspectorRemoveIcon />
           </button>

@@ -3,6 +3,7 @@
  */
 
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
+import { t } from '../../i18n';
 
 export interface ConfirmModalProps {
   open: boolean;
@@ -20,7 +21,7 @@ export interface ConfirmModalProps {
 
 export function ConfirmModal({
   open, onClose, onCancel, onConfirm, title, message,
-  confirmLabel = 'Confirm', cancelLabel = 'Cancel',
+  confirmLabel, cancelLabel,
   danger = false, loading = false, children,
 }: ConfirmModalProps) {
   return (
@@ -32,7 +33,7 @@ export function ConfirmModal({
       footer={
         <>
           <button className={modalStyles.btn} onClick={onCancel ?? onClose} disabled={loading} type="button">
-            {cancelLabel}
+            {cancelLabel ?? t('Cancel')}
           </button>
           <button
             className={`${modalStyles.btn} ${danger ? modalStyles.btnDanger : modalStyles.btnPrimary}`}
@@ -41,7 +42,7 @@ export function ConfirmModal({
             type="button"
             data-modal-primary="true"
           >
-            {confirmLabel}
+            {confirmLabel ?? t('Confirm')}
           </button>
         </>
       }

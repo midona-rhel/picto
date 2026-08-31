@@ -2,11 +2,12 @@ import { IconEqual, IconLayersIntersect, IconLayersUnion } from '@tabler/icons-r
 import type { SetMatchMode } from '../../types/canonical';
 import styles from './FilterLogicTabs.module.css';
 import { KbdTooltip } from '../KbdTooltip';
+import { t } from '../../../i18n';
 
 const OPTIONS = [
-  { value: 'any', label: 'Match any', icon: IconLayersUnion },
-  { value: 'all', label: 'Match all', icon: IconLayersIntersect },
-  { value: 'exact', label: 'Match exactly', icon: IconEqual },
+  { value: 'any', label: t("Match any"), icon: IconLayersUnion },
+  { value: 'all', label: t("Match all"), icon: IconLayersIntersect },
+  { value: 'exact', label: t("Match exactly"), icon: IconEqual },
 ] as const;
 
 export function FilterLogicTabs({ value, onChange }: {
@@ -14,7 +15,7 @@ export function FilterLogicTabs({ value, onChange }: {
   onChange: (value: SetMatchMode) => void;
 }) {
   return (
-    <div className={styles.root} role="group" aria-label="Filter matching rule">
+    <div className={styles.root} role="group" aria-label={t("Filter matching rule")}>
       {OPTIONS.map((option) => {
         const Icon = option.icon;
         return (

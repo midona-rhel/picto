@@ -123,6 +123,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.defineProperty(window, 'close', { value: vi.fn(), configurable: true });
   localStorage.removeItem('picto:audio-visualization');
+  localStorage.removeItem('picto:locale');
   setKeyboardPreset('us');
   mocks.getSettings.mockResolvedValue(appSettings);
   mocks.getUpdateState.mockResolvedValue({
@@ -253,6 +254,16 @@ describe('Settings', () => {
     await waitFor(() => expect(screen.getByText('Appearance')).toBeInTheDocument());
     expect(screen.queryByText('Keyboard')).not.toBeInTheDocument();
     expect(screen.queryByText(/Search results for/)).not.toBeInTheDocument();
+  });
+
+  it('offers every supported language from General settings', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Language' }));
+    for (const language of ['English', 'Deutsch', 'Español', 'Português', 'Français', '简体中文', '日本語', 'Suomi']) {
+      expect(screen.getAllByText(language).length).toBeGreaterThan(0);
+    }
   });
 
   it('stores compact tag prefixes as a global interface preference', async () => {

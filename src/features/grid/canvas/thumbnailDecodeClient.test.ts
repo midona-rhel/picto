@@ -19,13 +19,19 @@ describe('ThumbnailDecodeClient', () => {
     const first = new ThumbnailDecodeClient(firstBitmap, vi.fn(), () => firstWorker as unknown as Worker);
     const second = new ThumbnailDecodeClient(secondBitmap, vi.fn(), () => secondWorker as unknown as Worker);
 
-    first.sendPlan([{ fileHash: 'first', url: '/first' }]);
-    second.sendPlan([{ fileHash: 'second', url: '/second' }]);
-    firstWorker.onmessage?.({ data: { type: 'bitmap', fileHash: 'first', bitmap: {} } } as MessageEvent);
+    first.sendPlan([{ fileHash: 'first', url: '/first', quality: 'full' }]);
+    second.sendPlan([{ fileHash: 'second', url: '/second', quality: 'thumbnail' }]);
+    firstWorker.onmessage?.({
+      data: { type: 'bitmap', fileHash: 'first', quality: 'full', bitmap: {} },
+    } as MessageEvent);
 
-    expect(firstWorker.postMessage).toHaveBeenCalledWith({ type: 'plan', entries: [{ fileHash: 'first', url: '/first' }] });
-    expect(secondWorker.postMessage).toHaveBeenCalledWith({ type: 'plan', entries: [{ fileHash: 'second', url: '/second' }] });
-    expect(firstBitmap).toHaveBeenCalledWith('first', {});
+    expect(firstWorker.postMessage).toHaveBeenCalledWith({
+      type: 'plan', entries: [{ fileHash: 'first', url: '/first', quality: 'full' }],
+    });
+    expect(secondWorker.postMessage).toHaveBeenCalledWith({
+      type: 'plan', entries: [{ fileHash: 'second', url: '/second', quality: 'thumbnail' }],
+    });
+    expect(firstBitmap).toHaveBeenCalledWith('first', {}, 'full');
     expect(secondBitmap).not.toHaveBeenCalled();
 
     first.invalidate('first');

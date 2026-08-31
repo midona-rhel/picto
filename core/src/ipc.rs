@@ -263,6 +263,17 @@ pub fn dispatch_library(
             application,
             &parse::<crate::media_io::ExportRequest>(args_json)?,
         )?),
+        "picto_pack.inspect" => read(crate::picto_pack::inspect(&parse::<
+            crate::picto_pack::PictoPackImportRequest,
+        >(args_json)?)?),
+        "picto_pack.export" => read(crate::picto_pack::export(
+            application,
+            &parse::<crate::picto_pack::PictoPackExportRequest>(args_json)?,
+        )?),
+        "picto_pack.import" => read(crate::picto_pack::import(
+            application,
+            &parse::<crate::picto_pack::PictoPackImportRequest>(args_json)?,
+        )?),
         "sources.list" => read(crate::auth::sources()),
         "auth.credentials.list" => read(crate::auth::list_library_credentials(application)?),
         "auth.health.list" => read(crate::auth::list_library_health(application)?),

@@ -11,6 +11,7 @@ import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import { GroupSurface } from './GroupSurface';
 import detailStyles from '../viewer/DetailWindow.module.css';
+import { t } from '../../i18n';
 
 const TOOLBAR_HIDE_DELAY = 1000;
 
@@ -76,7 +77,7 @@ export function GroupDetailWindow({ groupId }: { groupId: number }) {
           <span className={detailStyles.titleName}>{title}</span>
         </div>
         <div className={detailStyles.toolbarRight}>
-          <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcutId="view.alwaysOnTop">
+          <KbdTooltip label={alwaysOnTop ? t("Unpin") : t("Always on top")} shortcutId="view.alwaysOnTop">
             <button
               className={`${detailStyles.icBtn} ${alwaysOnTop ? detailStyles.icBtnActive : ''}`}
               onClick={toggleAlwaysOnTop}
@@ -84,7 +85,7 @@ export function GroupDetailWindow({ groupId }: { groupId: number }) {
               {alwaysOnTop ? <IconPinFilled size={16} /> : <IconPin size={16} />}
             </button>
           </KbdTooltip>
-          <KbdTooltip label="Close" shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
+          <KbdTooltip label={t("Close")} shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
         </div>
       </div>
 

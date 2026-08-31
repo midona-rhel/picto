@@ -61,6 +61,9 @@ describe('theme surface ownership', () => {
     expect(tokens).toContain('--mantine-font-family: var(--font-family-ui);');
     expect(overlay).toContain('.checkBoxChecked {\n  background: var(--color-text-primary);');
     expect(tags).toContain('.tagRowSelected {\n  background: var(--color-selection-bg);');
+    expect(tags).toContain('font: var(--font-weight-regular) var(--font-size-md)/24px var(--font-family-ui);');
+    expect(tags).toContain('font: var(--font-weight-regular) var(--font-size-md)/25px var(--font-family-ui);');
+    expect(tags).not.toContain('opacity: 0.95;');
     expect(tags).not.toContain('--tag-text-dark');
     expect(tagPanel).not.toContain('tagGroupTextColor');
     expect(tagPanel).toContain('fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}');
@@ -93,6 +96,7 @@ describe('theme surface ownership', () => {
     expect(sidebar).toContain('var(--sidebar-font-family, var(--font-family-ui))');
     expect(librarySwitcher).toContain('font-family: var(--sidebar-font-family, var(--font-family-ui));');
     expect(sidebarRows).toContain('font-family: var(--sidebar-mono-font-family, var(--font-family-mono));');
+    expect(sidebarRows).toContain('.active .count,\n.selected .count {\n  color: var(--sidebar-text-primary, var(--color-text-primary));');
     expect(sidebarRows).not.toContain('box-shadow: inset 0 0 0 1px var(--color-border-focus);');
     expect(tooltip).toContain('font-size: var(--font-size-md);');
     expect(tooltip).toContain('font-size: var(--font-size-xs);');

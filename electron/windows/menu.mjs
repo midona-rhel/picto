@@ -204,6 +204,10 @@ export function createMenuManager({
             accelerator: 'Shift+CmdOrCtrl+I',
             click: () => sendToMainWindow('menu:import-folder'),
           },
+          {
+            label: commandContext.importPictoPackLabel || 'Import Picto Pack…',
+            click: () => sendToMainWindow('menu:import-picto-pack'),
+          },
           { type: 'separator' },
           {
             label: 'Export Originals…',
@@ -216,6 +220,11 @@ export function createMenuManager({
             accelerator: accelerator('file.exportAs', 'Shift+CmdOrCtrl+E'),
             enabled: hasSelection,
             click: () => sendToMainWindow('menu:export-advanced'),
+          },
+          {
+            label: commandContext.exportPictoPackLabel || 'Export as Picto Pack…',
+            enabled: hasSelection,
+            click: () => sendToMainWindow('menu:export-picto-pack'),
           },
           ...(!isMac ? [
             { type: 'separator' },

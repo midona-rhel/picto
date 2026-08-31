@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { renderAsync } from 'docx-preview';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import styles from './DocxViewer.module.css';
+import { t } from '../../../i18n';
 
 interface Props { src: string; onReady?: () => void }
 
@@ -45,7 +46,7 @@ export function DocxViewer({ src, onReady }: Props) {
       })
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Could not open this DOCX document.');
+          setError(reason instanceof Error ? reason.message : t('Could not open this DOCX document.'));
           onReady?.();
         }
       });

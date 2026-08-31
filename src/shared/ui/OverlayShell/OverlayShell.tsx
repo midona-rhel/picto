@@ -18,6 +18,7 @@ import { KbdTooltip } from '../KbdTooltip';
 import { useShortcutScope } from '../../hooks/useShortcutScope';
 import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import styles from './OverlayShell.module.css';
+import { t } from '../../../i18n';
 
 export interface OverlayShellProps {
   open: boolean;
@@ -153,7 +154,7 @@ export function OverlayShell({
         <div className={styles.header} onMouseDown={onDragStart}>
           {header}
           {onPinnedChange && (
-            <KbdTooltip label={pinned ? 'Unpin' : 'Pin (keep open)'}>
+            <KbdTooltip label={pinned ? t("Unpin") : t("Pin (keep open)")}>
               <button
                 className={`${styles.pinBtn} ${pinned ? styles.pinBtnActive : ''}`}
                 onClick={() => onPinnedChange(!pinned)}

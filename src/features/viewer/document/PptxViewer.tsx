@@ -4,6 +4,7 @@ import type { CSSProperties } from 'react';
 import { renderSlideToSvg } from '@office-kit/pptx-preview';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import styles from './PptxViewer.module.css';
+import { t } from '../../../i18n';
 
 interface Props { src: string; onReady?: () => void }
 
@@ -49,7 +50,7 @@ export function PptxViewer({ src, onReady }: Props) {
       })
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Could not open this presentation.');
+          setError(reason instanceof Error ? reason.message : t('Could not open this presentation.'));
           onReady?.();
         }
       });

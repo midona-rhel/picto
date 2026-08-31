@@ -25,6 +25,7 @@ import { createDocumentThumbnailService } from './services/documentThumbnailServ
 import { createSiteIconService } from './services/siteIconService.mjs';
 import { createUpdateService } from './services/updateService.mjs';
 import { createSubscriptionNotificationService } from './services/subscriptionNotificationService.mjs';
+import { associatedFilesFromArguments } from './services/associatedFileService.mjs';
 
 installConsoleForwarding();
 
@@ -57,6 +58,23 @@ if (!gotLock) {
   );
   app.quit();
 }
+
+let bootstrapComplete = false;
+let incomingAssociatedFiles = associatedFilesFromArguments(process.argv, process.cwd());
+const pendingPictoPackPaths = [];
+let associatedFileDispatch = Promise.resolve();
+
+function acceptAssociatedFiles(values, workingDirectory = process.cwd()) {
+  const entries = associatedFilesFromArguments(values, workingDirectory);
+  if (entries.length === 0) return;
+  incomingAssociatedFiles.push(...entries);
+  if (bootstrapComplete) void drainAssociatedFiles();
+}
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  acceptAssociatedFiles([filePath]);
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -272,6 +290,44 @@ const libraryHost = createLibraryHostService({
   setFileIcon,
 });
 
+function focusMainWindow() {
+  const win = windowManager.getWindow('main');
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+
+function enqueuePictoPack(pathToPack, notify = true) {
+  if (!pendingPictoPackPaths.includes(pathToPack)) pendingPictoPackPaths.push(pathToPack);
+  if (notify) windowManager.sendToMainWindow('picto:associated-file-queued');
+}
+
+function drainAssociatedFiles() {
+  if (!bootstrapComplete || incomingAssociatedFiles.length === 0) return associatedFileDispatch;
+  const entries = incomingAssociatedFiles;
+  incomingAssociatedFiles = [];
+  associatedFileDispatch = associatedFileDispatch.then(async () => {
+    for (const entry of entries) {
+      try {
+        if (entry.kind === 'library') await libraryHost.switchLibrary(entry.path);
+        else enqueuePictoPack(entry.path);
+      } catch (error) {
+        console.error(`[main] could not open associated ${entry.kind}`, error);
+        dialog.showErrorBox(
+          entry.kind === 'library' ? 'Could not open Picto Library' : 'Could not open Picto Pack',
+          error?.message ?? String(error),
+        );
+      }
+    }
+    focusMainWindow();
+  });
+  return associatedFileDispatch;
+}
+
+function claimAssociatedPictoPack() {
+  return pendingPictoPackPaths.shift() ?? null;
+}
+
 const menuManager = createMenuManager({
   app,
   Menu,
@@ -332,6 +388,7 @@ registerIpcHandlers({
   openWithApplication,
   isDev,
   updateService,
+  claimAssociatedPictoPack,
 });
 
 function wireNativeEvents() {
@@ -372,7 +429,16 @@ async function bootstrapApplication() {
   const config = await loadGlobalConfig();
   console.info('[main] global config loaded');
 
-  let libraryToOpen = await resolveInitialLibrary(config);
+  const startupAssociatedFiles = incomingAssociatedFiles;
+  incomingAssociatedFiles = [];
+  const startupLibrary = startupAssociatedFiles.findLast((entry) => entry.kind === 'library') ?? null;
+  for (const entry of startupAssociatedFiles) {
+    if (entry.kind === 'picto-pack') enqueuePictoPack(entry.path, false);
+  }
+
+  let libraryToOpen = startupLibrary && await libraryHost.isValidLibrary(startupLibrary.path)
+    ? startupLibrary.path
+    : await resolveInitialLibrary(config);
 
   if (!libraryToOpen && config.lastLibrary) {
     const result = await libraryHost.handleMissingLibrary(config.lastLibrary);
@@ -408,6 +474,12 @@ async function bootstrapApplication() {
     setMainWindow(mainWin);
     console.info('[main] main window creation requested');
   }
+
+  if (startupLibrary && libraryToOpen !== startupLibrary.path) {
+    dialog.showErrorBox('Could not open Picto Library', `The library is missing or invalid:\n${startupLibrary.path}`);
+  }
+  bootstrapComplete = true;
+  void drainAssociatedFiles();
 }
 
 process.on('uncaughtException', (err) => {
@@ -419,16 +491,12 @@ process.on('unhandledRejection', (reason) => {
   console.error('[main] Unhandled promise rejection:', reason);
 });
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv, workingDirectory) => {
   // Native hot reload can overlap the old and new Electron processes briefly.
   // Do not let that development-only overlap steal focus from the active app.
   if (isDev) return;
-  // Another instance tried to launch — focus the existing main window.
-  const win = windowManager.getWindow('main');
-  if (win && !win.isDestroyed()) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  }
+  acceptAssociatedFiles(argv, workingDirectory);
+  focusMainWindow();
 });
 
 // Dev-only: capture the main window to a PNG when the trigger file is

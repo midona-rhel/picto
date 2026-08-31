@@ -31,8 +31,9 @@ export function mediaThumbnailUrl(hash: string): string {
   return `media://localhost/thumb/${hash}.jpg`;
 }
 
-export function libraryCoverUrl(libraryPath: string): string {
-  return `media://localhost/library-cover/cover?library=${encodeURIComponent(libraryPath)}`;
+export function libraryCoverUrl(libraryPath: string, version?: string | null): string {
+  const base = `media://localhost/library-cover/cover?library=${encodeURIComponent(libraryPath)}`;
+  return version ? `${base}&v=${encodeURIComponent(version)}` : base;
 }
 
 export function mediaFileUrl(hash: string, mime: string): string {

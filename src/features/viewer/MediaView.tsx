@@ -31,6 +31,7 @@ import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 import { usePreviewPreferences } from './usePreviewPreferences';
 import styles from './MediaView.module.css';
+import { t } from '../../i18n';
 
 export interface MediaViewProps {
   items: CanonicalEntityGridItem[];
@@ -297,8 +298,8 @@ export function MediaView({
           />
 
           {/* Boundary flash */}
-          <div className={`${styles.boundaryLeft} ${boundaryFlash === 'left' ? styles.boundaryVisible : ''}`}>First item</div>
-          <div className={`${styles.boundaryRight} ${boundaryFlash === 'right' ? styles.boundaryVisible : ''}`}>Last item</div>
+          <div className={`${styles.boundaryLeft} ${boundaryFlash === 'left' ? styles.boundaryVisible : ''}`}>{t("First item")}</div>
+          <div className={`${styles.boundaryRight} ${boundaryFlash === 'right' ? styles.boundaryVisible : ''}`}>{t("Last item")}</div>
 
           {/* Navigator — always mounted, visibility via useNavigatorRenderer */}
           <div ref={navigatorRef} className={styles.navigator} onMouseDown={handleNavMouseDown} style={{ display: 'none' }}>

@@ -15,6 +15,7 @@ import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
 import { compileGridQuery, createEmptyItemFilters, type ItemFilters } from '../shared/lib/itemFilters';
+import { t } from '../i18n';
 
 export type QueryFilters = ItemFilters;
 export type { BaseScope, CanonicalEntityGridItem, SortDirection, SortField };
@@ -164,16 +165,16 @@ export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
 export const gridFilterToolbarOpenAtom = atom(false);
 
 export const gridScopeLabelAtom = atom((get) => {
-  if (get(gridSessionAtom).scope.kind === 'media_matches') return 'Items with This Media';
+  if (get(gridSessionAtom).scope.kind === 'media_matches') return t('Items with This Media');
   const nodeId = get(displayedSurfaceNodeIdAtom);
   const labels: Record<string, string> = {
-    'system:active': 'All',
-    'system:inbox': 'Inbox',
-    'system:trash': 'Trash',
-    'system:uncategorized': 'Uncategorized',
-    'system:untagged': 'Untagged',
-    'system:recent_viewed': 'Recently Viewed',
-    'system:random': 'Random',
+    'system:active': t('All'),
+    'system:inbox': t('Inbox'),
+    'system:trash': t('Trash'),
+    'system:uncategorized': t('Uncategorized'),
+    'system:untagged': t('Untagged'),
+    'system:recent_viewed': t('Recently Viewed'),
+    'system:random': t('Random'),
   };
   if (labels[nodeId]) return labels[nodeId];
   return get(sidebarNodesAtom).find((node) => node.id === nodeId)?.name ?? '';

@@ -1,4 +1,5 @@
-export type NotificationTone = 'error' | 'warning' | 'info' | 'success';
+
+import { t } from '../../i18n';export type NotificationTone = 'error' | 'warning' | 'info' | 'success';
 
 export interface NotificationPopupPreferences {
   enabled: boolean;
@@ -84,7 +85,7 @@ export function showErrorNotification(options: ShowNotificationOptions): void {
   if (isFolderDepthLimit(options.message)) {
     showNotification('warning', {
       ...options,
-      title: 'Folder depth limit',
+      title: t("Folder depth limit"),
       message: 'Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.',
     });
     return;

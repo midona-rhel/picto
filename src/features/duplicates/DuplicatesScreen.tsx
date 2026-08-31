@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type RefObject,
+  type SyntheticEvent,
   type TransitionEvent,
 } from 'react';
 import { atom, useAtomValue, useSetAtom } from 'jotai';
@@ -54,6 +55,7 @@ import {
   ToolbarFitIcon,
 } from '../../shared/ui/icons/toolbar-icons';
 import styles from './DuplicatesScreen.module.css';
+import { t } from '../../i18n';
 
 const LOADING_MESSAGE_DELAY_MS = 200;
 
@@ -79,28 +81,28 @@ export function DuplicatesToolbar() {
 
   return (
     <TitlebarControls
-      label="Duplicate review controls"
+      label={t("Duplicate review controls")}
       center={<TitlebarCounter current={model.index + 1} total={model.total} />}
       right={(
         <>
-          <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
-            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Zoom to fit" aria-pressed={model.isFit}>
+          <KbdTooltip label={t("Zoom to fit")} shortcutId="view.fitWindow">
+            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label={t("Zoom to fit")} aria-pressed={model.isFit}>
               <ToolbarFitIcon />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Actual pixels" shortcutId="view.actualSize">
-            <TitlebarControlButton active={model.isActual} onClick={model.actual} aria-label="Actual pixels" aria-pressed={model.isActual}>
+          <KbdTooltip label={t("Actual pixels")} shortcutId="view.actualSize">
+            <TitlebarControlButton active={model.isActual} onClick={model.actual} aria-label={t("Actual pixels")} aria-pressed={model.isActual}>
               <ToolbarActualSizeIcon />
             </TitlebarControlButton>
           </KbdTooltip>
           <TitlebarControlGroup>
-            <KbdTooltip label="Previous pair" shortcutId="dup.prevPair">
-              <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label="Previous pair">
+            <KbdTooltip label={t("Previous pair")} shortcutId="dup.prevPair">
+              <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label={t("Previous pair")}>
                 <ToolbarChevronIcon direction="left" />
               </TitlebarControlButton>
             </KbdTooltip>
-            <KbdTooltip label="Next pair" shortcutId="dup.nextPair">
-              <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label="Next pair">
+            <KbdTooltip label={t("Next pair")} shortcutId="dup.nextPair">
+              <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label={t("Next pair")}>
                 <ToolbarChevronIcon direction="right" />
               </TitlebarControlButton>
             </KbdTooltip>
@@ -155,14 +157,14 @@ function formatBytes(bytes: number): string {
 }
 
 function dimensions(file: FileQuality): string {
-  if (file.pixel_width == null || file.pixel_height == null) return 'Unknown';
+  if (file.pixel_width == null || file.pixel_height == null) return t('Unknown');
   return `${file.pixel_width} x ${file.pixel_height}`;
 }
 
 function similarityLabel(pair: DuplicatePair): string {
   const similarity = Math.max(0, 100 - pair.distance / 100);
   if (pair.distance === 0) return '100% similar';
-  return `${similarity.toFixed(pair.distance < 10 ? 2 : 1)}% similar`;
+  return t('{value0}% similar', { value0: similarity.toFixed(pair.distance < 10 ? 2 : 1) });
 }
 
 function mediaForFile(details: CanonicalEntityDetails, fileHash: string): MediaRecord | null {
@@ -278,9 +280,9 @@ function MediaCard({
     >
       <header className={styles.cardHeader}>
         <span className={styles.sideLabel}>{label}</span>
-        <KbdTooltip label={`Keep ${side}`} shortcutId={side === 'left' ? 'dup.keepLeft' : 'dup.keepRight'}>
-          <button className={btnStyles.btn} onClick={onKeep} disabled={disabled} aria-label={`Keep ${side}`}>
-            <IconCheck size={15} /> <span className={styles.keepLabel}>Keep {side}</span>
+        <KbdTooltip label={t("Keep {value0}", { value0: side })} shortcutId={side === 'left' ? 'dup.keepLeft' : 'dup.keepRight'}>
+          <button className={btnStyles.btn} onClick={onKeep} disabled={disabled} aria-label={t("Keep {value0}", { value0: side })}>
+            <IconCheck size={15} /> <span className={styles.keepLabel}>{t("Keep ")}{side}</span>
           </button>
         </KbdTooltip>
       </header>
@@ -294,8 +296,8 @@ function MediaCard({
         onPointerCancel={zoom.handlers.onPointerUp}
         onDoubleClick={zoom.fit}
       >
-        {loading && !details.item && <div className={styles.previewState}>Loading metadata...</div>}
-        {!loading && !details.item && <div className={styles.previewState}>Media details unavailable</div>}
+        {loading && !details.item && <div className={styles.previewState}>{t("Loading metadata...")}</div>}
+        {!loading && !details.item && <div className={styles.previewState}>{t("Media details unavailable")}</div>}
         {!differenceActive && (
           <div className={styles.previewLayers} style={zoom.frameStyle(side)} data-testid={`${side}-preview-layers`}>
             <ProgressiveDuplicateImage
@@ -317,20 +319,20 @@ function MediaCard({
         <div className={styles.mediaName} title={media?.media_name ?? file.file_hash}>
           {media?.media_name ?? file.file_hash}
         </div>
-        <PropertyRow label="Resolution" value={dimensions(file)} />
-        <PropertyRow label="Size" value={formatBytes(file.size_bytes)} />
-        <PropertyRow label="Format" value={file.mime_type} />
-        <PropertyRow label="Rating" value={details.item?.rating ?? 'Unrated'} />
-        <PropertyRow label="Tags" value={String(details.item?.tag_ids.length ?? 0)} />
+        <PropertyRow label={t("Resolution")} value={dimensions(file)} />
+        <PropertyRow label={t("Size")} value={formatBytes(file.size_bytes)} />
+        <PropertyRow label={t("Format")} value={file.mime_type} />
+        <PropertyRow label={t("Rating")} value={details.item?.rating ?? 'Unrated'} />
+        <PropertyRow label={t("Tags")} value={String(details.item?.tag_ids.length ?? 0)} />
         <PropertyRow
-          label="Created"
+          label={t("Created")}
           value={details.item?.root.captured_at_ms ? new Date(details.item.root.captured_at_ms).toLocaleDateString() : 'Unknown'}
         />
-        <PropertyRow label="Added" value={details.item ? new Date(details.item.root.imported_at_ms).toLocaleDateString() : 'Unknown'} />
+        <PropertyRow label={t("Added")} value={details.item ? new Date(details.item.root.imported_at_ms).toLocaleDateString() : 'Unknown'} />
         {details.item?.root.kind === 'collection' && (
-          <PropertyRow label="Group" value={details.item.root.name || `Group ${details.item.root.root_id}`} />
+          <PropertyRow label={t("Group")} value={details.item.root.name || `Group ${details.item.root.root_id}`} />
         )}
-        <PropertyRow label="Occurrences" value={String(occurrenceCount)} />
+        <PropertyRow label={t("Occurrences")} value={String(occurrenceCount)} />
       </div>
       {contextMenu.state && (
         <ContextMenu
@@ -398,16 +400,21 @@ function ProgressiveDuplicateImage({
     });
   }, [assetKey, fullResolutionUrl, thumbnailUrl]);
 
-  const markThumbnailReady = () => {
+  const markThumbnailReady = (event: SyntheticEvent<HTMLImageElement>) => {
+    if (event.currentTarget.dataset.assetKey !== assetKey) return;
     setLayers((current) => (
       current.assetKey === assetKey ? { ...current, thumbnailReady: true } : current
     ));
     onThumbnailReady();
   };
-  const markFullReady = () => setLayers((current) => (
-    current.assetKey === assetKey ? { ...current, fullReady: true } : current
-  ));
-  const settleFullImage = (_event: TransitionEvent<HTMLImageElement>) => {
+  const markFullReady = (event: SyntheticEvent<HTMLImageElement>) => {
+    if (event.currentTarget.dataset.assetKey !== assetKey) return;
+    setLayers((current) => (
+      current.assetKey === assetKey ? { ...current, fullReady: true } : current
+    ));
+  };
+  const settleFullImage = (event: TransitionEvent<HTMLImageElement>) => {
+    if (event.currentTarget.dataset.assetKey !== assetKey) return;
     setLayers((current) => (
       current.assetKey === assetKey ? { ...current, fullSettled: true } : current
     ));
@@ -427,6 +434,7 @@ function ProgressiveDuplicateImage({
       {!layers.fullSettled && (
         <img
           key={`thumbnail:${layers.assetKey}`}
+          data-asset-key={layers.assetKey}
           className={`${styles.thumbnailImage} ${pairThumbnailsReady ? styles.thumbnailImageReady : ''}`}
           src={layers.thumbnailUrl}
           onLoad={markThumbnailReady}
@@ -437,6 +445,7 @@ function ProgressiveDuplicateImage({
       {pairThumbnailsReady && (
         <img
           key={`full:${pairKey}:${layers.assetKey}`}
+          data-asset-key={layers.assetKey}
           data-resolution="full"
           className={`${styles.fullImage} ${layers.fullReady ? styles.fullImageVisible : ''}`}
           src={layers.fullResolutionUrl}
@@ -455,7 +464,7 @@ function ProgressiveDuplicateImage({
 export function DuplicatesScreen() {
   const setDuplicateToolbar = useSetAtom(duplicateToolbarAtom);
   const [pairs, setPairs] = useState<DuplicatePair[]>([]);
-  const [index, setIndex] = useState(0);
+  const [activePairKey, setActivePairKey] = useState('');
   const [total, setTotal] = useState(0);
   const [initialTotal, setInitialTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -476,18 +485,24 @@ export function DuplicatesScreen() {
   const leftPreviewRef = useRef<HTMLDivElement>(null);
   const rightPreviewRef = useRef<HTMLDivElement>(null);
 
-  const currentPair = pairs[index] ?? null;
-  const pairKey = currentPair ? duplicatePairKey(currentPair) : '';
+  const index = activePairKey
+    ? pairs.findIndex((candidate) => duplicatePairKey(candidate) === activePairKey)
+    : -1;
+  const currentPair = index >= 0 ? pairs[index] : null;
+  const pairKey = currentPair ? activePairKey : '';
+  const pairsRef = useRef(pairs);
+  pairsRef.current = pairs;
   const currentPairRef = useRef(currentPair);
   currentPairRef.current = currentPair;
-  const activePairKeyRef = useRef(pairKey);
-  activePairKeyRef.current = pairKey;
+  const activePairKeyRef = useRef(activePairKey);
+  activePairKeyRef.current = activePairKey;
   const [thumbnailGate, setThumbnailGate] = useState({ pairKey: '', left: false, right: false });
-  const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+  const [pendingPairKey, setPendingPairKey] = useState<string | null>(null);
   const [pendingThumbnailGate, setPendingThumbnailGate] = useState({ left: false, right: false });
   const [pendingDetails, setPendingDetails] = useState<PairDetails | null>(null);
-  const pendingPair = pendingIndex == null ? null : pairs[pendingIndex] ?? null;
-  const pendingPairKey = pendingPair ? duplicatePairKey(pendingPair) : '';
+  const pendingPair = pendingPairKey == null
+    ? null
+    : pairs.find((candidate) => duplicatePairKey(candidate) === pendingPairKey) ?? null;
   const markThumbnailReady = useCallback((side: ComparisonSide, readyPairKey: string) => {
     if (readyPairKey !== activePairKeyRef.current) return;
     setThumbnailGate((current) => {
@@ -501,7 +516,7 @@ export function DuplicatesScreen() {
   const pairThumbnailsReady = thumbnailGate.pairKey === pairKey
     && thumbnailGate.left
     && thumbnailGate.right;
-  const navigating = pendingIndex != null;
+  const navigating = pendingPairKey != null;
   const markPendingThumbnailReady = useCallback((side: ComparisonSide) => {
     setPendingThumbnailGate((current) => (
       current[side] ? current : { ...current, [side]: true }
@@ -531,7 +546,7 @@ export function DuplicatesScreen() {
   const showLoadingMessage = useDelayedFlag(loading);
   const showScanProgress = useDelayedFlag(scanning);
 
-  const reportFailure = useCallback((cause: unknown, title = 'Duplicate review failed') => {
+  const reportFailure = useCallback((cause: unknown, title = t('Duplicate review failed')) => {
     const message = cause instanceof Error ? cause.message : String(cause);
     setError(message);
     showErrorNotification({ title, message });
@@ -549,10 +564,10 @@ export function DuplicatesScreen() {
       })
       .catch((cause) => {
         if (cancelled) return;
-        setPendingIndex(null);
+        setPendingPairKey(null);
         setPendingThumbnailGate({ left: false, right: false });
         setPendingDetails(null);
-        reportFailure(cause, 'Unable to load duplicate media');
+        reportFailure(cause, t('Unable to load duplicate media'));
       });
     return () => {
       cancelled = true;
@@ -560,8 +575,8 @@ export function DuplicatesScreen() {
   }, [pendingPairKey, reportFailure]);
 
   useLayoutEffect(() => {
-    if (pendingIndex == null || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
-    const readyPair = pairs[pendingIndex];
+    if (!pendingPairKey || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
+    const readyPair = pairs.find((candidate) => duplicatePairKey(candidate) === pendingPairKey);
     if (!readyPair) return;
     const readyPairKey = duplicatePairKey(readyPair);
     if (pendingDetails?.pairKey !== readyPairKey) return;
@@ -572,36 +587,31 @@ export function DuplicatesScreen() {
     setRight(pendingDetails.right);
     setMetadataLoading(false);
     setThumbnailGate({ pairKey: readyPairKey, left: true, right: true });
-    setIndex(pendingIndex);
-    setPendingIndex(null);
+    setActivePairKey(readyPairKey);
+    setPendingPairKey(null);
     setPendingThumbnailGate({ left: false, right: false });
     setPendingDetails(null);
-  }, [pairs, pendingDetails, pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
+  }, [pairs, pendingDetails, pendingPairKey, pendingThumbnailGate.left, pendingThumbnailGate.right]);
 
   const loadPairs = useCallback(async ({
     showLoading = true,
     resetProgress = true,
   }: LoadPairsOptions = {}) => {
     if (showLoading) setLoading(true);
-    setPendingIndex(null);
+    setPendingPairKey(null);
     setPendingThumbnailGate({ left: false, right: false });
     setPendingDetails(null);
     setError(null);
     try {
       const page = await getDuplicatePairs();
       const activePairKey = activePairKeyRef.current;
+      const nextPairKey = selectStablePairKey(pairsRef.current, activePairKey, page.items);
       setPairs(page.items);
+      setActivePairKey(nextPairKey);
       setTotal(page.total);
       if (resetProgress) setInitialTotal(page.total);
-      setIndex((current) => {
-        const retainedIndex = activePairKey
-          ? page.items.findIndex((candidate) => duplicatePairKey(candidate) === activePairKey)
-          : -1;
-        if (retainedIndex >= 0) return retainedIndex;
-        return resetProgress ? 0 : Math.min(current, Math.max(0, page.items.length - 1));
-      });
     } catch (cause) {
-      reportFailure(cause, 'Unable to load duplicate review');
+      reportFailure(cause, t('Unable to load duplicate review'));
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -648,7 +658,7 @@ export function DuplicatesScreen() {
       })
       .catch((cause) => {
         if (requestId !== requestIdRef.current) return;
-        reportFailure(cause, 'Unable to load duplicate media');
+        reportFailure(cause, t('Unable to load duplicate media'));
       })
       .finally(() => {
         if (requestId === requestIdRef.current) setMetadataLoading(false);
@@ -666,33 +676,33 @@ export function DuplicatesScreen() {
       const result = await resolveDuplicatePair(action, pair);
       if (result.status === 'quality_ambiguous') {
         showWarningNotification({
-          title: 'Smart merge needs a choice',
+          title: t("Smart merge needs a choice"),
           message: 'No clear quality winner. Choose left or right, or keep both.',
         });
         return;
       }
       const page = await getDuplicatePairs();
-      const nextIndex = Math.min(index, Math.max(0, page.items.length - 1));
-      const nextPair = page.items[nextIndex] ?? null;
+      const nextPairKey = selectStablePairKey(pairsRef.current, duplicatePairKey(pair), page.items);
+      const nextPair = page.items.find((candidate) => duplicatePairKey(candidate) === nextPairKey) ?? null;
       const prepared = nextPair ? await loadPairDetails(nextPair) : null;
       preparedDetailsRef.current = prepared;
-      setPendingIndex(null);
+      setPendingPairKey(null);
       setPendingThumbnailGate({ left: false, right: false });
       setPendingDetails(null);
       setPairs(page.items);
       setTotal(page.total);
-      setIndex(nextIndex);
+      setActivePairKey(nextPairKey);
       if (prepared) {
         setLeft(prepared.left);
         setRight(prepared.right);
       }
     } catch (cause) {
-      reportFailure(cause, 'Unable to resolve duplicate pair');
+      reportFailure(cause, t('Unable to resolve duplicate pair'));
     } finally {
       resolutionInFlightRef.current = false;
       setResolving(false);
     }
-  }, [index, reportFailure]);
+  }, [reportFailure]);
 
   const resolveCurrent = useCallback((action: DuplicateAction) => {
     if (!currentPair || resolving || navigating) return;
@@ -707,14 +717,14 @@ export function DuplicatesScreen() {
     try {
       const summary = await scanDuplicates();
       showInfoNotification({
-        title: 'Duplicate scan complete',
+        title: t("Duplicate scan complete"),
         message: summary.candidate_count > 0
           ? `Found ${summary.candidate_count} new review pairs`
           : 'Scan complete - no new review pairs',
       });
       await loadPairs({ showLoading: false, resetProgress: true });
     } catch (cause) {
-      reportFailure(cause, 'Unable to scan for duplicates');
+      reportFailure(cause, t('Unable to scan for duplicates'));
     } finally {
       scanningRef.current = false;
       setScanning(false);
@@ -723,11 +733,13 @@ export function DuplicatesScreen() {
 
   const requestIndex = useCallback((nextIndex: number) => {
     const boundedIndex = Math.max(0, Math.min(Math.max(0, pairs.length - 1), nextIndex));
-    if (boundedIndex === index || pendingIndex != null) return;
+    const requestedPair = pairs[boundedIndex];
+    const requestedPairKey = requestedPair ? duplicatePairKey(requestedPair) : null;
+    if (!requestedPairKey || requestedPairKey === activePairKey || pendingPairKey != null) return;
     setPendingThumbnailGate({ left: false, right: false });
     setPendingDetails(null);
-    setPendingIndex(boundedIndex);
-  }, [index, pairs.length, pendingIndex]);
+    setPendingPairKey(requestedPairKey);
+  }, [activePairKey, pairs, pendingPairKey]);
   const goPrevious = useCallback(() => requestIndex(index - 1), [index, requestIndex]);
   const goNext = useCallback(() => requestIndex(index + 1), [index, requestIndex]);
 
@@ -789,14 +801,14 @@ export function DuplicatesScreen() {
   if (loading) {
     return (
       <div className={styles.centerState} aria-busy="true">
-        {showLoadingMessage ? 'Loading duplicate review queue...' : null}
+        {showLoadingMessage ? t("Loading duplicate review queue...") : null}
       </div>
     );
   }
 
   if (!currentPair) {
     const title = error
-      ? 'Unable to load duplicate review'
+      ? t('Unable to load duplicate review')
       : resolvedCount > 0 ? 'Review complete' : 'No duplicate pairs';
     const description = error
       ? error
@@ -810,7 +822,7 @@ export function DuplicatesScreen() {
         description={description}
         actions={(
           <EmptyStateAction onClick={scan} disabled={scanning || resolving}>
-            <IconRefresh size={14} stroke={1.5} /> {error ? 'Retry' : 'Scan library'}
+            <IconRefresh size={14} stroke={1.5} /> {error ? t("Retry") : t("Scan library")}
           </EmptyStateAction>
         )}
         progress={showScanProgress ? <ProgressBar indeterminate height={2} /> : null}
@@ -819,12 +831,12 @@ export function DuplicatesScreen() {
   }
 
   return (
-    <section className={styles.root} aria-label="Duplicate review">
+    <section className={styles.root} aria-label={t("Duplicate review")}>
       {pendingPair && (
         <div className={styles.pairPreload} aria-hidden="true">
           {(['left', 'right'] as const).map((side) => (
             <img
-              key={`${pendingIndex}:${side}`}
+              key={`${pendingPairKey}:${side}`}
               data-testid={`pending-${side}-thumbnail`}
               src={mediaThumbnailUrl(pendingPair[side].file.file_hash)}
               alt=""
@@ -841,7 +853,7 @@ export function DuplicatesScreen() {
         </div>
       )}
       {showScanProgress && (
-        <div className={styles.scanProgress} role="status" aria-label="Scanning duplicate pairs"><ProgressBar indeterminate height={2} /></div>
+        <div className={styles.scanProgress} role="status" aria-label={t("Scanning duplicate pairs")}><ProgressBar indeterminate height={2} /></div>
       )}
 
       <div className={styles.comparison}>
@@ -851,13 +863,13 @@ export function DuplicatesScreen() {
 
       <footer className={styles.footer}>
         <div className={styles.footerActions}>
-          <KbdTooltip label="These are different media" shortcutId="dup.notDuplicate">
-            <button className={btnStyles.btn} onClick={() => resolveCurrent('not_duplicate')} disabled={resolving}><IconX size={15} /> Not duplicates</button>
+          <KbdTooltip label={t("These are different media")} shortcutId="dup.notDuplicate">
+            <button className={btnStyles.btn} onClick={() => resolveCurrent('not_duplicate')} disabled={resolving}><IconX size={15} /> {t("Not duplicates")}</button>
           </KbdTooltip>
-          <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
-            <button className={btnStyles.btn} onClick={() => resolveCurrent('keep_both')} disabled={resolving}><IconCopy size={15} /> Keep both</button>
+          <KbdTooltip label={t("Keep both files")} shortcutId="dup.keepBoth">
+            <button className={btnStyles.btn} onClick={() => resolveCurrent('keep_both')} disabled={resolving}><IconCopy size={15} /> {t("Keep both")}</button>
           </KbdTooltip>
-          <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcutId="dup.smartMerge">
+          <KbdTooltip label={t("Keep the stronger file and preserve item metadata")} shortcutId="dup.smartMerge">
             <button
               className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
               onClick={() => {
@@ -871,10 +883,9 @@ export function DuplicatesScreen() {
               onBlur={() => setSmartMergeFocused(false)}
               disabled={resolving}
             >
-              <IconArrowsJoin size={16} /> Smart merge
-            </button>
+              <IconArrowsJoin size={16} /> {t("Smart merge")}</button>
           </KbdTooltip>
-          <KbdTooltip label="Show differences while held">
+          <KbdTooltip label={t("Show differences while held")}>
             <button
               className={`${btnStyles.btn} ${styles.differenceButton}`}
               onMouseEnter={() => setDifferenceHovered(true)}
@@ -882,13 +893,12 @@ export function DuplicatesScreen() {
               onFocus={() => setDifferenceFocused(true)}
               onBlur={() => setDifferenceFocused(false)}
               disabled={resolving || !differenceFiles}
-              aria-label="Show Difference"
+              aria-label={t("Show Difference")}
               aria-pressed={differenceActive}
             >
-              <ToolbarDifferenceIcon /> Show Difference
-            </button>
+              <ToolbarDifferenceIcon /> {t("Show Difference")}</button>
           </KbdTooltip>
-          <KbdTooltip label="Perceptual similarity is not pixel equality"><span className={styles.similarity}>
+          <KbdTooltip label={t("Perceptual similarity is not pixel equality")}><span className={styles.similarity}>
             {similarityLabel(currentPair)}
           </span></KbdTooltip>
         </div>
@@ -901,4 +911,30 @@ function duplicatePairKey(pair: DuplicatePair): string {
   const left = Math.min(pair.file_id_a, pair.file_id_b);
   const right = Math.max(pair.file_id_a, pair.file_id_b);
   return `${left}:${right}`;
+}
+
+function selectStablePairKey(
+  previousPairs: DuplicatePair[],
+  activePairKey: string,
+  nextPairs: DuplicatePair[],
+): string {
+  if (nextPairs.length === 0) return '';
+  const nextKeys = new Set(nextPairs.map(duplicatePairKey));
+  if (activePairKey && nextKeys.has(activePairKey)) return activePairKey;
+
+  const previousIndex = previousPairs.findIndex(
+    (candidate) => duplicatePairKey(candidate) === activePairKey,
+  );
+  if (previousIndex >= 0) {
+    for (let index = previousIndex + 1; index < previousPairs.length; index += 1) {
+      const key = duplicatePairKey(previousPairs[index]);
+      if (nextKeys.has(key)) return key;
+    }
+    for (let index = previousIndex - 1; index >= 0; index -= 1) {
+      const key = duplicatePairKey(previousPairs[index]);
+      if (nextKeys.has(key)) return key;
+    }
+  }
+
+  return duplicatePairKey(nextPairs[0]);
 }

@@ -13,6 +13,7 @@ import {
   type SubscriptionCoverDimensions,
 } from './SubscriptionCoverImage';
 import styles from './SubscriptionCoverDialog.module.css';
+import { t } from '../../../i18n';
 
 type Target = { id: string; name: string };
 type Crop = { focusX: number; focusY: number; zoomPercent: number };
@@ -83,7 +84,7 @@ export function MediaCoverDialog<TCursor>({
         if (cancelled) return;
         setCandidates([]);
         showErrorNotification({
-          title: 'Unable to load subscription media',
+          title: t("Unable to load subscription media"),
           message: error instanceof Error ? error.message : String(error),
         });
       })
@@ -106,7 +107,7 @@ export function MediaCoverDialog<TCursor>({
         setNextCursor(page.next_cursor);
       })
       .catch((error) => showErrorNotification({
-        title: 'Unable to load more subscription media',
+        title: t("Unable to load more subscription media"),
         message: error instanceof Error ? error.message : String(error),
       }))
       .finally(() => setLoadingMore(false));
@@ -179,12 +180,12 @@ export function MediaCoverDialog<TCursor>({
     <GlassModal
       open={target != null}
       onClose={onClose}
-      title="Set cover photo"
+      title={t("Set cover photo")}
       size={selected ? 'md' : 'lg'}
       footer={selected ? (
         <div className={styles.footerActions}>
-          <ActionButton variant="ghost" onClick={() => setSelected(null)} disabled={busy}>Back</ActionButton>
-          <ActionButton variant="primary" onClick={() => void commit()} disabled={busy}>Confirm</ActionButton>
+          <ActionButton variant="ghost" onClick={() => setSelected(null)} disabled={busy}>{t("Back")}</ActionButton>
+          <ActionButton variant="primary" onClick={() => void commit()} disabled={busy}>{t("Confirm")}</ActionButton>
         </div>
       ) : undefined}
     >
@@ -192,7 +193,7 @@ export function MediaCoverDialog<TCursor>({
         <div className={styles.cropStep}>
           <div
             className={styles.cropViewport}
-            aria-label="Cover crop preview"
+            aria-label={t("Cover crop preview")}
             onWheel={(event) => {
               event.preventDefault();
               setCrop((current) => ({
@@ -250,7 +251,7 @@ export function MediaCoverDialog<TCursor>({
             />
           </div>
           <label className={styles.zoomRow}>
-            <span>Zoom</span>
+            <span>{t("Zoom")}</span>
             <input
               className={modalStyles.rangeInput}
               type="range"
@@ -258,7 +259,7 @@ export function MediaCoverDialog<TCursor>({
               max={300}
               step={5}
               value={crop.zoomPercent}
-              aria-label="Cover zoom"
+              aria-label={t("Cover zoom")}
               onChange={(event) => setZoom(Number(event.currentTarget.value))}
             />
           </label>
@@ -267,7 +268,7 @@ export function MediaCoverDialog<TCursor>({
         <div className={styles.selectStep}>
           <p className={styles.instructions}>{instructions}</p>
           {loading ? (
-            <p className={styles.empty}>Loading…</p>
+            <p className={styles.empty}>{t("Loading…")}</p>
           ) : candidates.length === 0 ? (
             <p className={styles.empty}>{emptyText}</p>
           ) : (
@@ -316,7 +317,7 @@ export function MediaCoverDialog<TCursor>({
                   </div>
                 ))}
               </div>
-              {loadingMore ? <span className={styles.loadingMore}>Loading more…</span> : null}
+              {loadingMore ? <span className={styles.loadingMore}>{t("Loading more…")}</span> : null}
             </div>
           )}
         </div>

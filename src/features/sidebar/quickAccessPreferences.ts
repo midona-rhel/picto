@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { getSettings, patchSettings } from '../../platform/settingsApi';
 import { registerAppSettingsReload } from '../../runtime/appSettingsSettle';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { t } from '../../i18n';
 
 const listeners = new Set<() => void>();
 let snapshot: string[] = [];
@@ -26,7 +27,7 @@ function ensureLoaded(): Promise<void> {
     loading = reload().catch((reason: unknown) => {
       loading = null;
       showErrorNotification({
-        title: 'Unable to load Quick Access',
+        title: t("Unable to load Quick Access"),
         message: reason instanceof Error ? reason.message : String(reason),
       });
     });
@@ -57,7 +58,7 @@ async function persist(next: string[]): Promise<void> {
   } catch (reason: unknown) {
     if (snapshot === next) setSnapshot(previous);
     showErrorNotification({
-      title: 'Unable to update Quick Access',
+      title: t("Unable to update Quick Access"),
       message: reason instanceof Error ? reason.message : String(reason),
     });
   }

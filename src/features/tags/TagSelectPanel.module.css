@@ -37,7 +37,7 @@
   height: 24px;
   padding: 0 8px 0 0;
   border-radius: 6px;
-  font-size: 13px;
+  font: var(--font-weight-regular) var(--font-size-md)/24px var(--font-family-ui);
   color: var(--color-text-primary);
   white-space: nowrap;
   transition: background-color 60ms ease;
@@ -167,7 +167,7 @@
   gap: 6px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
+  font: var(--font-weight-regular) var(--font-size-md)/25px var(--font-family-ui);
   color: var(--color-text-primary);
   transition: background-color 60ms ease;
 }
@@ -264,7 +264,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-primary);
-  opacity: 0.95;
 }
 
 .tagBadge {

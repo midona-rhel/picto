@@ -5,6 +5,7 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { GlassModal } from '../../shared/ui/GlassModal';
 import { TagAssignmentControl } from '../../shared/ui/TagAssignmentControl';
 import { tagSelectPortalAtom } from '../../state/portals';
+import { t } from '../../i18n';
 
 export function FolderAutoTagsModal({
   open,
@@ -29,14 +30,14 @@ export function FolderAutoTagsModal({
     void Promise.all(folderIds.map((folderId) => foldersController.setAutoTags(folderId, nextTags)))
       .catch((reason) => {
         showErrorNotification({
-          title: 'Could not set folder auto tags',
+          title: t("Could not set folder auto tags"),
           message: reason instanceof Error ? reason.message : String(reason),
         });
       });
   };
 
   return (
-    <GlassModal open={open} onClose={onClose} title="Set Auto Tags" size="sm">
+    <GlassModal open={open} onClose={onClose} title={t("Set Auto Tags")} size="sm">
       <TagAssignmentControl
         tags={tags}
         onRemove={(tag) => apply(tags.filter((current) => current !== tag))}

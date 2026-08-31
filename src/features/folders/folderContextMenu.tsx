@@ -17,14 +17,15 @@ import {
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import type { MenuEntry } from '../../shared/ui/ContextMenu';
 import type { ContentSortField } from '../../platform/folderApi';
+import { t } from '../../i18n';
 
 const CONTENT_SORT_OPTIONS: ReadonlyArray<{ field: ContentSortField; label: string }> = [
-  { field: 'name', label: 'Name' },
-  { field: 'imported_at', label: 'Import Date' },
-  { field: 'created_at', label: 'Date Created' },
-  { field: 'modified_at', label: 'Date Modified' },
-  { field: 'size', label: 'Size' },
-  { field: 'notes', label: 'Notes' },
+  { field: 'name', label: t("Name") },
+  { field: 'imported_at', label: t("Import Date") },
+  { field: 'created_at', label: t("Date Created") },
+  { field: 'modified_at', label: t("Date Modified") },
+  { field: 'size', label: t("Size") },
+  { field: 'notes', label: t("Notes") },
 ];
 
 export function contentSortSubmenu(
@@ -34,7 +35,7 @@ export function contentSortSubmenu(
   const included = new Set(fields);
   return {
     submenu: true,
-    label: 'Sort by',
+    label: t("Sort by"),
     icon: <IconSort size={14} />,
     children: CONTENT_SORT_OPTIONS
       .filter(({ field }) => included.has(field))
@@ -60,6 +61,7 @@ interface FolderContextMenuOptions {
   iconPickerEntry?: MenuEntry;
   colorPickerEntry?: MenuEntry;
   onExport: () => void;
+  onExportPictoPack?: () => void;
   onDelete: () => void;
 }
 
@@ -77,36 +79,36 @@ interface BulkFolderContextMenuOptions {
 /** Folder operations shared by every surface that presents a folder context menu. */
 export function buildFolderContextMenu(options: FolderContextMenuOptions): MenuEntry[] {
   return [
-    { label: 'Open Folder', icon: <IconFolderOpen size={14} />, action: options.onOpen },
-    { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: options.onNewSubfolder },
+    { label: t("Open Folder"), icon: <IconFolderOpen size={14} />, action: options.onOpen },
+    { label: t("New Subfolder"), icon: <IconNewSubfolder size={14} />, action: options.onNewSubfolder },
     { separator: true },
     {
-      label: options.inQuickAccess ? 'Remove from Quick Access' : 'Add to Quick Access',
+      label: options.inQuickAccess ? t("Remove from Quick Access") : t("Add to Quick Access"),
       icon: options.inQuickAccess ? <IconStarOff size={14} /> : <IconStar size={14} />,
       action: options.onToggleQuickAccess,
     },
-    { label: 'Rename', icon: <IconRename size={14} />, action: options.onRename },
-    { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: options.onMove },
-    { label: 'Duplicate', icon: <IconCopy size={14} />, action: options.onDuplicate },
-    { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
+    { label: t("Rename"), icon: <IconRename size={14} />, action: options.onRename },
+    { label: t("Move to..."), icon: <IconFolderOpen size={14} />, action: options.onMove },
+    { label: t("Duplicate"), icon: <IconCopy size={14} />, action: options.onDuplicate },
+    { label: t("Set Auto Tags..."), icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
     { separator: true },
-    { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: options.onImport },
-    { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: options.onAttachWatch },
+    { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: options.onImport },
+    { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: options.onAttachWatch },
     ...(options.watchEnabled && options.onRemoveWatch ? [{
-      label: 'Remove Watched Folder',
+      label: t("Remove Watched Folder"),
       icon: <IconWatchFolder size={14} />,
       action: options.onRemoveWatch,
     } satisfies MenuEntry] : []),
     { separator: true },
     {
       submenu: true,
-      label: 'Sort Folders',
+      label: t("Sort Folders"),
       icon: <IconSort size={14} />,
       children: [
-        { label: 'This Level A-Z', action: () => options.onSortTree(false, false) },
-        { label: 'This Level Z-A', action: () => options.onSortTree(true, false) },
-        { label: 'This Level and Descendants A-Z', action: () => options.onSortTree(false, true) },
-        { label: 'This Level and Descendants Z-A', action: () => options.onSortTree(true, true) },
+        { label: t("This Level A-Z"), action: () => options.onSortTree(false, false) },
+        { label: t("This Level Z-A"), action: () => options.onSortTree(true, false) },
+        { label: t("This Level and Descendants A-Z"), action: () => options.onSortTree(false, true) },
+        { label: t("This Level and Descendants Z-A"), action: () => options.onSortTree(true, true) },
       ],
     },
     contentSortSubmenu(options.onSortContents),
@@ -114,33 +116,38 @@ export function buildFolderContextMenu(options: FolderContextMenuOptions): MenuE
       { separator: true } satisfies MenuEntry,
       ...(options.iconPickerEntry ? [{
         submenu: true,
-        label: 'Change Icon',
+        label: t("Change Icon"),
         icon: <IconChangeIcon size={14} />,
         children: [options.iconPickerEntry],
       } satisfies MenuEntry] : []),
       ...(options.colorPickerEntry ? [options.colorPickerEntry] : []),
     ] : []),
     { separator: true },
-    { label: 'Export to Computer...', icon: <IconUpload size={14} />, action: options.onExport },
+    { label: t("Export to Computer..."), icon: <IconUpload size={14} />, action: options.onExport },
+    ...(options.onExportPictoPack ? [{
+      label: t("Export as Picto Pack..."),
+      icon: <IconUpload size={14} />,
+      action: options.onExportPictoPack,
+    } satisfies MenuEntry] : []),
     { separator: true },
-    { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: options.onDelete },
+    { label: t("Delete"), icon: <IconTrash size={14} />, danger: true, action: options.onDelete },
   ];
 }
 
 export function buildBulkFolderContextMenu(options: BulkFolderContextMenuOptions): MenuEntry[] {
   return [
     {
-      label: options.allInQuickAccess ? 'Remove from Quick Access' : 'Add to Quick Access',
+      label: options.allInQuickAccess ? t("Remove from Quick Access") : t("Add to Quick Access"),
       icon: options.allInQuickAccess ? <IconStarOff size={14} /> : <IconStar size={14} />,
       action: options.onToggleQuickAccess,
     },
-    { label: `Duplicate ${options.count} Folders`, icon: <IconCopy size={14} />, action: options.onDuplicate },
-    { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: options.onMove },
-    { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
+    { label: t("Duplicate {value0} Folders", { value0: options.count }), icon: <IconCopy size={14} />, action: options.onDuplicate },
+    { label: t("Move to..."), icon: <IconFolderOpen size={14} />, action: options.onMove },
+    { label: t("Set Auto Tags..."), icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
     contentSortSubmenu(options.onSortContents),
     { separator: true },
     {
-      label: `Delete ${options.count} Folders`,
+      label: t("Delete {value0} Folders", { value0: options.count }),
       icon: <IconTrash size={14} />,
       danger: true,
       action: options.onDelete,

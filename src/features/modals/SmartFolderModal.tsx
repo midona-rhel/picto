@@ -25,6 +25,7 @@ import { RuleGroupEditor } from './smart-folder/RuleGroupEditor';
 import { compileSmartFolderPredicate, editorPredicateFromFilter } from './smart-folder/queryModel';
 import { getFieldDef, defaultOperator, defaultValue, isListField, FIELD_DEFS } from './smart-folder/fieldConfig';
 import styles from './SmartFolderModal.module.css';
+import { t } from '../../i18n';
 
 const MAX_LOCAL_RULES = 10;
 
@@ -51,7 +52,7 @@ function IconPickerPopover({ value, onChange }: { value: string | null; onChange
       <button
         ref={btnRef}
         type="button"
-        aria-label="Change icon"
+        aria-label={t("Change icon")}
         onClick={handleOpen}
         className={styles.iconTrigger}
       >
@@ -310,9 +311,9 @@ export function SmartFolderModal({
             disabled={!name.trim() || (showRules && (!editorReady || ruleCount > MAX_LOCAL_RULES))}
             type="button"
           >
-            {mode === 'create' ? 'Create' : 'Save Changes'}
+            {mode === 'create' ? t("Create") : t("Save Changes")}
           </button>
-          <button className={modalStyles.btn} onClick={handleClose} type="button">Cancel</button>
+          <button className={modalStyles.btn} onClick={handleClose} type="button">{t("Cancel")}</button>
         </>
       )}
     >
@@ -320,11 +321,11 @@ export function SmartFolderModal({
         {showDetails && (
           <>
             <div className={styles.section}>
-              <label className={styles.label}>Name</label>
+              <label className={styles.label}>{t("Name")}</label>
               <GlassInput
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Smart Folder Name"
+                placeholder={t("Smart Folder Name")}
                 autoFocus
               />
             </div>
@@ -332,22 +333,22 @@ export function SmartFolderModal({
             <div className={styles.section}>
               <div className={styles.appearanceGrid}>
                 <div className={styles.compactField}>
-                  <label className={styles.label}>Icon</label>
+                  <label className={styles.label}>{t("Icon")}</label>
                   <IconPickerPopover value={icon} onChange={setIcon} />
                 </div>
                 <div className={styles.compactField}>
-                  <label className={styles.label}>Color</label>
+                  <label className={styles.label}>{t("Color")}</label>
                   <ColorPicker value={color} onChange={setColor} />
                 </div>
               </div>
             </div>
 
             <div className={styles.section}>
-              <label className={styles.label}>Notes</label>
+              <label className={styles.label}>{t("Notes")}</label>
               <GlassTextarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Notes..."
+                placeholder={t("Notes...")}
                 rows={3}
               />
             </div>

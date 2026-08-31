@@ -3,6 +3,7 @@ import { KbdTooltip } from '../KbdTooltip';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../ContextMenu';
 import { formatKeysDisplay } from '../../lib/shortcuts';
 import styles from './ApplicationMenuButton.module.css';
+import { t } from '../../../i18n';
 
 interface ApplicationMenuNode {
   id: string;
@@ -67,11 +68,11 @@ export function ApplicationMenuButton({
 
   return (
     <>
-      <KbdTooltip label="Application menu" position="bottom">
+      <KbdTooltip label={t("Application menu")} position="bottom">
         <button
           type="button"
           className={styles.button}
-          aria-label="Application menu"
+          aria-label={t("Application menu")}
           aria-haspopup="menu"
           aria-expanded={menu.state ? true : undefined}
           onClick={(event) => { void openMenu(event); }}

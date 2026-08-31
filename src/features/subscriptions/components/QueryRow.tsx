@@ -13,6 +13,7 @@ import type {
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
 import { getSiteLabel } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 /** One dense table row in the queries table. */
 export function QueryRow({
@@ -58,10 +59,10 @@ export function QueryRow({
       }}
     >
       <span className={styles.qCellSource} title={source}>{source}</span>
-      <KbdTooltip label="Double-click for source details"><span className={styles.qCellQuery}>
+      <KbdTooltip label={t("Double-click for source details")}><span className={styles.qCellQuery}>
         <span className={styles.qName} title={query.query_text}>{query.query_text}</span>
         {query.source_history_complete && query.completed_initial_run && (
-          <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title="Checked all available posts" />
+          <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title={t("Checked all available posts")} />
         )}
         {authWarning && <button type="button" className={styles.qAuthChip} onClick={onOpenAuth}>{authWarning}</button>}
         {query.last_failure_message && !running && (
@@ -71,22 +72,22 @@ export function QueryRow({
       <span className={styles.qCellNum}>{query.posts_found.toLocaleString()}</span>
       <span className={styles.qCellNum}>{query.files_found.toLocaleString()}</span>
       <span className={styles.qCellActions} onDoubleClick={(event) => event.stopPropagation()}>
-        <KbdTooltip label="Run only this source now">
+        <KbdTooltip label={t("Run only this source now")}>
           <button
             type="button"
             className={styles.querySmallBtn}
-            aria-label="Run query now"
+            aria-label={t("Run query now")}
             onClick={onRun}
             disabled={busy || subscriptionRunning}
           >
             <IconPlayerPlay size={14} />
           </button>
         </KbdTooltip>
-        <KbdTooltip label={query.group_posts ? 'Group multi-media posts' : 'Keep post media separate'}>
+        <KbdTooltip label={query.group_posts ? t("Group multi-media posts") : t("Keep post media separate")}>
           <button
             type="button"
             className={`${styles.querySmallBtn} ${query.group_posts ? styles.querySmallBtnActive : ''}`.trim()}
-            aria-label="Group multi-media posts"
+            aria-label={t("Group multi-media posts")}
             aria-pressed={query.group_posts}
             onClick={() => onGrouping(!query.group_posts)}
             disabled={busy || subscriptionRunning}
@@ -95,24 +96,24 @@ export function QueryRow({
           </button>
         </KbdTooltip>
         <KbdTooltip label={paused
-          ? 'Resume this source in future subscription runs'
-          : 'Put this source on hold until it is resumed'}>
+          ? t("Resume this source in future subscription runs")
+          : t("Put this source on hold until it is resumed")}>
           <button
             type="button"
             className={styles.querySmallBtn}
-            aria-label={paused ? 'Resume query' : 'Put query on hold'}
+            aria-label={paused ? t("Resume query") : t("Put query on hold")}
             onClick={() => onPause(!paused)}
             disabled={busy || subscriptionRunning}
           >
             {paused ? <IconPlayerPlay size={14} /> : <IconHandStop size={14} />}
           </button>
         </KbdTooltip>
-        <KbdTooltip label="Edit">
+        <KbdTooltip label={t("Edit")}>
           <button type="button" className={styles.querySmallBtn} onClick={onEdit} disabled={busy || subscriptionRunning}>
             <IconPencil size={14} />
           </button>
         </KbdTooltip>
-        <KbdTooltip label="Delete">
+        <KbdTooltip label={t("Delete")}>
           <button type="button" className={styles.querySmallBtn} onClick={onDelete} disabled={busy || subscriptionRunning}>
             <IconTrash size={14} />
           </button>

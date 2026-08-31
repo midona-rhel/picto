@@ -3,6 +3,7 @@ import { libraryCoverModalAtom } from '../../state/modals';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { MediaCoverDialog } from '../subscriptions/components/SubscriptionCoverDialog';
 import { loadLibraryCoverCandidates, saveLibraryCover } from './libraryAppearance';
+import { t } from '../../i18n';
 
 export function LibraryCoverDialogHost() {
   const state = useAtomValue(libraryCoverModalAtom);
@@ -22,7 +23,7 @@ export function LibraryCoverDialogHost() {
           return true;
         } catch (reason) {
           showErrorNotification({
-            title: 'Could not set library cover',
+            title: t("Could not set library cover"),
             message: reason instanceof Error ? reason.message : String(reason),
           });
           return false;

@@ -78,6 +78,24 @@ export interface ExportModalState {
 }
 export const exportModalAtom = atom<ExportModalState>({ open: false, fileCount: 0 });
 
+export type PictoPackModalState =
+  | { open: false }
+  | {
+      open: true;
+      mode: 'export';
+      source: import('../platform/pictoPackApi').PictoPackSource;
+      itemCount: number;
+      suggestedName: string;
+    }
+  | {
+      open: true;
+      mode: 'import';
+      path: string;
+      summary: import('../platform/pictoPackApi').PictoPackSummary;
+    };
+
+export const pictoPackModalAtom = atom<PictoPackModalState>({ open: false });
+
 export interface BatchRenameModalState {
   open: boolean;
   items: Array<{ root_id: number; name: string }>;

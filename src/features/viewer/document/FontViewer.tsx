@@ -2,24 +2,25 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { IconMinus, IconPlus } from '@tabler/icons-react';
 import styles from './FontViewer.module.css';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
+import { t, translateMessage } from '../../../i18n';
 
 type FontTab = 'preview' | 'waterfall' | 'glyphs' | 'information';
 type PreviewTheme = 'auto' | 'light' | 'dark' | 'purple' | 'yellow';
 
 const TABS: Array<{ id: FontTab; label: string }> = [
-  { id: 'preview', label: 'Preview' },
-  { id: 'waterfall', label: 'Waterfall' },
-  { id: 'glyphs', label: 'Glyphs' },
-  { id: 'information', label: 'Information' },
+  { id: 'preview', label: t("Preview") },
+  { id: 'waterfall', label: t("Waterfall") },
+  { id: 'glyphs', label: t("Glyphs") },
+  { id: 'information', label: t("Information") },
 ];
 
 const THEMES: PreviewTheme[] = ['auto', 'light', 'dark', 'purple', 'yellow'];
 const WATERFALL_SIZES = [72, 64, 56, 48, 38, 30, 24, 20, 16, 14, 12];
 const GLYPH_GROUPS = [
-  { label: 'Uppercase', value: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
-  { label: 'Lowercase', value: 'abcdefghijklmnopqrstuvwxyz' },
-  { label: 'Numbers', value: '0123456789' },
-  { label: 'Punctuation', value: '.,:;!?@#$%&*()[]{}+-=/\\_\u2014\u2013\u201c\u201d\u2018\u2019' },
+  { label: t("Uppercase"), value: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+  { label: t("Lowercase"), value: 'abcdefghijklmnopqrstuvwxyz' },
+  { label: t("Numbers"), value: '0123456789' },
+  { label: t("Punctuation"), value: '.,:;!?@#$%&*()[]{}+-=/\\_\u2014\u2013\u201c\u201d\u2018\u2019' },
 ];
 
 function fontFormat(mimeType: string) {
@@ -100,47 +101,47 @@ export function FontViewer({ src, displayName, mimeType, onReady }: Props) {
         </header>
 
         <div className={styles.toolbar}>
-          <div className={styles.tabs} role="tablist" aria-label="Font preview mode">
+          <div className={styles.tabs} role="tablist" aria-label={t("Font preview mode")}>
             {TABS.map((item) => (
               <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={styles.tab} onClick={() => setTab(item.id)}>
-                {item.label}
+                {translateMessage(item.label)}
               </button>
             ))}
           </div>
-          <div className={styles.themes} aria-label="Preview background">
+          <div className={styles.themes} aria-label={t("Preview background")}>
             {THEMES.map((item) => (
-              <button key={item} type="button" aria-label={`${item} preview`} aria-pressed={theme === item} className={`${styles.theme} ${styles[item]}`} onClick={() => setTheme(item)}>A</button>
+              <button key={item} type="button" aria-label={t("{value0} preview", { value0: item })} aria-pressed={theme === item} className={`${styles.theme} ${styles[item]}`} onClick={() => setTheme(item)}>{t("A")}</button>
             ))}
           </div>
         </div>
 
         <main className={styles.content}>
-          {status === 'loading' ? <div className={styles.message}>Loading font…</div> : null}
-          {status === 'error' ? <div className={styles.message} role="alert">This font cannot be previewed by Chromium.</div> : null}
+          {status === 'loading' ? <div className={styles.message}>{t("Loading font…")}</div> : null}
+          {status === 'error' ? <div className={styles.message} role="alert">{t("This font cannot be previewed by Chromium.")}</div> : null}
           {status === 'ready' && tab === 'preview' ? (
             <article className={styles.article} contentEditable suppressContentEditableWarning spellCheck={false}>
-              <h2>The quick brown fox jumps over the lazy dog.</h2>
-              <p>Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers.</p>
-              <p>ABCDEFGHIJKLMNOPQRSTUVWXYZ<br />abcdefghijklmnopqrstuvwxyz<br />0123456789</p>
+              <h2>{t("The quick brown fox jumps over the lazy dog.")}</h2>
+              <p>{t("Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers.")}</p>
+              <p>{t("ABCDEFGHIJKLMNOPQRSTUVWXYZ")}<br />{t("abcdefghijklmnopqrstuvwxyz")}<br />0123456789</p>
             </article>
           ) : null}
           {status === 'ready' && tab === 'waterfall' ? (
             <div className={styles.waterfall}>
-              {WATERFALL_SIZES.map((size) => <div key={size} contentEditable suppressContentEditableWarning spellCheck={false} style={{ fontSize: `calc(${size}px * var(--preview-scale))` }}>Hamburgefontsiv 0123456789</div>)}
+              {WATERFALL_SIZES.map((size) => <div key={size} contentEditable suppressContentEditableWarning spellCheck={false} style={{ fontSize: `calc(${size}px * var(--preview-scale))` }}>{t("Hamburgefontsiv 0123456789")}</div>)}
             </div>
           ) : null}
           {status === 'ready' && tab === 'glyphs' ? (
             <div className={styles.glyphs}>
               {GLYPH_GROUPS.map((group) => (
-                <section key={group.label}><h2>{group.label}</h2><div className={styles.glyphGrid}>{Array.from(group.value).map((glyph, index) => <span key={`${glyph}-${index}`} title={glyph}>{glyph}</span>)}</div></section>
+                <section key={group.label}><h2>{translateMessage(group.label)}</h2><div className={styles.glyphGrid}>{Array.from(group.value).map((glyph, index) => <span key={`${glyph}-${index}`} title={glyph}>{glyph}</span>)}</div></section>
               ))}
             </div>
           ) : null}
           {tab === 'information' ? (
             <dl className={styles.information}>
-              <div><dt>File name</dt><dd>{displayName}</dd></div>
-              <div><dt>Format</dt><dd>{fontFormat(mimeType)}</dd></div>
-              <div><dt>Preview engine</dt><dd>Chromium FontFace</dd></div>
+              <div><dt>{t("File name")}</dt><dd>{displayName}</dd></div>
+              <div><dt>{t("Format")}</dt><dd>{fontFormat(mimeType)}</dd></div>
+              <div><dt>{t("Preview engine")}</dt><dd>{t("Chromium FontFace")}</dd></div>
             </dl>
           ) : null}
         </main>
@@ -148,9 +149,9 @@ export function FontViewer({ src, displayName, mimeType, onReady }: Props) {
 
       {tab !== 'information' ? (
         <div className={styles.zoom}>
-          <button type="button" aria-label="Decrease font preview size" onClick={() => setScale((value) => Math.max(0.5, value - 0.1))}><IconMinus size={14} /></button>
-          <input aria-label="Font preview size" type="range" min="50" max="300" value={Math.round(scale * 100)} onChange={(event) => setScale(Number(event.currentTarget.value) / 100)} />
-          <button type="button" aria-label="Increase font preview size" onClick={() => setScale((value) => Math.min(3, value + 0.1))}><IconPlus size={14} /></button>
+          <button type="button" aria-label={t("Decrease font preview size")} onClick={() => setScale((value) => Math.max(0.5, value - 0.1))}><IconMinus size={14} /></button>
+          <input aria-label={t("Font preview size")} type="range" min="50" max="300" value={Math.round(scale * 100)} onChange={(event) => setScale(Number(event.currentTarget.value) / 100)} />
+          <button type="button" aria-label={t("Increase font preview size")} onClick={() => setScale((value) => Math.min(3, value + 0.1))}><IconPlus size={14} /></button>
         </div>
       ) : null}
     </div>

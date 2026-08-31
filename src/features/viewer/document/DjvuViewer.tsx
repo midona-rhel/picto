@@ -4,6 +4,7 @@ import simdWasmUrl from '/node_modules/djvu-rs/simd128/djvu_rs_bg.wasm?url';
 import { useEffect, useRef, useState } from 'react';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import styles from './DjvuViewer.module.css';
+import { t } from '../../../i18n';
 
 interface Props { src: string; onReady?: () => void }
 
@@ -32,7 +33,7 @@ export function DjvuViewer({ src, onReady }: Props) {
       setPageCount(document.page_count());
     }).catch((reason: unknown) => {
       if (!abort.signal.aborted) {
-        setError(reason instanceof Error ? reason.message : 'Could not open this DjVu document.');
+        setError(reason instanceof Error ? reason.message : t('Could not open this DjVu document.'));
         onReady?.();
       }
     });
@@ -62,7 +63,7 @@ export function DjvuViewer({ src, onReady }: Props) {
         page.free();
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not render this DjVu page.');
+      setError(reason instanceof Error ? reason.message : t('Could not render this DjVu page.'));
       onReady?.();
     }
   }, [onReady, pageCount, pageNumber]);

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { t } from '../../i18n';
 
 export type AudioVisualizationMode = 'none' | 'spectrum' | 'oscilloscope' | 'orbit';
 
@@ -6,10 +7,10 @@ export const AUDIO_VISUALIZATION_OPTIONS: Array<{
   value: AudioVisualizationMode;
   label: string;
 }> = [
-  { value: 'none', label: 'None' },
-  { value: 'spectrum', label: 'Spectrum' },
-  { value: 'oscilloscope', label: 'Oscilloscope' },
-  { value: 'orbit', label: 'Orbit' },
+  { value: 'none', label: t("None") },
+  { value: 'spectrum', label: t("Spectrum") },
+  { value: 'oscilloscope', label: t("Oscilloscope") },
+  { value: 'orbit', label: t("Orbit") },
 ];
 
 const STORAGE_KEY = 'picto:audio-visualization';

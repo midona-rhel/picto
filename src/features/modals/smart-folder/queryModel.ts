@@ -1,5 +1,6 @@
 import { getTagsById, getTagsPaginated } from '../../../platform/tagApi';
 import { hexToLab, labToHex } from '../../../shared/lib/labColor';
+import { DEFAULT_COLOR_DELTA_E } from '../../../shared/lib/itemFilters';
 import type {
   FilterClause,
   FilterExpr,
@@ -156,7 +157,7 @@ async function compileRule(rule: SmartFolderPredicateRule): Promise<FilterExpr> 
     case 'color': {
       const value = rule.values?.[0];
       if (!value) throw new Error('Smart-folder color is empty.');
-      clause = { clause: 'color', color: hexToLab(value), delta_e: 12 };
+      clause = { clause: 'color', color: hexToLab(value), delta_e: DEFAULT_COLOR_DELTA_E };
       break;
     }
     default: throw new Error(`Unsupported smart-folder field: ${rule.field}`);

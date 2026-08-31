@@ -24,6 +24,7 @@ import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import { folderNodesAtom } from '../../state/sidebar';
 import * as entityMutations from '../../controllers/entityMutations';
+import { recordRecentFolderUse, useRecentFolders } from '../../shared/hooks/useRecentFolders';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
@@ -31,9 +32,9 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal/GlassModal';
 import { foldersController } from '../../controllers/foldersController';
 import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
 import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
-import { useRecentItems } from '../../shared/hooks/useRecentItems';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import styles from './FolderPickerPanel.module.css';
+import { t } from '../../i18n';
 
 type FolderView = 'all' | 'recent' | 'selected';
 
@@ -63,7 +64,7 @@ export function FolderPickerPanel() {
   const contextMenu = useContextMenu();
   const [createTarget, setCreateTarget] = useState<{ parentId: number | null; title: string } | null>(null);
   const [folderName, setFolderName] = useState('');
-  const [recentFolderIds, recordRecentFolders] = useRecentItems('picto-recent-folders', 20);
+  const [recentFolderIds] = useRecentFolders(20);
 
   // Build tree + flat visible IDs for range selection
   const availableFolders = useMemo(() => {
@@ -82,7 +83,7 @@ export function FolderPickerPanel() {
     if (view === 'all') return availableFolders;
     const byId = new Map(availableFolders.map((node) => [Number(node.id.slice(7)), node]));
     const ids = view === 'recent'
-      ? recentFolderIds.map(Number)
+      ? recentFolderIds
       : [...selected];
     return ids.flatMap((folderId, index) => {
       const node = byId.get(folderId);
@@ -113,11 +114,11 @@ export function FolderPickerPanel() {
   const commitImmediateSelection = useCallback((next: Set<number>, folderId: number, adding: boolean) => {
     if (portalState.onApplyFolders) {
       portalState.onApplyFolders([...next]);
+      if (adding) recordRecentFolderUse([folderId]);
     } else if (target) {
       void entityMutations.updateTargetFolderMembership(target, folderId, adding ? 'add' : 'remove');
     }
-    if (adding) recordRecentFolders([String(folderId)]);
-  }, [portalState.onApplyFolders, recordRecentFolders, target]);
+  }, [portalState.onApplyFolders, target]);
 
   const commitFilterSelection = useCallback((nextSelected: Set<number>, nextExcluded: Set<number>, mode = matchMode) => {
     portalState.onApplyFolderFilter?.([...nextSelected], [...nextExcluded], mode);
@@ -155,6 +156,7 @@ export function FolderPickerPanel() {
       setSelected(nextSelected);
       setExcluded(nextExcluded);
       lastClickedRef.current = folderId;
+      recordRecentFolderUse([folderId]);
       commitFilterSelection(nextSelected, nextExcluded);
       return;
     }
@@ -190,6 +192,7 @@ export function FolderPickerPanel() {
     if (!nextExcluded.delete(folderId)) nextExcluded.add(folderId);
     setSelected(nextSelected);
     setExcluded(nextExcluded);
+    recordRecentFolderUse([folderId]);
     commitFilterSelection(nextSelected, nextExcluded);
   }, [commitFilterSelection, excluded, filterSelection, selected]);
 
@@ -204,12 +207,12 @@ export function FolderPickerPanel() {
     };
     contextMenu.open(event, [
       {
-        label: 'New Subfolder',
+        label: t("New Subfolder"),
         icon: <IconFolderPlus size={14} />,
         action: () => openCreate(folderId, 'New Subfolder'),
       },
       {
-        label: 'New Sibling Folder',
+        label: t("New Sibling Folder"),
         icon: <IconFolderPlus size={14} />,
         action: () => openCreate(parentId, 'New Sibling Folder'),
       },
@@ -255,28 +258,28 @@ export function FolderPickerPanel() {
             <input
               ref={searchRef}
               className={shellStyles.searchInput}
-              placeholder="Search..."
+              placeholder={t("Search...")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className={shellStyles.viewTabs} role="group" aria-label="Folder view">
-            <KbdTooltip label="All folders"><button
+          <div className={shellStyles.viewTabs} role="group" aria-label={t("Folder view")}>
+            <KbdTooltip label={t("All folders")}><button
               type="button"
               className={`${shellStyles.viewTab} ${view === 'all' ? shellStyles.viewTabActive : ''}`}
-              aria-label="All folders"
+              aria-label={t("All folders")}
               onClick={() => setView('all')}
             ><IconFolders size={14} /></button></KbdTooltip>
-            <KbdTooltip label="Recent folders"><button
+            <KbdTooltip label={t("Recent folders")}><button
               type="button"
               className={`${shellStyles.viewTab} ${view === 'recent' ? shellStyles.viewTabActive : ''}`}
-              aria-label="Recent folders"
+              aria-label={t("Recent folders")}
               onClick={() => setView('recent')}
             ><IconHistory size={14} /></button></KbdTooltip>
-            <KbdTooltip label="Selected folders"><button
+            <KbdTooltip label={t("Selected folders")}><button
               type="button"
               className={`${shellStyles.viewTab} ${view === 'selected' ? shellStyles.viewTabActive : ''}`}
-              aria-label="Selected folders"
+              aria-label={t("Selected folders")}
               onClick={() => setView('selected')}
             ><IconChecks size={14} /></button></KbdTooltip>
           </div>
@@ -286,9 +289,9 @@ export function FolderPickerPanel() {
       footer={
         <>
           <div className={styles.footerHints}>
-            <span className={shellStyles.kbdHint}>Switch <span className={shellStyles.kbd}>Tab</span></span>
-            <span className={shellStyles.kbdHint}>Move <span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
-            <span className={shellStyles.kbdHint}>Select <span className={shellStyles.kbd}>↵</span></span>
+            <span className={shellStyles.kbdHint}>{t("Switch ")}<span className={shellStyles.kbd}>{t("Tab")}</span></span>
+            <span className={shellStyles.kbdHint}>{t("Move ")}<span className={styles.keyPair}><span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span></span></span>
+            <span className={shellStyles.kbdHint}>{t("Select ")}<span className={shellStyles.kbd}>↵</span></span>
           </div>
           <div className={`${btnStyles.btnGroup} ${styles.footerEnd}`}>
             {parentSelection && (
@@ -297,10 +300,9 @@ export function FolderPickerPanel() {
                 onClick={moveFolder}
                 type="button"
               >
-                Move
-              </button>
+                {t("Move")}</button>
             )}
-            {!parentSelection && <span className={shellStyles.kbdHint}>Close <span className={shellStyles.kbd}>Esc</span></span>}
+            {!parentSelection && <span className={shellStyles.kbdHint}>{t("Close ")}<span className={shellStyles.kbd}>{t("Esc")}</span></span>}
           </div>
         </>
       }
@@ -314,7 +316,7 @@ export function FolderPickerPanel() {
             {rootSelected ? <IconCheck size={10} /> : null}
           </div>
           <IconFolder size={14} />
-          <span className={shellStyles.checkLabel}>Library</span>
+          <span className={shellStyles.checkLabel}>{t("Library")}</span>
         </div>
       ) : null}
       <FolderTree
@@ -342,8 +344,8 @@ export function FolderPickerPanel() {
         size="sm"
         footer={(
           <>
-            <button type="button" className={modalStyles.btn} onClick={() => setCreateTarget(null)}>Cancel</button>
-            <button data-modal-primary="true" type="submit" form="folder-picker-create-form" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} disabled={!folderName.trim()}>Create</button>
+            <button type="button" className={modalStyles.btn} onClick={() => setCreateTarget(null)}>{t("Cancel")}</button>
+            <button data-modal-primary="true" type="submit" form="folder-picker-create-form" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} disabled={!folderName.trim()}>{t("Create")}</button>
           </>
         )}
       >
@@ -351,8 +353,8 @@ export function FolderPickerPanel() {
           <input
             autoFocus
             className={modalStyles.textInput}
-            aria-label="Folder name"
-            placeholder="Folder name"
+            aria-label={t("Folder name")}
+            placeholder={t("Folder name")}
             value={folderName}
             onChange={(event) => setFolderName(event.target.value)}
           />

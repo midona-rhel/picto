@@ -41,6 +41,7 @@ import { GroupEditIcon } from '../../shared/ui/icons/group-icons';
 import styles from './GridToolbar.module.css';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { t } from '../../i18n';
 
 const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
@@ -100,7 +101,7 @@ function SearchInput() {
         ref={ref}
         type="text"
         className={styles.searchInput}
-        placeholder="Search"
+        placeholder={t("Search")}
         value={searchText}
         onChange={(e) => gridController.setSearchText(e.target.value)}
       />
@@ -155,8 +156,8 @@ export function ViewerToolbar() {
         action: () => zoom.setZoomScale(percent / 100),
       })),
       { separator: true },
-      { label: 'Actual size', shortcut: formatKeysDisplay(getShortcut('view.actualSize')!.keys), action: zoom.fitActual },
-      { label: 'Fit to window', shortcut: formatKeysDisplay(getShortcut('view.fitWindow')!.keys), action: zoom.fitToWindow },
+      { label: t("Actual size"), shortcut: formatKeysDisplay(getShortcut('view.actualSize')!.keys), action: zoom.fitActual },
+      { label: t("Fit to window"), shortcut: formatKeysDisplay(getShortcut('view.fitWindow')!.keys), action: zoom.fitToWindow },
     ], { showSearch: false });
   };
 
@@ -198,7 +199,7 @@ export function ViewerToolbar() {
           >{state.zoomPercent ?? 100}%</span>
           <TitlebarRangeSlider
             ref={sliderRef}
-            aria-label="Zoom"
+            aria-label={t("Zoom")}
             min={0}
             max={100}
             step={0.5}
@@ -219,40 +220,40 @@ export function ViewerToolbar() {
         <>
         {zoom ? (
           <>
-            <KbdTooltip label="Fit to window" shortcutId="view.fitWindow">
-              <TitlebarControlButton onClick={zoom.fitToWindow} aria-label="Fit to window">
+            <KbdTooltip label={t("Fit to window")} shortcutId="view.fitWindow">
+              <TitlebarControlButton onClick={zoom.fitToWindow} aria-label={t("Fit to window")}>
                 <ToolbarFitIcon />
               </TitlebarControlButton>
             </KbdTooltip>
-            <KbdTooltip label="Actual size" shortcutId="view.actualSize">
-              <TitlebarControlButton onClick={zoom.fitActual} aria-label="Actual size">
+            <KbdTooltip label={t("Actual size")} shortcutId="view.actualSize">
+              <TitlebarControlButton onClick={zoom.fitActual} aria-label={t("Actual size")}>
                 <ToolbarActualSizeIcon />
               </TitlebarControlButton>
             </KbdTooltip>
           </>
         ) : null}
         {controls.edit ? (
-          <KbdTooltip label="Edit group">
-            <TitlebarControlButton onClick={controls.edit} aria-label="Edit group">
+          <KbdTooltip label={t("Edit group")}>
+            <TitlebarControlButton onClick={controls.edit} aria-label={t("Edit group")}>
               <GroupEditIcon size={16} />
             </TitlebarControlButton>
           </KbdTooltip>
         ) : null}
         {controls.navigate ? <TitlebarControlGroup>
-          <KbdTooltip label="Previous" shortcutId="view.prevImage">
+          <KbdTooltip label={t("Previous")} shortcutId="view.prevImage">
             <TitlebarControlButton
               disabled={!canPrev}
               onClick={canPrev ? () => controls.navigate?.(-1) : undefined}
-              aria-label="Previous"
+              aria-label={t("Previous")}
             >
               <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Next" shortcutId="view.nextImage">
+          <KbdTooltip label={t("Next")} shortcutId="view.nextImage">
             <TitlebarControlButton
               disabled={!canNext}
               onClick={canNext ? () => controls.navigate?.(1) : undefined}
-              aria-label="Next"
+              aria-label={t("Next")}
             >
               <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>
@@ -299,14 +300,14 @@ export function GridToolbar() {
       </div>
 
       <div className={styles.rightSection}>
-        <KbdTooltip label="View options">
-          <TitlebarControlButton ref={viewBtnRef} active={viewMenu.state != null} onClick={openViewMenu} aria-label="View options">
+        <KbdTooltip label={t("View options")}>
+          <TitlebarControlButton ref={viewBtnRef} active={viewMenu.state != null} onClick={openViewMenu} aria-label={t("View options")}>
             <ToolbarLayoutIcon />
           </TitlebarControlButton>
         </KbdTooltip>
 
-        <KbdTooltip label="Filter library">
-          <TitlebarControlButton active={filterToolbarOpen || activeFilterCount > 0} onClick={() => setFilterToolbarOpen((value) => !value)} aria-label="Filter library">
+        <KbdTooltip label={t("Filter library")}>
+          <TitlebarControlButton active={filterToolbarOpen || activeFilterCount > 0} onClick={() => setFilterToolbarOpen((value) => !value)} aria-label={t("Filter library")}>
             <ToolbarFilterIcon />
             {activeFilterCount > 0 ? <span className={styles.filterBadge}>{activeFilterCount}</span> : null}
           </TitlebarControlButton>

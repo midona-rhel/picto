@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import styles from './PropertyRow.module.css';
+import { t } from '../../../i18n';
 
 interface Props {
   label: string;
@@ -26,7 +27,7 @@ export function PropertyRow({
       <span className={styles.label}>{label}</span>
       <span className={mono ? styles.valueMono : styles.value} title={title}>
         {loading
-          ? showLoading && <span className={styles.spinner} data-inspector-summary-loading="" aria-label={`Loading ${label.toLowerCase()}`} />
+          ? showLoading && <span className={styles.spinner} data-inspector-summary-loading="" aria-label={t("Loading {value0}", { value0: label.toLowerCase() })} />
           : content ?? value}
       </span>
     </div>

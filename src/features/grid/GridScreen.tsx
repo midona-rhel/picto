@@ -80,7 +80,7 @@ import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
-import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, pasteImport, requestMediaImport } from '../../controllers/filesController';
+import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, openPictoPackImport, pasteImport, pictoPackPathFromDrop, requestMediaImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
@@ -88,7 +88,7 @@ import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 import type { CanonicalEntityGridItem, EntityTarget, Lifecycle } from '../../shared/types/canonical';
 import { showErrorNotification } from '../../shared/lib/notifications';
-import { GridFilterToolbar } from './GridFilterMenu';
+import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { addQuickAccess, removeQuickAccess, reorderQuickAccess, useQuickAccess } from '../sidebar/quickAccessPreferences';
@@ -103,11 +103,12 @@ import {
 } from '../folders/folderContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { IconPicker } from '../../shared/ui/IconPicker';
-import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
-import { readRecentItems } from '../../shared/hooks/useRecentItems';
+import { compileGridQuery, createEmptyItemFilters, textSearchQuery } from '../../shared/lib/itemFilters';
+import { readRecentFolderIds } from '../../shared/hooks/useRecentFolders';
 import type { GridScrollPosition } from '../../shared/types/gridScroll';
 import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
+import { t } from '../../i18n';
 
 const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
@@ -193,7 +194,7 @@ export function GridScreen({
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
   const [renamingSubfolderId, setRenamingSubfolderId] = useState<string | null>(null);
   const [groupInitialMode, setGroupInitialMode] = useState<'reader' | 'editor'>('reader');
-  const collectionBreadcrumbParent = useAtomValue(displayedScopeLabelAtom) || 'Collections';
+  const collectionBreadcrumbParent = useAtomValue(displayedScopeLabelAtom) || t('Collections');
   const subfolderGridRef = useRef<SubfolderGridHandle>(null);
   const quickAccessIds = useQuickAccess();
 
@@ -253,7 +254,7 @@ export function GridScreen({
       if (type !== 'drop') return;
       setFileDragOver(false);
       if (dropError) {
-        showErrorNotification({ title: 'Could not import dropped media', message: dropError });
+        showErrorNotification({ title: t("Could not import dropped media"), message: dropError });
         return;
       }
       if (!paths?.length) return;
@@ -263,6 +264,25 @@ export function GridScreen({
       const temporary = new Set(temporaryPaths);
       const browserPaths = paths.filter((path) => temporary.has(path));
       const localPaths = paths.filter((path) => !temporary.has(path));
+
+      try {
+        const pictoPackPath = pictoPackPathFromDrop(paths);
+        if (pictoPackPath) {
+          void openPictoPackImport(pictoPackPath).catch((reason) => {
+            showErrorNotification({
+              title: t("Could not import Picto Pack"),
+              message: reason instanceof Error ? reason.message : String(reason),
+            });
+          });
+          return;
+        }
+      } catch (reason) {
+        showErrorNotification({
+          title: t("Could not import Picto Pack"),
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
+        return;
+      }
 
       // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
@@ -385,9 +405,9 @@ export function GridScreen({
     if (!target) return;
     store.set(confirmModalAtom, {
       open: true,
-      title: 'Delete Permanently',
+      title: t("Delete Permanently"),
       message: `This will permanently delete ${count} item${count !== 1 ? 's' : ''}. This cannot be undone.`,
-      confirmLabel: 'Delete',
+      confirmLabel: t("Delete"),
       danger: true,
       onConfirm: () => {
         void entityMutations.permanentlyDeleteTarget(target);
@@ -483,7 +503,7 @@ export function GridScreen({
         open();
       })
       .catch((reason) => showErrorNotification({
-        title: 'Could not open group',
+        title: t("Could not open group"),
         message: reason instanceof Error ? reason.message : String(reason),
       }));
   }, []);
@@ -558,7 +578,7 @@ export function GridScreen({
       });
     } catch (reason) {
       showErrorNotification({
-        title: 'Could not create group',
+        title: t("Could not create group"),
         message: reason instanceof Error ? reason.message : String(reason),
       });
     }
@@ -621,7 +641,7 @@ export function GridScreen({
         && scope.kind !== 'media_matches') {
         e.preventDefault();
         void pasteImport(scope).catch((reason) => showErrorNotification({
-          title: 'Could not paste import',
+          title: t("Could not paste import"),
           message: reason instanceof Error ? reason.message : String(reason),
         }));
         return;
@@ -631,7 +651,7 @@ export function GridScreen({
         e.preventDefault();
         void filesController.copyTarget({ kind: 'explicit', root_ids: [...itemIds] })
           .catch((reason) => showErrorNotification({
-            title: 'Could not copy selection',
+            title: t("Could not copy selection"),
             message: reason instanceof Error ? reason.message : String(reason),
           }));
         return;
@@ -735,7 +755,7 @@ export function GridScreen({
       }
   }, { priority: 20 });
 
-  const isEmpty = items.length === 0 && !loading;
+  const isEmpty = items.length === 0 && totalCount === 0;
 
   useEffect(() => {
     const hasSubfolders = !viewerSession
@@ -898,7 +918,7 @@ export function GridScreen({
         void foldersController.create('New Folder', parentId)
           .then(setPendingSidebarRenameNodeId)
           .catch((reason) => showErrorNotification({
-            title: 'Could not create folder',
+            title: t("Could not create folder"),
             message: reason instanceof Error ? reason.message : String(reason),
           }));
       },
@@ -908,13 +928,13 @@ export function GridScreen({
         initial: { name: 'New Smart Folder', view: { filter: { kind: 'all', value: [] }, sort: { field: 'imported_at', direction: 'descending', random_seed: null } } },
       }),
       onImportFiles: canImport
-        ? () => runImport(() => chooseAndImportFiles(gridScope), 'Could not import files')
+        ? () => runImport(() => chooseAndImportFiles(gridScope), t('Could not import files'))
         : undefined,
       onImportFolder: canImport
-        ? () => runImport(() => chooseAndImportFolder(gridScope), 'Could not import folder')
+        ? () => runImport(() => chooseAndImportFolder(gridScope), t('Could not import folder'))
         : undefined,
       onPasteImport: clipboardImportAvailable
-        ? () => runImport(() => pasteImport(gridScope), 'Could not paste import')
+        ? () => runImport(() => pasteImport(gridScope), t('Could not paste import'))
         : undefined,
       onSortContents: gridScope.kind === 'folder'
         ? (field) => { void foldersController.sortContents(gridScope.folder_id, field); }
@@ -944,16 +964,17 @@ export function GridScreen({
         <div className={styles.error}>
           <span>{error}</span>
           <button className={styles.retryBtn} onClick={() => gridController.loadFirstPage()}>
-            Retry
-          </button>
+            {t("Retry")}</button>
         </div>
       );
     }
 
     if (isEmpty && !hasSubfolders) {
       const scopeKey = gridScope.kind;
-      const hasSearch = searchText.trim().length > 0;
+      const hasSearch = textSearchQuery(searchText) != null;
+      const hasFilters = countActiveGridFilters(filters) > 0;
       const emptyTitle = hasSearch ? 'No results found'
+        : hasFilters ? t("No items match these filters")
         : scopeKey === 'inbox' ? 'Inbox is empty'
         : scopeKey === 'uncategorized' ? 'No uncategorized images'
         : scopeKey === 'untagged' ? 'No untagged images'
@@ -962,6 +983,7 @@ export function GridScreen({
         : scopeKey === 'folder' ? 'This folder is empty'
         : 'No images';
       const emptyDesc = hasSearch ? 'Try different search terms or clear filters'
+        : hasFilters ? t("Try adjusting or clearing your filters")
         : scopeKey === 'inbox' ? 'Run subscriptions to add new images to your inbox'
         : scopeKey === 'uncategorized' ? 'All your images are already assigned to folders'
         : scopeKey === 'untagged' ? 'All your images have been tagged'
@@ -969,7 +991,7 @@ export function GridScreen({
         : scopeKey === 'media_matches' ? 'This media is no longer used by another library item'
         : scopeKey === 'folder' ? 'Drag and drop files here, or import them below'
         : 'Drag and drop files here, or click the button below to import';
-      const showImport = !hasSearch
+      const showImport = !hasSearch && !hasFilters
         && scopeKey !== 'inbox'
         && scopeKey !== 'untagged'
         && scopeKey !== 'smart_folder'
@@ -995,16 +1017,14 @@ export function GridScreen({
                 });
               }}>
                 <IconUpload size={14} stroke={1.5} />
-                Import Files
-              </EmptyStateAction>
+                {t("Import Files")}</EmptyStateAction>
               <EmptyStateAction onClick={() => {
                 void chooseAndImportFolder(gridScope).catch((err) => {
                   console.error('[grid] import folder failed:', err);
                 });
               }}>
                 <IconFolderPlus size={14} stroke={1.5} />
-                Import Folder
-              </EmptyStateAction>
+                {t("Import Folder")}</EmptyStateAction>
             </>
           ) : undefined}
         />
@@ -1025,7 +1045,7 @@ export function GridScreen({
           setRenamingSubfolderId(null);
           if (Number.isNaN(folderId)) return;
           void foldersController.rename(folderId, name).catch((reason) => showErrorNotification({
-            title: 'Unable to rename folder',
+            title: t("Unable to rename folder"),
             message: reason instanceof Error ? reason.message : String(reason),
           }));
         }}
@@ -1094,9 +1114,9 @@ export function GridScreen({
               onDelete: () => {
                 store.set(confirmModalAtom, {
                   open: true,
-                  title: 'Delete Folders',
+                  title: t("Delete Folders"),
                   danger: true,
-                  confirmLabel: 'Delete',
+                  confirmLabel: t("Delete"),
                   message: `Delete ${selectedFolderIds.length} selected folders and all their subfolders? Media inside these folders will remain untouched.`,
                   onConfirm: () => { void foldersController.deleteMany(selectedFolderIds); },
                 });
@@ -1142,13 +1162,13 @@ export function GridScreen({
                 const result = await (window as any).picto.dialog.open({
                   properties: ['openDirectory'],
                   multiple: false,
-                  title: `Import folder into ${folder.name}`,
+                  title: t("Import folder into {value0}", { value0: folder.name }),
                 });
                 if (!result) return;
                 const path = typeof result === 'string' ? result : result[0];
                 if (path) await foldersController.addMedia(path, folderId);
               })().catch((reason) => showErrorNotification({
-                title: 'Unable to import folder',
+                title: t("Unable to import folder"),
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },
@@ -1158,9 +1178,9 @@ export function GridScreen({
             onRemoveWatch: watchEnabled ? () => {
               store.set(confirmModalAtom, {
                 open: true,
-                title: 'Remove Watch',
+                title: t("Remove Watch"),
                 danger: true,
-                confirmLabel: 'Remove',
+                confirmLabel: t("Remove"),
                 message: `Stop watching the folder for "${folder.name}"?`,
                 onConfirm: () => { void foldersController.clearWatchConfig(folderId); },
               });
@@ -1205,12 +1225,19 @@ export function GridScreen({
                 },
               });
             },
+            onExportPictoPack: () => {
+              filesController.requestPictoPackExport(
+                { kind: 'folder', folder_id: folderId },
+                folder.count ?? 0,
+                folder.name,
+              );
+            },
             onDelete: () => {
               store.set(confirmModalAtom, {
                 open: true,
-                title: 'Delete Folder',
+                title: t("Delete Folder"),
                 danger: true,
-                confirmLabel: 'Delete',
+                confirmLabel: t("Delete"),
                 message: `Delete "${folder.name}" and all its subfolders? Media inside these folders will remain untouched.`,
                 onConfirm: () => { void foldersController.delete(folderId); },
               });
@@ -1354,8 +1381,7 @@ export function GridScreen({
             : selectionLifecycle === 'trash' || gridScope.kind === 'trash' ? 'trash'
             : gridScope.kind === 'all' ? 'active'
             : null;
-          const lastUsedFolder = readRecentItems('picto-recent-folders')
-            .map((value) => Number.parseInt(value, 10))
+          const lastUsedFolder = readRecentFolderIds()
             .map((folderId) => sidebarNodes.find((node) => node.id === `folder:${folderId}`))
             .find((node) => node != null);
           const canOpenWith = singleItem?.kind === 'media' && Boolean(singleItem.content_hash);
@@ -1368,7 +1394,7 @@ export function GridScreen({
           const onOpenWithApplication = (hash: string, applicationPath: string) => {
             void filesController.openWithApplicationForHash(hash, applicationPath).catch((reason) => {
               showErrorNotification({
-                title: 'Could not open file',
+                title: t("Could not open file"),
                 message: reason instanceof Error ? reason.message : String(reason),
               });
             });
@@ -1376,7 +1402,7 @@ export function GridScreen({
           const onOpenWithChooser = (hash: string) => {
             void filesController.openWithChooserForHash(hash).catch((reason) => {
               showErrorNotification({
-                title: 'Could not open application chooser',
+                title: t("Could not open application chooser"),
                 message: reason instanceof Error ? reason.message : String(reason),
               });
             });
@@ -1448,15 +1474,15 @@ export function GridScreen({
               ? () => {
                   store.set(confirmModalAtom, {
                     open: true,
-                    title: 'Ungroup?',
+                    title: t("Ungroup?"),
                     message: 'Every member will return to the library as a separate item. Files and metadata will not be deleted.',
-                    confirmLabel: 'Ungroup',
+                    confirmLabel: t("Ungroup"),
                     onConfirm: () => {
                       void ungroup(singleItem.root_id)
                         .then(() => announceUndoableMutation('collections.ungroup'))
                         .then(() => clearSelection())
                         .catch((reason) => showErrorNotification({
-                          title: 'Could not ungroup items',
+                          title: t("Could not ungroup items"),
                           message: reason instanceof Error ? reason.message : String(reason),
                         }));
                     },
@@ -1476,7 +1502,7 @@ export function GridScreen({
                 pixel_height: singleItem.height,
                 mime_type: singleItem.mime,
               } : null).catch((reason) => showErrorNotification({
-                title: 'Could not set library cover',
+                title: t("Could not set library cover"),
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },
@@ -1484,7 +1510,7 @@ export function GridScreen({
               ? () => {
                   void foldersController.setCover(gridScope.folder_id, singleItem.root_id)
                     .catch((reason) => showErrorNotification({
-                      title: 'Could not set folder cover',
+                      title: t("Could not set folder cover"),
                       message: reason instanceof Error ? reason.message : String(reason),
                     }));
                 }
@@ -1517,7 +1543,7 @@ export function GridScreen({
               void entityMutations.updateTargetFolderMembership(effectiveTarget, folderId, 'add')
                 .then(() => entityMutations.settleSelectionAfterMutation())
                 .catch((reason) => showErrorNotification({
-                  title: `Could not add to ${lastUsedFolder.name}`,
+                  title: t('Could not add to {value0}', { value0: lastUsedFolder.name }),
                   message: reason instanceof Error ? reason.message : String(reason),
                 }));
             } : undefined,
@@ -1535,7 +1561,7 @@ export function GridScreen({
             } : undefined,
             onSearchByImage: (engine, hash) => {
               void reverseImageSearch(hash, engine).catch((reason) => showErrorNotification({
-                title: 'Reverse image search failed',
+                title: t("Reverse image search failed"),
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },
@@ -1548,10 +1574,17 @@ export function GridScreen({
                 open: true, fileCount: selCount, target: effectiveTarget,
               });
             },
+            onExportPictoPack: () => {
+              if (!effectiveTarget) return;
+              filesController.requestPictoPackExport(
+                { kind: 'items', target: effectiveTarget },
+                selCount,
+              );
+            },
             onExportOriginals: () => {
               if (!effectiveTarget) return;
               void filesController.chooseAndExportOriginals(effectiveTarget).catch((reason) => showErrorNotification({
-                title: 'Could not export originals',
+                title: t("Could not export originals"),
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },
@@ -1614,8 +1647,7 @@ export function GridScreen({
       {!viewerSession && !quickLookSession && fileDragOver && (
         <div className={styles.dropOverlay}>
           <div className={styles.dropOverlayBadge}>
-            Drop files to import
-            {gridScope.kind === 'folder' && <span className={styles.dropOverlaySub}>into current folder</span>}
+            {t("Drop files to import")}{gridScope.kind === 'folder' && <span className={styles.dropOverlaySub}>{t("into current folder")}</span>}
           </div>
         </div>
       )}

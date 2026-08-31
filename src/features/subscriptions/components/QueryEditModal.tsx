@@ -6,6 +6,7 @@ import { ActionButton } from './ActionButton';
 import { TagAutocompleteInput } from './TagAutocompleteInput';
 import type { SubscriptionQueryInfo, SubscriptionSiteInfo } from '../../../shared/types/subscriptions';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 export function QueryEditModal({
   query,
@@ -50,11 +51,11 @@ export function QueryEditModal({
     <GlassModal
       open={query != null}
       onClose={onClose}
-      title="Edit query"
+      title={t("Edit query")}
       size="md"
       footer={
         <>
-          <ActionButton variant="ghost" onClick={onClose}>Cancel</ActionButton>
+          <ActionButton variant="ghost" onClick={onClose}>{t("Cancel")}</ActionButton>
           <ActionButton
             variant="primary"
             pending={busy}
@@ -68,13 +69,12 @@ export function QueryEditModal({
               })
             }
           >
-            Save
-          </ActionButton>
+            {t("Save")}</ActionButton>
         </>
       }
     >
       <div className={styles.formField}>
-        <span className={styles.label}>Site</span>
+        <span className={styles.label}>{t("Site")}</span>
         <CmSelect
           value={siteId}
           options={sortedSites.map((entry) => ({ value: entry.id, label: entry.name }))}
@@ -92,15 +92,15 @@ export function QueryEditModal({
         />
       </div>
       <div className={styles.formField}>
-        <span className={styles.label}>Display name (optional)</span>
+        <span className={styles.label}>{t("Display name (optional)")}</span>
         <GlassInput
           value={displayName}
-          placeholder="Shown instead of the query text"
+          placeholder={t("Shown instead of the query text")}
           onChange={(e) => setDisplayName(e.target.value)}
         />
       </div>
       <div className={styles.formField}>
-        <span className={styles.label}>Notes (optional)</span>
+        <span className={styles.label}>{t("Notes (optional)")}</span>
         <GlassInput value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
     </GlassModal>

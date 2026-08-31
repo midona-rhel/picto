@@ -8,6 +8,16 @@ import type {
 } from '../types/canonical';
 import { hexToLab } from './labColor';
 
+export const MINIMUM_TEXT_SEARCH_CHARACTERS = 3;
+export const DEFAULT_COLOR_DELTA_E = 16;
+export const MINIMUM_COLOR_DELTA_E = 4;
+export const MAXIMUM_COLOR_DELTA_E = 32;
+
+export function textSearchQuery(value: string | null | undefined): string | null {
+  const query = value?.trim() ?? '';
+  return Array.from(query).length >= MINIMUM_TEXT_SEARCH_CHARACTERS ? query : null;
+}
+
 export interface TagFilterChoice {
   tag_id: number;
   name: string;
@@ -26,6 +36,7 @@ export interface ItemFilters {
   exclude_mime_types: string[];
   text: string | null;
   color_hex: string | null;
+  color_delta_e: number;
   imported_after: string | null;
   imported_before: string | null;
   modified_after: string | null;
@@ -58,6 +69,7 @@ export function createEmptyItemFilters(): ItemFilters {
     exclude_mime_types: [],
     text: null,
     color_hex: null,
+    color_delta_e: DEFAULT_COLOR_DELTA_E,
     imported_after: null,
     imported_before: null,
     modified_after: null,
@@ -147,16 +159,22 @@ export function compileGridQuery(
   if (filters.source_url_present != null) {
     values.push(clause({ clause: 'source_urls_present', present: filters.source_url_present }));
   }
-  if (filters.notes_contains?.trim()) {
-    values.push(clause({ clause: 'text', field: 'notes', query: filters.notes_contains.trim() }));
+  const notesQuery = textSearchQuery(filters.notes_contains);
+  if (notesQuery) {
+    values.push(clause({ clause: 'text', field: 'notes', query: notesQuery }));
   }
-  if (filters.source_url_contains?.trim()) {
-    values.push(clause({ clause: 'text', field: 'source_url', query: filters.source_url_contains.trim() }));
+  const sourceUrlQuery = textSearchQuery(filters.source_url_contains);
+  if (sourceUrlQuery) {
+    values.push(clause({ clause: 'text', field: 'source_url', query: sourceUrlQuery }));
   }
-  const text = searchText.trim() || filters.text?.trim();
+  const text = textSearchQuery(searchText.trim() || filters.text);
   if (text) values.push(clause({ clause: 'text', field: 'global', query: text }));
   if (filters.color_hex) {
-    values.push(clause({ clause: 'color', color: hexToLab(filters.color_hex), delta_e: 12 }));
+    const deltaE = Math.max(
+      MINIMUM_COLOR_DELTA_E,
+      Math.min(MAXIMUM_COLOR_DELTA_E, filters.color_delta_e ?? DEFAULT_COLOR_DELTA_E),
+    );
+    values.push(clause({ clause: 'color', color: hexToLab(filters.color_hex), delta_e: deltaE }));
   }
 
   const queryScope: EntityViewQuery['scope'] = includeDescendants && scope.kind === 'folder'

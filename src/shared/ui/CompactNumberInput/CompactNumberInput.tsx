@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 import { GlassInput } from '../GlassInput/GlassInput';
 import styles from './CompactNumberInput.module.css';
+import { t } from '../../../i18n';
 
 export function CompactNumberInput({
   value,
@@ -65,11 +66,11 @@ export function CompactNumberInput({
         }}
       />
       <span className={styles.stepper}>
-        <button type="button" aria-label={`Increase ${label.toLowerCase()}`} disabled={disabled}
+        <button type="button" aria-label={t("Increase {value0}", { value0: label.toLowerCase() })} disabled={disabled}
           onMouseDown={(event) => event.preventDefault()} onClick={() => step(1)}>
           <IconChevronUp size={11} stroke={2} />
         </button>
-        <button type="button" aria-label={`Decrease ${label.toLowerCase()}`} disabled={disabled}
+        <button type="button" aria-label={t("Decrease {value0}", { value0: label.toLowerCase() })} disabled={disabled}
           onMouseDown={(event) => event.preventDefault()} onClick={() => step(-1)}>
           <IconChevronDown size={11} stroke={2} />
         </button>

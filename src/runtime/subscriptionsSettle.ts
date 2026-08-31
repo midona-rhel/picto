@@ -10,6 +10,7 @@ import { showErrorNotification, showSuccessNotification } from '../shared/lib/no
 import type { SubscriptionProgressEvent } from '../shared/types/subscriptions';
 import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 import { isGalleryImportJob } from '../features/subscriptions/subscriptionUtils';
+import { t } from '../i18n';
 
 const authRefreshCallbacks = new Set<() => void>();
 const store = getDefaultStore();
@@ -70,7 +71,9 @@ function isSuccessfulTerminal(status: string): boolean {
 }
 
 function completionSummary(postsAdded: number): string {
-  return `${postsAdded} post${postsAdded === 1 ? '' : 's'} added to library`;
+  return postsAdded === 1
+    ? t('1 post added to library')
+    : t('{value0} posts added to library', { value0: postsAdded });
 }
 
 function observePausedFailures(
@@ -83,7 +86,7 @@ function observePausedFailures(
     if (notifiedPausedFailures.has(key)) continue;
     notifiedPausedFailures.add(key);
     showErrorNotification({
-      title: galleryIds.has(entry.subscription_id) ? 'Gallery download paused' : 'Subscription paused',
+      title: galleryIds.has(entry.subscription_id) ? t("Gallery download paused") : t("Subscription paused"),
       message: entry.error ?? entry.last_error ?? 'The run paused after an error. Retry it when ready.',
     });
   }
@@ -131,7 +134,7 @@ async function observeQueryCompletions(
       for (const query of activity.queries) {
         if (!isSuccessfulTerminal(query.status) || isSuccessfulTerminal(previous.get(query.query_id) ?? '')) continue;
         showSuccessNotification({
-          title: 'Query completed',
+          title: t("Query completed"),
           message: `${entry.subscription_name} · ${query.query_text} · ${completionSummary(query.counts.posts_added)}`,
         });
       }
@@ -160,7 +163,7 @@ async function observeSubscriptionCompletions(
       notifiedRunIds.add(entry.run_id!);
       const completedQueries = activity.queries.filter((query) => isSuccessfulTerminal(query.status)).length;
       showSuccessNotification({
-        title: 'Subscription completed',
+        title: t("Subscription completed"),
         message: `${entry.subscription_name} · ${completedQueries} quer${completedQueries === 1 ? 'y' : 'ies'} completed · ${completionSummary(activity.summary.counts.posts_added)}`,
       });
     }).catch(() => {
@@ -185,7 +188,7 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
       if (latest.status === 'succeeded') {
         const cleanup = await subscriptionsController.cleanupGalleryImport(job.id);
         showSuccessNotification({
-          title: cleanup?.already_exists ? 'Gallery already exists' : 'Gallery downloaded',
+          title: cleanup?.already_exists ? t("Gallery already exists") : t("Gallery downloaded"),
           message: cleanup?.already_exists
             ? `${cleanup.title ?? job.name} is already in the library.`
             : `${cleanup?.title ?? job.name} has been downloaded.`,
@@ -194,7 +197,7 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
         await subscriptionsController.cleanupGalleryImport(job.id);
       } else {
         showErrorNotification({
-          title: 'Gallery import failed',
+          title: t("Gallery import failed"),
           message: latest.error_message ?? `Gallery worker failed (${latest.failure_kind ?? latest.status}).`,
         });
         await subscriptionsController.cleanupGalleryImport(job.id);
@@ -278,7 +281,7 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
         settleFinishedGalleryImports(snapshot);
       } catch (error) {
         showErrorNotification({
-          title: 'Subscriptions unavailable',
+          title: t("Subscriptions unavailable"),
           message: error instanceof Error ? error.message : String(error),
         });
       }

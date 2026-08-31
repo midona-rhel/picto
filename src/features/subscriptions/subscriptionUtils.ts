@@ -7,6 +7,7 @@ import type {
   SubscriptionQueryInfo,
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
+import { t } from '../../i18n';
 
 const DEFAULT_SOURCE_POST_BATCH_SIZE = 100;
 
@@ -20,18 +21,18 @@ export function isVisibleGalleryImportJob(subscription: SubscriptionInfo): boole
 
 export function describeGalleryFailure(kind: string | null, message: string | null): string {
   const normalized = message?.toLowerCase() ?? '';
-  if (normalized.includes('requires gp')) return 'Original requires GP';
-  if (normalized.includes('image viewing limit')) return 'Image limit reached';
-  if (normalized.includes('temporarily blocked')) return 'Temporarily rate limited';
-  if (normalized.includes('web page instead of a file')) return 'Invalid media response';
+  if (normalized.includes('requires gp')) return t('Original requires GP');
+  if (normalized.includes('image viewing limit')) return t('Image limit reached');
+  if (normalized.includes('temporarily blocked')) return t('Temporarily rate limited');
+  if (normalized.includes('web page instead of a file')) return t('Invalid media response');
   switch (kind) {
     case 'unauthorized':
     case 'expired':
-      return 'Login required';
+      return t('Login required');
     case 'rate_limited':
-      return 'Rate limited';
+      return t('Rate limited');
     default:
-      return 'Download failed';
+      return t('Download failed');
   }
 }
 
@@ -45,12 +46,12 @@ export function getSubscriptionRunTarget(
   return perQuery * Math.max(1, activeQueries);
 }
 
-export function getSubscriptionRunActionLabel(_subscription: SubscriptionInfo): 'Run now' {
-  return 'Run now';
+export function getSubscriptionRunActionLabel(_subscription: SubscriptionInfo): string {
+  return t('Run now');
 }
 
 export function formatRelativeTime(value: string | null | undefined): string {
-  if (!value) return 'Never';
+  if (!value) return t('Never');
 
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return value;
@@ -69,7 +70,7 @@ export function formatRelativeTime(value: string | null | undefined): string {
 }
 
 export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return 'None';
+  if (!value) return t('None');
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) return value;
   return new Intl.DateTimeFormat(undefined, {
@@ -87,12 +88,12 @@ export function getSubscriptionSiteSummary(
   sites: SubscriptionSiteInfo[],
 ): string {
   const siteIds = Array.from(new Set(queries.map((query) => query.site_id)));
-  if (siteIds.length === 0) return 'No sites';
+  if (siteIds.length === 0) return t('No sites');
   if (siteIds.length === 1) return getSiteLabel(siteIds[0], sites);
   if (siteIds.length === 2) {
     return siteIds.map((siteId) => getSiteLabel(siteId, sites)).join(' + ');
   }
-  return `${siteIds.length} sites`;
+  return t('{value0} sites', { value0: siteIds.length });
 }
 
 export function describeSubscriptionState(input: {
@@ -141,7 +142,7 @@ export function getQueryAuthState(input: {
 } {
   const site = input.sites.find((entry) => entry.id === input.query.site_id) ?? null;
   if (!site) {
-    return { tone: 'idle', label: 'No auth', blocking: false };
+    return { tone: 'idle', label: t("No auth"), blocking: false };
   }
 
   const credential = input.credentials.find(
@@ -158,15 +159,15 @@ export function getQueryAuthState(input: {
   if (blocking) {
     return {
       tone: 'attention',
-      label: missing ? 'Sign in required' : health?.last_error?.trim() || 'Sign in again',
+      label: missing ? t("Sign in required") : health?.last_error?.trim() || 'Sign in again',
       blocking: true,
     };
   }
   if (credential && (healthStatus === 'valid' || healthStatus === 'healthy')) {
-    return { tone: 'running', label: 'Auth ok', blocking: false };
+    return { tone: 'running', label: t("Auth ok"), blocking: false };
   }
   if (credential) {
-    return { tone: 'paused', label: 'Auth saved', blocking: false };
+    return { tone: 'paused', label: t("Auth saved"), blocking: false };
   }
   if (site.auth_required_for_full_access) {
     return { tone: 'idle', label: '', blocking: false };
@@ -177,14 +178,14 @@ export function getQueryAuthState(input: {
 /** Human-readable, actionable text for a query's recorded failure kind. */
 export function describeFailure(kind: string | null, message: string | null): string | null {
   switch (kind) {
-    case 'not_found': return 'User/query not found — check the handle';
-    case 'unauthorized': return 'Login rejected — check the account in Accounts';
-    case 'expired': return 'Session expired — log in again in Accounts';
-    case 'rate_limited': return 'Rate limited by the site — resumes automatically when the limit resets';
-    case 'network': return 'Network error — check your connection';
-    case 'environment': return 'Local setup problem — check the logs';
-    case 'stale': return 'Interrupted by app shutdown';
-    case 'inbox_full': return 'Paused — inbox is full';
+    case 'not_found': return t('User/query not found — check the handle');
+    case 'unauthorized': return t('Login rejected — check the account in Accounts');
+    case 'expired': return t('Session expired — log in again in Accounts');
+    case 'rate_limited': return t('Rate limited by the site — resumes automatically when the limit resets');
+    case 'network': return t('Network error — check your connection');
+    case 'environment': return t('Local setup problem — check the logs');
+    case 'stale': return t('Interrupted by app shutdown');
+    case 'inbox_full': return t('Paused — inbox is full');
     default: return message;
   }
 }

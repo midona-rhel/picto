@@ -2,6 +2,7 @@ import { getDefaultStore } from 'jotai';
 import { getUpdateState, onUpdateState, type UpdateState } from '../platform/updateApi';
 import { updateModalAtom } from '../state/modals';
 import { showInfoNotification, showSuccessNotification } from '../shared/lib/notifications';
+import { t } from '../i18n';
 
 const store = getDefaultStore();
 
@@ -14,10 +15,10 @@ export function startUpdateRuntime(): () => void {
     if (announced === key) return;
     if (state.status === 'available' && state.platform === 'darwin') {
       announced = key;
-      showInfoNotification({ title: `Picto ${state.version} is available`, message: 'Open the release notes to download it.', duration: 10_000, action: { label: 'View', onClick: () => store.set(updateModalAtom, { open: true }) } });
+      showInfoNotification({ title: t("Picto {value0} is available", { value0: state.version }), message: 'Open the release notes to download it.', duration: 10_000, action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) } });
     } else if (state.status === 'downloaded') {
       announced = key;
-      showSuccessNotification({ title: `Picto ${state.version} is ready`, message: 'Restart to finish updating.', duration: 10_000, action: { label: 'View', onClick: () => store.set(updateModalAtom, { open: true }) } });
+      showSuccessNotification({ title: t("Picto {value0} is ready", { value0: state.version }), message: 'Restart to finish updating.', duration: 10_000, action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) } });
     }
   };
   void getUpdateState().then(announce).catch(() => {});

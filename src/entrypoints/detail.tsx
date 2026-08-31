@@ -7,6 +7,7 @@ import '@mantine/core/styles.css';
 import '../shared/styles/tokens.css';
 import '../app/globals.css';
 import { startThemeRuntime } from '../runtime/themeRuntime';
+import { startLocalizedRenderer, t } from '../i18n';
 
 startThemeRuntime();
 
@@ -22,14 +23,17 @@ function DetailApp() {
       ) : hash ? (
         <DetailWindow hash={hash} />
       ) : (
-        <div style={{ color: 'var(--color-text-secondary)', padding: 24 }}>No detail item provided</div>
+        <div style={{ color: 'var(--color-text-secondary)', padding: 24 }}>{t("No detail item provided")}</div>
       )}
     </MantineProvider>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <DetailApp />
-  </React.StrictMode>,
-);
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+startLocalizedRenderer(() => {
+  root.render(
+    <React.StrictMode>
+      <DetailApp />
+    </React.StrictMode>,
+  );
+});

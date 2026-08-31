@@ -222,8 +222,35 @@ describe('GridFilterToolbar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '#FF0000' }));
     fireEvent.change(screen.getByLabelText('Color hue'), { target: { value: '120' } });
-    act(() => vi.advanceTimersByTime(100));
+    act(() => vi.advanceTimersByTime(249));
+    expect(setFilters).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
 
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ color_hex: '#00FF00' }));
+  });
+
+  it('exposes a debounced strict-to-broad color match range', () => {
+    vi.useFakeTimers();
+    const store = getDefaultStore();
+    store.set(gridFilterToolbarOpenAtom, true);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      filters: { ...emptyFilters, color_hex: '#FF0000' },
+    });
+    const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
+    render(<GridFilterToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: '#FF0000' }));
+    const range = screen.getByLabelText('Color match range');
+    expect(range).toHaveValue('16');
+    fireEvent.change(range, { target: { value: '24' } });
+    act(() => vi.advanceTimersByTime(249));
+    expect(setFilters).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+
+    expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      color_hex: '#FF0000',
+      color_delta_e: 24,
+    }));
   });
 });

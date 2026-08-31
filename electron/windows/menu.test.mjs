@@ -110,15 +110,19 @@ test('library and file commands invoke live application workflows', () => {
   library.get('New Library…').click();
   file.get('Import Files…').click();
   file.get('Import Folder…').click();
+  file.get('Import Picto Pack…').click();
   file.get('Export Originals…').click();
   file.get('Export As…').click();
+  file.get('Export as Picto Pack…').click();
 
   expect(openLibraryManager).toHaveBeenCalledOnce();
   expect(sendToMainWindow.mock.calls).toEqual([
     ['menu:import-files'],
     ['menu:import-folder'],
+    ['menu:import-picto-pack'],
     ['menu:export-basic'],
     ['menu:export-advanced'],
+    ['menu:export-picto-pack'],
   ]);
 });
 

@@ -39,6 +39,7 @@ import { usePreviewPreferences } from './usePreviewPreferences';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
+import { t } from '../../i18n';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -417,12 +418,12 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             {supportsZoom && (usesRendererZoom || pipeline.thumbLoaded) && (
               <>
                 <span className={styles.zoomRatio}>{zoomPercent}%</span>
-                <KbdTooltip label="Actual size" shortcutId="view.actualSize">
+                <KbdTooltip label={t("Actual size")} shortcutId="view.actualSize">
                   <button className={styles.icBtn} onClick={actualActiveViewer}>
                     <ToolbarActualSizeIcon />
                   </button>
                 </KbdTooltip>
-                <KbdTooltip label="Fit to window" shortcutId="view.fitWindow">
+                <KbdTooltip label={t("Fit to window")} shortcutId="view.fitWindow">
                   <button className={styles.icBtn} onClick={fitActiveViewer}>
                     <ToolbarFitIcon />
                   </button>
@@ -430,7 +431,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </>
             )}
 
-            <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcutId="view.alwaysOnTop">
+            <KbdTooltip label={alwaysOnTop ? t("Unpin") : t("Always on top")} shortcutId="view.alwaysOnTop">
               <button
                 className={`${styles.icBtn} ${alwaysOnTop ? styles.icBtnActive : ''}`}
                 onClick={toggleAlwaysOnTop}
@@ -439,7 +440,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </button>
             </KbdTooltip>
 
-            <KbdTooltip label="Close" shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
+            <KbdTooltip label={t("Close")} shortcutId="view.closeDetail"><WindowCloseButton onClick={() => void windowController.closeCurrentWindow()} /></KbdTooltip>
           </div>
         </div>
       )}
@@ -494,8 +495,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               />
 
               {/* Boundary flash */}
-              <div className={`${viewerStyles.boundaryLeft} ${boundaryFlash === 'left' ? viewerStyles.boundaryVisible : ''}`}>First item</div>
-              <div className={`${viewerStyles.boundaryRight} ${boundaryFlash === 'right' ? viewerStyles.boundaryVisible : ''}`}>Last item</div>
+              <div className={`${viewerStyles.boundaryLeft} ${boundaryFlash === 'left' ? viewerStyles.boundaryVisible : ''}`}>{t("First item")}</div>
+              <div className={`${viewerStyles.boundaryRight} ${boundaryFlash === 'right' ? viewerStyles.boundaryVisible : ''}`}>{t("Last item")}</div>
 
               {/* Navigator minimap */}
               {isImage && (
@@ -507,7 +508,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             </>
           ) : (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>Loading...</span>
+              <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>{t("Loading...")}</span>
             </div>
           )}
         </div>

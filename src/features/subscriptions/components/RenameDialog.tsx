@@ -3,6 +3,7 @@ import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { ActionButton } from './ActionButton';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 export interface RenameTarget {
   kind: 'subscription';
@@ -50,16 +51,14 @@ export function RenameDialog({
     <GlassModal
       open={target != null}
       onClose={onClose}
-      title="Rename Subscription"
+      title={t("Rename Subscription")}
       size="sm"
       footer={
         <div className={styles.inlineActions}>
           <ActionButton variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </ActionButton>
+            {t("Cancel")}</ActionButton>
           <ActionButton variant="primary" onClick={commit} disabled={busy || !name.trim()}>
-            Rename
-          </ActionButton>
+            {t("Rename")}</ActionButton>
         </div>
       }
     >
@@ -67,7 +66,7 @@ export function RenameDialog({
         ref={inputRef}
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Name"
+        placeholder={t("Name")}
       />
     </GlassModal>
   );

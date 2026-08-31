@@ -43,6 +43,7 @@ import {
   useTagPreferences,
 } from './tagPreferences';
 import styles from './TagManagerScreen.module.css';
+import { t } from '../../i18n';
 
 const PAGE_SIZE = 500;
 const PICKER_PAGE_SIZE = 40;
@@ -130,13 +131,13 @@ function RelationPicker({ title, excludeTagId, onChoose, onClose }: RelationPick
           autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search existing tags"
-          aria-label="Search existing tags"
+          placeholder={t("Search existing tags")}
+          aria-label={t("Search existing tags")}
         />
-        {loading && <div className={styles.pickerHint}>Searching...</div>}
+        {loading && <div className={styles.pickerHint}>{t("Searching...")}</div>}
         {error && <div className={styles.error} role="alert">{error}</div>}
         {!loading && !error && query.trim() && results.length === 0 && (
-          <div className={styles.pickerHint}>No existing tags found.</div>
+          <div className={styles.pickerHint}>{t("No existing tags found.")}</div>
         )}
         <div className={styles.pickerResults}>
           {results.map((tag) => (
@@ -174,18 +175,18 @@ function RenameTagGroupModal({
     <GlassModal
       open
       onClose={onClose}
-      title="Rename tag group"
+      title={t("Rename tag group")}
       size="sm"
       footer={(
         <>
-          <ActionButton onClick={onClose} disabled={busy}>Cancel</ActionButton>
-          <ActionButton onClick={() => onRename(normalized)} disabled={busy || !canRename}>Rename</ActionButton>
+          <ActionButton onClick={onClose} disabled={busy}>{t("Cancel")}</ActionButton>
+          <ActionButton onClick={() => onRename(normalized)} disabled={busy || !canRename}>{t("Rename")}</ActionButton>
         </>
       )}
     >
       <GlassInput
         autoFocus
-        aria-label="Tag group name"
+        aria-label={t("Tag group name")}
         value={name}
         onChange={(event) => setName(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && canRename) onRename(normalized); }}
@@ -210,22 +211,22 @@ function CreateTagGroupModal({
     <GlassModal
       open
       onClose={onClose}
-      title="Create tag group"
+      title={t("Create tag group")}
       size="sm"
       footer={(
         <>
-          <ActionButton onClick={onClose} disabled={busy}>Cancel</ActionButton>
-          <ActionButton onClick={() => onCreate(normalized)} disabled={busy || !canCreate}>Create</ActionButton>
+          <ActionButton onClick={onClose} disabled={busy}>{t("Cancel")}</ActionButton>
+          <ActionButton onClick={() => onCreate(normalized)} disabled={busy || !canCreate}>{t("Create")}</ActionButton>
         </>
       )}
     >
       <GlassInput
         autoFocus
-        aria-label="Tag group name"
+        aria-label={t("Tag group name")}
         value={name}
         onChange={(event) => setName(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && canCreate) onCreate(normalized); }}
-        placeholder="Group name"
+        placeholder={t("Group name")}
       />
     </GlassModal>
   );
@@ -252,40 +253,37 @@ function TagEditorModal({
   };
 
   return (
-    <GlassModal open onClose={onClose} title="Edit tag" size="lg">
+    <GlassModal open onClose={onClose} title={t("Edit tag")} size="lg">
       <div className={styles.editor}>
         <div className={styles.editorIntro}>
           <div className={styles.editorIcon}><IconBookmark size={18} /></div>
           <div>
             <TagChip namespace={tag.namespace} subtag={tag.subname} />
-            <div className={styles.editorCount}>{tag.assignment_count} media items</div>
+            <div className={styles.editorCount}>{tag.assignment_count} {t("media items")}</div>
           </div>
         </div>
 
         <section className={styles.editorSection} aria-labelledby="tag-name-heading">
           <div className={styles.sectionHeader}>
-            <h2 id="tag-name-heading">Tag name</h2>
+            <h2 id="tag-name-heading">{t("Tag name")}</h2>
             <ActionButton compact onClick={submitRename} disabled={busy || !name.trim()}>
-              <IconEdit size={14} /> Rename
-            </ActionButton>
+              <IconEdit size={14} /> {t("Rename")}</ActionButton>
           </div>
           <GlassInput
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') submitRename(); }}
-            placeholder="namespace:tag"
-            aria-label="New tag name"
+            placeholder={t("namespace:tag")}
+            aria-label={t("New tag name")}
             disabled={busy}
           />
         </section>
 
         <div className={styles.editorActions}>
           <ActionButton compact onClick={() => onAction({ kind: 'merge' })} disabled={busy}>
-            <IconGitMerge size={14} /> Merge into...
-          </ActionButton>
+            <IconGitMerge size={14} /> {t("Merge into...")}</ActionButton>
           <ActionButton compact variant="danger" onClick={() => onAction({ kind: 'delete' })} disabled={busy}>
-            <IconTrash size={14} /> Delete
-          </ActionButton>
+            <IconTrash size={14} /> {t("Delete")}</ActionButton>
         </div>
 
       </div>
@@ -645,18 +643,18 @@ export function TagManagerScreen() {
       }),
       { separator: true },
       {
-        label: 'Edit Tag',
+        label: t("Edit Tag"),
         icon: <IconEdit size={16} />,
         action: () => { setSelected(tag); setEditorAction(null); },
       },
       {
-        label: 'Merge Into…',
+        label: t("Merge Into…"),
         icon: <IconGitMerge size={16} />,
         action: () => { setSelected(tag); setEditorAction({ kind: 'merge' }); },
       },
       { separator: true },
       {
-        label: 'Delete Tag',
+        label: t("Delete Tag"),
         icon: <IconTrash size={16} />,
         danger: true,
         action: () => { setSelected(tag); setEditorAction({ kind: 'delete' }); },
@@ -671,13 +669,13 @@ export function TagManagerScreen() {
   ) => {
     contextMenu.open(event, [
       {
-        label: 'Show Tags in Group',
+        label: t("Show Tags in Group"),
         icon: <IconBookmark size={16} />,
         action: () => handleNamespaceChange(group.name),
       },
       { separator: true },
       {
-        label: 'Rename Group…',
+        label: t("Rename Group…"),
         icon: <IconEdit size={16} />,
         action: () => setGroupAction({
           kind: 'rename',
@@ -696,7 +694,7 @@ export function TagManagerScreen() {
         ),
       },
       {
-        label: 'Delete Group',
+        label: t("Delete Group"),
         icon: <IconTrash size={16} />,
         action: () => setGroupAction({
           kind: 'delete',
@@ -712,13 +710,13 @@ export function TagManagerScreen() {
       {error && <div className={styles.error} role="alert">{error}</div>}
 
       <div className={styles.content}>
-        <nav className={styles.namespaceRail} aria-label="Tag groups">
+        <nav className={styles.namespaceRail} aria-label={t("Tag groups")}>
           <button
             className={`${styles.namespaceItem} ${!showStarred && namespace === null ? styles.namespaceItemActive : ''}`}
             onClick={() => handleNamespaceChange(null)}
             type="button"
           >
-            <span className={styles.groupIdentity}><IconBookmarks size={16} /><span>All</span></span>
+            <span className={styles.groupIdentity}><IconBookmarks size={16} /><span>{t("All")}</span></span>
             <span className={styles.namespaceCount}>{namespaces.reduce((sum, item) => sum + item.tag_count, 0)}</span>
           </button>
           <button
@@ -726,7 +724,7 @@ export function TagManagerScreen() {
             onClick={() => handleNamespaceChange('')}
             type="button"
           >
-            <span className={styles.groupIdentity}><IconBookmark size={16} /><span>General</span></span>
+            <span className={styles.groupIdentity}><IconBookmark size={16} /><span>{t("General")}</span></span>
             <span className={styles.namespaceCount}>{namespaces.find((item) => item.name === '')?.tag_count ?? 0}</span>
           </button>
           <button
@@ -734,17 +732,17 @@ export function TagManagerScreen() {
             onClick={handleStarredChange}
             type="button"
           >
-            <span className={styles.groupIdentity}><IconStar size={16} /><span>Starred</span></span>
+            <span className={styles.groupIdentity}><IconStar size={16} /><span>{t("Starred")}</span></span>
             <span className={styles.namespaceCount}>{tagPreferences.starredTags.length}</span>
           </button>
           <div className={styles.railHeading}>
-            <span>Groups({sortedNamespaces.length})</span>
+            <span>{t("Groups(")}{sortedNamespaces.length})</span>
             <button
-              aria-label="Create tag group"
+              aria-label={t("Create tag group")}
               className={styles.addGroupButton}
               disabled={busy}
               onClick={() => setCreateGroupOpen(true)}
-              title="Create tag group"
+              title={t("Create tag group")}
               type="button"
             >
               <IconPlus size={15} />
@@ -774,18 +772,18 @@ export function TagManagerScreen() {
             type="button"
           >
             <IconTrash size={14} />
-            <span>Delete Unused</span>
+            <span>{t("Delete Unused")}</span>
             <span className={styles.namespaceCount}>{unusedCount}</span>
           </button>
         </nav>
 
         <section
           className={`${styles.browseSurface} ${viewTransition === 'leaving' ? styles.viewLeaving : ''} ${viewTransition === 'entering' ? styles.viewEntering : ''}`}
-          aria-label="Tags"
+          aria-label={t("Tags")}
         >
           <div className={styles.tagCanvas} ref={tagCanvasRef}>
             {!loading && tags.length === 0 && (
-              <div className={styles.noTags}>No tags</div>
+              <div className={styles.noTags}>{t("No tags")}</div>
             )}
             <div
               className={styles.tagListInner}
@@ -824,7 +822,7 @@ export function TagManagerScreen() {
                         <span className={styles.tagDot} style={{ background: tagGroupColor(tag.namespace, tagGroupColors) }} />
                         <span className={styles.tagName}>{tag.subname}</span>
                         {tagPreferences.starredTags.includes(tagKey(tag)) && (
-                          <IconStar aria-label="Starred" className={styles.starredIcon} size={12} fill="currentColor" />
+                          <IconStar aria-label={t("Starred")} className={styles.starredIcon} size={12} fill="currentColor" />
                         )}
                         <span className={styles.tagCardCount}>({tag.assignment_count})</span>
                       </button>
@@ -859,7 +857,7 @@ export function TagManagerScreen() {
       )}
       {selected && editorAction?.kind === 'merge' && (
         <RelationPicker
-          title="Merge into existing tag"
+          title={t("Merge into existing tag")}
           excludeTagId={selected.tag_id}
           onClose={() => setEditorAction(null)}
           onChoose={(target) => {
@@ -873,9 +871,9 @@ export function TagManagerScreen() {
           open
           onClose={() => setEditorAction(null)}
           onConfirm={() => void runMutation(() => tagsController.delete(selected.tag_id), true)}
-          title="Delete tag"
+          title={t("Delete tag")}
           message={`Delete ${tagKey(selected)}? Existing media will remain untouched.`}
-          confirmLabel="Delete tag"
+          confirmLabel={t('Delete tag')}
           danger
           loading={busy}
         />
@@ -915,9 +913,9 @@ export function TagManagerScreen() {
                 if (namespace === deletedNamespace) handleNamespaceChange(null);
               });
           }}
-          title="Delete tag group"
+          title={t("Delete tag group")}
           message={`Delete the ${groupAction.namespace} group? Its tags will move to General; no tags or media assignments will be deleted.`}
-          confirmLabel="Delete group"
+          confirmLabel={t('Delete group')}
           loading={busy}
         />
       )}
@@ -941,9 +939,9 @@ export function TagManagerScreen() {
           setCleanupOpen(false);
           void runMutation(() => tagsController.deleteUnused());
         }}
-        title="Delete unused tags"
+        title={t("Delete unused tags")}
         message={`Delete ${unusedCount.toLocaleString()} ${unusedCount === 1 ? 'tag' : 'tags'} with no assignments anywhere in the library? Tags used by Inbox or Trash items are kept.`}
-        confirmLabel="Delete unused tags"
+        confirmLabel={t('Delete unused tags')}
         danger
         loading={busy}
       />
@@ -975,11 +973,11 @@ export function TagsToolbar() {
           ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search tags"
-          aria-label="Search tags"
+          placeholder={t("Search tags")}
+          aria-label={t("Search tags")}
         />
         {query && (
-          <button onClick={() => setQuery('')} aria-label="Clear tag search" type="button">
+          <button onClick={() => setQuery('')} aria-label={t("Clear tag search")} type="button">
             <IconX size={12} />
           </button>
         )}

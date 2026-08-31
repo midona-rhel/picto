@@ -6,6 +6,7 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import styles from './InboxReviewControls.module.css';
+import { t } from '../../i18n';
 
 export type InboxReviewDecision = 'accept' | 'reject';
 
@@ -52,7 +53,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
       setDecision(null);
       setLeaving(false);
       showErrorNotification({
-        title: nextDecision === 'accept' ? 'Unable to accept item' : 'Unable to reject item',
+        title: nextDecision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
         message: reason instanceof Error ? reason.message : String(reason),
       });
     }
@@ -78,11 +79,11 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
       data-inbox-review-controls
       data-review-decision={decision ?? 'idle'}
     >
-      <KbdTooltip label="Accept" shortcutId="inbox.accept" position="top">
+      <KbdTooltip label={t("Accept")} shortcutId="inbox.accept" position="top">
         <button
           type="button"
           className={`${styles.action} ${styles.accept} ${decision === 'accept' ? styles.chosen : ''}`}
-          aria-label="Accept item"
+          aria-label={t("Accept item")}
           disabled={decision != null}
           onClick={() => { void review('accept'); }}
         >
@@ -90,11 +91,11 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
         </button>
       </KbdTooltip>
       <span className={styles.divider} aria-hidden="true" />
-      <KbdTooltip label="Reject" shortcutId="inbox.reject" position="top">
+      <KbdTooltip label={t("Reject")} shortcutId="inbox.reject" position="top">
         <button
           type="button"
           className={`${styles.action} ${styles.reject} ${decision === 'reject' ? styles.chosen : ''}`}
-          aria-label="Reject item"
+          aria-label={t("Reject item")}
           disabled={decision != null}
           onClick={() => { void review('reject'); }}
         >

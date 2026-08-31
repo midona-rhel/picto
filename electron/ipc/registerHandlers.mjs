@@ -231,9 +231,12 @@ export function registerIpcHandlers({
   openWithApplication,
   isDev,
   updateService,
+  claimAssociatedPictoPack,
 }) {
   const openWithOptionsByExtension = new Map();
   const handle = createTrustedIpcHandle(ipcMain, windowManager.ownsWebContents);
+
+  handle('picto:associated-files:claim-picto-pack', async () => claimAssociatedPictoPack());
 
   const runWindowControl = (event, method) => {
     if (!windowManager.ownsWebContents(event.sender)) return;

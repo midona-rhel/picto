@@ -8,6 +8,7 @@ import {
   startSubscriptionsSettle,
 } from '../runtime/subscriptionsSettle';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
+import { startLocalizedRenderer } from '../i18n';
 
 startThemeRuntime();
 libraryInvalidation.start();
@@ -18,8 +19,11 @@ window.addEventListener('beforeunload', () => {
   libraryInvalidation.stop();
 }, { once: true });
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <SubscriptionsScreen standalone />
-  </React.StrictMode>,
-);
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+startLocalizedRenderer(() => {
+  root.render(
+    <React.StrictMode>
+      <SubscriptionsScreen standalone />
+    </React.StrictMode>,
+  );
+});

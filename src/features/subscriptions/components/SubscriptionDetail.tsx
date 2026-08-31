@@ -31,6 +31,7 @@ import {
   isSubscriptionCompleted,
 } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
+import { t, translateMessage } from '../../../i18n';
 
 export interface DetailController {
   run: (id: string) => void;
@@ -55,21 +56,21 @@ export interface DetailController {
 type DetailTab = 'sources' | 'history' | 'problems';
 
 const SCHEDULE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
+  { value: 'manual', label: t("Manual") },
+  { value: 'daily', label: t("Daily") },
+  { value: 'weekly', label: t("Weekly") },
+  { value: 'monthly', label: t("Monthly") },
 ];
 
 function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: number }) => void }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   return (
-    <KbdTooltip label="More actions">
+    <KbdTooltip label={t("More actions")}>
       <button
         type="button"
         ref={buttonRef}
         className={`${styles.querySmallBtn} ${styles.subscriptionOverflowButton}`.trim()}
-        aria-label="More actions"
+        aria-label={t("More actions")}
         onClick={() => {
           const rect = buttonRef.current?.getBoundingClientRect();
           if (rect) onOpen({ x: rect.left, y: rect.bottom + 4 });
@@ -91,7 +92,7 @@ function PostsPerRunInput({
   onCommit: (value: number) => void;
 }) {
   return (
-    <CompactNumberInput value={value} min={1} max={10_000} label="Posts per run"
+    <CompactNumberInput value={value} min={1} max={10_000} label={t("Posts per run")}
       disabled={disabled} onCommit={onCommit} />
   );
 }
@@ -203,9 +204,9 @@ export function SubscriptionDetail({
   }, [folders, subscription.target_folder_ids]);
 
   const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: 'sources', label: 'Sources' },
-    { id: 'history', label: 'History' },
-    { id: 'problems', label: 'Problems' },
+    { id: 'sources', label: t("Sources") },
+    { id: 'history', label: t("History") },
+    { id: 'problems', label: t("Problems") },
   ];
 
   return (
@@ -230,7 +231,7 @@ export function SubscriptionDetail({
               </span>
             )}
           </span>
-          <KbdTooltip label="Double-click to rename">
+          <KbdTooltip label={t("Double-click to rename")}>
             <span className={styles.subscriptionName} onDoubleClick={() => controller.rename(subscription.id, subscription.name)}>
               {subscription.name}
             </span>
@@ -258,7 +259,7 @@ export function SubscriptionDetail({
                 : runFailed
                   ? <IconRefresh size={14} />
                   : <IconPlayerPlay size={14} />}
-              {running ? 'Pause' : subscription.run_status === 'paused' ? 'Resume' : 'Retry'}
+              {running ? t("Pause") : subscription.run_status === 'paused' ? t("Resume") : t("Retry")}
             </ActionButton>
           ) : (
             <ActionButton variant="primary" pending={busy} disabled={subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
@@ -266,10 +267,10 @@ export function SubscriptionDetail({
             </ActionButton>
           )}
           <KbdTooltip label={active
-            ? 'Stop this run and keep the posts already added'
+            ? t("Stop this run and keep the posts already added")
             : subscription.paused
-              ? 'Allow future runs again'
-              : 'Put future runs on hold'}>
+              ? t("Allow future runs again")
+              : t("Put future runs on hold")}>
             <span className={styles.subscriptionActionTooltipTarget}>
               <ActionButton
                 variant="secondary"
@@ -279,10 +280,10 @@ export function SubscriptionDetail({
                   : controller.hold(subscription.id, !subscription.paused)}
               >
                 {active
-                  ? <><IconPlayerStop size={14} /> Stop</>
+                  ? <><IconPlayerStop size={14} /> {t("Stop")}</>
                   : subscription.paused
-                    ? <><IconPlayerPlay size={14} /> Release</>
-                    : <><IconHandStop size={14} /> Hold</>}
+                    ? <><IconPlayerPlay size={14} /> {t("Release")}</>
+                    : <><IconHandStop size={14} /> {t("Hold")}</>}
               </ActionButton>
             </span>
           </KbdTooltip>
@@ -294,8 +295,8 @@ export function SubscriptionDetail({
           aria-hidden={!active}
         >
           <div className={styles.subscriptionRunProgressLabel}>
-            <span>{runSettled.toLocaleString()} / {runTarget.toLocaleString()} posts processed</span>
-            <span>{runFilesDownloaded.toLocaleString()} files downloaded</span>
+            <span>{runSettled.toLocaleString()} / {runTarget.toLocaleString()} {t("posts processed")}</span>
+            <span>{runFilesDownloaded.toLocaleString()} {t("files downloaded")}</span>
           </div>
           <div
             className={styles.subscriptionRunProgressTrack}
@@ -309,17 +310,17 @@ export function SubscriptionDetail({
         </div>
 
         <div className={styles.subscriptionProperties}>
-          <div className={styles.subscriptionProperty}><span>Posts traversed</span><strong>{traversedCount.toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Posts added</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Posts skipped</span><strong>{postsSkippedCount.toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Files downloaded</span><strong>{filesDownloadedCount.toLocaleString()}</strong></div>
-          <div className={styles.subscriptionProperty}><span>Last check</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Posts traversed")}</span><strong>{traversedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Posts added")}</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Posts skipped")}</span><strong>{postsSkippedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Files downloaded")}</span><strong>{filesDownloadedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Last check")}</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
           <div className={styles.subscriptionProperty}>
-            <span>Schedule</span>
+            <span>{t("Schedule")}</span>
             <CmSelect value={subscription.schedule} options={SCHEDULE_OPTIONS} onChange={(schedule) => controller.setSchedule(subscription.id, schedule)} width={100} />
           </div>
           <div className={styles.subscriptionProperty}>
-            <span>Posts per run</span>
+            <span>{t("Posts per run")}</span>
             <PostsPerRunInput
               value={subscription.posts_per_run}
               disabled={busy || running}
@@ -329,9 +330,9 @@ export function SubscriptionDetail({
         </div>
 
         <div className={styles.subscriptionDestination}>
-          <span className={styles.subscriptionRailHeading}>New files</span>
+          <span className={styles.subscriptionRailHeading}>{t("New files")}</span>
           <div className={styles.subscriptionRailField}>
-            <span>Automatically add to folders</span>
+            <span>{t("Automatically add to folders")}</span>
             <div className={styles.subscriptionDestinationValues}>
               {selectedFolders.map((folder) => {
                 const folderId = Number(folder.id.slice('folder:'.length));
@@ -354,7 +355,7 @@ export function SubscriptionDetail({
                   });
                 }}
               >
-                <IconPlus size={14} />{selectedFolders.length === 0 && <span>Add to folders</span>}
+                <IconPlus size={14} />{selectedFolders.length === 0 && <span>{t("Add to folders")}</span>}
               </button>
             </div>
           </div>
@@ -380,7 +381,7 @@ export function SubscriptionDetail({
 
       <section className={styles.subscriptionDataPlane}>
         <header className={styles.subscriptionDataHeader}>
-          <div className={styles.subscriptionTabs} role="tablist" aria-label="Subscription details">
+          <div className={styles.subscriptionTabs} role="tablist" aria-label={t("Subscription details")}>
             {tabs.map((entry) => (
               <button
                 key={entry.id}
@@ -390,7 +391,7 @@ export function SubscriptionDetail({
                 className={`${styles.subscriptionTab} ${tab === entry.id ? styles.subscriptionTabActive : ''}`.trim()}
                 onClick={() => setTab(entry.id)}
               >
-                {entry.label}
+                {translateMessage(entry.label)}
               </button>
             ))}
           </div>
@@ -402,10 +403,10 @@ export function SubscriptionDetail({
               {subscription.queries.length > 0 ? (
                 <div className={`${styles.qTable} ${styles.subscriptionTable}`.trim()}>
                   <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.qRow}`}>
-                    <span className={styles.qCellSource}>Source</span>
-                    <span>Query</span>
-                    <span className={styles.qCellNum}>Posts</span>
-                    <span className={styles.qCellNum}>Media</span>
+                    <span className={styles.qCellSource}>{t("Source")}</span>
+                    <span>{t("Query")}</span>
+                    <span className={styles.qCellNum}>{t("Posts")}</span>
+                    <span className={styles.qCellNum}>{t("Media")}</span>
                     <span />
                   </div>
                   {subscription.queries.map((query) => {
@@ -433,23 +434,23 @@ export function SubscriptionDetail({
                   })}
                 </div>
               ) : (
-                <div className={styles.subscriptionWorkspaceEmpty}>No sources yet.</div>
+                <div className={styles.subscriptionWorkspaceEmpty}>{t("No sources yet.")}</div>
               )}
             </div>
           )}
 
           {tab === 'history' && (
             <div className={styles.subscriptionTableViewport} role="tabpanel">
-              {detail.loading ? <div className={styles.subscriptionWorkspaceEmpty}>Loading history…</div> : <HistoryTab runs={detail.runs} />}
+              {detail.loading ? <div className={styles.subscriptionWorkspaceEmpty}>{t("Loading history…")}</div> : <HistoryTab runs={detail.runs} />}
             </div>
           )}
 
           {tab === 'problems' && (
             <div className={styles.subscriptionTableViewport} role="tabpanel">
               {detail.loading ? (
-                <div className={styles.subscriptionWorkspaceEmpty}>Checking for problems…</div>
+                <div className={styles.subscriptionWorkspaceEmpty}>{t("Checking for problems…")}</div>
               ) : problemCount === 0 ? (
-                <div className={styles.subscriptionWorkspaceEmpty}>No problems found.</div>
+                <div className={styles.subscriptionWorkspaceEmpty}>{t("No problems found.")}</div>
               ) : (
                 <HealthTab
                   failedPosts={detail.failedPosts}
@@ -493,16 +494,16 @@ export function SubscriptionDetail({
           setEditing(null);
         }}
       />
-      <GlassModal open={statsQuery != null} onClose={() => setStatsQuery(null)} title="Source details" size="sm">
+      <GlassModal open={statsQuery != null} onClose={() => setStatsQuery(null)} title={t("Source details")} size="sm">
         {statsQuery && (
           <div className={styles.queryStats}>
-            <div><span>Source</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
-            <div><span>Query</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
-            <div><span>Posts</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
-            <div><span>Media</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
-            <div><span>Last check</span><strong>{statsQuery.last_check_time ? formatRelativeTime(statsQuery.last_check_time) : 'Never'}</strong></div>
-            <div><span>State</span><strong>{statsQuery.paused ? 'Paused' : statsQuery.last_failure_message ? 'Failed' : statsQuery.completed_initial_run ? 'Ready' : 'Initial sync'}</strong></div>
-            {statsQuery.last_failure_message && <div><span>Last error</span><strong>{statsQuery.last_failure_message}</strong></div>}
+            <div><span>{t("Source")}</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
+            <div><span>{t("Query")}</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
+            <div><span>{t("Posts")}</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
+            <div><span>{t("Media")}</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
+            <div><span>{t("Last check")}</span><strong>{statsQuery.last_check_time ? formatRelativeTime(statsQuery.last_check_time) : t("Never")}</strong></div>
+            <div><span>{t("State")}</span><strong>{statsQuery.paused ? t("Paused") : statsQuery.last_failure_message ? t("Failed") : statsQuery.completed_initial_run ? t("Ready") : t("Initial sync")}</strong></div>
+            {statsQuery.last_failure_message && <div><span>{t("Last error")}</span><strong>{statsQuery.last_failure_message}</strong></div>}
           </div>
         )}
       </GlassModal>

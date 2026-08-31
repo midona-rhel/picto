@@ -26,6 +26,8 @@ import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory
 import { patchFolderNodeAtom, pendingSidebarRevealNodeIdAtom, sidebarNodesAtom } from '../state/sidebar';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 import { showErrorNotification } from '../shared/lib/notifications';
+import { t } from '../i18n';
+import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 
 const store = getDefaultStore();
 
@@ -39,7 +41,7 @@ async function warnOnFolderDepth<T>(operation: () => Promise<T>): Promise<T> {
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (message.includes('folders may be nested at most 8 levels deep')) {
-      showErrorNotification({ title: 'Folder depth limit', message });
+      showErrorNotification({ title: t("Folder depth limit"), message });
     }
     throw reason;
   }
@@ -76,11 +78,17 @@ function folderMetadata(folderId: number) {
 }
 
 export function singleFolderDeletionMessage(name: string): string {
-  return `Delete "${name}" and all its subfolders? Media inside these folders will remain untouched.`;
+  return t('Delete "{value0}" and all its subfolders? Media inside these folders will remain untouched.', {
+    value0: name,
+  });
 }
 
 export function bulkFolderDeletionMessage(selectedCount: number): string {
-  return `Delete ${selectedCount} selected item${selectedCount === 1 ? '' : 's'}? All selected folders and their subfolders will be deleted. Media inside these folders will remain untouched.`;
+  return selectedCount === 1
+    ? t('Delete the selected item? Its folder and subfolders will be deleted. Media inside these folders will remain untouched.')
+    : t('Delete {value0} selected items? All selected folders and their subfolders will be deleted. Media inside these folders will remain untouched.', {
+      value0: selectedCount,
+    });
 }
 
 export const foldersController = {
@@ -184,6 +192,7 @@ export const foldersController = {
       parent_folder_id: parentFolderId,
       preserve_structure: true,
     });
+    if (parentFolderId != null) recordRecentFolderUse([parentFolderId]);
   },
 
   getCoverHash(folderId: number): Promise<string | null> {

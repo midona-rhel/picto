@@ -7,7 +7,7 @@ import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
-import { compileGridQuery, itemFiltersEqual } from '../shared/lib/itemFilters';
+import { compileGridQuery, itemFiltersEqual, textSearchQuery } from '../shared/lib/itemFilters';
 import {
   currentGridQueryAtom,
   gridSessionAtom,
@@ -257,10 +257,13 @@ class GridSessionController {
   }
 
   setSearchText(text: string): void {
+    const previousQuery = textSearchQuery(store.get(gridSessionAtom).searchText);
+    const nextQuery = textSearchQuery(text);
     updateSession({ searchText: text });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
     this.cancelSearch();
+    if (previousQuery == null && nextQuery == null) return;
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
       this.runSettledSearch();

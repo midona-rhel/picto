@@ -47,6 +47,10 @@ const dialog = {
   save: (options = {}) => ipcRenderer.invoke('picto:dialog:save', options),
 };
 
+const associatedFiles = {
+  claimPictoPack: () => ipcRenderer.invoke('picto:associated-files:claim-picto-pack'),
+};
+
 const diagnostics = {
   save: (content) => ipcRenderer.invoke('picto:diagnostics:save', { content }),
 };
@@ -223,6 +227,7 @@ const webview = {
 
 contextBridge.exposeInMainWorld('picto', {
   api,
+  associatedFiles,
   windowControls,
   events,
   dialog,

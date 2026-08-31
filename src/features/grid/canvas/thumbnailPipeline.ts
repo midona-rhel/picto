@@ -11,7 +11,11 @@
  * separately by ThumbnailRevealTracker.
  */
 
-import { ThumbnailDecodeClient } from './thumbnailDecodeClient';
+import {
+  ThumbnailDecodeClient,
+  type ThumbnailDecodePlanEntry,
+  type ThumbnailDecodeQuality,
+} from './thumbnailDecodeClient';
 import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 import {
@@ -40,20 +44,27 @@ export class ThumbnailPipeline {
   private totalBytes = 0;
   private readonly decoder: ThumbnailDecodeClient;
   private readonly revisions = new Map<string, number>();
+  private readonly pendingFullBitmaps = new Map<string, ImageBitmap>();
+  private fullAdmissionFrame: number | null = null;
 
   // ── Plan deduplication ──
   // Only send plan to worker when the visible hash set actually changes.
   // -1 = never computed; computePlanFingerprint always returns >= 0.
   private lastPlanFingerprint = -1;
   // Reusable array for building plan entries — avoids per-frame allocation.
-  private planBuffer: Array<{ fileHash: string; url: string }> = [];
+  private planBuffer: ThumbnailDecodePlanEntry[] = [];
 
-  constructor(onDirty: () => void = () => {}, onBitmapAvailable: (hash: string) => void = () => {}) {
+  constructor(
+    onDirty: () => void = () => {},
+    onBitmapAvailable: (hash: string) => void = () => {},
+    private readonly scheduleFrame: (callback: FrameRequestCallback) => number = requestAnimationFrame,
+    private readonly cancelFrame: (handle: number) => void = cancelAnimationFrame,
+  ) {
     this.onDirty = onDirty;
     this.onBitmapAvailable = onBitmapAvailable;
     this.decoder = new ThumbnailDecodeClient(
-      (hash, bitmap) => this.handleBitmap(hash, bitmap),
-      (hash) => this.handleError(hash),
+      (hash, bitmap, quality) => this.handleBitmap(hash, bitmap, quality),
+      (hash, quality) => this.handleError(hash, quality),
     );
   }
 
@@ -93,11 +104,14 @@ export class ThumbnailPipeline {
       const url = needsFull
         ? mediaFileUrl(t.fileHash, t.mime)
         : `${mediaThumbnailUrl(t.fileHash)}?v=${revision}`;
+      const quality: ThumbnailDecodeQuality = needsFull ? 'full' : 'thumbnail';
+      if (!needsFull) this.discardPendingFullBitmap(t.fileHash);
       if (buf[i]) {
         buf[i].fileHash = t.fileHash;
         buf[i].url = url;
+        buf[i].quality = quality;
       } else {
-        buf[i] = { fileHash: t.fileHash, url };
+        buf[i] = { fileHash: t.fileHash, url, quality };
       }
     }
     this.decoder.sendPlan(buf);
@@ -114,12 +128,16 @@ export class ThumbnailPipeline {
     // thumbnail refresh and makes active subscription grids visibly flash.
     this.revisions.set(hash, (this.revisions.get(hash) ?? 0) + 1);
     this.lastPlanFingerprint = -1;
+    this.discardPendingFullBitmap(hash);
     this.decoder.invalidate(hash);
     this.onDirty();
   }
 
   /** Close bitmaps for tiles no longer in the decode activation zone. */
   evictOutsideActive(activeHashes: Set<string>): void {
+    for (const hash of this.pendingFullBitmaps.keys()) {
+      if (!activeHashes.has(hash)) this.discardPendingFullBitmap(hash);
+    }
     for (const [hash, entry] of this.cache) {
       if (activeHashes.has(hash)) continue;
       if (entry.thumb) {
@@ -137,6 +155,12 @@ export class ThumbnailPipeline {
     this.destroyed = true;
     this.lastPlanFingerprint = -1;
     this.decoder.clear();
+    if (this.fullAdmissionFrame != null) {
+      this.cancelFrame(this.fullAdmissionFrame);
+      this.fullAdmissionFrame = null;
+    }
+    for (const bitmap of this.pendingFullBitmaps.values()) bitmap.close();
+    this.pendingFullBitmaps.clear();
     for (const entry of this.cache.values()) entry.thumb?.close();
     this.cache.clear();
     this.totalBytes = 0;
@@ -150,9 +174,20 @@ export class ThumbnailPipeline {
 
   // ── Worker callbacks ────────────────────────────────────────────
 
-  private handleBitmap(hash: string, bitmap: ImageBitmap): void {
+  private handleBitmap(hash: string, bitmap: ImageBitmap, quality: ThumbnailDecodeQuality): void {
     if (this.destroyed) { bitmap.close(); return; }
 
+    if (quality === 'full') {
+      this.discardPendingFullBitmap(hash);
+      this.pendingFullBitmaps.set(hash, bitmap);
+      this.scheduleFullAdmission();
+      return;
+    }
+
+    this.installBitmap(hash, bitmap);
+  }
+
+  private installBitmap(hash: string, bitmap: ImageBitmap): void {
     let entry = this.cache.get(hash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
@@ -174,8 +209,34 @@ export class ThumbnailPipeline {
     this.onDirty();
   }
 
-  private handleError(hash: string): void {
+  private scheduleFullAdmission(): void {
+    if (this.fullAdmissionFrame != null || this.pendingFullBitmaps.size === 0) return;
+    this.fullAdmissionFrame = this.scheduleFrame(() => {
+      this.fullAdmissionFrame = null;
+      const next = this.pendingFullBitmaps.entries().next().value as [string, ImageBitmap] | undefined;
+      if (!next) return;
+      const [hash, bitmap] = next;
+      this.pendingFullBitmaps.delete(hash);
+      if (this.destroyed) bitmap.close();
+      else this.installBitmap(hash, bitmap);
+      this.scheduleFullAdmission();
+    });
+  }
+
+  private discardPendingFullBitmap(hash: string): void {
+    const bitmap = this.pendingFullBitmaps.get(hash);
+    if (!bitmap) return;
+    bitmap.close();
+    this.pendingFullBitmaps.delete(hash);
+    if (this.pendingFullBitmaps.size === 0 && this.fullAdmissionFrame != null) {
+      this.cancelFrame(this.fullAdmissionFrame);
+      this.fullAdmissionFrame = null;
+    }
+  }
+
+  private handleError(hash: string, quality: ThumbnailDecodeQuality): void {
     let entry = this.cache.get(hash);
+    if (quality === 'full' && entry?.thumb) return;
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
       this.cache.set(hash, entry);

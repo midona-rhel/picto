@@ -41,6 +41,7 @@ import {
 } from '../../state/subscriptionsWorkspace';
 import styles from './SubscriptionsScreen.module.css';
 import { WindowCloseButton } from '../../shared/ui/WindowControls';
+import { t } from '../../i18n';
 
 export function SubscriptionsScreen({ standalone = false }: { standalone?: boolean } = {}) {
   const [snapshot, setSnapshot] = useAtom(subscriptionsWorkspaceSnapshotAtom);
@@ -108,7 +109,7 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
         subscriptionId: subscription.id,
       });
       showErrorNotification({
-        title: 'Subscription details unavailable',
+        title: t("Subscription details unavailable"),
         message: err instanceof Error ? err.message : String(err),
       });
     }
@@ -133,7 +134,7 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
         return true;
       } catch (err) {
         showErrorNotification({
-          title: 'Subscription action failed',
+          title: t("Subscription action failed"),
           message: err instanceof Error ? err.message : String(err),
         });
         return false;
@@ -205,9 +206,9 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
     delete: (id: string) => {
       confirm(
         {
-          title: 'Delete Subscription',
+          title: t("Delete Subscription"),
           message: 'Downloaded files stay in your library. The subscription and its queries are removed.',
-          confirmLabel: 'Delete',
+          confirmLabel: t("Delete"),
           danger: true,
         },
         () => void act(`delete:${id}`, () => subscriptionsController.delete(id)),
@@ -216,9 +217,9 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
     reset: (id: string) => {
       confirm(
         {
-          title: 'Reset Sync History',
+          title: t("Reset Sync History"),
           message: 'Picto will clear this subscription\'s handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again.',
-          confirmLabel: 'Reset',
+          confirmLabel: t("Reset"),
         },
         () => void act(`reset:${id}`, () => subscriptionsController.reset(id)),
       );
@@ -242,7 +243,7 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
       void act(`groupq:${queryId}`, () => subscriptionsController.setQueryGrouping(queryId, groupPosts)),
     deleteQuery: (queryId: string) => {
       confirm(
-        { title: 'Delete Query', message: 'This query stops syncing. Downloaded files stay in your library.', confirmLabel: 'Delete', danger: true },
+        { title: t("Delete Query"), message: 'This query stops syncing. Downloaded files stay in your library.', confirmLabel: t("Delete"), danger: true },
         () => void act(`delq:${queryId}`, () => subscriptionsController.deleteQuery(queryId)),
       );
     },
@@ -261,9 +262,9 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
     const total = subscriptionIds.length;
     confirm(
       {
-        title: `Delete ${total} Subscription${total === 1 ? '' : 's'}`,
+        title: t("Delete {value0} Subscription{value1}", { value0: total, value1: total === 1 ? '' : 's' }),
         message: 'Downloaded files stay in your library. The selected subscriptions and their queries are removed.',
-        confirmLabel: 'Delete',
+        confirmLabel: t("Delete"),
         danger: true,
       },
       () => void act('multi:delete', async () => {
@@ -384,8 +385,8 @@ export function SubscriptionsScreen({ standalone = false }: { standalone?: boole
           />
         ) : snapshot ? (
           <EmptyState
-            title="Subscribe to artists and tags"
-            description="Create a subscription and new posts will land in your library automatically."
+            title={t("Subscribe to artists and tags")}
+            description={t('Create a subscription and new posts will land in your library automatically.')}
           />
         ) : null}
       </main>

@@ -15,6 +15,7 @@ import {
   type QueryFilters,
 } from './grid';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
+import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 import { createEmptyItemFilters } from '../shared/lib/itemFilters';
 import type { ItemSort } from '../shared/types/canonical';
 import type { GridScrollPosition } from '../shared/types/gridScroll';
@@ -28,6 +29,11 @@ import {
 } from './viewer';
 
 const SUBSCRIPTIONS_NODE_ID = 'system:subscriptions';
+
+function recordFolderNavigation(nodeId: string): void {
+  const scope = nodeIdToGridScope(nodeId);
+  if (scope?.kind === 'folder') recordRecentFolderUse([scope.folder_id]);
+}
 
 interface HistoryEntry {
   nodeId: string;
@@ -203,6 +209,7 @@ export function navigateWithGridFilters(
   filters: QueryFilters,
   ownerNodeId?: string,
 ): void {
+  recordFolderNavigation(nodeId);
   const nextFilters = cloneFilters(filters);
   const activeNodeId = store.get(activeNodeIdAtom);
   const h = store.get(historyAtom);
@@ -242,6 +249,7 @@ export function navigateWithGridFilters(
 
 /** Navigate to a workspace scope, leaving any item/group viewer first. */
 export function navigateToNode(nodeId: string) {
+  recordFolderNavigation(nodeId);
   const hadDrilldown = store.get(gridDrilldownAtom) != null;
   store.set(gridDrilldownAtom, null);
   if (store.get(activeNodeIdAtom) === nodeId) {

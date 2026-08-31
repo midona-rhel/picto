@@ -2,6 +2,7 @@ import { invoke } from './ipc';
 import type { ResolvedFilePath } from '../shared/types/generated/application/ResolvedFilePath';
 import type { ThumbnailQueueResult } from '../shared/types/generated/application/ThumbnailQueueResult';
 import type { EntityTarget } from '../shared/types/canonical';
+import { t } from '../i18n';
 
 export interface AssociatedApplication {
   name: string;
@@ -17,11 +18,11 @@ export interface OpenWithOptions {
 }
 
 export const REVERSE_IMAGE_SEARCH_ENGINES = [
-  { key: 'tineye', label: 'TinEye' },
-  { key: 'saucenao', label: 'SauceNAO' },
-  { key: 'yandex', label: 'Yandex Images' },
-  { key: 'sogou', label: 'Sogou' },
-  { key: 'bing', label: 'Bing Visual Search' },
+  { key: 'tineye', label: t("TinEye") },
+  { key: 'saucenao', label: t("SauceNAO") },
+  { key: 'yandex', label: t("Yandex Images") },
+  { key: 'sogou', label: t("Sogou") },
+  { key: 'bing', label: t("Bing Visual Search") },
 ] as const;
 
 export type ReverseImageSearchEngine = typeof REVERSE_IMAGE_SEARCH_ENGINES[number]['key'];

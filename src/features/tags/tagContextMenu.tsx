@@ -9,6 +9,7 @@ import {
 } from '@tabler/icons-react';
 import type { MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
+import { t } from '../../i18n';
 
 export interface TagNameParts {
   namespace: string;
@@ -65,13 +66,13 @@ export function buildCommonTagContextEntries({
     .sort((left, right) => left.localeCompare(right));
   const entries: MenuEntry[] = [
     {
-      label: 'Filter Items with This Tag',
+      label: t("Filter Items with This Tag"),
       icon: <IconSearch size={16} />,
       disabled: tag.tag_id <= 0,
       action: () => onFilter({ tag_id: tag.tag_id, name }),
     },
     {
-      label: starred ? 'Remove from Starred' : 'Add to Starred',
+      label: starred ? t("Remove from Starred") : t("Add to Starred"),
       icon: starred ? <IconStarOff size={16} /> : <IconStar size={16} />,
       action: () => onStarChange(name, !starred),
     },
@@ -80,7 +81,7 @@ export function buildCommonTagContextEntries({
   if (onMoveToGroup && groupTargets.length > 0) {
     entries.push({
       submenu: true,
-      label: currentNamespace ? 'Move to Group…' : 'Add to Group…',
+      label: currentNamespace ? t("Move to Group…") : t("Add to Group…"),
       icon: <IconBookmarks size={16} />,
       children: groupTargets.map((namespace) => ({
         label: namespace,
@@ -91,7 +92,7 @@ export function buildCommonTagContextEntries({
   }
   if (onMoveToGroup && currentNamespace) {
     entries.push({
-      label: 'Remove from this Group',
+      label: t("Remove from this Group"),
       icon: <IconBookmark size={16} />,
       action: () => onMoveToGroup(null),
     });
@@ -100,14 +101,14 @@ export function buildCommonTagContextEntries({
   entries.push(
     { separator: true },
     {
-      label: 'Copy Tag',
+      label: t("Copy Tag"),
       icon: <IconCopy size={16} />,
       action: () => copyText(name),
     },
   );
   if (onRemove) {
     entries.push({
-      label: 'Remove Tag',
+      label: t("Remove Tag"),
       icon: <IconX size={16} />,
       action: onRemove,
     });

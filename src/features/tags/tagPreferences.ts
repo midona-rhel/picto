@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { getSettings, patchSettings } from '../../platform/settingsApi';
 import { registerAppSettingsReload } from '../../runtime/appSettingsSettle';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { t } from '../../i18n';
 
 export interface TagPreferences {
   showTagGroups: boolean;
@@ -39,7 +40,7 @@ function ensureLoaded(): Promise<void> {
       .catch((reason: unknown) => {
         loadPromise = null;
         showErrorNotification({
-          title: 'Unable to load tag preferences',
+          title: t("Unable to load tag preferences"),
           message: reason instanceof Error ? reason.message : String(reason),
         });
       });
@@ -77,7 +78,7 @@ async function persist(next: TagPreferences, patch: Partial<TagPreferences>): Pr
     // Do not roll back a newer preference write that completed while this one was pending.
     if (snapshot === next) setSnapshot(previous);
     showErrorNotification({
-      title: 'Unable to save tag preferences',
+      title: t("Unable to save tag preferences"),
       message: reason instanceof Error ? reason.message : String(reason),
     });
   }

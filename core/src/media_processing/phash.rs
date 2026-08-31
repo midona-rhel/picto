@@ -26,24 +26,20 @@ fn legacy_luma_bytes(img: &image::DynamicImage) -> Vec<u8> {
             .iter()
             .map(|pixel| pixel[0])
             .collect(),
-        image::DynamicImage::ImageRgb8(buffer) => {
-            buffer
-                .as_raw()
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|pixel| rgb_luma(pixel))
-                .collect()
-        }
-        image::DynamicImage::ImageRgba8(buffer) => {
-            buffer
-                .as_raw()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|pixel| rgb_luma(pixel))
-                .collect()
-        }
+        image::DynamicImage::ImageRgb8(buffer) => buffer
+            .as_raw()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|pixel| rgb_luma(pixel))
+            .collect(),
+        image::DynamicImage::ImageRgba8(buffer) => buffer
+            .as_raw()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| rgb_luma(pixel))
+            .collect(),
         _ => img
             .to_rgba8()
             .as_raw()

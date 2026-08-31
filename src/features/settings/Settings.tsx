@@ -72,6 +72,7 @@ import { checkForUpdates, getUpdateState, installUpdate, onUpdateState, openUpda
 import packageMetadata from '../../../package.json';
 import { openExternalUrl } from '../../platform/shellApi';
 import pictoLogo from '../../../build/icons/picto-flat.svg';
+import { getLocale, LOCALE_OPTIONS, setLocale, t, translateMessage } from '../../i18n';
 
 // ── Settings row definition ──
 
@@ -96,72 +97,72 @@ interface PanelDef {
 
 const PANELS: PanelDef[] = [
   {
-    id: 'general', label: 'General', icon: IconSettings2,
+    id: 'general', label: t("General"), icon: IconSettings2,
     keywords: 'general appearance theme color light dark gray blue purple zoom tags group namespace prefix compact',
-    description: 'Appearance and zoom.',
+    description: t("Appearance and zoom."),
   },
   {
-    id: 'updates', label: 'Updates', icon: IconRefresh,
+    id: 'updates', label: t("Updates"), icon: IconRefresh,
     keywords: 'updates software version release notes download install latest',
-    description: 'Check for new versions of Picto.',
+    description: t("Check for new versions of Picto."),
   },
   {
-    id: 'library', label: 'Library', icon: IconLibrary,
+    id: 'library', label: t("Library"), icon: IconLibrary,
     keywords: 'library statistics media images video audio files size all inbox trash tags folders smart subscriptions collections',
-    description: 'Current library contents and storage.',
+    description: t("Current library contents and storage."),
   },
   {
-    id: 'sidebar', label: 'Sidebar', icon: IconLayoutSidebar,
+    id: 'sidebar', label: t("Sidebar"), icon: IconLayoutSidebar,
     keywords: 'sidebar navigation folder tree guides hierarchy lines',
-    description: 'Sidebar and folder-tree presentation.',
+    description: t("Sidebar and folder-tree presentation."),
   },
   {
-    id: 'controls', label: 'Controls', icon: IconAdjustmentsHorizontal,
+    id: 'controls', label: t("Controls"), icon: IconAdjustmentsHorizontal,
     keywords: 'controls grid layout thumbnails spacing density wide tight sort order name resolution extension label count fit',
-    description: 'Default grid controls and item presentation.',
+    description: t("Default grid controls and item presentation."),
     separatorBefore: true,
   },
   {
-    id: 'preview', label: 'Preview', icon: IconEye,
+    id: 'preview', label: t("Preview"), icon: IconEye,
     keywords: 'preview image video audio scaling pixelated zoom transparency autoplay loop visualization visualizer spectrum oscilloscope orbit',
-    description: 'Media preview behavior.',
+    description: t("Media preview behavior."),
   },
   {
-    id: 'shortcuts', label: 'Shortcuts', icon: IconCommand,
+    id: 'shortcuts', label: t("Shortcuts"), icon: IconCommand,
     keywords: 'shortcuts keyboard shortcut keybind hotkey binding command key layout qwerty qwertz azerty eu us european preset',
-    description: 'Keyboard layout and shortcut bindings.',
+    description: t("Keyboard layout and shortcut bindings."),
   },
   {
-    id: 'notifications', label: 'Notifications', icon: IconBell,
+    id: 'notifications', label: t("Notifications"), icon: IconBell,
     keywords: 'notifications alerts popups success information warnings errors',
-    description: 'Choose which actions show pop-up notifications.',
+    description: t("Choose which actions show pop-up notifications."),
     separatorBefore: true,
   },
   {
-    id: 'autoimport', label: 'Auto-Import', icon: IconFolderDown,
+    id: 'autoimport', label: t("Auto-Import"), icon: IconFolderDown,
     keywords: 'auto import watched folder watch files inbox recursive subfolders',
-    description: 'Control imports from watched folders.',
+    description: t("Control imports from watched folders."),
   },
   {
-    id: 'subscriptions', label: 'Subscriptions', icon: IconDownload,
+    id: 'subscriptions', label: t("Subscriptions"), icon: IconDownload,
     keywords: 'subscriptions defaults schedule daily weekly monthly posts run group multi media',
-    description: 'Defaults for new subscriptions and source queries.',
+    description: t("Defaults for new subscriptions and source queries."),
   },
   {
-    id: 'cloud', label: 'Cloud', icon: IconCloud,
+    id: 'cloud', label: t("Cloud"), icon: IconCloud,
     keywords: 'cloud sync backup restore google drive dropbox offline retention snapshots',
-    description: 'Library sync, recovery snapshots, and missing files.',
+    description: t("Library sync, recovery snapshots, and missing files."),
   },
   {
-    id: 'aitagging', label: 'AI Models', icon: IconBox,
+    id: 'aitagging', label: t("AI Models"), icon: IconBox,
     keywords: 'ai tagging tagger models model download threshold confidence auto tag rating',
-    description: 'Local models, confidence thresholds, and auto-tag behavior.',
+    description: t("Local models, confidence thresholds, and auto-tag behavior."),
     separatorBefore: true,
   },
   {
-    id: 'about', label: 'About', icon: IconInfoCircle,
+    id: 'about', label: t("About"), icon: IconInfoCircle,
     keywords: 'about picto version build copyright license github website release',
-    description: 'Version, project information, and licenses.',
+    description: t("Version, project information, and licenses."),
     separatorBefore: true,
   },
 ];
@@ -188,17 +189,17 @@ function UpdatesPanel() {
   return <div className={styles.panelContent}>
     <div className={styles.settingsBlock}>
       <div className={styles.blockContent}>
-        <div className={styles.blockTitle}>Software Update</div>
-        <Row label="Installed version"><span>{state?.currentVersion ?? '—'}</span></Row>
+        <div className={styles.blockTitle}>{t("Software Update")}</div>
+        <Row label={t("Installed version")}><span>{state?.currentVersion ?? '—'}</span></Row>
         <div className={styles.rowSep} />
         <Row label={status}>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className={styles.footerBtn} type="button" disabled={state?.status === 'checking' || state?.status === 'downloading'} onClick={() => void checkForUpdates().then(setState)}>Check Now</button>
-            {state?.status === 'downloaded' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void installUpdate()}>{state.platform === 'darwin' ? 'Open Download Page' : 'Restart and Install'}</button> : null}
-            {state?.status === 'available' && state.platform === 'darwin' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void openUpdateRelease()}>Open Download Page</button> : null}
+            <button className={styles.footerBtn} type="button" disabled={state?.status === 'checking' || state?.status === 'downloading'} onClick={() => void checkForUpdates().then(setState)}>{t("Check Now")}</button>
+            {state?.status === 'downloaded' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void installUpdate()}>{state.platform === 'darwin' ? t("Open Download Page") : t("Restart and Install")}</button> : null}
+            {state?.status === 'available' && state.platform === 'darwin' ? <button className={styles.footerBtnPrimary} type="button" onClick={() => void openUpdateRelease()}>{t("Open Download Page")}</button> : null}
           </div>
         </Row>
-        <p className={styles.panelDescription}>{state?.automaticInstall ? 'Updates download in the background and install after Picto closes.' : 'On macOS, Picto opens the release download because this build is not signed for automatic installation.'}</p>
+        <p className={styles.panelDescription}>{state?.automaticInstall ? t("Updates download in the background and install after Picto closes.") : t("On macOS, Picto opens the release download because this build is not signed for automatic installation.")}</p>
       </div>
     </div>
   </div>;
@@ -212,25 +213,25 @@ function AboutPanel() {
     <div className={styles.aboutHero}>
       <img className={styles.aboutLogo} src={pictoLogo} alt="" />
       <div>
-        <h1>Picto</h1>
-        <p>Personal media library and organization.</p>
-        <span>Version {packageMetadata.version}{platform ? ` · ${platform}` : ''}</span>
+        <h1>{t("Picto")}</h1>
+        <p>{t("Personal media library and organization.")}</p>
+        <span>{t("Version ")}{packageMetadata.version}{platform ? ` · ${platform}` : ''}</span>
       </div>
     </div>
     <div className={styles.settingsBlock}>
       <div className={styles.blockContent}>
-        <div className={styles.blockTitle}>Application</div>
-        <Row label="Software updates"><button className={styles.footerBtn} type="button" onClick={() => void checkForUpdates().then(setState)}>Check Now</button></Row>
+        <div className={styles.blockTitle}>{t("Application")}</div>
+        <Row label={t("Software updates")}><button className={styles.footerBtn} type="button" onClick={() => void checkForUpdates().then(setState)}>{t("Check Now")}</button></Row>
         <div className={styles.rowSep} />
-        <Row label="License"><span className={styles.staticValue}>MIT</span></Row>
+        <Row label={t("License")}><span className={styles.staticValue}>{t("MIT")}</span></Row>
       </div>
     </div>
     <div className={styles.aboutLinks}>
-      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto')}><IconBrandGithub size={16} /> Project on GitHub <IconExternalLink size={13} /></button>
-      <button type="button" onClick={() => void openUpdateRelease()}><IconRefresh size={16} /> Release notes <IconExternalLink size={13} /></button>
-      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto/blob/main/LICENSE')}><IconScale size={16} /> Open-source license <IconExternalLink size={13} /></button>
+      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto')}><IconBrandGithub size={16} /> {t("Project on GitHub ")}<IconExternalLink size={13} /></button>
+      <button type="button" onClick={() => void openUpdateRelease()}><IconRefresh size={16} /> {t("Release notes ")}<IconExternalLink size={13} /></button>
+      <button type="button" onClick={() => void openExternalUrl('https://github.com/midona-rhel/picto/blob/main/LICENSE')}><IconScale size={16} /> {t("Open-source license ")}<IconExternalLink size={13} /></button>
     </div>
-    <p className={styles.aboutCopyright}>© {new Date().getFullYear()} Picto contributors</p>
+    <p className={styles.aboutCopyright}>© {new Date().getFullYear()} {t("Picto contributors")}</p>
   </div>;
 }
 
@@ -240,13 +241,13 @@ function KeyboardPresetRow({ preset, onChange }: { preset: KeyboardPreset; onCha
   return (
     <div className={styles.settingsBlock}>
       <div className={styles.blockContent}>
-        <div className={styles.blockTitle}>Keyboard</div>
-        <Row label="Keyboard layout">
+        <div className={styles.blockTitle}>{t("Keyboard")}</div>
+        <Row label={t("Keyboard layout")}>
           <CmSelect
             value={preset}
             options={[
-              { value: 'us', label: 'US (QWERTY)' },
-              { value: 'eu', label: 'EU (QWERTZ / AZERTY / Nordic)' },
+              { value: 'us', label: t("US (QWERTY)") },
+              { value: 'eu', label: t("EU (QWERTZ / AZERTY / Nordic)") },
             ]}
             onChange={(value) => onChange(value as KeyboardPreset)}
             width={260}
@@ -254,8 +255,7 @@ function KeyboardPresetRow({ preset, onChange }: { preset: KeyboardPreset; onCha
           />
         </Row>
         <p className={styles.settingHint}>
-          EU mode adds alternatives for shortcuts that use backtick, backslash, and brackets.
-        </p>
+          {t("EU mode adds alternatives for shortcuts that use backtick, backslash, and brackets.")}</p>
       </div>
     </div>
   );
@@ -337,78 +337,78 @@ function LayoutIcon({ mode }: { mode: string }) {
 }
 
 const LAYOUT_OPTIONS = [
-  { value: 'waterfall', label: 'Waterfall', icon: <LayoutIcon mode="waterfall" /> },
-  { value: 'grid', label: 'Grid', icon: <LayoutIcon mode="grid" /> },
-  { value: 'justified', label: 'Justified', icon: <LayoutIcon mode="justified" /> },
+  { value: 'waterfall', label: t("Waterfall"), icon: <LayoutIcon mode="waterfall" /> },
+  { value: 'grid', label: t("Grid"), icon: <LayoutIcon mode="grid" /> },
+  { value: 'justified', label: t("Justified"), icon: <LayoutIcon mode="justified" /> },
 ];
 const SORT_FIELD_OPTIONS = [
-  { value: 'imported_at', label: 'Date Added' },
-  { value: 'captured_at', label: 'Date Created' },
-  { value: 'name', label: 'Name' },
-  { value: 'rating', label: 'Rating' },
-  { value: 'size', label: 'File Size' },
-  { value: 'random', label: 'Random' },
+  { value: 'imported_at', label: t("Date Added") },
+  { value: 'captured_at', label: t("Date Created") },
+  { value: 'name', label: t("Name") },
+  { value: 'rating', label: t("Rating") },
+  { value: 'size', label: t("File Size") },
+  { value: 'random', label: t("Random") },
 ];
 const SORT_DIR_OPTIONS = [
-  { value: 'ascending', label: 'Ascending', icon: <IconSortAscending size={14} /> },
-  { value: 'descending', label: 'Descending', icon: <IconSortDescending size={14} /> },
+  { value: 'ascending', label: t("Ascending"), icon: <IconSortAscending size={14} /> },
+  { value: 'descending', label: t("Descending"), icon: <IconSortDescending size={14} /> },
 ];
 const GRID_SPACING_OPTIONS = [
-  { value: 'wide', label: 'Wide' },
-  { value: 'tight', label: 'Tight' },
+  { value: 'wide', label: t("Wide") },
+  { value: 'tight', label: t("Tight") },
 ];
 const WHEEL_ACTION_OPTIONS = [
-  { value: 'scroll', label: 'Scroll grid' },
-  { value: 'zoom', label: 'Adjust thumbnail size' },
+  { value: 'scroll', label: t("Scroll grid") },
+  { value: 'zoom', label: t("Adjust thumbnail size") },
 ];
 const MEDIA_GESTURE_OPTIONS = [
-  { value: 'wheel_zoom', label: 'Wheel zoom' },
-  { value: 'trackpad', label: 'Trackpad pan + pinch zoom' },
+  { value: 'wheel_zoom', label: t("Wheel zoom") },
+  { value: 'trackpad', label: t("Trackpad pan + pinch zoom") },
 ];
 const CONTROL_SELECT_WIDTH = 220;
 const DOUBLE_CLICK_ACTION_OPTIONS = [
-  { value: 'detail', label: 'Open Media View' },
-  { value: 'external', label: 'Open in default app' },
+  { value: 'detail', label: t("Open Media View") },
+  { value: 'external', label: t("Open in default app") },
 ];
 const MIDDLE_CLICK_ACTION_OPTIONS = [
-  { value: 'new_window', label: 'Open in new window' },
-  { value: 'none', label: 'Do nothing' },
+  { value: 'new_window', label: t("Open in new window") },
+  { value: 'none', label: t("Do nothing") },
 ];
 const SPACE_ACTION_OPTIONS = [
-  { value: 'quick_look', label: 'Quick Look' },
-  { value: 'scroll', label: 'Scroll page' },
+  { value: 'quick_look', label: t("Quick Look") },
+  { value: 'scroll', label: t("Scroll page") },
 ];
 const IMAGE_RENDERING_OPTIONS = [
-  { value: 'smooth', label: 'Smooth' },
-  { value: 'pixelated', label: 'Pixelated' },
+  { value: 'smooth', label: t("Smooth") },
+  { value: 'pixelated', label: t("Pixelated") },
 ];
 const IMAGE_DEFAULT_ZOOM_OPTIONS = [
-  { value: 'fit', label: 'Fit to window' },
-  { value: 'actual', label: 'Actual size' },
+  { value: 'fit', label: t("Fit to window") },
+  { value: 'actual', label: t("Actual size") },
 ];
 
 const NOTIFICATION_TONE_OPTIONS: Array<{ tone: NotificationTone; label: string }> = [
-  { tone: 'success', label: 'Successful actions' },
-  { tone: 'info', label: 'Information' },
-  { tone: 'warning', label: 'Warnings' },
-  { tone: 'error', label: 'Errors' },
+  { tone: 'success', label: t("Successful actions") },
+  { tone: 'info', label: t("Information") },
+  { tone: 'warning', label: t("Warnings") },
+  { tone: 'error', label: t("Errors") },
 ];
 
 const SUBSCRIPTION_SCHEDULE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
+  { value: 'manual', label: t("Manual") },
+  { value: 'daily', label: t("Daily") },
+  { value: 'weekly', label: t("Weekly") },
+  { value: 'monthly', label: t("Monthly") },
 ];
 
 function cloudProviderLabel(provider: string | null): string {
   if (provider === 'google_drive') return 'Google Drive';
   if (provider === 'dropbox') return 'Dropbox';
-  return 'Not configured';
+  return t('Not configured');
 }
 
 function formatCloudDate(value: string | null): string {
-  if (!value) return 'Never';
+  if (!value) return t('Never');
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
@@ -451,39 +451,39 @@ function LibraryPanel({ statistics }: { statistics: LibraryStatistics | null }) 
     <div className={styles.panelContent}>
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Overview</div>
-          <Row label="Library items"><span className={styles.staticValue}>{totalRoots.toLocaleString()}</span></Row>
-          <Row label="Media assets" sep><span className={styles.staticValue}>{statistics.media_assets.toLocaleString()}</span></Row>
-          <Row label="Size" sep><span className={styles.staticValue}>{formatBytes(statistics.original_bytes)}</span></Row>
+          <div className={styles.blockTitle}>{t("Overview")}</div>
+          <Row label={t("Library items")}><span className={styles.staticValue}>{totalRoots.toLocaleString()}</span></Row>
+          <Row label={t("Media assets")} sep><span className={styles.staticValue}>{statistics.media_assets.toLocaleString()}</span></Row>
+          <Row label={t("Size")} sep><span className={styles.staticValue}>{formatBytes(statistics.original_bytes)}</span></Row>
         </div>
       </div>
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Library Items</div>
-          <Row label="All"><span className={styles.staticValue}>{statistics.active_items.toLocaleString()}</span></Row>
-          <Row label="Inbox" sep><span className={styles.staticValue}>{statistics.inbox_items.toLocaleString()}</span></Row>
-          <Row label="Trash" sep><span className={styles.staticValue}>{statistics.trash_items.toLocaleString()}</span></Row>
-          <Row label="Standalone" sep><span className={styles.staticValue}>{statistics.standalone_items.toLocaleString()}</span></Row>
-          <Row label="Groups" sep><span className={styles.staticValue}>{statistics.collections.toLocaleString()}</span></Row>
+          <div className={styles.blockTitle}>{t("Library Items")}</div>
+          <Row label={t("All")}><span className={styles.staticValue}>{statistics.active_items.toLocaleString()}</span></Row>
+          <Row label={t("Inbox")} sep><span className={styles.staticValue}>{statistics.inbox_items.toLocaleString()}</span></Row>
+          <Row label={t("Trash")} sep><span className={styles.staticValue}>{statistics.trash_items.toLocaleString()}</span></Row>
+          <Row label={t("Standalone")} sep><span className={styles.staticValue}>{statistics.standalone_items.toLocaleString()}</span></Row>
+          <Row label={t("Groups")} sep><span className={styles.staticValue}>{statistics.collections.toLocaleString()}</span></Row>
         </div>
       </div>
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Media and Storage</div>
-          <Row label="Images"><span className={styles.staticValue}>{statistics.image_assets.toLocaleString()}</span></Row>
-          <Row label="Videos" sep><span className={styles.staticValue}>{statistics.video_assets.toLocaleString()}</span></Row>
-          <Row label="Audio" sep><span className={styles.staticValue}>{statistics.audio_assets.toLocaleString()}</span></Row>
-          <Row label="Other media" sep><span className={styles.staticValue}>{statistics.other_assets.toLocaleString()}</span></Row>
-          <Row label="Physical files" sep><span className={styles.staticValue}>{statistics.physical_files.toLocaleString()}</span></Row>
+          <div className={styles.blockTitle}>{t("Media and Storage")}</div>
+          <Row label={t("Images")}><span className={styles.staticValue}>{statistics.image_assets.toLocaleString()}</span></Row>
+          <Row label={t("Videos")} sep><span className={styles.staticValue}>{statistics.video_assets.toLocaleString()}</span></Row>
+          <Row label={t("Audio")} sep><span className={styles.staticValue}>{statistics.audio_assets.toLocaleString()}</span></Row>
+          <Row label={t("Other media")} sep><span className={styles.staticValue}>{statistics.other_assets.toLocaleString()}</span></Row>
+          <Row label={t("Physical files")} sep><span className={styles.staticValue}>{statistics.physical_files.toLocaleString()}</span></Row>
         </div>
       </div>
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Organization</div>
-          <Row label="Tags"><span className={styles.staticValue}>{statistics.tags.toLocaleString()}</span></Row>
-          <Row label="Folders" sep><span className={styles.staticValue}>{statistics.folders.toLocaleString()}</span></Row>
-          <Row label="Smart folders" sep><span className={styles.staticValue}>{statistics.smart_folders.toLocaleString()}</span></Row>
-          <Row label="Subscriptions" sep><span className={styles.staticValue}>{statistics.subscriptions.toLocaleString()}</span></Row>
+          <div className={styles.blockTitle}>{t("Organization")}</div>
+          <Row label={t("Tags")}><span className={styles.staticValue}>{statistics.tags.toLocaleString()}</span></Row>
+          <Row label={t("Folders")} sep><span className={styles.staticValue}>{statistics.folders.toLocaleString()}</span></Row>
+          <Row label={t("Smart folders")} sep><span className={styles.staticValue}>{statistics.smart_folders.toLocaleString()}</span></Row>
+          <Row label={t("Subscriptions")} sep><span className={styles.staticValue}>{statistics.subscriptions.toLocaleString()}</span></Row>
         </div>
       </div>
     </div>
@@ -525,7 +525,7 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
       if (success) showSuccessNotification({ title: success, message: '' });
     } catch (reason) {
       showErrorNotification({
-        title: 'Cloud operation failed',
+        title: t("Cloud operation failed"),
         message: reason instanceof Error ? reason.message : String(reason),
       });
     } finally {
@@ -553,43 +553,43 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
     <div className={styles.panelContent}>
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Library Sync</div>
-          <Row label="Provider"><span className={styles.staticValue}>{cloudProviderLabel(configuration.provider)}</span></Row>
-          <Row label="Folder" sep><span className={styles.staticValue} title={configuration.root_path ?? ''}>{configuration.root_path ?? 'Choose a cloud folder in Libraries'}</span></Row>
-          <Row label="State" sep><span className={styles.staticValue}>{status.message || status.state}</span></Row>
-          <Row label="Last sync" sep><span className={styles.staticValue}>{formatCloudDate(status.last_sync_at)}</span></Row>
+          <div className={styles.blockTitle}>{t("Library Sync")}</div>
+          <Row label={t("Provider")}><span className={styles.staticValue}>{cloudProviderLabel(configuration.provider)}</span></Row>
+          <Row label={t("Folder")} sep><span className={styles.staticValue} title={configuration.root_path ?? ''}>{configuration.root_path ?? 'Choose a cloud folder in Libraries'}</span></Row>
+          <Row label={t("State")} sep><span className={styles.staticValue}>{status.message || status.state}</span></Row>
+          <Row label={t("Last sync")} sep><span className={styles.staticValue}>{formatCloudDate(status.last_sync_at)}</span></Row>
           <div className={styles.rowSep} />
           <div className={styles.cloudActions}>
-            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.reconcile'))}>Sync now</button>
-            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.pause', { paused: status.state !== 'paused' }))}>{status.state === 'paused' ? 'Resume' : 'Pause'}</button>
-            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.snapshot.create'), 'Recovery snapshot created')}>Create snapshot</button>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.reconcile'))}>{t("Sync now")}</button>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.pause', { paused: status.state !== 'paused' }))}>{status.state === 'paused' ? t("Resume") : t("Pause")}</button>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.snapshot.create'), 'Recovery snapshot created')}>{t("Create snapshot")}</button>
           </div>
-          {!configured ? <p className={styles.settingHint}>Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device.</p> : null}
+          {!configured ? <p className={styles.settingHint}>{t("Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device.")}</p> : null}
         </div>
       </div>
 
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Pending Work</div>
-          <Row label="Mutations"><span className={styles.staticValue}>{status.pending_mutations}</span></Row>
-          <Row label="Files" sep><span className={styles.staticValue}>{status.pending_blobs}</span></Row>
-          <Row label="Unavailable files" sep><span className={styles.staticValue}>{status.missing_blobs}</span></Row>
+          <div className={styles.blockTitle}>{t("Pending Work")}</div>
+          <Row label={t("Mutations")}><span className={styles.staticValue}>{status.pending_mutations}</span></Row>
+          <Row label={t("Files")} sep><span className={styles.staticValue}>{status.pending_blobs}</span></Row>
+          <Row label={t("Unavailable files")} sep><span className={styles.staticValue}>{status.missing_blobs}</span></Row>
         </div>
       </div>
 
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Recovery Retention</div>
-          <Row label="Daily snapshots"><CompactNumberInput label="Daily snapshots" min={2} max={365} value={retention.daily} commitOnChange onCommit={(value) => updateRetention('daily', value)} /></Row>
-          <Row label="Weekly snapshots" sep><CompactNumberInput label="Weekly snapshots" min={0} max={260} value={retention.weekly} commitOnChange onCommit={(value) => updateRetention('weekly', value)} /></Row>
-          <Row label="Yearly snapshots" sep><CompactNumberInput label="Yearly snapshots" min={0} max={100} value={retention.yearly} commitOnChange onCommit={(value) => updateRetention('yearly', value)} /></Row>
+          <div className={styles.blockTitle}>{t("Recovery Retention")}</div>
+          <Row label={t("Daily snapshots")}><CompactNumberInput label={t("Daily snapshots")} min={2} max={365} value={retention.daily} commitOnChange onCommit={(value) => updateRetention('daily', value)} /></Row>
+          <Row label={t("Weekly snapshots")} sep><CompactNumberInput label={t("Weekly snapshots")} min={0} max={260} value={retention.weekly} commitOnChange onCommit={(value) => updateRetention('weekly', value)} /></Row>
+          <Row label={t("Yearly snapshots")} sep><CompactNumberInput label={t("Yearly snapshots")} min={0} max={100} value={retention.yearly} commitOnChange onCommit={(value) => updateRetention('yearly', value)} /></Row>
         </div>
       </div>
 
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
-          <div className={styles.blockTitle}>Restore History</div>
-          {restorePoints.length === 0 ? <p className={styles.settingHint}>No recovery snapshots are available yet.</p> : restorePoints.map((point) => (
+          <div className={styles.blockTitle}>{t("Restore History")}</div>
+          {restorePoints.length === 0 ? <p className={styles.settingHint}>{t("No recovery snapshots are available yet.")}</p> : restorePoints.map((point) => (
             <Row key={point.snapshot_id} label={formatCloudDate(point.created_at)} sep>
               <span className={styles.restorePointSize}>{formatBytes(point.size_bytes)}</span>
               <button
@@ -597,10 +597,10 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
                 type="button"
                 disabled={busy || !point.verified}
                 onClick={() => {
-                  if (!window.confirm('Restore this recovery snapshot? Picto will preserve the current database as an emergency copy.')) return;
-                  void run(() => invoke('cloud.restore.start', { snapshot_id: point.snapshot_id }), 'Library restored');
+                  if (!window.confirm(t('Restore this recovery snapshot? Picto will preserve the current database as an emergency copy.'))) return;
+                  void run(() => invoke('cloud.restore.start', { snapshot_id: point.snapshot_id }), t('Library restored'));
                 }}
-              >Restore</button>
+              >{t("Restore")}</button>
             </Row>
           ))}
         </div>
@@ -679,47 +679,57 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Appearance</div>
-              <Row label="Theme">
+              <div className={styles.blockTitle}>{t("Appearance")}</div>
+              <Row label={t("Theme")}>
                 <div className={styles.themesPicker}>
-                  {THEMES.map((t) => (
+                  {THEMES.map((theme) => (
                     <button
-                      key={t.css}
-                      className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${!t.color && t.css !== 'auto' ? styles.themeSwatchGlass : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
-                      style={t.color ? { backgroundColor: t.color } : undefined}
-                      data-tooltip={t.name}
+                      key={theme.css}
+                      className={`${styles.themeSwatch} ${theme.css === 'auto' ? styles.themeSwatchAuto : ''} ${!theme.color && theme.css !== 'auto' ? styles.themeSwatchGlass : ''} ${activeTheme === theme.css ? styles.themeSwatchActive : ''}`}
+                      style={theme.color ? { backgroundColor: theme.color } : undefined}
+                      data-tooltip={theme.name}
                       type="button"
-                      aria-label={`${t.name} theme`}
-                      onClick={() => handleThemeChange(t.css)}
+                      aria-label={t("{value0} theme", { value0: theme.name })}
+                      onClick={() => handleThemeChange(theme.css)}
                     />
                   ))}
                 </div>
               </Row>
               <div className={styles.rowSep} />
-              <Row label="Zoom Level">
+              <Row label={t("Zoom Level")}>
                 <CmSelect value={zoom} options={ZOOM_OPTIONS} onChange={handleZoomChange} />
               </Row>
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Interface</div>
+              <div className={styles.blockTitle}>{t("Interface")}</div>
+              <Row label={t("Language")}>
+                <CmSelect
+                  value={getLocale()}
+                  options={LOCALE_OPTIONS}
+                  onChange={(value) => setLocale(value as typeof LOCALE_OPTIONS[number]['value'])}
+                  width={220}
+                  ariaLabel={t("Language")}
+                />
+              </Row>
+              <div className={styles.rowSep} />
               <CheckSetting
                 checked={appSettings?.showSidebarCounts ?? true}
-                label="Show item counts in the sidebar"
+                label={t("Show item counts in the sidebar")}
                 onChange={() => updateAppSetting({ showSidebarCounts: !(appSettings?.showSidebarCounts ?? true) })}
               />
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Tags</div>
+              <div className={styles.blockTitle}>{t("Tags")}</div>
               <CheckSetting
                 checked={!(appSettings?.showTagPrefixes ?? false)}
-                label="Hide group prefixes"
+                label={t("Hide group prefixes")}
                 onChange={() => updateAppSetting({ showTagPrefixes: appSettings?.showTagPrefixes === false })}
               />
-              <p className={styles.settingHint}>Show shorter tag names without changing their underlying group.</p>
+              <p className={styles.settingHint}>{t("Show shorter tag names without changing their underlying group.")}</p>
             </div>
           </div>
         </>
@@ -729,17 +739,17 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Double Click</div>
+              <div className={styles.blockTitle}>{t("Double Click")}</div>
               <div className={styles.sidebarSettingsGrid}>
                 <RadioSetting
                   checked={(appSettings?.sidebarDoubleClickAction ?? 'collapse') === 'rename'}
-                  label="Rename"
+                  label={t("Rename")}
                   name="sidebar-double-click"
                   onChange={() => updateAppSetting({ sidebarDoubleClickAction: 'rename' })}
                 />
                 <RadioSetting
                   checked={(appSettings?.sidebarDoubleClickAction ?? 'collapse') === 'collapse'}
-                  label="Expand/Collapse"
+                  label={t("Expand/Collapse")}
                   name="sidebar-double-click"
                   onChange={() => updateAppSetting({ sidebarDoubleClickAction: 'collapse' })}
                 />
@@ -748,33 +758,33 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Show these items in the sidebar:</div>
+              <div className={styles.blockTitle}>{t("Show these items in the sidebar:")}</div>
               <div className={styles.sidebarSettingsGrid}>
-                <CheckSetting checked disabled label="All" onChange={() => {}} />
-                <CheckSetting checked={appSettings?.showSidebarUncategorized ?? true} label="Uncategorized" onChange={() => updateAppSetting({ showSidebarUncategorized: !(appSettings?.showSidebarUncategorized ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarUntagged ?? true} label="Untagged" onChange={() => updateAppSetting({ showSidebarUntagged: !(appSettings?.showSidebarUntagged ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarInbox ?? true} label="Inbox" onChange={() => updateAppSetting({ showSidebarInbox: !(appSettings?.showSidebarInbox ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarRandom ?? true} label="Random" onChange={() => updateAppSetting({ showSidebarRandom: !(appSettings?.showSidebarRandom ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarTagManager ?? true} label="Tag Manager" onChange={() => updateAppSetting({ showSidebarTagManager: !(appSettings?.showSidebarTagManager ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarRecentlyViewed ?? true} label="Recently Viewed" onChange={() => updateAppSetting({ showSidebarRecentlyViewed: !(appSettings?.showSidebarRecentlyViewed ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarSubscriptions ?? true} label="Subscriptions" onChange={() => updateAppSetting({ showSidebarSubscriptions: !(appSettings?.showSidebarSubscriptions ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarDuplicates ?? true} label="Duplicates" onChange={() => updateAppSetting({ showSidebarDuplicates: !(appSettings?.showSidebarDuplicates ?? true) })} />
-                <CheckSetting checked disabled label="Trash" onChange={() => {}} />
+                <CheckSetting checked disabled label={t("All")} onChange={() => {}} />
+                <CheckSetting checked={appSettings?.showSidebarUncategorized ?? true} label={t("Uncategorized")} onChange={() => updateAppSetting({ showSidebarUncategorized: !(appSettings?.showSidebarUncategorized ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarUntagged ?? true} label={t("Untagged")} onChange={() => updateAppSetting({ showSidebarUntagged: !(appSettings?.showSidebarUntagged ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarInbox ?? true} label={t("Inbox")} onChange={() => updateAppSetting({ showSidebarInbox: !(appSettings?.showSidebarInbox ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarRandom ?? true} label={t("Random")} onChange={() => updateAppSetting({ showSidebarRandom: !(appSettings?.showSidebarRandom ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarTagManager ?? true} label={t("Tag Manager")} onChange={() => updateAppSetting({ showSidebarTagManager: !(appSettings?.showSidebarTagManager ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarRecentlyViewed ?? true} label={t("Recently Viewed")} onChange={() => updateAppSetting({ showSidebarRecentlyViewed: !(appSettings?.showSidebarRecentlyViewed ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarSubscriptions ?? true} label={t("Subscriptions")} onChange={() => updateAppSetting({ showSidebarSubscriptions: !(appSettings?.showSidebarSubscriptions ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarDuplicates ?? true} label={t("Duplicates")} onChange={() => updateAppSetting({ showSidebarDuplicates: !(appSettings?.showSidebarDuplicates ?? true) })} />
+                <CheckSetting checked disabled label={t("Trash")} onChange={() => {}} />
               </div>
               <div className={styles.rowSep} />
               <div className={styles.sidebarSettingsGrid}>
-                <CheckSetting checked={appSettings?.showSidebarQuickAccess ?? true} label="Quick Access" onChange={() => updateAppSetting({ showSidebarQuickAccess: !(appSettings?.showSidebarQuickAccess ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarSmartFolders ?? true} label="Smart Folders" onChange={() => updateAppSetting({ showSidebarSmartFolders: !(appSettings?.showSidebarSmartFolders ?? true) })} />
-                <CheckSetting checked={appSettings?.showSidebarFolders ?? true} label="Folders" onChange={() => updateAppSetting({ showSidebarFolders: !(appSettings?.showSidebarFolders ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarQuickAccess ?? true} label={t("Quick Access")} onChange={() => updateAppSetting({ showSidebarQuickAccess: !(appSettings?.showSidebarQuickAccess ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarSmartFolders ?? true} label={t("Smart Folders")} onChange={() => updateAppSetting({ showSidebarSmartFolders: !(appSettings?.showSidebarSmartFolders ?? true) })} />
+                <CheckSetting checked={appSettings?.showSidebarFolders ?? true} label={t("Folders")} onChange={() => updateAppSetting({ showSidebarFolders: !(appSettings?.showSidebarFolders ?? true) })} />
               </div>
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Folder Tree</div>
+              <div className={styles.blockTitle}>{t("Folder Tree")}</div>
               <CheckSetting
                 checked={appSettings?.showTreeGuides ?? true}
-                label="Show hierarchy guides"
+                label={t("Show hierarchy guides")}
                 onChange={() => updateAppSetting({ showTreeGuides: !(appSettings?.showTreeGuides ?? true) })}
               />
             </div>
@@ -786,15 +796,15 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Image</div>
-              <Row label="Scaling">
+              <div className={styles.blockTitle}>{t("Image")}</div>
+              <Row label={t("Scaling")}>
                 <CmSelect
                   value={appSettings?.imageRendering ?? 'smooth'}
                   options={IMAGE_RENDERING_OPTIONS}
                   onChange={(value) => updateAppSetting({ imageRendering: value as AppSettings['imageRendering'] })}
                 />
               </Row>
-              <Row label="Default zoom" sep>
+              <Row label={t("Default zoom")} sep>
                 <CmSelect
                   value={appSettings?.imageDefaultZoom ?? 'fit'}
                   options={IMAGE_DEFAULT_ZOOM_OPTIONS}
@@ -804,23 +814,23 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
               <div className={styles.rowSep} />
               <CheckSetting
                 checked={appSettings?.showTransparencyGrid ?? false}
-                label="Show transparency grid"
+                label={t("Show transparency grid")}
                 onChange={() => updateAppSetting({ showTransparencyGrid: !(appSettings?.showTransparencyGrid ?? false) })}
               />
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Video</div>
+              <div className={styles.blockTitle}>{t("Video")}</div>
               <div className={styles.checkboxGrid}>
                 <CheckSetting
                   checked={appSettings?.videoAutoPlay ?? true}
-                  label="Autoplay videos"
+                  label={t("Autoplay videos")}
                   onChange={() => updateAppSetting({ videoAutoPlay: !(appSettings?.videoAutoPlay ?? true) })}
                 />
                 <CheckSetting
                   checked={appSettings?.videoLoop ?? true}
-                  label="Loop videos"
+                  label={t("Loop videos")}
                   onChange={() => updateAppSetting({ videoLoop: !(appSettings?.videoLoop ?? true) })}
                 />
               </div>
@@ -828,8 +838,8 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Audio</div>
-              <Row label="Visualization">
+              <div className={styles.blockTitle}>{t("Audio")}</div>
+              <Row label={t("Visualization")}>
                 <CmSelect
                   value={audioVisualization}
                   options={AUDIO_VISUALIZATION_OPTIONS}
@@ -845,32 +855,32 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Mouse</div>
-              <Row label="Mouse wheel"><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridWheelAction ?? 'scroll'} options={WHEEL_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridWheelAction: value as AppSettings['gridWheelAction'] })} /></Row>
-              {isMac ? <Row label="Media view gestures" sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.viewerTrackpadGestures ? 'trackpad' : 'wheel_zoom'} options={MEDIA_GESTURE_OPTIONS} onChange={(value) => updateAppSetting({ viewerTrackpadGestures: value === 'trackpad' })} /></Row> : null}
-              <Row label="Double-click" sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridDoubleClickAction ?? 'detail'} options={DOUBLE_CLICK_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridDoubleClickAction: value as AppSettings['gridDoubleClickAction'] })} /></Row>
-              <Row label="Middle-click" sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridMiddleClickAction ?? 'new_window'} options={MIDDLE_CLICK_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridMiddleClickAction: value as AppSettings['gridMiddleClickAction'] })} /></Row>
+              <div className={styles.blockTitle}>{t("Mouse")}</div>
+              <Row label={t("Mouse wheel")}><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridWheelAction ?? 'scroll'} options={WHEEL_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridWheelAction: value as AppSettings['gridWheelAction'] })} /></Row>
+              {isMac ? <Row label={t("Media view gestures")} sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.viewerTrackpadGestures ? 'trackpad' : 'wheel_zoom'} options={MEDIA_GESTURE_OPTIONS} onChange={(value) => updateAppSetting({ viewerTrackpadGestures: value === 'trackpad' })} /></Row> : null}
+              <Row label={t("Double-click")} sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridDoubleClickAction ?? 'detail'} options={DOUBLE_CLICK_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridDoubleClickAction: value as AppSettings['gridDoubleClickAction'] })} /></Row>
+              <Row label={t("Middle-click")} sep><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.gridMiddleClickAction ?? 'new_window'} options={MIDDLE_CLICK_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ gridMiddleClickAction: value as AppSettings['gridMiddleClickAction'] })} /></Row>
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Keyboard</div>
-              <Row label="Space key"><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.spaceKeyAction ?? 'quick_look'} options={SPACE_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ spaceKeyAction: value as AppSettings['spaceKeyAction'] })} /></Row>
+              <div className={styles.blockTitle}>{t("Keyboard")}</div>
+              <Row label={t("Space key")}><CmSelect width={CONTROL_SELECT_WIDTH} value={appSettings?.spaceKeyAction ?? 'quick_look'} options={SPACE_ACTION_OPTIONS} onChange={(value) => updateAppSetting({ spaceKeyAction: value as AppSettings['spaceKeyAction'] })} /></Row>
             </div>
           </div>
           {prefs ? (
             <div className={styles.settingsBlock}>
               <div className={styles.blockContent}>
-                <div className={styles.blockTitle}>Grid Defaults</div>
-                <Row label="Default layout">
+                <div className={styles.blockTitle}>{t("Grid Defaults")}</div>
+                <Row label={t("Default layout")}>
                   <CmSelect value={prefs.view_mode ?? 'waterfall'} options={LAYOUT_OPTIONS} onChange={(v) => updateViewPref({ view_mode: v })} />
                 </Row>
-                <Row label="Thumbnail size" sep>
+                <Row label={t("Thumbnail size")} sep>
                   <input type="range" min={100} max={600} step={50} value={prefs.target_size ?? 220}
                     onChange={(e) => updateViewPref({ target_size: Number(e.target.value) })} className={styles.rangeInput} />
-                  <span className={styles.valueLabel}>{prefs.target_size ?? 220}px</span>
+                  <span className={styles.valueLabel}>{prefs.target_size ?? 220}{t("px")}</span>
                 </Row>
-                <Row label="Grid spacing" sep>
+                <Row label={t("Grid spacing")} sep>
                   <CmSelect
                     value={appSettings?.gridSpacing ?? 'wide'}
                     options={GRID_SPACING_OPTIONS}
@@ -880,14 +890,14 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 <div className={styles.rowSep} />
                 <div className={styles.labelItems}>
                   <div className={styles.labelItem}>
-                    <label className={styles.settingLabel}>Sort by</label>
+                    <label className={styles.settingLabel}>{t("Sort by")}</label>
                     <div className={styles.settingControl}>
                       <CmSelect value={prefs.sort_field ?? 'imported_at'} options={SORT_FIELD_OPTIONS} onChange={(v) => updateViewPref({ sort_field: v })} />
                     </div>
                   </div>
                   <div className={styles.labelItemsSep} />
                   <div className={styles.labelItem}>
-                    <label className={styles.settingLabel}>Order</label>
+                    <label className={styles.settingLabel}>{t("Order")}</label>
                     <div className={styles.settingControl}>
                       <CmSelect value={prefs.sort_order ?? 'descending'} options={SORT_DIR_OPTIONS} onChange={(v) => updateViewPref({ sort_order: v })} />
                     </div>
@@ -895,29 +905,27 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 </div>
                 <div className={styles.rowSep} />
                 <div className={styles.checkboxGrid}>
-                  <CheckSetting checked={prefs.thumbnail_fit === 'cover'} label="Fit thumbnails" onChange={() => {
+                  <CheckSetting checked={prefs.thumbnail_fit === 'cover'} label={t("Fit thumbnails")} onChange={() => {
                     updateViewPref({ thumbnail_fit: prefs.thumbnail_fit === 'cover' ? 'contain' : 'cover' });
                   }} />
-                  <CheckSetting checked={prefs.show_name ?? true} label="Show name" onChange={() => updateViewPref({ show_name: !(prefs.show_name ?? true) })} />
-                  <CheckSetting checked={prefs.show_resolution ?? false} label="Show resolution" onChange={() => updateViewPref({ show_resolution: !(prefs.show_resolution ?? false) })} />
-                  <CheckSetting checked={prefs.show_extension ?? false} label="Show extension" onChange={() => updateViewPref({ show_extension: !(prefs.show_extension ?? false) })} />
-                  <CheckSetting checked={prefs.show_label ?? false} label="Show label" onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
-                  <CheckSetting checked={prefs.show_item_count ?? true} label="Show item count" onChange={() => updateViewPref({ show_item_count: !(prefs.show_item_count ?? true) })} />
+                  <CheckSetting checked={prefs.show_name ?? true} label={t("Show name")} onChange={() => updateViewPref({ show_name: !(prefs.show_name ?? true) })} />
+                  <CheckSetting checked={prefs.show_resolution ?? false} label={t("Show resolution")} onChange={() => updateViewPref({ show_resolution: !(prefs.show_resolution ?? false) })} />
+                  <CheckSetting checked={prefs.show_extension ?? false} label={t("Show extension")} onChange={() => updateViewPref({ show_extension: !(prefs.show_extension ?? false) })} />
+                  <CheckSetting checked={prefs.show_label ?? false} label={t("Show label")} onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
+                  <CheckSetting checked={prefs.show_item_count ?? true} label={t("Show item count")} onChange={() => updateViewPref({ show_item_count: !(prefs.show_item_count ?? true) })} />
                 </div>
                 <div className={styles.rowSep} />
-                <Row label="View overrides">
+                <Row label={t("View overrides")}>
                   <button
                     className={styles.inlineButton}
                     type="button"
                     disabled={viewOverridesWillReset}
                     onClick={onResetViewOverrides}
                   >
-                    Reset all views
-                  </button>
+                    {t("Reset all views")}</button>
                 </Row>
                 <p className={styles.settingHint}>
-                  Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox resets to oldest items first.
-                </p>
+                  {t("Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox resets to oldest items first.")}</p>
               </div>
             </div>
           ) : null}
@@ -928,7 +936,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <div className={styles.settingsBlock}>
           <div className={styles.blockContent}>
             <div className={styles.blockTitle}>
-              <span>Pop-ups</span>
+              <span>{t("Pop-ups")}</span>
               <span className={styles.blockTitleControl}>
                 <ToggleSwitch
                   on={appSettings?.notificationPopupsEnabled ?? true}
@@ -957,7 +965,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
               <div className={styles.blockTitle}>
-                <span>Auto-Import</span>
+                <span>{t("Auto-Import")}</span>
                 <span className={styles.blockTitleControl}>
                   <ToggleSwitch
                     on={appSettings?.autoImportEnabled ?? true}
@@ -966,20 +974,19 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 </span>
               </div>
               <p className={styles.settingHint}>
-                Import new files into Inbox from watched folders configured in the folder context menu.
-              </p>
+                {t("Import new files into Inbox from watched folders configured in the folder context menu.")}</p>
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
-              <div className={styles.blockTitle}>Manual Imports</div>
-              <Row label="Multiple files">
+              <div className={styles.blockTitle}>{t("Manual Imports")}</div>
+              <Row label={t("Multiple files")}>
                 <CmSelect
                   value={appSettings?.multiFileImportBehavior ?? 'ask'}
                   options={[
-                    { value: 'ask', label: 'Ask every time' },
-                    { value: 'group', label: 'Group as collection' },
-                    { value: 'separate', label: 'Keep separate' },
+                    { value: 'ask', label: t("Ask every time") },
+                    { value: 'group', label: t("Group as collection") },
+                    { value: 'separate', label: t("Keep separate") },
                   ]}
                   onChange={(value) => updateAppSetting({
                     multiFileImportBehavior: value as AppSettings['multiFileImportBehavior'],
@@ -987,8 +994,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 />
               </Row>
               <p className={styles.settingHint}>
-                Choose whether batches become one collection, stay separate, or ask each time.
-              </p>
+                {t("Choose whether batches become one collection, stay separate, or ask each time.")}</p>
             </div>
           </div>
         </>
@@ -998,8 +1004,8 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         <>
         <div className={styles.settingsBlock}>
           <div className={styles.blockContent}>
-            <div className={styles.blockTitle}>Defaults for New Subscriptions</div>
-            <Row label="Schedule">
+            <div className={styles.blockTitle}>{t("Defaults for New Subscriptions")}</div>
+            <Row label={t("Schedule")}>
               <CmSelect
                 value={appSettings?.subscriptionDefaultSchedule ?? 'daily'}
                 options={SUBSCRIPTION_SCHEDULE_OPTIONS}
@@ -1008,9 +1014,9 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 })}
               />
             </Row>
-            <Row label="Posts per run" sep>
+            <Row label={t("Posts per run")} sep>
               <CompactNumberInput
-                label="Posts per run"
+                label={t("Posts per run")}
                 min={1}
                 max={10_000}
                 value={appSettings?.subscriptionDefaultPostsPerRun ?? 100}
@@ -1021,7 +1027,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
             <div className={styles.rowSep} />
             <CheckSetting
               checked={appSettings?.subscriptionDefaultGroupPosts ?? true}
-              label="Group multi-media posts"
+              label={t("Group multi-media posts")}
               onChange={() => updateAppSetting({
                 subscriptionDefaultGroupPosts: !(appSettings?.subscriptionDefaultGroupPosts ?? true),
               })}
@@ -1030,10 +1036,10 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         </div>
         <div className={styles.settingsBlock}>
           <div className={styles.blockContent}>
-            <div className={styles.blockTitle}>Inbox Capacity</div>
-            <Row label="Maximum Inbox items">
+            <div className={styles.blockTitle}>{t("Inbox Capacity")}</div>
+            <Row label={t("Maximum Inbox items")}>
               <CompactNumberInput
-                label="Maximum Inbox items"
+                label={t("Maximum Inbox items")}
                 min={1}
                 max={1_000_000}
                 value={appSettings?.subscriptionInboxItemLimit ?? 1_000}
@@ -1042,8 +1048,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
               />
             </Row>
             <p className={styles.settingHint}>
-              Subscription work waits when the Inbox reaches this many top-level items.
-            </p>
+              {t("Subscription work waits when the Inbox reaches this many top-level items.")}</p>
           </div>
         </div>
         </>
@@ -1055,67 +1060,73 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
 const ALL_SETTINGS: SettingRow[] = [
   {
     id: 'general.appearance',
-    label: 'Appearance',
+    label: t("Appearance"),
     keywords: 'theme color light dark gray blue purple zoom',
     panel: 'general',
   },
   {
+    id: 'general.language',
+    label: t("Language"),
+    keywords: 'language locale translation english german spanish portuguese french chinese japanese finnish',
+    panel: 'general',
+  },
+  {
     id: 'shortcuts.keyboard',
-    label: 'Keyboard Layout',
+    label: t("Keyboard Layout"),
     keywords: 'keyboard layout qwerty qwertz azerty eu us european preset shortcut',
     panel: 'shortcuts',
   },
   {
     id: 'sidebar.folder-tree',
-    label: 'Folder Tree',
+    label: t("Folder Tree"),
     keywords: 'sidebar folder hierarchy tree guides lines',
     panel: 'sidebar',
   },
   {
     id: 'controls.grid',
-    label: 'Grid Defaults',
+    label: t("Grid Defaults"),
     keywords: 'grid layout thumbnail size spacing density wide tight sort name resolution extension label count fit',
     panel: 'controls',
   },
   {
     id: 'preview.image',
-    label: 'Image Preview',
+    label: t("Image Preview"),
     keywords: 'image preview scaling smooth pixelated zoom fit actual transparency checkerboard',
     panel: 'preview',
   },
   {
     id: 'preview.video',
-    label: 'Video Preview',
+    label: t("Video Preview"),
     keywords: 'video preview autoplay loop playback',
     panel: 'preview',
   },
   {
     id: 'preview.audio',
-    label: 'Audio Preview',
+    label: t("Audio Preview"),
     keywords: 'audio preview visualization spectrum oscilloscope orbit',
     panel: 'preview',
   },
   {
     id: 'notifications.behavior',
-    label: 'Notifications',
+    label: t("Notifications"),
     keywords: 'notifications alerts popups success information warnings errors',
     panel: 'notifications',
   },
   {
     id: 'autoimport.behavior',
-    label: 'Auto-Import',
+    label: t("Auto-Import"),
     keywords: 'auto import watched folder watch files inbox recursive subfolders',
     panel: 'autoimport',
   },
   {
     id: 'subscriptions.defaults',
-    label: 'Subscription Defaults',
+    label: t("Subscription Defaults"),
     keywords: 'subscriptions schedule daily weekly monthly posts per run group multi media inbox maximum limit capacity',
     panel: 'subscriptions',
   },
   {
     id: 'cloud.sync',
-    label: 'Cloud Sync and Recovery',
+    label: t("Cloud Sync and Recovery"),
     keywords: 'cloud sync backup restore google drive dropbox snapshots retention offline',
     panel: 'cloud',
   },
@@ -1124,6 +1135,7 @@ const ALL_SETTINGS: SettingRow[] = [
 // ── Component ──
 
 export function Settings() {
+  const locale = getLocale();
   const [selected, setSelected] = useState('general');
   const [search, setSearch] = useState('');
   const [isDirty, setIsDirty] = useState(false);
@@ -1218,7 +1230,7 @@ export function Settings() {
     return ALL_SETTINGS.filter((s) =>
       s.label.toLowerCase().includes(q) || s.keywords.toLowerCase().includes(q),
     );
-  }, [searchQuery, isSearching]);
+  }, [searchQuery, isSearching, locale]);
 
   // Categories own the search vocabulary, so custom panels and registry rows share one path.
   const matchedPanels = useMemo(() => {
@@ -1228,7 +1240,7 @@ export function Settings() {
       panel.keywords.includes(searchQuery) ||
       searchResults.some((setting) => setting.panel === panel.id),
     );
-  }, [isSearching, searchQuery, searchResults]);
+  }, [isSearching, searchQuery, searchResults, locale]);
 
   // Filter sidebar nav
   const filteredPanels = useMemo(() => {
@@ -1288,7 +1300,7 @@ export function Settings() {
       if (needsRestart) await appController.restartMainWindow();
       if (closeAfterSave) window.close();
     } catch (reason) {
-      setSaveError(reason instanceof Error ? reason.message : 'Unable to save settings.');
+      setSaveError(reason instanceof Error ? reason.message : t('Unable to save settings.'));
     } finally {
       window.clearTimeout(busyTimer);
       savingRef.current = false;
@@ -1300,14 +1312,14 @@ export function Settings() {
     <div className={styles.root}>
       {/* ── Sidebar ── */}
       <div className={styles.sidebar}>
-        <div className={styles.sidebarTitle} data-window-drag-region="">Preferences</div>
+        <div className={styles.sidebarTitle} data-window-drag-region="">{t("Preferences")}</div>
         <div className={styles.searchWrap}>
           <IconSearch size={14} className={styles.searchIcon} />
           <input
             className={styles.sidebarSearch}
             type="search"
-            placeholder="Search..."
-            aria-label="Search settings"
+            placeholder={t("Search...")}
+            aria-label={t("Search settings")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -1324,7 +1336,7 @@ export function Settings() {
                   onClick={() => { setSelected(panel.id); setSearch(''); }}
                 >
                   <Icon size={18} stroke={1.8} />
-                  {panel.label}
+                  {translateMessage(panel.label)}
                 </button>
               </div>
             );
@@ -1336,7 +1348,7 @@ export function Settings() {
       <div className={styles.content}>
         <div className={styles.contentHeader} data-window-drag-region="">
           <span className={styles.contentTitle}>
-            {isSearching ? `Search results for "${search}"` : activePanel.label}
+            {isSearching ? t("Search results for \"{value0}\"", { value0: search }) : translateMessage(activePanel.label)}
           </span>
           <WindowCloseButton onClick={handleClose} />
         </div>
@@ -1344,10 +1356,10 @@ export function Settings() {
         <div className={styles.contentBody}>
           {isSearching ? (
             matchedPanels.length === 0 ? (
-              <div className={styles.emptySearch}>No settings match "{search}"</div>
+              <div className={styles.emptySearch}>{t("No settings match \"")}{search}"</div>
             ) : (
               <div className={styles.searchGroup}>
-                <div className={styles.searchGroupTitle}>Categories</div>
+                <div className={styles.searchGroupTitle}>{t("Categories")}</div>
                 {matchedPanels.map((panel) => {
                   const Icon = panel.icon;
                   return (
@@ -1359,8 +1371,8 @@ export function Settings() {
                     >
                       <Icon size={18} />
                       <span className={styles.searchResultCopy}>
-                        <span className={styles.searchResultTitle}>{panel.label}</span>
-                        <span className={styles.searchResultDescription}>{panel.description}</span>
+                        <span className={styles.searchResultTitle}>{translateMessage(panel.label)}</span>
+                        <span className={styles.searchResultDescription}>{translateMessage(panel.description)}</span>
                       </span>
                     </button>
                   );
@@ -1422,20 +1434,19 @@ export function Settings() {
         {/* ── Footer — always visible ── */}
         <div className={styles.footer}>
           <span className={styles.saveStatus} role="status">{saveError}</span>
-          <KbdTooltip label="Save settings and close Preferences"><button
+          <KbdTooltip label={t("Save settings and close Preferences")}><button
             className={styles.footerBtnPrimary}
             onClick={() => void handleSave(true)}
             disabled={isSaving}
           >
-            {isSaving ? 'Saving…' : 'Save & Close'}
+            {isSaving ? t("Saving…") : t("Save & Close")}
           </button></KbdTooltip>
-          <KbdTooltip label="Save settings and keep Preferences open"><button
+          <KbdTooltip label={t("Save settings and keep Preferences open")}><button
             className={styles.footerBtn}
             onClick={() => void handleSave(false)}
             disabled={isSaving}
           >
-            Apply
-          </button></KbdTooltip>
+            {t("Apply")}</button></KbdTooltip>
         </div>
       </div>
 

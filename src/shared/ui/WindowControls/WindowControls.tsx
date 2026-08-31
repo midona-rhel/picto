@@ -9,6 +9,7 @@ import { IconMinus, IconSquare } from '@tabler/icons-react';
 import { KbdTooltip } from '../KbdTooltip';
 import { WindowCloseButton } from './WindowCloseButton';
 import styles from './WindowControls.module.css';
+import { t } from '../../../i18n';
 
 type WindowControlMethod = 'minimize' | 'toggleMaximize';
 
@@ -25,13 +26,13 @@ export function WindowControls({
 
   return (
     <div className={styles.controls}>
-      <KbdTooltip label="Minimize"><button type="button" className={styles.btn} onClick={() => callWindow('minimize')} aria-label="Minimize">
+      <KbdTooltip label={t("Minimize")}><button type="button" className={styles.btn} onClick={() => callWindow('minimize')} aria-label={t("Minimize")}>
         <IconMinus size={16} stroke={1} />
       </button></KbdTooltip>
-      <KbdTooltip label="Maximize"><button type="button" className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label="Maximize">
+      <KbdTooltip label={t("Maximize")}><button type="button" className={styles.btn} onClick={() => callWindow('toggleMaximize')} aria-label={t("Maximize")}>
         <IconSquare size={12} stroke={1.5} />
       </button></KbdTooltip>
-      <KbdTooltip label="Close"><WindowCloseButton destructive /></KbdTooltip>
+      <KbdTooltip label={t("Close")}><WindowCloseButton destructive /></KbdTooltip>
     </div>
   );
 }

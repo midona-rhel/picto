@@ -2790,6 +2790,78 @@ impl Library {
         Ok(receipt)
     }
 
+    /// Ensure portable metadata can reference tag definitions without adding
+    /// synthetic assignments to a library item.
+    pub fn ensure_tag_definitions(
+        &self,
+        names: &[String],
+    ) -> Result<(Vec<crate::TagId>, MutationReceipt)> {
+        let names = names
+            .iter()
+            .map(|name| required_name("tag", name))
+            .collect::<Result<BTreeSet<_>>>()?;
+        if names.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "at least one tag definition is required".into(),
+            ));
+        }
+        let projections = self.projections.clone();
+        let publication = self.publication.clone();
+        let ((tag_ids, receipt), _, _) = self.database.published_write(
+            WorkPriority::ForegroundMutation,
+            |revision| self.capture_revision(revision),
+            |transaction, _, revision, snapshot| {
+                let mut next = (*snapshot).clone();
+                let mut tag_ids = Vec::with_capacity(names.len());
+                let mut created = Vec::new();
+                for name in &names {
+                    let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                        tag_id
+                    } else {
+                        let tag_id = ingest::ensure_tag(transaction, name)?;
+                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                        Arc::make_mut(&mut next.tags)
+                            .entry(tag_id)
+                            .or_insert_with(|| RoaringBitmap::new().into());
+                        created.push(name.clone());
+                        tag_id
+                    };
+                    tag_ids.push(tag_id);
+                }
+                if !created.is_empty() {
+                    insert_cloud_journal(
+                        transaction,
+                        revision,
+                        "tag.definitions.ensure",
+                        None,
+                        serde_json::json!({"names": created}),
+                        now_ms(),
+                    )?;
+                }
+                next.revision = revision;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    if created.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec!["tags".into(), "navigation".into()]
+                    },
+                    Vec::new(),
+                );
+                Ok((
+                    (tag_ids, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ))
+            },
+            move |_, delta| publish_delta(&projections, &publication, delta),
+        )?;
+        Ok((tag_ids, receipt))
+    }
+
     pub fn rename_or_merge_tag_namespace(
         &self,
         namespace_id: TagNamespaceId,

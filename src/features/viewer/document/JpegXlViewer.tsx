@@ -1,4 +1,5 @@
-import decode from '@jsquash/jxl/decode.js';
+import decode, { init as initJpegXlDecoder } from '@jsquash/jxl/decode.js';
+import jpegXlDecoderWasmUrl from '@jsquash/jxl/codec/dec/jxl_dec.wasm?url';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ViewerZoomControls } from '../../../state/viewer';
 import { useImageZoom, type ImageSize } from '../hooks/useImageZoom';
@@ -6,6 +7,7 @@ import { useNavigatorDrag } from '../hooks/useNavigatorDrag';
 import { useNavigatorRenderer } from '../hooks/useNavigatorRenderer';
 import { usePreviewPreferences } from '../usePreviewPreferences';
 import styles from './JpegXlViewer.module.css';
+import { t } from '../../../i18n';
 
 interface Props {
   src: string;
@@ -16,6 +18,20 @@ interface Props {
 }
 
 const NAVIGATOR_SIZE = 120;
+
+let decoderReady: Promise<void> | null = null;
+
+function decodeJpegXl(buffer: ArrayBuffer): Promise<ImageData> {
+  if (!decoderReady) {
+    decoderReady = initJpegXlDecoder({
+      locateFile: (path: string) => path.endsWith('.wasm') ? jpegXlDecoderWasmUrl : path,
+    }).then(() => undefined).catch((reason) => {
+      decoderReady = null;
+      throw reason;
+    });
+  }
+  return decoderReady.then(() => decode(buffer));
+}
 
 export function JpegXlViewer({ src, thumbnailSrc, onReady, onZoomControlsChange, onZoomPercentChange }: Props) {
   const previewPreferences = usePreviewPreferences();
@@ -45,11 +61,11 @@ export function JpegXlViewer({ src, thumbnailSrc, onReady, onZoomControlsChange,
         if (!response.ok) throw new Error(`JPEG XL request failed (${response.status})`);
         return response.arrayBuffer();
       })
-      .then(decode)
+      .then(decodeJpegXl)
       .then((decoded) => { if (!abort.signal.aborted) setImage(decoded); })
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Could not open this JPEG XL image.');
+          setError(reason instanceof Error ? reason.message : t('Could not open this JPEG XL image.'));
           onReady?.();
         }
       });

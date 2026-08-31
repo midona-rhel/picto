@@ -1,4 +1,5 @@
 import { getZoomFactor, rectToCSS, getViewportCSS } from '../../lib/zoomCompensation';
+import { translateMessage } from '../../../i18n';
 
 /**
  * CmSelect — custom dropdown select for use anywhere (portals, scroll containers).
@@ -48,6 +49,7 @@ export function CmSelect({ value, options, onChange, width, ariaLabel }: Props) 
   const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listboxId = useId();
   const cur = options.find((o) => o.value === value);
+  const labelFor = (option: CmSelectOption) => translateMessage(option.label);
   const hasIcons = options.some((o) => o.icon);
 
   const currentIndex = options.length === 0
@@ -104,11 +106,11 @@ export function CmSelect({ value, options, onChange, width, ariaLabel }: Props) 
     event.preventDefault();
     if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
     const nextQuery = `${typeaheadRef.current}${event.key}`.toLocaleLowerCase();
-    const match = options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(nextQuery));
+    const match = options.findIndex((option) => labelFor(option).toLocaleLowerCase().startsWith(nextQuery));
     typeaheadRef.current = match >= 0 ? nextQuery : event.key.toLocaleLowerCase();
     const fallbackMatch = match >= 0
       ? match
-      : options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(typeaheadRef.current));
+      : options.findIndex((option) => labelFor(option).toLocaleLowerCase().startsWith(typeaheadRef.current));
     if (fallbackMatch >= 0) openAt(fallbackMatch);
     typeaheadTimerRef.current = setTimeout(() => { typeaheadRef.current = ''; }, 700);
   };
@@ -181,10 +183,10 @@ export function CmSelect({ value, options, onChange, width, ariaLabel }: Props) 
       >
         {cur?.icon && <span className={styles.btnIcon}>{cur.icon}</span>}
         <span className={styles.btnLabel}>
-          {cur?.label ?? value}
+          {cur ? labelFor(cur) : value}
           {/* Invisible sizers: force label area to widest option text */}
           {options.map((o) => (
-            <span key={o.value} className={styles.sizer} aria-hidden>{o.label}</span>
+            <span key={o.value} className={styles.sizer} aria-hidden>{labelFor(o)}</span>
           ))}
         </span>
         <span className={styles.btnChevron}><IconSelector size={14} /></span>
@@ -218,7 +220,7 @@ export function CmSelect({ value, options, onChange, width, ariaLabel }: Props) 
               aria-selected={o.value === value}
             >
               {hasIcons && <span className={styles.optIcon}>{o.icon ?? null}</span>}
-              <span className={styles.optLabel}>{o.label}</span>
+              <span className={styles.optLabel}>{labelFor(o)}</span>
             </button>
           ))}
         </div>,

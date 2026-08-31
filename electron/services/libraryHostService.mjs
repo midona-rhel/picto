@@ -39,6 +39,37 @@ export function createLibraryHostService({
     return path.join(libraryPath, `.picto-library-cover.${extension}`);
   }
 
+  function materializedCoverMetadataPath(libraryPath) {
+    return path.join(libraryPath, '.picto-library-cover.json');
+  }
+
+  async function readMaterializedCoverMetadata(libraryPath) {
+    try {
+      const value = JSON.parse(await fs.readFile(materializedCoverMetadataPath(libraryPath), 'utf8'));
+      if (typeof value.imageHash !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.imageHash)) return null;
+      return {
+        imageHash: value.imageHash,
+        imageFocusX: Number.isFinite(value.imageFocusX) ? value.imageFocusX : 500,
+        imageFocusY: Number.isFinite(value.imageFocusY) ? value.imageFocusY : 500,
+        imageZoomPercent: Number.isFinite(value.imageZoomPercent) ? value.imageZoomPercent : 100,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeMaterializedCoverMetadata(libraryPath, meta) {
+    const destination = materializedCoverMetadataPath(libraryPath);
+    const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify({
+      imageHash: meta.imageHash,
+      imageFocusX: meta.imageFocusX ?? 500,
+      imageFocusY: meta.imageFocusY ?? 500,
+      imageZoomPercent: meta.imageZoomPercent ?? 100,
+    }, null, 2), 'utf8');
+    await fs.rename(temporary, destination);
+  }
+
   async function clearMaterializedLibraryCover(libraryPath, exceptExtension = null) {
     await Promise.all(coverExtensions
       .filter((extension) => extension !== exceptExtension)
@@ -62,10 +93,14 @@ export function createLibraryHostService({
   }
 
   async function ensureMaterializedLibraryCover(libraryPath, imageHash) {
-    const exists = await Promise.any(coverExtensions.map((extension) =>
+    const exists = await hasMaterializedLibraryCover(libraryPath);
+    if (!exists) await materializeLibraryCover(libraryPath, imageHash).catch(() => false);
+  }
+
+  async function hasMaterializedLibraryCover(libraryPath) {
+    return Promise.any(coverExtensions.map((extension) =>
       fs.access(materializedCoverPath(libraryPath, extension)).then(() => true),
     )).catch(() => false);
-    if (!exists) await materializeLibraryCover(libraryPath, imageHash).catch(() => false);
   }
 
   async function cleanupStaleTutorialLibraries() {
@@ -620,24 +655,45 @@ export function createLibraryHostService({
   async function getLibraryConfig() {
     const config = getCachedConfig();
     const existsMap = {};
+    const coverExistsMap = {};
+    const libraryMeta = { ...(config.libraryMeta ?? {}) };
+    let recoveredCoverMetadata = false;
     await Promise.all(
       (config.libraryHistory ?? []).map(async (libraryPath) => {
         try {
           await fs.access(libraryPath);
           existsMap[libraryPath] = true;
-          const imageHash = config.libraryMeta?.[libraryPath]?.imageHash;
-          if (imageHash) await ensureMaterializedLibraryCover(libraryPath, imageHash);
+          coverExistsMap[libraryPath] = await hasMaterializedLibraryCover(libraryPath);
+          if (coverExistsMap[libraryPath] && !libraryMeta[libraryPath]?.imageHash) {
+            const recovered = await readMaterializedCoverMetadata(libraryPath);
+            if (recovered) {
+              libraryMeta[libraryPath] = { ...(libraryMeta[libraryPath] ?? {}), ...recovered };
+              recoveredCoverMetadata = true;
+            }
+          }
+          const imageHash = libraryMeta[libraryPath]?.imageHash;
+          if (imageHash && !coverExistsMap[libraryPath]) {
+            await ensureMaterializedLibraryCover(libraryPath, imageHash);
+            coverExistsMap[libraryPath] = await hasMaterializedLibraryCover(libraryPath);
+          }
         } catch {
           existsMap[libraryPath] = false;
+          coverExistsMap[libraryPath] = false;
         }
       }),
     );
+    if (recoveredCoverMetadata) {
+      config.libraryMeta = libraryMeta;
+      await saveGlobalConfig(config);
+    }
     return {
       ...config,
+      libraryMeta,
       currentPath: getCurrentLibraryRoot(),
       openingPath: openingLibraryPath,
       libraryFailure,
       existsMap,
+      coverExistsMap,
     };
   }
 
@@ -676,11 +732,6 @@ export function createLibraryHostService({
   }
 
   async function setLibraryMeta(libraryPath, meta) {
-    const config = getCachedConfig();
-    if (!config.libraryMeta) config.libraryMeta = {};
-    const existing = config.libraryMeta[libraryPath] ?? {};
-    if ('icon' in meta) existing.icon = meta.icon;
-    if ('color' in meta) existing.color = meta.color;
     if ('imageHash' in meta) {
       const hasCanonicalHash = typeof meta.imageHash === 'string'
         && /^[a-fA-F0-9]{64}$/.test(meta.imageHash);
@@ -690,13 +741,25 @@ export function createLibraryHostService({
         }
       } else if (!meta.imageHash) {
         await clearMaterializedLibraryCover(libraryPath);
+        await fs.rm(materializedCoverMetadataPath(libraryPath), { force: true }).catch(() => {});
       }
-      existing.imageHash = meta.imageHash;
     }
+    // Materializing a cover is asynchronous. Re-read the current config after
+    // it finishes so an overlapping theme/window-state save cannot be replaced
+    // by the stale object captured before the file operation.
+    const config = getCachedConfig();
+    if (!config.libraryMeta) config.libraryMeta = {};
+    const existing = { ...(config.libraryMeta[libraryPath] ?? {}) };
+    if ('icon' in meta) existing.icon = meta.icon;
+    if ('color' in meta) existing.color = meta.color;
+    if ('imageHash' in meta) existing.imageHash = meta.imageHash;
     if ('imageFocusX' in meta) existing.imageFocusX = meta.imageFocusX;
     if ('imageFocusY' in meta) existing.imageFocusY = meta.imageFocusY;
     if ('imageZoomPercent' in meta) existing.imageZoomPercent = meta.imageZoomPercent;
     if ('cloudLibraryId' in meta) existing.cloudLibraryId = meta.cloudLibraryId;
+    if (typeof existing.imageHash === 'string' && /^[a-fA-F0-9]{64}$/.test(existing.imageHash)) {
+      await writeMaterializedCoverMetadata(libraryPath, existing);
+    }
     config.libraryMeta[libraryPath] = existing;
     await saveGlobalConfig(config);
     sendToAllWindows('library-meta-changed', { path: libraryPath });

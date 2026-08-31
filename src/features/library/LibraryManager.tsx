@@ -38,6 +38,7 @@ import {
 } from './librarySyncPresentation';
 import styles from './LibraryManager.module.css';
 import { WindowCloseButton } from '../../shared/ui/WindowControls';
+import { t } from '../../i18n';
 
 interface LibraryConfigResult {
   libraryHistory?: string[];
@@ -56,6 +57,7 @@ interface LibraryConfigResult {
   libraryFailure?: { path?: string | null; message: string } | null;
   cloudLocations?: Partial<Record<DetectedCloudRoot['provider'], DetectedCloudRoot>>;
   existsMap: Record<string, boolean>;
+  coverExistsMap?: Record<string, boolean>;
 }
 
 interface DetectedCloudRoot {
@@ -280,6 +282,7 @@ export function LibraryManager() {
       icon: config.libraryMeta?.[path]?.icon ?? null,
       color: config.libraryMeta?.[path]?.color ?? null,
       imageHash: config.libraryMeta?.[path]?.imageHash ?? null,
+      hasMaterializedCover: config.coverExistsMap?.[path] === true,
       imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
       imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
       imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
@@ -373,14 +376,14 @@ export function LibraryManager() {
       const result = await (window as any).picto.dialog.open({
         properties: ['openDirectory'],
         multiple: false,
-        title: 'Choose where to store the library',
+        title: t("Choose where to store the library"),
       });
       const dir = Array.isArray(result) ? result[0] : result;
       if (!dir) return;
       await pictoLibrary().create(name, dir);
       setLocalName('');
       setShowLocalCreate(false);
-      setMessage(`Created "${name}".`);
+      setMessage(t('Created "{value0}".', { value0: name }));
     });
 
   const joinCloud = () => {
@@ -398,7 +401,7 @@ export function LibraryManager() {
       setShowCloudOpen(false);
       setSelectedCloudLibrary(null);
       setCloudName('');
-      setMessage(`Opened "${baseName(result.path)}" from cloud.`);
+      setMessage(t('Opened "{value0}" from cloud.', { value0: baseName(result.path) }));
       await refreshCloud();
     });
   };
@@ -428,7 +431,7 @@ export function LibraryManager() {
         root_path: root.path,
       });
       await refreshCloud();
-      setMessage(`Cloud sync enabled through ${root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'}.`);
+      setMessage(t("Cloud sync enabled through {value0}.", { value0: root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox' }));
     });
 
   const chooseCloudRoot = (provider: DetectedCloudRoot['provider']) => {
@@ -437,7 +440,7 @@ export function LibraryManager() {
       const result = await (window as any).picto.dialog.open({
         properties: ['openDirectory'],
         multiple: false,
-        title: `Choose the ${providerName} synced folder`,
+        title: t("Choose the {value0} synced folder", { value0: providerName }),
       });
       const rootPath = Array.isArray(result) ? result[0] : result;
       if (!rootPath) return;
@@ -459,8 +462,8 @@ export function LibraryManager() {
       }
       await refreshCloud();
       setMessage(configuredCurrentLibrary
-        ? `Cloud sync enabled through ${providerName}.`
-        : `${providerName} location saved.`);
+        ? t('Cloud sync enabled through {value0}.', { value0: providerName })
+        : t('{value0} location saved.', { value0: providerName }));
     });
   };
 
@@ -471,11 +474,11 @@ export function LibraryManager() {
     });
 
   const disableCloud = () => {
-    if (!window.confirm('Stop syncing this library?\n\nLocal files and the existing cloud copy will not be deleted.')) return;
+    if (!window.confirm(t('Stop syncing this library?\n\nLocal files and the existing cloud copy will not be deleted.'))) return;
     void run('cloud-disable', async () => {
       await invoke('cloud.disable');
       await refreshCloud();
-      setMessage('Cloud sync stopped.');
+      setMessage(t('Cloud sync stopped.'));
     });
   };
 
@@ -489,11 +492,11 @@ export function LibraryManager() {
     run('cloud-snapshot', async () => {
       await invoke('cloud.snapshot.create');
       await refreshCloudStatus();
-      setMessage('Recovery snapshot created.');
+      setMessage(t('Recovery snapshot created.'));
     });
 
   const removeFromList = (path: string, name: string) => {
-    if (!window.confirm(`Remove "${name}" from this list?\n\nThe library and its files remain on disk.`)) return;
+    if (!window.confirm(t('Remove "{value0}" from this list?\n\nThe library and its files remain on disk.', { value0: name }))) return;
     setSelectedPath(null);
     void run(`remove:${path}`, () => pictoLibrary().remove(path));
   };
@@ -503,18 +506,18 @@ export function LibraryManager() {
     const rect = event.currentTarget.getBoundingClientRect();
     const entries: MenuEntry[] = [
       {
-        label: selectedEntry.pinned ? 'Remove from Quick Access' : 'Add to Quick Access',
+        label: selectedEntry.pinned ? t("Remove from Quick Access") : t("Add to Quick Access"),
         icon: <IconPin size={15} />,
         action: () => { void run(`pin:${selectedEntry.path}`, () => pictoLibrary().togglePin(selectedEntry.path)); },
       },
       {
-        label: 'Rename',
+        label: t("Rename"),
         icon: <IconPencil size={15} />,
         disabled: !selectedEntry.exists,
         action: () => beginRename(selectedEntry.path, selectedEntry.name),
       },
       {
-        label: 'Show in File Manager',
+        label: t("Show in File Manager"),
         icon: <IconFolderOpen size={15} />,
         disabled: !selectedEntry.exists,
         action: () => { void pictoShell().showInFolder(selectedEntry.path); },
@@ -526,30 +529,30 @@ export function LibraryManager() {
       if (cloudConfiguration?.root_path) {
         entries.push(
           {
-            label: 'Sync Now',
+            label: t("Sync Now"),
             icon: <IconRefresh size={15} />,
             disabled: busy !== null || syncPresentation.active,
             action: () => { void syncNow(); },
           },
           {
-            label: cloudStatus?.state === 'paused' ? 'Resume Sync' : 'Pause Sync',
+            label: cloudStatus?.state === 'paused' ? t("Resume Sync") : t("Pause Sync"),
             icon: cloudStatus?.state === 'paused' ? <IconPlayerPlay size={15} /> : <IconPlayerPause size={15} />,
             disabled: busy !== null,
             action: () => { void setCloudPaused(cloudStatus?.state !== 'paused'); },
           },
           {
-            label: 'Create Recovery Snapshot',
+            label: t("Create Recovery Snapshot"),
             icon: <IconCloud size={15} />,
             disabled: busy !== null || syncPresentation.active,
             action: () => { void createCloudSnapshot(); },
           },
           {
-            label: 'Show Cloud Folder',
+            label: t("Show Cloud Folder"),
             icon: <IconFolderOpen size={15} />,
             action: () => { void pictoShell().showInFolder(cloudConfiguration.root_path); },
           },
           {
-            label: 'Stop Syncing',
+            label: t("Stop Syncing"),
             icon: <IconCloudOff size={15} />,
             disabled: busy !== null,
             action: disableCloud,
@@ -558,7 +561,7 @@ export function LibraryManager() {
       } else if (cloudRoots.length > 0) {
         entries.push({
           submenu: true,
-          label: 'Enable Cloud Sync',
+          label: t("Enable Cloud Sync"),
           icon: <IconCloud size={15} />,
           children: cloudRoots.map((root) => ({
             label: `${root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · ${root.account_label}`,
@@ -571,7 +574,7 @@ export function LibraryManager() {
     entries.push(
       { separator: true },
       {
-        label: 'Remove from List',
+        label: t("Remove from List"),
         icon: <IconX size={15} />,
         danger: true,
         disabled: selectedEntry.current,
@@ -585,16 +588,16 @@ export function LibraryManager() {
     <div className={styles.root}>
       <section className={styles.panel}>
         <header className={styles.header} data-window-drag-region="">
-          <div className={styles.title}>Library Manager</div>
+          <div className={styles.title}>{t("Library Manager")}</div>
           <WindowCloseButton onClick={() => window.close()} />
         </header>
 
         <div className={styles.workspace}>
           <aside className={styles.sidebar}>
-            <div className={styles.sectionTitle}>On this device</div>
+            <div className={styles.sectionTitle}>{t("On this device")}</div>
             <div className={styles.list}>
               {localEntries.length === 0 ? (
-                <div className={styles.empty}>No libraries yet.</div>
+                <div className={styles.empty}>{t("No libraries yet.")}</div>
               ) : localEntries.map((entry) => (
                 <button
                   key={entry.path}
@@ -622,8 +625,8 @@ export function LibraryManager() {
                     {entry.current && cloudConfiguration?.root_path ? (
                       <span
                         className={`${styles.rowSyncStatus} ${styles[`syncState_${syncPresentation.tone}`]}`}
-                        title={`Cloud sync: ${syncPresentation.label}`}
-                        aria-label={`Cloud sync: ${syncPresentation.label}`}
+                        title={t("Cloud sync: {value0}", { value0: syncPresentation.label })}
+                        aria-label={t("Cloud sync: {value0}", { value0: syncPresentation.label })}
                       >
                         <span className={styles.syncDot} />
                       </span>
@@ -639,14 +642,14 @@ export function LibraryManager() {
             {showCloudOpen ? (
               <div className={styles.createPane}>
                 <span className={styles.heroIcon}><IconCloud size={26} /></span>
-                <div className={styles.heroTitle}>Open a cloud library</div>
-                <p className={styles.heroDescription}>Select your synced folder, then choose a Picto library found there.</p>
+                <div className={styles.heroTitle}>{t("Open a cloud library")}</div>
+                <p className={styles.heroDescription}>{t("Select your synced folder, then choose a Picto library found there.")}</p>
                 <div className={styles.cloudProviderActions}>
                   <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('google_drive')} disabled={busy !== null}>
-                    <IconBrandGoogleDrive size={18} /><span>Connect Google Drive…</span><small>Choose folder</small>
+                    <IconBrandGoogleDrive size={18} /><span>{t("Connect Google Drive…")}</span><small>{t("Choose folder")}</small>
                   </button>
                   <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('dropbox')} disabled={busy !== null}>
-                    <IconBrandDropbox size={18} /><span>Connect Dropbox…</span><small>Choose folder</small>
+                    <IconBrandDropbox size={18} /><span>{t("Connect Dropbox…")}</span><small>{t("Choose folder")}</small>
                   </button>
                 </div>
                 {cloudLibraries.length > 0 ? (
@@ -665,22 +668,20 @@ export function LibraryManager() {
                             setCloudName(library.name);
                           }}
                           aria-disabled={unavailable}
-                          title={unavailable ? `Already added · synced to ${addedTo}` : `Open ${library.name}`}
+                          title={unavailable ? t("Already added · synced to {value0}", { value0: addedTo ?? '' }) : t("Open {value0}", { value0: library.name })}
                         >
                           <span>{library.name}</span>
                           <span className={styles.rowPath}>
-                            {unavailable
-                              ? `Already added · synced to ${addedTo}`
-                              : `${library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · ${library.root.account_label}`}
+                            {unavailable ? t("Already added · synced to {value0}", { value0: addedTo ?? '' }) : t("{value0} · {value1}", { value0: library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox', value1: library.root.account_label })}
                           </span>
                         </button>
                       );
                     })}
                   </div>
                 ) : (
-                  <p className={styles.cardDescription}>No Picto recovery snapshots were found in the installed cloud folders.</p>
+                  <p className={styles.cardDescription}>{t("No Picto recovery snapshots were found in the installed cloud folders.")}</p>
                 )}
-                <label className={styles.fieldLabel} htmlFor="cloud-library-name">Local library name</label>
+                <label className={styles.fieldLabel} htmlFor="cloud-library-name">{t("Local library name")}</label>
                 <input
                   id="cloud-library-name"
                   className={styles.nameInput}
@@ -689,25 +690,25 @@ export function LibraryManager() {
                   disabled={!selectedCloudLibrary}
                 />
                 <button className={styles.btnPrimary} onClick={joinCloud} disabled={busy !== null || !selectedCloudLibrary || !cloudName.trim()}>
-                  {busy?.startsWith('join-cloud:') ? 'Opening…' : 'Choose Location…'}
+                  {busy?.startsWith('join-cloud:') ? t("Opening…") : t("Choose Location…")}
                 </button>
               </div>
             ) : showLocalCreate ? (
               <div className={styles.createPane}>
                 <span className={styles.heroIcon}><IconPlus size={26} /></span>
-                <div className={styles.heroTitle}>Create a new library</div>
-                <p className={styles.heroDescription}>Choose a name now; Picto will ask where the library should be stored.</p>
-                <label className={styles.fieldLabel} htmlFor="library-name">Library name</label>
+                <div className={styles.heroTitle}>{t("Create a new library")}</div>
+                <p className={styles.heroDescription}>{t("Choose a name now; Picto will ask where the library should be stored.")}</p>
+                <label className={styles.fieldLabel} htmlFor="library-name">{t("Library name")}</label>
                 <input
                   id="library-name"
                   className={styles.nameInput}
-                  placeholder="My Inspirations"
+                  placeholder={t("My Inspirations")}
                   value={localName}
                   onChange={(event) => setLocalName(event.target.value)}
                   autoFocus
                 />
                 <button className={styles.btnPrimary} onClick={createLocal} disabled={busy !== null || !localName.trim()}>
-                  {busy === 'create-local' ? 'Creating…' : 'Choose Location…'}
+                  {busy === 'create-local' ? t("Creating…") : t("Choose Location…")}
                 </button>
               </div>
             ) : selectedEntry ? (
@@ -727,20 +728,20 @@ export function LibraryManager() {
                           }}
                           autoFocus
                         />
-                        <button className={styles.btnPrimary} onClick={() => void commitRename(selectedEntry.path)} disabled={busy !== null || !renameValue.trim()}>Save</button>
-                        <button className={styles.btn} onClick={() => setRenamingPath(null)} disabled={busy !== null}>Cancel</button>
+                        <button className={styles.btnPrimary} onClick={() => void commitRename(selectedEntry.path)} disabled={busy !== null || !renameValue.trim()}>{t("Save")}</button>
+                        <button className={styles.btn} onClick={() => setRenamingPath(null)} disabled={busy !== null}>{t("Cancel")}</button>
                       </span>
                     ) : <span className={styles.heroTitle}>{selectedEntry.name}</span>}
                     <span className={styles.heroPath}>{selectedEntry.path}</span>
                   </span>
                   <span className={styles.heroActions}>
                     {!selectedEntry.current && selectedEntry.exists ? (
-                      <button className={styles.btnPrimary} onClick={() => switchTo(selectedEntry.path)} disabled={busy !== null}>Open Library</button>
+                      <button className={styles.btnPrimary} onClick={() => switchTo(selectedEntry.path)} disabled={busy !== null}>{t("Open Library")}</button>
                     ) : null}
                     <button
                       type="button"
                       className={styles.iconButton}
-                      aria-label="Library actions"
+                      aria-label={t("Library actions")}
                       aria-haspopup="menu"
                       aria-expanded={libraryMenu.state ? true : undefined}
                       onClick={openLibraryMenu}
@@ -752,78 +753,77 @@ export function LibraryManager() {
                 </div>
 
                 <div className={styles.statusLine}>
-                  {selectedEntry.current ? <span><IconCheck size={13} /> Current library</span> : null}
-                  {selectedEntry.pinned ? <span><IconPin size={12} /> Pinned</span> : null}
-                  {!selectedEntry.exists ? <span className={styles.missing}><IconAlertTriangle size={12} /> Missing on disk</span> : null}
+                  {selectedEntry.current ? <span><IconCheck size={13} /> {t("Current library")}</span> : null}
+                  {selectedEntry.pinned ? <span><IconPin size={12} /> {t("Pinned")}</span> : null}
+                  {!selectedEntry.exists ? <span className={styles.missing}><IconAlertTriangle size={12} /> {t("Missing on disk")}</span> : null}
                 </div>
 
                 <section className={styles.appearanceCard}>
-                  <div className={styles.cardTitle}>Appearance</div>
+                  <div className={styles.cardTitle}>{t("Appearance")}</div>
                   <div className={styles.detailGrid}>
-                    <span className={styles.detailLabel}>Color</span>
+                    <span className={styles.detailLabel}>{t("Color")}</span>
                     <span className={styles.colorConstraint}>
                       <ColorPicker value={selectedEntry.color} onChange={(color) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { color }))} />
                     </span>
-                    <span className={styles.detailLabel}>Icon</span>
+                    <span className={styles.detailLabel}>{t("Icon")}</span>
                     <button className={styles.btn} onClick={() => setShowIconEditor((value) => !value)} disabled={busy !== null}>
-                      {showIconEditor ? 'Done' : 'Change…'}
+                      {showIconEditor ? t("Done") : t("Change…")}
                     </button>
-                    <span className={styles.detailLabel}>Cover</span>
-                    <KbdTooltip label={selectedEntry.current ? 'Choose a media item and crop the library cover' : 'Open this library before choosing its media'}>
+                    <span className={styles.detailLabel}>{t("Cover")}</span>
+                    <KbdTooltip label={selectedEntry.current ? t("Choose a media item and crop the library cover") : t("Open this library before choosing its media")}>
                       <button
                         className={styles.btn}
                         onClick={() => setCoverPath(selectedEntry.path)}
                         disabled={busy !== null || !selectedEntry.current}
                       >
-                        Choose…
-                      </button>
+                        {t("Choose…")}</button>
                     </KbdTooltip>
                   </div>
                   {showIconEditor ? (
                     <div className={styles.iconEditor}>
-                      <IconPicker compact defaultLabel="Use default library icon" value={selectedEntry.icon} onChange={(icon) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { icon, imageHash: null }))} />
+                      <IconPicker compact defaultLabel="Use default library icon" value={selectedEntry.icon} onChange={(icon) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { icon }))} />
                     </div>
                   ) : null}
                 </section>
 
                 <section className={styles.statisticsCard}>
-                  <div className={styles.cardTitle}>Library</div>
+                  <div className={styles.cardTitle}>{t("Library")}</div>
                   {!selectedEntry.current ? (
-                    <p className={styles.cardDescription}>Open this library to view its statistics.</p>
+                    <p className={styles.cardDescription}>{t("Open this library to view its statistics.")}</p>
                   ) : libraryStatistics ? (
                     <div className={styles.statisticsGrid}>
-                      <span><strong>{libraryStatistics.active_items.toLocaleString()}</strong><small>All</small></span>
-                      <span><strong>{libraryStatistics.inbox_items.toLocaleString()}</strong><small>Inbox</small></span>
-                      <span><strong>{libraryStatistics.trash_items.toLocaleString()}</strong><small>Trash</small></span>
-                      <span><strong>{libraryStatistics.media_assets.toLocaleString()}</strong><small>Media</small></span>
-                      <span><strong>{libraryStatistics.image_assets.toLocaleString()}</strong><small>Images</small></span>
-                      <span><strong>{libraryStatistics.tags.toLocaleString()}</strong><small>Tags</small></span>
-                      <span><strong>{libraryStatistics.subscriptions.toLocaleString()}</strong><small>Subscriptions</small></span>
-                      <span><strong>{formatBytes(libraryStatistics.original_bytes)}</strong><small>Size</small></span>
+                      <span><strong>{libraryStatistics.active_items.toLocaleString()}</strong><small>{t("All")}</small></span>
+                      <span><strong>{libraryStatistics.inbox_items.toLocaleString()}</strong><small>{t("Inbox")}</small></span>
+                      <span><strong>{libraryStatistics.trash_items.toLocaleString()}</strong><small>{t("Trash")}</small></span>
+                      <span><strong>{libraryStatistics.media_assets.toLocaleString()}</strong><small>{t("Media")}</small></span>
+                      <span><strong>{libraryStatistics.image_assets.toLocaleString()}</strong><small>{t("Images")}</small></span>
+                      <span><strong>{libraryStatistics.tags.toLocaleString()}</strong><small>{t("Tags")}</small></span>
+                      <span><strong>{libraryStatistics.subscriptions.toLocaleString()}</strong><small>{t("Subscriptions")}</small></span>
+                      <span><strong>{formatBytes(libraryStatistics.original_bytes)}</strong><small>{t("Size")}</small></span>
                     </div>
-                  ) : <p className={styles.cardDescription}>Loading library statistics…</p>}
+                  ) : <p className={styles.cardDescription}>{t("Loading library statistics…")}</p>}
                 </section>
 
                 <section className={styles.cloudCard}>
-                  <div className={styles.cardTitle}>Cloud Sync</div>
+                  <div className={styles.cardTitle}>{t("Cloud Sync")}</div>
                   {!selectedEntry.current ? (
-                    <p className={styles.cardDescription}>Open this library to configure its cloud location.</p>
+                    <p className={styles.cardDescription}>{t("Open this library to configure its cloud location.")}</p>
                   ) : cloudConfiguration?.root_path ? (
                     <>
                       <div className={styles.cloudSummary}>
-                        <span className={styles.detailLabel}>Provider</span>
-                        <span>{cloudConfiguration.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {cloudConfiguration.account_label}</span>
-                        <span className={styles.detailLabel}>State</span>
+                        <span className={styles.detailLabel}>{t("Provider")}</span>
+                        <span>{cloudConfiguration.provider === 'google_drive' ? t("Google Drive") : t("Dropbox")} · {cloudConfiguration.account_label}</span>
+                        <span className={styles.detailLabel}>{t("State")}</span>
                         <span className={`${styles.syncState} ${styles[`syncState_${syncPresentation.tone}`]}`}>
                           <span className={styles.syncDot} />
                           {syncPresentation.label}
                         </span>
-                        <span className={styles.detailLabel}>Last sync</span>
+                        <span className={styles.detailLabel}>{t("Last sync")}</span>
                         <span>{formatLastSync(cloudStatus?.last_sync_at ?? null)}</span>
-                        <span className={styles.detailLabel}>Changes</span>
-                        <span>{cloudStatus?.pending_mutations ?? 0} pending</span>
-                        <span className={styles.detailLabel}>Files</span>
-                        <span>{cloudStatus?.pending_blobs ?? 0} pending{cloudStatus?.missing_blobs ? ` · ${cloudStatus.missing_blobs} unavailable` : ''}</span>
+                        <span className={styles.detailLabel}>{t("Changes")}</span>
+                        <span>{cloudStatus?.pending_mutations ?? 0} {t("pending")}</span>
+                        <span className={styles.detailLabel}>{t("Files")}</span>
+                        <span>{cloudStatus?.pending_blobs ?? 0} {t("pending")}{cloudStatus?.missing_blobs ? t(" · {value0} unavailable", { value0: cloudStatus.missing_blobs }) : ''}</span>
                       </div>
                       {syncPresentation.active ? (
                         <div className={styles.syncProgress}>
@@ -855,7 +855,7 @@ export function LibraryManager() {
                             disabled={busy !== null}
                           >
                             <ProviderIcon size={18} />
-                            <span>Synchronize Library with {providerName}</span>
+                            <span>{t("Synchronize Library with ")}{providerName}</span>
                             <small>{root.account_label}</small>
                           </button>
                         );
@@ -867,8 +867,8 @@ export function LibraryManager() {
                         disabled={busy !== null}
                       >
                         <IconBrandGoogleDrive size={18} />
-                        <span>Connect Google Drive…</span>
-                        <small>Choose folder</small>
+                        <span>{t("Connect Google Drive…")}</span>
+                        <small>{t("Choose folder")}</small>
                       </button>
                       <button
                         type="button"
@@ -877,8 +877,8 @@ export function LibraryManager() {
                         disabled={busy !== null}
                       >
                         <IconBrandDropbox size={18} />
-                        <span>Connect Dropbox…</span>
-                        <small>Choose folder</small>
+                        <span>{t("Connect Dropbox…")}</span>
+                        <small>{t("Choose folder")}</small>
                       </button>
                     </div>
                   )}
@@ -887,14 +887,14 @@ export function LibraryManager() {
             ) : (
               <div className={styles.createPane}>
                 <span className={styles.heroIcon}><IconCloud size={26} /></span>
-                <div className={styles.heroTitle}>Get started</div>
-                <p className={styles.heroDescription}>Create a library on this device or connect an existing cloud folder.</p>
+                <div className={styles.heroTitle}>{t("Get started")}</div>
+                <p className={styles.heroDescription}>{t("Create a library on this device or connect an existing cloud folder.")}</p>
                 <div className={styles.cloudProviderActions}>
                   <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('google_drive')} disabled={busy !== null}>
-                    <IconBrandGoogleDrive size={18} /><span>Connect Google Drive…</span><small>Choose folder</small>
+                    <IconBrandGoogleDrive size={18} /><span>{t("Connect Google Drive…")}</span><small>{t("Choose folder")}</small>
                   </button>
                   <button type="button" className={styles.cloudProviderButton} onClick={() => chooseCloudRoot('dropbox')} disabled={busy !== null}>
-                    <IconBrandDropbox size={18} /><span>Connect Dropbox…</span><small>Choose folder</small>
+                    <IconBrandDropbox size={18} /><span>{t("Connect Dropbox…")}</span><small>{t("Choose folder")}</small>
                   </button>
                 </div>
               </div>
@@ -907,11 +907,9 @@ export function LibraryManager() {
 
         <footer className={styles.footer}>
           <button className={styles.btn} onClick={() => { setShowLocalCreate(true); setShowCloudOpen(false); setShowIconEditor(false); }} disabled={busy !== null}>
-            <IconPlus size={14} /> New Library…
-          </button>
+            <IconPlus size={14} /> {t("New Library…")}</button>
           <button className={styles.btn} onClick={() => run('open-existing', () => pictoLibrary().open())} disabled={busy !== null}>
-            <IconFolderOpen size={14} /> Open Existing…
-          </button>
+            <IconFolderOpen size={14} /> {t("Open Existing…")}</button>
           <button
             className={styles.btn}
             onClick={() => {
@@ -922,8 +920,7 @@ export function LibraryManager() {
             }}
             disabled={busy !== null}
           >
-            Open from Cloud…
-          </button>
+            {t("Open from Cloud…")}</button>
         </footer>
       </section>
 

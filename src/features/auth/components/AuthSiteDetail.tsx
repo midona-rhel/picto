@@ -5,6 +5,7 @@ import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { formatRelativeTime, getAuthAccountStatus } from '../authUtils';
 import { SiteIcon } from './SiteIcon';
 import styles from '../AuthWorkspace.module.css';
+import { t } from '../../../i18n';
 
 export function AuthSiteDetail({
   entry,
@@ -41,8 +42,8 @@ export function AuthSiteDetail({
     return (
       <main className={styles.detail}>
         <div className={styles.emptyState}>
-          <div className={styles.sectionTitle}>Select a site</div>
-          <div className={styles.muted}>Authentication is managed per site here, not per subscription.</div>
+          <div className={styles.sectionTitle}>{t("Select a site")}</div>
+          <div className={styles.muted}>{t("Authentication is managed per site here, not per subscription.")}</div>
         </div>
       </main>
     );
@@ -91,27 +92,25 @@ export function AuthSiteDetail({
       </header>
 
       <div className={styles.detailBody}>
-        <section className={styles.accountPanel} aria-label="Account details">
+        <section className={styles.accountPanel} aria-label={t("Account details")}>
           <dl className={styles.factGrid}>
-            <dt>Account</dt><dd>{accountState}</dd>
-            <dt>Credential</dt><dd>{entry.credential?.credential_type ?? 'Not configured'}</dd>
-            <dt>Subscriptions</dt><dd>{usageLabel}</dd>
-            <dt>Last checked</dt><dd>{entry.health?.last_checked_at ? formatRelativeTime(entry.health.last_checked_at) : 'Never'}</dd>
+            <dt>{t("Account")}</dt><dd>{accountState}</dd>
+            <dt>{t("Credential")}</dt><dd>{entry.credential?.credential_type ?? 'Not configured'}</dd>
+            <dt>{t("Subscriptions")}</dt><dd>{usageLabel}</dd>
+            <dt>{t("Last checked")}</dt><dd>{entry.health?.last_checked_at ? formatRelativeTime(entry.health.last_checked_at) : t("Never")}</dd>
           </dl>
 
         <div className={styles.inlineActions}>
           <button type="button" className={styles.buttonPrimary} disabled={busy || sessionActive} onClick={() => { void onStartLogin(); }}>
-            {sessionActive ? 'Logging in…' : entry.credential ? 'Refresh Login' : 'Log In'}
+            {sessionActive ? t("Logging in…") : entry.credential ? t("Refresh Login") : t("Log In")}
           </button>
           {sessionActive && (
             <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => { void onCancelLogin(); }}>
-              Cancel
-            </button>
+              {t("Cancel")}</button>
           )}
           {entry.credential && (
             <button type="button" className={styles.buttonDanger} disabled={busy} onClick={() => { void onRemoveCredential(); }}>
-              Remove
-            </button>
+              {t("Remove")}</button>
           )}
         </div>
           {isOnlyFans && (
@@ -122,23 +121,23 @@ export function AuthSiteDetail({
                 disabled={busy || sessionActive}
                 onClick={() => setManualOpen((open) => !open)}
               >
-                {manualOpen ? 'Hide manual login' : 'Enter session manually…'}
+                {manualOpen ? t("Hide manual login") : t("Enter session manually…")}
               </button>
               {manualOpen && (
                 <form className={styles.manualForm} onSubmit={(event) => { void submitManualOnlyFans(event); }}>
                   <label>
-                    <span>Cookie</span>
+                    <span>{t("Cookie")}</span>
                     <GlassInput type="password" value={cookie} onChange={(event) => setCookie(event.target.value)} autoComplete="off" spellCheck={false} required />
                   </label>
                   <label>
-                    <span>User-Agent</span>
+                    <span>{t("User-Agent")}</span>
                     <GlassInput value={userAgent} onChange={(event) => setUserAgent(event.target.value)} autoComplete="off" spellCheck={false} required />
                   </label>
                   <label>
-                    <span>X-BC</span>
+                    <span>{t("X-BC")}</span>
                     <GlassInput type="password" value={xBc} onChange={(event) => setXBc(event.target.value)} autoComplete="off" spellCheck={false} required />
                   </label>
-                  <button type="submit" className={styles.buttonSecondary} disabled={busy}>Save Session</button>
+                  <button type="submit" className={styles.buttonSecondary} disabled={busy}>{t("Save Session")}</button>
                 </form>
               )}
             </div>
@@ -149,7 +148,7 @@ export function AuthSiteDetail({
         </section>
 
         <section className={styles.loginPanel}>
-          <div className={styles.sectionTitle}>Sign in</div>
+          <div className={styles.sectionTitle}>{t("Sign in")}</div>
           <p className={styles.helper}>{loginDescription}</p>
           <div className={styles.sessionSlot} data-visible={hasEmbeddedSession} aria-live="polite">
             {hasEmbeddedSession && (
@@ -162,15 +161,15 @@ export function AuthSiteDetail({
         </section>
 
         <section className={styles.issuesPanel}>
-          <div className={styles.sectionTitle}>Runtime Issues</div>
+          <div className={styles.sectionTitle}>{t("Runtime Issues")}</div>
           <div className={styles.issueList}>
             {entry.issues.length === 0 ? (
-              <div className={styles.emptyIssue}>No authentication issues</div>
+              <div className={styles.emptyIssue}>{t("No authentication issues")}</div>
             ) : entry.issues.map((issue) => (
               <article key={issue.issue_id} className={styles.issueCard}>
                 <strong>{issue.message}</strong>
                 {issue.detail && <span>{issue.detail}</span>}
-                <span>Seen {formatRelativeTime(issue.last_seen_at)}</span>
+                <span>{t("Seen ")}{formatRelativeTime(issue.last_seen_at)}</span>
               </article>
             ))}
           </div>

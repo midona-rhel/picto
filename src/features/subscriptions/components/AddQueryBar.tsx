@@ -4,6 +4,7 @@ import { ActionButton } from './ActionButton';
 import { TagAutocompleteInput } from './TagAutocompleteInput';
 import type { SubscriptionSiteInfo } from '../../../shared/types/subscriptions';
 import styles from '../SubscriptionsScreen.module.css';
+import { t } from '../../../i18n';
 
 export function AddQueryBar({
   sites,
@@ -53,11 +54,10 @@ export function AddQueryBar({
         value={queryText}
         onChange={setQueryText}
         onSubmit={submit}
-        placeholder={site ? `e.g. ${site.example_query}` : 'query'}
+        placeholder={site ? t("e.g. {value0}", { value0: site.example_query }) : t("query")}
       />
       <ActionButton variant="secondary" compact disabled={busy || !queryText.trim()} onClick={submit}>
-        Add
-      </ActionButton>
+        {t("Add")}</ActionButton>
     </div>
   );
 }

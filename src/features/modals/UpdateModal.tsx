@@ -10,10 +10,11 @@ import {
   type UpdateState,
 } from '../../platform/updateApi';
 import styles from './UpdateModal.module.css';
+import { t } from '../../i18n';
 
 function NoteBody({ text }: { text: string }) {
   const lines = text.trim().split(/\r?\n/);
-  if (!text.trim()) return <p className={styles.emptyNotes}>No release notes were provided.</p>;
+  if (!text.trim()) return <p className={styles.emptyNotes}>{t("No release notes were provided.")}</p>;
   return <div className={styles.notes}>{lines.map((line, index) => {
     const heading = line.match(/^#{1,3}\s+(.+)/);
     const bullet = line.match(/^[-*]\s+(.+)/);
@@ -43,12 +44,11 @@ export function UpdateModal({ open, onClose }: { open: boolean; onClose: () => v
   return <GlassModal
     open={open}
     onClose={onClose}
-    title={state?.version ? `Picto ${state.version}` : 'Software Update'}
+    title={state?.version ? t("Picto {value0}", { value0: state.version }) : t("Software Update")}
     size="md"
     footer={<>
       <button className={modalStyles.btn} type="button" disabled={busy} onClick={() => void checkForUpdates().then(setState)}>
-        <IconRefresh size={15} /> Check Again
-      </button>
+        <IconRefresh size={15} /> {t("Check Again")}</button>
       {state?.status === 'downloaded' || (state?.status === 'available' && state.platform === 'darwin') ? (
         <button className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} type="button" onClick={action}>
           <IconDownload size={15} /> {actionLabel}
@@ -57,17 +57,17 @@ export function UpdateModal({ open, onClose }: { open: boolean; onClose: () => v
     </>}
   >
     <div className={styles.summary}>
-      <div className={styles.version}>Current version {state?.currentVersion ?? '—'}</div>
-      {state?.status === 'checking' ? <p>Checking for the latest version…</p> : null}
-      {state?.status === 'current' ? <p>Picto is up to date.</p> : null}
+      <div className={styles.version}>{t("Current version ")}{state?.currentVersion ?? '—'}</div>
+      {state?.status === 'checking' ? <p>{t("Checking for the latest version…")}</p> : null}
+      {state?.status === 'current' ? <p>{t("Picto is up to date.")}</p> : null}
       {state?.status === 'unavailable' ? <p>{state.error}</p> : null}
       {state?.status === 'error' ? <p className={styles.error}>{state.error}</p> : null}
       {state?.status === 'downloading' ? <>
-        <p>Downloading Picto {state.version}… {state.progress ? `${Math.round(state.progress.percent)}%` : ''}</p>
+        <p>{t("Downloading Picto ")}{state.version}… {state.progress ? `${Math.round(state.progress.percent)}%` : ''}</p>
         <div className={styles.progress}><span style={{ width: `${state.progress?.percent ?? 2}%` }} /></div>
       </> : null}
-      {state?.status === 'downloaded' ? <p>The update is ready. Picto will close before the installer starts.</p> : null}
-      {state?.status === 'available' && state.platform === 'darwin' ? <p>A new version is available. Download it from the release page to update this Mac.</p> : null}
+      {state?.status === 'downloaded' ? <p>{t("The update is ready. Picto will close before the installer starts.")}</p> : null}
+      {state?.status === 'available' && state.platform === 'darwin' ? <p>{t("A new version is available. Download it from the release page to update this Mac.")}</p> : null}
     </div>
     {state?.version ? <section className={styles.release}>
       <div className={styles.releaseHeader}>

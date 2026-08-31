@@ -8,6 +8,7 @@ import { IconCheck, IconChevronRight, IconSearch, IconX } from '@tabler/icons-re
 import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import { useShortcutScope } from '../../hooks/useShortcutScope';
 import styles from './ContextMenu.module.css';
+import { t, translateMessage } from '../../../i18n';
 
 // ── Types ──
 
@@ -248,7 +249,7 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
         ref={menuRef}
         className={`${styles.menu} floatingGlassSurface ${closing ? styles.menuClosing : ''}`}
         role="menu"
-        aria-label="Context menu"
+        aria-label={t("Context menu")}
         style={pos
           ? { left: pos.x, top: pos.y, transformOrigin: origin, width }
           : { left: -9999, top: -9999, visibility: 'hidden' as const, width }
@@ -265,7 +266,7 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
                 className={styles.searchInput}
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setFocusIdx(-1); }}
-                placeholder="Search..."
+                placeholder={t("Search...")}
                 onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); startClose(); } }}
               />
             </div>
@@ -300,7 +301,7 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
                     onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(entry.label); }}
                   >
                     {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
-                    <span className={styles.label}>{entry.label}</span>
+                    <span className={styles.label}>{translateMessage(entry.label)}</span>
                     <IconChevronRight size={12} className={styles.chevron} />
                   </div>
                   {isOpen && (
@@ -345,7 +346,7 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
                 onMouseLeave={() => setFocusIdx(-1)}
               >
                 {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
-                <span className={styles.label}>{entry.label}</span>
+                <span className={styles.label}>{translateMessage(entry.label)}</span>
                 {(entry.checked !== undefined || entry.excluded) && (
                   <span className={styles.checkSlot}>{entry.excluded ? <IconX size={13} /> : entry.checked ? <IconCheck size={13} /> : null}</span>
                 )}
@@ -354,7 +355,7 @@ export function ContextMenu({ entries, position, onClose, showSearch = true, wid
             );
           })}
 
-          {cleaned.length === 0 && query && <div className={styles.empty}>No results</div>}
+          {cleaned.length === 0 && query && <div className={styles.empty}>{t("No results")}</div>}
         </div>
       </div>
     </div>,
@@ -413,7 +414,7 @@ function SubmenuPanel({
       ref={ref}
       className={`${styles.menu} ${styles.submenuMenu} floatingGlassSurface`}
       role="menu"
-      aria-label="Context submenu"
+      aria-label={t("Context submenu")}
       style={{ left: pos.left, top: pos.top, width: 'auto', transformOrigin: subOrigin }}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
@@ -441,7 +442,7 @@ function SubmenuPanel({
                 entry.contextAction();
               }}>
               {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
-              <span className={styles.label}>{entry.label}</span>
+              <span className={styles.label}>{translateMessage(entry.label)}</span>
               {(entry.checked !== undefined || entry.excluded) && (
                 <span className={styles.checkSlot}>{entry.excluded ? <IconX size={13} /> : entry.checked ? <IconCheck size={13} /> : null}</span>
               )}
@@ -472,7 +473,7 @@ function cleanSeparators(entries: MenuEntry[]): MenuEntry[] {
 
 function keywordText(entry: MenuItem | MenuSubmenu): string {
   const keywords = Array.isArray(entry.keywords) ? entry.keywords.join(' ') : entry.keywords ?? '';
-  return `${entry.label} ${keywords}`.toLocaleLowerCase();
+  return `${translateMessage(entry.label)} ${keywords}`.toLocaleLowerCase();
 }
 
 /**
@@ -491,7 +492,7 @@ export function searchMenuEntries(entries: MenuEntry[], rawQuery: string): MenuE
       if (isSeparator(entry) || isCustom(entry)) continue;
       const currentOrder = order++;
       if (!('disabled' in entry) || !entry.disabled) {
-        const score = menuSearchScore(keywordText(entry), entry.label.toLocaleLowerCase(), query);
+        const score = menuSearchScore(keywordText(entry), translateMessage(entry.label).toLocaleLowerCase(), query);
         if (score != null) matches.push({ entry, score, order: currentOrder });
       }
       if (isSubmenu(entry)) visit(entry.children);

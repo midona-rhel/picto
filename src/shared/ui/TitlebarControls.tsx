@@ -8,6 +8,7 @@ import {
 import { KbdTooltip } from './KbdTooltip';
 import { ToolbarMinusIcon, ToolbarPlusIcon } from './icons/toolbar-icons';
 import styles from './TitlebarControls.module.css';
+import { t } from '../../i18n';
 
 interface TitlebarControlsProps {
   label?: string;
@@ -98,21 +99,21 @@ export function TitlebarZoomSlider({
 }: TitlebarZoomSliderProps) {
   return (
     <div className={styles.zoomControl}>
-      <KbdTooltip label="Zoom out" shortcutId="view.zoomOut">
-        <TitlebarControlButton onClick={onZoomOut} disabled={value <= min} aria-label="Zoom out">
+      <KbdTooltip label={t("Zoom out")} shortcutId="view.zoomOut">
+        <TitlebarControlButton onClick={onZoomOut} disabled={value <= min} aria-label={t("Zoom out")}>
           <ToolbarMinusIcon />
         </TitlebarControlButton>
       </KbdTooltip>
       <TitlebarRangeSlider
-        aria-label="Zoom"
+        aria-label={t("Zoom")}
         min={min}
         max={max}
         step={step}
         value={value}
         onValueChange={onChange}
       />
-      <KbdTooltip label="Zoom in" shortcutId="view.zoomIn">
-        <TitlebarControlButton onClick={onZoomIn} disabled={value >= max} aria-label="Zoom in">
+      <KbdTooltip label={t("Zoom in")} shortcutId="view.zoomIn">
+        <TitlebarControlButton onClick={onZoomIn} disabled={value >= max} aria-label={t("Zoom in")}>
           <ToolbarPlusIcon />
         </TitlebarControlButton>
       </KbdTooltip>

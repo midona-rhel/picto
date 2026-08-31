@@ -5,13 +5,17 @@ import '@mantine/core/styles.css';
 import '../app/globals.css';
 import { LibraryManager } from '../features/library/LibraryManager';
 import { startThemeRuntime } from '../runtime/themeRuntime';
+import { startLocalizedRenderer } from '../i18n';
 
 startThemeRuntime();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <MantineProvider defaultColorScheme="dark" cssVariablesSelector=":root:root">
-      <LibraryManager />
-    </MantineProvider>
-  </React.StrictMode>,
-);
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+startLocalizedRenderer(() => {
+  root.render(
+    <React.StrictMode>
+      <MantineProvider defaultColorScheme="dark" cssVariablesSelector=":root:root">
+        <LibraryManager />
+      </MantineProvider>
+    </React.StrictMode>,
+  );
+});

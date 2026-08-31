@@ -8,13 +8,14 @@ import { GlassInput } from '../../shared/ui/GlassInput';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import type { ExportFormat } from '../../shared/types/generated/application/ExportFormat';
+import { t } from '../../i18n';
 
 const FORMAT_OPTIONS: Array<{ value: ExportFormat; label: string }> = [
-  { value: 'original', label: 'Original Format' },
-  { value: 'jpeg', label: 'JPEG' },
-  { value: 'png', label: 'PNG' },
-  { value: 'webp', label: 'WebP' },
-  { value: 'avif', label: 'AVIF' },
+  { value: 'original', label: t("Original Format") },
+  { value: 'jpeg', label: t("JPEG") },
+  { value: 'png', label: t("PNG") },
+  { value: 'webp', label: t("WebP") },
+  { value: 'avif', label: t("AVIF") },
 ];
 
 export interface ExportConfig {
@@ -51,7 +52,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
   const browse = useCallback(async () => {
     try {
       const result = await (window as any).picto.dialog.open({
-        properties: ['openDirectory'], multiple: false, title: 'Choose export folder',
+        properties: ['openDirectory'], multiple: false, title: t("Choose export folder"),
       });
       if (result) setOutputDir(typeof result === 'string' ? result : result[0]);
     } catch {}
@@ -63,11 +64,11 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
     <GlassModal
       open={open}
       onClose={onClose}
-      title={`Export ${fileCount} File${fileCount !== 1 ? 's' : ''}`}
+      title={t("Export {value0} File{value1}", { value0: fileCount, value1: fileCount !== 1 ? 's' : '' })}
       size="md"
       footer={
         <>
-          <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
+          <button className={modalStyles.btn} onClick={onClose} type="button">{t("Cancel")}</button>
           <button
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
@@ -80,22 +81,21 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
             disabled={!outputDir}
             type="button"
           >
-            Export
-          </button>
+            {t("Export")}</button>
         </>
       }
     >
       <div className={modalStyles.stack}>
         <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Destination</label>
+          <label className={modalStyles.fieldLabel}>{t("Destination")}</label>
           <div className={modalStyles.fieldRow}>
-            <GlassInput value={outputDir} readOnly placeholder="Choose export folder..." style={{ flex: 1 }} />
-            <button className={modalStyles.btn} onClick={browse} type="button">Browse</button>
+            <GlassInput value={outputDir} readOnly placeholder={t("Choose export folder...")} style={{ flex: 1 }} />
+            <button className={modalStyles.btn} onClick={browse} type="button">{t("Browse")}</button>
           </div>
         </div>
 
         <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Format</label>
+          <label className={modalStyles.fieldLabel}>{t("Format")}</label>
           <CmSelect
             value={format}
             options={FORMAT_OPTIONS}
@@ -106,7 +106,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
 
         {!isOriginal && format !== 'png' && (
           <div className={modalStyles.field}>
-            <label className={modalStyles.fieldLabel}>Quality — {quality}%</label>
+            <label className={modalStyles.fieldLabel}>{t("Quality — ")}{quality}%</label>
             <input
               type="range" min={1} max={100} value={quality}
               onChange={(e) => setQuality(parseInt(e.target.value, 10))}
@@ -119,26 +119,26 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
           <>
             <div className={modalStyles.separator} />
             <div className={modalStyles.field}>
-              <label className={modalStyles.fieldLabel}>Resize (optional)</label>
+              <label className={modalStyles.fieldLabel}>{t("Resize (optional)")}</label>
               <div className={modalStyles.fieldRow}>
                 <GlassInput
                   value={width}
                   onChange={(e) => setWidth(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Width"
+                  placeholder={t("Width")}
                   style={{ width: 100 }}
                 />
-                <span className={modalStyles.inlineLabel}>×</span>
+                <span className={modalStyles.inlineLabel}>{t("×")}</span>
                 <GlassInput
                   value={height}
                   onChange={(e) => setHeight(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Height"
+                  placeholder={t("Height")}
                   style={{ width: 100 }}
                 />
               </div>
             </div>
 
             <div className={modalStyles.rowSpread}>
-              <span className={modalStyles.fieldLabel}>Keep Aspect Ratio</span>
+              <span className={modalStyles.fieldLabel}>{t("Keep Aspect Ratio")}</span>
               <ToggleSwitch on={keepAspectRatio} onChange={() => setKeepAspectRatio(!keepAspectRatio)} />
             </div>
           </>

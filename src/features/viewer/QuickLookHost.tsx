@@ -4,6 +4,7 @@ import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ToolbarCloseIcon } from '../../shared/ui/icons/toolbar-icons';
 import { QuickLookNavigation } from './QuickLookNavigation';
 import styles from './QuickLookHost.module.css';
+import { t } from '../../i18n';
 
 interface QuickLookHostProps {
   children: ReactNode;
@@ -40,8 +41,8 @@ export function QuickLookHost({
       data-quick-look-overlay
       data-media-ready={revealed ? 'true' : 'false'}
     >
-      <KbdTooltip label="Close" shortcutId="view.quicklook" position="bottom">
-        <button className={styles.closeButton} type="button" onClick={onClose} aria-label="Close Quick Look">
+      <KbdTooltip label={t("Close")} shortcutId="view.quicklook" position="bottom">
+        <button className={styles.closeButton} type="button" onClick={onClose} aria-label={t("Close Quick Look")}>
           <ToolbarCloseIcon />
         </button>
       </KbdTooltip>

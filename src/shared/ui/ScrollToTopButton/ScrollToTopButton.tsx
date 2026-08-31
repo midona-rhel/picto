@@ -1,5 +1,6 @@
 import { IconArrowUp } from '@tabler/icons-react';
 import styles from './ScrollToTopButton.module.css';
+import { t } from '../../../i18n';
 
 interface ScrollToTopButtonProps {
   visible: boolean;
@@ -18,7 +19,7 @@ export function ScrollToTopButton({
       className={`${styles.button} ${visible ? styles.visible : ''}`}
       style={{ '--scroll-to-top-bottom': `${bottom}px` } as React.CSSProperties}
       onClick={onClick}
-      aria-label="Return to Top"
+      aria-label={t("Return to Top")}
       aria-hidden={!visible}
       tabIndex={visible ? 0 : -1}
     >

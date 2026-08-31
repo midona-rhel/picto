@@ -12,6 +12,8 @@ The macOS package points directly at `build/Picto.icon`. Electron Builder compil
 
 `picto-library-folder.svg` is the neutral folder artwork for Picto `.library` packages. The generator produces `library.icns` for macOS Finder, `library.ico` for Windows library folders, and a PNG preview used by release audits. Linux has no portable per-directory icon contract across file managers, so the source remains available to Picto without writing desktop-specific metadata.
 
+`picto-pack.svg` is the portable-document artwork for `.picto-pack` files. The generator produces `picto-pack.icns`, `picto-pack.ico`, and a PNG preview. The folded document distinguishes a transferable file from a live library package, while the parcel and Picto book mark identify its contents.
+
 Verification:
 
 1. Run `npm run generate:app-icons` and confirm the three generated assets are 1024×1024 RGBA PNGs.

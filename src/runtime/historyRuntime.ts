@@ -11,6 +11,7 @@ import {
   showInfoNotification,
   showSuccessNotification,
 } from '../shared/lib/notifications';
+import { t } from '../i18n';
 
 let operationPending = false;
 
@@ -44,7 +45,7 @@ async function perform(direction: 'undo' | 'redo'): Promise<void> {
     showHistoryResult(direction, result);
   } catch (error) {
     showErrorNotification({
-      title: direction === 'undo' ? 'Could not undo' : 'Could not redo',
+    title: direction === 'undo' ? t('Could not undo') : t('Could not redo'),
       message: error instanceof Error ? error.message : String(error),
     });
   } finally {
@@ -58,7 +59,7 @@ function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationR
     title: `${direction === 'undo' ? 'Undid' : 'Redid'} ${result.entry.label}`,
     message: '',
     action: reverse ? {
-      label: direction === 'undo' ? 'Redo' : 'Undo',
+      label: direction === 'undo' ? t("Redo") : t("Undo"),
       onClick: () => { void perform(direction === 'undo' ? 'redo' : 'undo'); },
     } : undefined,
   });
@@ -73,7 +74,7 @@ export async function announceUndoableMutation(command: string): Promise<void> {
       title: state.undo.label,
       message: '',
       action: {
-        label: 'Undo',
+        label: t("Undo"),
         onClick: () => { void perform('undo'); },
       },
     });

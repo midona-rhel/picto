@@ -7,6 +7,7 @@ import { folderPickerPortalAtom } from '../../state/portals';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { foldersController } from '../../controllers/foldersController';
 import { FolderPickerPanel } from './FolderPickerPanel';
+import { readRecentFolderIds, setRecentFoldersLibrary } from '../../shared/hooks/useRecentFolders';
 
 vi.mock('../../controllers/foldersController', () => ({
   foldersController: { create: vi.fn().mockResolvedValue('folder:9') },
@@ -16,7 +17,8 @@ const store = getDefaultStore();
 
 describe('FolderPickerPanel row context actions', () => {
   beforeEach(() => {
-    localStorage.removeItem('picto-recent-folders');
+    setRecentFoldersLibrary('/test/Recent.library');
+    localStorage.removeItem('picto-recent-folders:/test/Recent.library');
     vi.mocked(foldersController.create).mockClear();
     store.set(sidebarNodesAtom, [{
       id: 'folder:7',
@@ -73,6 +75,23 @@ describe('FolderPickerPanel row context actions', () => {
     expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
   });
 
+  it('records folders used by a filter and updates the mounted recent view', () => {
+    const onApplyFolderFilter = vi.fn();
+    store.set(folderPickerPortalAtom, {
+      open: true,
+      selectedFolderIds: [],
+      excludedFolderIds: [],
+      filterMatchMode: 'any',
+      onApplyFolderFilter,
+    });
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+
+    fireEvent.click(screen.getByText('Reference'));
+    expect(readRecentFolderIds()).toEqual([7]);
+    fireEvent.click(screen.getByRole('button', { name: 'Recent folders' }));
+    expect(screen.getByText('Reference')).toBeInTheDocument();
+  });
+
   it('updates ordinary multi-folder assignment on each click without an Apply step', () => {
     const onApplyFolders = vi.fn();
     store.set(sidebarNodesAtom, [
@@ -99,7 +118,7 @@ describe('FolderPickerPanel row context actions', () => {
   });
 
   it('offers all, recent, and selected folder views', () => {
-    localStorage.setItem('picto-recent-folders', JSON.stringify(['8']));
+    localStorage.setItem('picto-recent-folders:/test/Recent.library', JSON.stringify([8]));
     store.set(sidebarNodesAtom, [
       { id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders' } as SidebarNodeDto,
       { id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders' } as SidebarNodeDto,

@@ -8,6 +8,7 @@ import { LibraryGate } from '../features/library/LibraryGate';
 import { NotificationHost } from '../shared/ui/NotificationHost/NotificationHost';
 import '../app/globals.css';
 import { startThemeRuntime } from '../runtime/themeRuntime';
+import { startLocalizedRenderer } from '../i18n';
 
 startThemeRuntime();
 
@@ -15,15 +16,18 @@ startThemeRuntime();
 // this same instance via getDefaultStore(), so Provider must use it too.
 const store = getDefaultStore();
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <MantineProvider defaultColorScheme="dark">
-      <Provider store={store}>
-        <NotificationHost />
-        <LibraryGate>
-          <AppShell />
-        </LibraryGate>
-      </Provider>
-    </MantineProvider>
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById('root')!);
+startLocalizedRenderer(() => {
+  root.render(
+    <StrictMode>
+      <MantineProvider defaultColorScheme="dark">
+        <Provider store={store}>
+          <NotificationHost />
+          <LibraryGate>
+            <AppShell />
+          </LibraryGate>
+        </Provider>
+      </MantineProvider>
+    </StrictMode>,
+  );
+});

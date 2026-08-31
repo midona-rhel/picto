@@ -3,6 +3,7 @@ import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { ActionButton } from './ActionButton';
 import styles from './NewSubscriptionDialog.module.css';
+import { t } from '../../../i18n';
 
 export interface AddGalleryInput {
   serviceId: 'ehentai' | 'exhentai';
@@ -10,8 +11,8 @@ export interface AddGalleryInput {
 }
 
 const SERVICES = [
-  { value: 'ehentai', label: 'E-Hentai' },
-  { value: 'exhentai', label: 'ExHentai' },
+  { value: 'ehentai', label: t("E-Hentai") },
+  { value: 'exhentai', label: t("ExHentai") },
 ];
 
 export function AddGalleryDialog({
@@ -38,24 +39,23 @@ export function AddGalleryDialog({
     <GlassModal
       open={open}
       onClose={close}
-      title="Add gallery"
+      title={t("Add gallery")}
       size="sm"
       footer={(
         <>
-          <ActionButton variant="ghost" onClick={close}>Cancel</ActionButton>
+          <ActionButton variant="ghost" onClick={close}>{t("Cancel")}</ActionButton>
           <ActionButton
             variant="primary"
             disabled={busy || trimmedUrl === ''}
             onClick={() => onAdd({ serviceId, url: trimmedUrl })}
           >
-            Add Gallery
-          </ActionButton>
+            {t("Add Gallery")}</ActionButton>
         </>
       )}
     >
       <div className={styles.form}>
         <div className={styles.row}>
-          <span className={styles.rowLabel}>Service</span>
+          <span className={styles.rowLabel}>{t("Service")}</span>
           <div className={styles.rowControl}>
             <CmSelect
               value={serviceId}
@@ -67,15 +67,15 @@ export function AddGalleryDialog({
           </div>
         </div>
         <div className={styles.row}>
-          <label className={styles.rowLabel} htmlFor="gallery-url">Gallery URL</label>
+          <label className={styles.rowLabel} htmlFor="gallery-url">{t("Gallery URL")}</label>
           <div className={styles.rowControl}>
             <input
               id="gallery-url"
               className={styles.textInput}
               value={url}
               placeholder={serviceId === 'exhentai'
-                ? 'https://exhentai.org/g/12345/67890abcde/'
-                : 'https://e-hentai.org/g/12345/67890abcde/'}
+                ? t("https://exhentai.org/g/12345/67890abcde/")
+                : t("https://e-hentai.org/g/12345/67890abcde/")}
               autoFocus
               onChange={(event) => {
                 const nextUrl = event.target.value;

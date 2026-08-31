@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { useEffect, useMemo, useState } from 'react';
 import { DocumentViewerShell } from './DocumentViewerShell';
 import styles from './ArchiveDocumentViewer.module.css';
+import { getLocale, t } from '../../../i18n';
 
 interface Props { src: string; kind: 'epub' | 'cbz'; onReady?: () => void }
 interface EpubChapter { path: string; title: string }
@@ -42,7 +43,7 @@ async function readEpubSpine(zip: JSZip) {
   return localElements(packageDocument, 'itemref').flatMap<EpubChapter>((item, index) => {
     const entry = manifest.get(item.getAttribute('idref') ?? '');
     if (!entry || !/xhtml|html/i.test(entry.mediaType)) return [];
-    return [{ path: resolveArchivePath(base, entry.href), title: `Chapter ${index + 1}` }];
+    return [{ path: resolveArchivePath(base, entry.href), title: t("Chapter {value0}", { value0: index + 1 }) }];
   });
 }
 
@@ -58,6 +59,7 @@ function sanitizeEpubDocument(markup: string) {
 }
 
 export function ArchiveDocumentViewer({ src, kind, onReady }: Props) {
+  const locale = getLocale();
   const [zip, setZip] = useState<JSZip | null>(null);
   const [entries, setEntries] = useState<Array<string | EpubChapter>>([]);
   const [pageNumber, setPageNumber] = useState(1);
@@ -89,7 +91,7 @@ export function ArchiveDocumentViewer({ src, kind, onReady }: Props) {
       })
       .catch((reason: unknown) => {
         if (!abort.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : `Could not open this ${kind.toUpperCase()}.`);
+          setError(reason instanceof Error ? reason.message : t('Could not open this {value0}.', { value0: kind.toUpperCase() }));
           onReady?.();
         }
       });
@@ -137,9 +139,9 @@ export function ArchiveDocumentViewer({ src, kind, onReady }: Props) {
   }, [entries, kind, onReady, pageNumber, zip]);
 
   const content = useMemo(() => kind === 'cbz'
-    ? (pageUrl ? <img className={styles.comicPage} src={pageUrl} alt={`Page ${pageNumber}`} onLoad={onReady} onError={onReady} /> : null)
+    ? (pageUrl ? <img className={styles.comicPage} src={pageUrl} alt={t("Page {value0}", { value0: pageNumber })} onLoad={onReady} onError={onReady} /> : null)
     : (chapterMarkup ? <article className={styles.bookPage} dangerouslySetInnerHTML={{ __html: chapterMarkup }} /> : null),
-  [chapterMarkup, kind, pageNumber, pageUrl]);
+  [chapterMarkup, kind, locale, pageNumber, pageUrl]);
 
   return (
     <DocumentViewerShell

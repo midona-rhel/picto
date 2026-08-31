@@ -151,6 +151,112 @@ test('library covers are materialized in the library root', async () => {
     await service.setLibraryMeta(libraryPath, { imageHash });
 
     expect(await fs.readFile(path.join(libraryPath, '.picto-library-cover.jpg'), 'utf8')).toBe('cover bytes');
+    expect(JSON.parse(await fs.readFile(path.join(libraryPath, '.picto-library-cover.json'), 'utf8'))).toEqual({
+      imageHash,
+      imageFocusX: 500,
+      imageFocusY: 500,
+      imageZoomPercent: 100,
+    });
+    expect(config.libraryMeta[libraryPath].imageHash).toBe(imageHash);
+  } finally {
+    await fs.rm(libraryPath, { recursive: true, force: true });
+  }
+});
+
+test('an existing root cover remains visible when app metadata was lost', async () => {
+  const libraryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-library-root-cover-'));
+  try {
+    await fs.writeFile(path.join(libraryPath, 'library.sqlite'), 'database');
+    await fs.writeFile(path.join(libraryPath, '.picto-library-cover.jpg'), 'cover bytes');
+    const service = createLibraryHostService({
+      fs, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+      addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+      getCachedConfig: () => ({ libraryHistory: [libraryPath] }), saveGlobalConfig: async () => {},
+      updateLibraryPath: async () => {}, getCurrentLibraryRoot: () => libraryPath, setCurrentLibraryRoot: () => {},
+      createMainWindow: () => {}, sendToAllWindows: () => {}, buildAppMenu: () => {},
+    });
+
+    await expect(service.getLibraryConfig()).resolves.toMatchObject({
+      coverExistsMap: { [libraryPath]: true },
+    });
+  } finally {
+    await fs.rm(libraryPath, { recursive: true, force: true });
+  }
+});
+
+test('root cover metadata restores the selected crop after app metadata was lost', async () => {
+  const libraryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-library-root-crop-'));
+  const imageHash = 'c'.repeat(64);
+  const config = { libraryHistory: [libraryPath] };
+  try {
+    await fs.writeFile(path.join(libraryPath, 'library.sqlite'), 'database');
+    await fs.writeFile(path.join(libraryPath, '.picto-library-cover.jpg'), 'cover bytes');
+    await fs.writeFile(path.join(libraryPath, '.picto-library-cover.json'), JSON.stringify({
+      imageHash,
+      imageFocusX: 275,
+      imageFocusY: 725,
+      imageZoomPercent: 160,
+    }));
+    const service = createLibraryHostService({
+      fs, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+      addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+      getCachedConfig: () => config, saveGlobalConfig: async () => {},
+      updateLibraryPath: async () => {}, getCurrentLibraryRoot: () => libraryPath, setCurrentLibraryRoot: () => {},
+      createMainWindow: () => {}, sendToAllWindows: () => {}, buildAppMenu: () => {},
+    });
+
+    await expect(service.getLibraryConfig()).resolves.toMatchObject({
+      libraryMeta: {
+        [libraryPath]: {
+          imageHash,
+          imageFocusX: 275,
+          imageFocusY: 725,
+          imageZoomPercent: 160,
+        },
+      },
+    });
+  } finally {
+    await fs.rm(libraryPath, { recursive: true, force: true });
+  }
+});
+
+test('cover materialization merges into config saved while the file copy was running', async () => {
+  const libraryPath = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-library-cover-race-'));
+  const imageHash = 'b'.repeat(64);
+  const thumbnail = path.join(libraryPath, 'blobs', 't', 'bb', 'bb', `${imageHash}.jpg`);
+  let config = { libraryMeta: {} };
+  let releaseCopy;
+  const copyReleased = new Promise((resolve) => { releaseCopy = resolve; });
+  let markCopyStarted;
+  const copyStarted = new Promise((resolve) => { markCopyStarted = resolve; });
+  const delayedFs = new Proxy(fs, {
+    get(target, property) {
+      if (property !== 'copyFile') return target[property];
+      return async (...args) => {
+        markCopyStarted();
+        await copyReleased;
+        return target.copyFile(...args);
+      };
+    },
+  });
+  try {
+    await fs.mkdir(path.dirname(thumbnail), { recursive: true });
+    await fs.writeFile(thumbnail, 'cover bytes');
+    const service = createLibraryHostService({
+      fs: delayedFs, path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+      addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+      getCachedConfig: () => config, saveGlobalConfig: async (next) => { config = next; },
+      updateLibraryPath: async () => {}, getCurrentLibraryRoot: () => libraryPath, setCurrentLibraryRoot: () => {},
+      createMainWindow: () => {}, sendToAllWindows: () => {}, buildAppMenu: () => {},
+    });
+
+    const savingCover = service.setLibraryMeta(libraryPath, { imageHash });
+    await copyStarted;
+    config = { ...config, theme: 'dark' };
+    releaseCopy();
+    await savingCover;
+
+    expect(config.theme).toBe('dark');
     expect(config.libraryMeta[libraryPath].imageHash).toBe(imageHash);
   } finally {
     await fs.rm(libraryPath, { recursive: true, force: true });

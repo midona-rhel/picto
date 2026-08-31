@@ -19,6 +19,7 @@ import {
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
 import { loadInspectorData } from './inspectorController';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
+import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 import type { CollectionNoteDraft, EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
@@ -118,7 +119,7 @@ export async function updateTargetFolderMembership(
 ): Promise<void> {
   await updateFolderMembership(target, folderId, operation);
   await announceUndoableMutation('items.set_folder');
-  if (operation === 'add') recordRecentItems('picto-recent-folders', [String(folderId)]);
+  if (operation === 'add') recordRecentFolderUse([folderId]);
   maybeReloadSingleItem(target);
 }
 

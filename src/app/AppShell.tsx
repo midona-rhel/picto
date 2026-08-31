@@ -64,6 +64,7 @@ import { configureNotificationPopups } from '../shared/lib/notifications';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, tagSelectPortalAtom } from '../state/portals';
 import { createEmptyItemFilters, itemFiltersEqual } from '../shared/lib/itemFilters';
 import styles from './AppShell.module.css';
+import { t, translateMessage } from '../i18n';
 
 const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -109,19 +110,19 @@ export function buildPanelVisibilityContextEntries({
 }): MenuEntry[] {
   return [
     {
-      label: 'Toggle All Panels',
+      label: t("Toggle All Panels"),
       shortcut: formatKeysDisplay(getShortcut('view.toggleBothPanels')!.keys),
       action: toggleAll,
       keepOpen: true,
     },
     {
-      label: 'Toggle Sidebar',
+      label: t("Toggle Sidebar"),
       shortcut: formatKeysDisplay(getShortcut('view.toggleSidebar')!.keys),
       action: toggleSidebar,
       keepOpen: true,
     },
     {
-      label: 'Toggle Inspector',
+      label: t("Toggle Inspector"),
       shortcut: formatKeysDisplay(getShortcut('view.toggleInspector')!.keys),
       action: toggleInspector,
       keepOpen: true,
@@ -133,11 +134,11 @@ function InspectorTitlebarActions() {
   const isPinned = useAtomValue(inspectorPinnedAtom);
   const setPinned = useSetAtom(inspectorPinnedAtom);
   return (
-    <KbdTooltip label={isPinned ? 'Unpin' : 'Pin'}>
+    <KbdTooltip label={isPinned ? t("Unpin") : t("Pin")}>
       <button
         className={`${styles.pinBtn} ${isPinned ? styles.pinBtnActive : ''}`}
         onClick={() => setPinned(!isPinned)}
-        aria-label={isPinned ? 'Unpin Inspector' : 'Pin Inspector'}
+        aria-label={isPinned ? t("Unpin Inspector") : t("Pin Inspector")}
       >
         {isPinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
       </button>
@@ -172,7 +173,7 @@ function ScopeTitle() {
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const frozenLabel = useAtomValue(displayedScopeLabelAtom);
   const liveLabel = useAtomValue(gridScopeLabelAtom);
-  const label = gridActive ? (frozenLabel || liveLabel) : liveLabel;
+  const label = translateMessage(gridActive ? (frozenLabel || liveLabel) : liveLabel);
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
@@ -190,7 +191,7 @@ function ScopeTitle() {
         ? subsSnapshot?.subscriptions.find((sub) => sub.id === subsSelection.id) ?? null
         : null;
     const leafName = selectedSub?.name ?? null;
-    if (!leafName) return <span {...titleProps}>Subscriptions</span>;
+    if (!leafName) return <span {...titleProps}>{t("Subscriptions")}</span>;
 
     const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
     return (
@@ -203,8 +204,7 @@ function ScopeTitle() {
             pushSubscriptionsHistory(null);
           }}
         >
-          Subscriptions
-        </button>
+          {t("Subscriptions")}</button>
         {crumbSeparator}
         {leafName}
       </span>
@@ -212,7 +212,7 @@ function ScopeTitle() {
   }
 
   if (displayedSurfaceNodeId === 'system:duplicates') {
-    return <span {...titleProps}>Duplicates</span>;
+    return <span {...titleProps}>{t("Duplicates")}</span>;
   }
 
   const displayedNodeId = snapshot?.nodeId ?? '';
@@ -230,7 +230,7 @@ function ScopeTitle() {
   };
 
   if (displayedSurfaceNodeId === 'system:tag_manager') {
-    if (!showsSearchResults) return <span {...titleProps}>Tags</span>;
+    if (!showsSearchResults) return <span {...titleProps}>{t("Tags")}</span>;
     return (
       <span {...titleProps}>
         <button
@@ -241,8 +241,7 @@ function ScopeTitle() {
             navigateToNode('system:tag_manager');
           }}
         >
-          Tags
-        </button>
+          {t("Tags")}</button>
         {crumbSeparator}
         {searchResultsLabel}
       </span>
@@ -615,12 +614,12 @@ export function AppShell() {
         <div className={titlebarLeftClass} data-help-region="sidebar">
           <ApplicationMenuButton />
           <div className={styles.titlebarActions}>
-            <KbdTooltip label="Settings" shortcutId="file.settings">
+            <KbdTooltip label={t("Settings")} shortcutId="file.settings">
               <button className={styles.toggleBtn} onClick={openSettings}>
                 <IconSettings size={16} stroke={1.5} />
               </button>
             </KbdTooltip>
-            <KbdTooltip label="Toggle Panels" shortcutId="view.toggleBothPanels">
+            <KbdTooltip label={t("Toggle Panels")} shortcutId="view.toggleBothPanels">
               <button
                 className={styles.toggleBtn}
                 data-help-id="panel-controls"
@@ -646,12 +645,12 @@ export function AppShell() {
               <ViewerToolbar />
             ) : (
               <>
-                <KbdTooltip label="Back" shortcutId="nav.back">
+                <KbdTooltip label={t("Back")} shortcutId="nav.back">
                   <TitlebarControlButton disabled={!canBack} onClick={canBack ? goBack : undefined}>
                     <ToolbarHistoryIcon direction="back" />
                   </TitlebarControlButton>
                 </KbdTooltip>
-                <KbdTooltip label="Forward" shortcutId="nav.forward">
+                <KbdTooltip label={t("Forward")} shortcutId="nav.forward">
                   <TitlebarControlButton disabled={!canForward} onClick={canForward ? goForward : undefined}>
                     <ToolbarHistoryIcon direction="forward" />
                   </TitlebarControlButton>

@@ -9,6 +9,7 @@ export interface LibraryAppearance {
   icon?: string | null;
   color?: string | null;
   imageHash?: string | null;
+  hasMaterializedCover?: boolean;
   imageFocusX?: number | null;
   imageFocusY?: number | null;
   imageZoomPercent?: number | null;
@@ -28,19 +29,20 @@ export function LibraryAvatar({
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageHash = appearance.imageHash ?? null;
+  const hasImageCover = Boolean(imageHash || appearance.hasMaterializedCover);
 
-  useEffect(() => setImageFailed(false), [appearance.libraryPath, imageHash]);
+  useEffect(() => setImageFailed(false), [appearance.hasMaterializedCover, appearance.libraryPath, imageHash]);
 
   return (
     <span
       className={`${styles.avatar}${highlighted ? ` ${styles.highlighted}` : ''}${className ? ` ${className}` : ''}`}
       style={{ width: size, height: size, color: appearance.color ?? undefined }}
     >
-      {imageHash && !imageFailed ? (
+      {hasImageCover && !imageFailed ? (
         <SubscriptionCoverImage
           className={styles.image}
-          fileHash={imageHash}
-          thumbnailUrlOverride={appearance.libraryPath ? libraryCoverUrl(appearance.libraryPath) : undefined}
+          fileHash={imageHash ?? '0'.repeat(64)}
+          thumbnailUrlOverride={appearance.libraryPath ? libraryCoverUrl(appearance.libraryPath, imageHash) : undefined}
           crop={{
             focusX: appearance.imageFocusX ?? 500,
             focusY: appearance.imageFocusY ?? 500,

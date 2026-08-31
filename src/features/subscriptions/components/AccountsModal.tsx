@@ -1,5 +1,6 @@
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { AuthWorkspace } from '../../auth/AuthWorkspace';
+import { t } from '../../../i18n';
 
 /**
  * Site accounts manager in a modal — wraps the existing auth workspace
@@ -16,7 +17,7 @@ export function AccountsModal({
   onClose: () => void;
 }) {
   return (
-    <GlassModal open={open} onClose={onClose} title="Site accounts" size="xl" flush>
+    <GlassModal open={open} onClose={onClose} title={t("Site accounts")} size="xl" flush>
       <AuthWorkspace externalSelectedSiteId={focusSiteId} />
     </GlassModal>
   );

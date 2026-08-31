@@ -45,6 +45,7 @@ import {
   setTagStarred,
   useTagPreferences,
 } from './tagPreferences';
+import { t } from '../../i18n';
 
 type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
 type TagLayout = 'grid' | 'list';
@@ -435,38 +436,38 @@ export function TagSelectPanel() {
             <input
               ref={searchRef}
               className={shellStyles.searchInput}
-              placeholder="Search..."
+              placeholder={t("Search...")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
             />
           </div>
           {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
-          <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}><button
+          <KbdTooltip label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}><button
             className={shellStyles.pinBtn}
             onClick={() => setShowSidebar((v) => !v)}
             type="button"
-            aria-label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}
+            aria-label={showSidebar ? t("Hide sidebar") : t("Show sidebar")}
           >
             <IconLayoutSidebar size={14} />
           </button></KbdTooltip>
-          <KbdTooltip label="Tag picker settings"><button
+          <KbdTooltip label={t("Tag picker settings")}><button
             className={`${shellStyles.pinBtn} ${settingsOpen ? shellStyles.pinBtnActive : ''}`}
             onClick={() => setSettingsOpen((current) => !current)}
             type="button"
-            aria-label="Tag picker settings"
+            aria-label={t("Tag picker settings")}
           ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>
         </>
       }
       footer={
         <>
-          {showSidebar ? <span className={shellStyles.kbdHint}>Switch <span className={shellStyles.kbd}>Tab</span></span> : null}
+          {showSidebar ? <span className={shellStyles.kbdHint}>{t("Switch ")}<span className={shellStyles.kbd}>{t("Tab")}</span></span> : null}
           <span className={shellStyles.kbdHint}>
-            Move <span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
+            {t("Move ")}<span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
             {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}
-            Select <span className={shellStyles.kbd}>↵</span>
+            {t("Select ")}<span className={shellStyles.kbd}>↵</span>
           </span>
-          <span className={shellStyles.kbdHint}>Close <span className={shellStyles.kbd}>Esc</span></span>
+          <span className={shellStyles.kbdHint}>{t("Close ")}<span className={shellStyles.kbd}>{t("Esc")}</span></span>
         </>
       }
     >
@@ -478,7 +479,7 @@ export function TagSelectPanel() {
             onClick={() => { setSidebarMode('all'); setActiveNamespace(null); }}
           >
             <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
-            <span className={styles.sidebarName}>All</span>
+            <span className={styles.sidebarName}>{t("All")}</span>
             <span className={styles.sidebarBadge}>
               {namespaces.reduce((sum, n) => sum + n.tag_count, 0).toLocaleString()}
             </span>
@@ -500,7 +501,7 @@ export function TagSelectPanel() {
             onClick={() => { setSidebarMode('selected'); setActiveNamespace(null); }}
           >
             <IconBookmark className={styles.sidebarIcon} size={10} fill="currentColor" fillOpacity={0.28} />
-            <span className={styles.sidebarName}>Selected</span>
+            <span className={styles.sidebarName}>{t("Selected")}</span>
             <span className={styles.sidebarBadge}>{entityTagKeys.size}</span>
           </div>
           <div
@@ -508,7 +509,7 @@ export function TagSelectPanel() {
             onClick={() => { setSidebarMode('starred'); setActiveNamespace(null); }}
           >
             <IconStar className={styles.sidebarStar} size={10} />
-            <span className={styles.sidebarName}>Starred</span>
+            <span className={styles.sidebarName}>{t("Starred")}</span>
             <span className={styles.sidebarBadge}>{tagPreferences.starredTags.length}</span>
           </div>
         </div>
@@ -518,7 +519,7 @@ export function TagSelectPanel() {
           <div ref={listRef} className={styles.tagListScroller}>
             {navigableTags.length === 0 && canShowEmpty ? (
               <div className={styles.emptyState}>
-                {sidebarMode === 'selected' ? 'No tags on this entity' : 'No tags found'}
+                {sidebarMode === 'selected' ? t("No tags on this entity") : t("No tags found")}
               </div>
             ) : navigableTags.length > 0 ? (
               <div className={styles.tagPages}>
@@ -534,7 +535,7 @@ export function TagSelectPanel() {
                   >
                     <IconPlus aria-hidden="true" className={styles.createTagIcon} size={10} />
                     <span className={styles.tagName}>
-                      Create &quot;<strong>{formatTag(createTag)}</strong>&quot;
+                      {t("Create \"")}<strong>{formatTag(createTag)}</strong>{'"'}
                     </span>
                   </div>
                 ) : null}
@@ -580,7 +581,7 @@ export function TagSelectPanel() {
                               await replaceStarredTag(tagName(tag), nextName);
                               loadTags(query, sidebarMode === 'namespace' ? activeNamespace : null);
                             }).catch((reason: unknown) => showErrorNotification({
-                              title: 'Unable to move tag',
+                              title: t("Unable to move tag"),
                               message: reason instanceof Error ? reason.message : String(reason),
                             }));
                           } : undefined,
@@ -621,17 +622,17 @@ export function TagSelectPanel() {
         </div>
         {settingsOpen ? (
           <>
-            <button className={styles.settingsBackdrop} type="button" aria-label="Close tag picker settings" onClick={() => setSettingsOpen(false)} />
+            <button className={styles.settingsBackdrop} type="button" aria-label={t("Close tag picker settings")} onClick={() => setSettingsOpen(false)} />
             <div className={styles.settingsPanel}>
               <div className={styles.settingsRow}>
-                <span>Layout</span>
-                <div className={shellStyles.viewTabs} role="group" aria-label="Tag layout">
-                  <KbdTooltip label="List"><button type="button" className={`${shellStyles.viewTab} ${layout === 'list' ? shellStyles.viewTabActive : ''}`} aria-label="List tags" aria-pressed={layout === 'list'} onClick={() => changeLayout('list')}><IconLayoutList size={14} /></button></KbdTooltip>
-                  <KbdTooltip label="Grid"><button type="button" className={`${shellStyles.viewTab} ${layout === 'grid' ? shellStyles.viewTabActive : ''}`} aria-label="Grid tags" aria-pressed={layout === 'grid'} onClick={() => changeLayout('grid')}><IconLayoutGrid size={14} /></button></KbdTooltip>
+                <span>{t("Layout")}</span>
+                <div className={shellStyles.viewTabs} role="group" aria-label={t("Tag layout")}>
+                  <KbdTooltip label={t("List")}><button type="button" className={`${shellStyles.viewTab} ${layout === 'list' ? shellStyles.viewTabActive : ''}`} aria-label={t("List tags")} aria-pressed={layout === 'list'} onClick={() => changeLayout('list')}><IconLayoutList size={14} /></button></KbdTooltip>
+                  <KbdTooltip label={t("Grid")}><button type="button" className={`${shellStyles.viewTab} ${layout === 'grid' ? shellStyles.viewTabActive : ''}`} aria-label={t("Grid tags")} aria-pressed={layout === 'grid'} onClick={() => changeLayout('grid')}><IconLayoutGrid size={14} /></button></KbdTooltip>
                 </div>
               </div>
               <button className={styles.settingsRow} type="button" onClick={toggleCounts}>
-                <span>Show counts</span>
+                <span>{t("Show counts")}</span>
                 <span className={`${shellStyles.checkBox} ${showCounts ? shellStyles.checkBoxChecked : ''}`}>{showCounts ? <IconCheck size={10} /> : null}</span>
               </button>
             </div>

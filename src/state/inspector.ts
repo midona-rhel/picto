@@ -16,6 +16,7 @@ import type {
 import type { ItemFilters } from '../shared/lib/itemFilters';
 import { gridActiveAtom } from './grid';
 import { displayedSurfaceNodeIdAtom } from './navigation';
+import { t } from '../i18n';
 import {
   gridSelectionAtom,
   selectedItemIdAtom,
@@ -75,18 +76,19 @@ export const displayedGridSnapshotAtom = atom<DisplayedGridSnapshot | null>(null
 /** Scope label — reads live sidebar node so renames propagate immediately. */
 export const displayedScopeLabelAtom = atom((get) => {
   const node = get(displayedSidebarNodeAtom);
-  if (node) return node.name;
+  const labels: Record<string, string> = {
+    'system:active': t('All'),
+    'system:inbox': t('Inbox'),
+    'system:trash': t('Trash'),
+    'system:uncategorized': t('Uncategorized'),
+    'system:untagged': t('Untagged'),
+    'system:recent_viewed': t('Recently Viewed'),
+    'system:random': t('Random'),
+  };
+  if (node) return labels[node.id] ?? node.name;
   const snapshot = get(displayedGridSnapshotAtom);
   if (!snapshot) return '';
-  const fallbacks: Record<string, string> = {
-    'system:active': 'All',
-    'system:inbox': 'Inbox',
-    'system:trash': 'Trash',
-    'system:uncategorized': 'Uncategorized',
-    'system:untagged': 'Untagged',
-    'system:random': 'Random',
-  };
-  return fallbacks[snapshot.nodeId] ?? '';
+  return labels[snapshot.nodeId] ?? '';
 });
 
 export const displayedInspectorTargetAtom = atom<InspectorTarget>({ kind: 'none' });

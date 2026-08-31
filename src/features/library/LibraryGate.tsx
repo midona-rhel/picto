@@ -4,6 +4,8 @@ import { invoke, listen } from '../../platform/ipc';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { WindowControls } from '../../shared/ui/WindowControls';
 import styles from './LibraryGate.module.css';
+import { t } from '../../i18n';
+import { setRecentFoldersLibrary } from '../../shared/hooks/useRecentFolders';
 
 interface LibraryConfig {
   currentPath: string | null;
@@ -45,7 +47,10 @@ export function LibraryGate({ children }: { children: ReactNode }) {
     const unlisteners: Array<() => void> = [];
 
     void listen<{ path: string }>('library-switched', ({ payload }) => {
-      if (!cancelled) setLibrary({ kind: 'open', path: payload.path });
+      if (!cancelled) {
+        setRecentFoldersLibrary(payload.path);
+        setLibrary({ kind: 'open', path: payload.path });
+      }
     }).then((dispose) => {
       if (cancelled) dispose();
       else unlisteners.push(dispose);
@@ -57,7 +62,10 @@ export function LibraryGate({ children }: { children: ReactNode }) {
       else unlisteners.push(dispose);
     });
     void listen<LibraryOpenFailure>('library-open-failed', () => {
-      if (!cancelled) setLibrary({ kind: 'closed' });
+      if (!cancelled) {
+        setRecentFoldersLibrary(null);
+        setLibrary({ kind: 'closed' });
+      }
     }).then((dispose) => {
       if (cancelled) dispose();
       else unlisteners.push(dispose);
@@ -66,6 +74,7 @@ export function LibraryGate({ children }: { children: ReactNode }) {
     void getLibraryConfig()
       .then((config) => {
         if (cancelled) return;
+        setRecentFoldersLibrary(config.openingPath ?? config.currentPath);
         setLibrary(config.openingPath
           ? { kind: 'loading', path: config.openingPath }
           : config.currentPath
@@ -76,6 +85,7 @@ export function LibraryGate({ children }: { children: ReactNode }) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
         console.error('[library] failed to read the active library configuration', error);
+        setRecentFoldersLibrary(null);
         setLibrary({ kind: 'closed' });
         void invoke('library.initial_read_failed', { message }).catch((deactivationError) => {
           console.error('[library] failed to leave after configuration could not be read', deactivationError);
@@ -129,15 +139,14 @@ export function LibraryGate({ children }: { children: ReactNode }) {
       {library.kind === 'closed' ? (
         <main className={styles.content}>
           <IconBooks size={30} stroke={1.25} />
-          <h1>Open a library to start</h1>
-          <p>Create a new Picto library or open one already on this device.</p>
+          <h1>{t("Open a library to start")}</h1>
+          <p>{t("Create a new Picto library or open one already on this device.")}</p>
           <button
             className={styles.action}
             type="button"
             onClick={() => void openLibraryManager()}
           >
-            Choose Library…
-          </button>
+            {t("Choose Library…")}</button>
         </main>
       ) : library.path ? (
         <main className={styles.content} aria-live="polite">

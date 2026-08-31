@@ -5,9 +5,10 @@ import { listen } from '../../platform/ipc';
 import { LibrarySwitcherPopover } from './LibrarySwitcherPopover';
 import { LibraryAvatar, type LibraryAppearance } from './LibraryAvatar';
 import styles from './LibrarySwitcherButton.module.css';
+import { t } from '../../i18n';
 
 function libraryDisplayName(path: string | null): string {
-  if (!path) return 'No library';
+  if (!path) return t('No library');
   const last = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
   return last.endsWith('.library') ? last.slice(0, -'.library'.length) : last;
 }
@@ -30,6 +31,7 @@ export function LibrarySwitcherButton() {
           icon: m?.icon ?? null,
           color: m?.color ?? null,
           imageHash: m?.imageHash ?? null,
+          hasMaterializedCover: config.currentPath ? config.coverExistsMap?.[config.currentPath] === true : false,
           imageFocusX: m?.imageFocusX ?? null,
           imageFocusY: m?.imageFocusY ?? null,
           imageZoomPercent: m?.imageZoomPercent ?? null,
@@ -51,7 +53,7 @@ export function LibrarySwitcherButton() {
 
   return (
     <>
-      <KbdTooltip label="Switch Library">
+      <KbdTooltip label={t("Switch Library")}>
         <button
           ref={buttonRef}
           className={styles.button}

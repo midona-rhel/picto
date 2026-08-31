@@ -2,6 +2,7 @@ import { getDefaultStore } from 'jotai';
 import { foldersController } from '../../controllers/foldersController';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { folderAutoTagsModalAtom } from '../../state/modals';
+import { t } from '../../i18n';
 
 const store = getDefaultStore();
 
@@ -26,7 +27,7 @@ export async function openFolderAutoTagsEditor(
     });
   } catch (reason) {
     showErrorNotification({
-      title: 'Could not load folder auto tags',
+      title: t("Could not load folder auto tags"),
       message: reason instanceof Error ? reason.message : String(reason),
     });
   }

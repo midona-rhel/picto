@@ -69,12 +69,13 @@ import { formatLabelForMime } from '../grid/canvas/primitives';
 import { GroupIcon } from '../../shared/ui/icons/group-icons';
 import { labToHex } from '../../shared/lib/labColor';
 import { tagGroupOrder } from '../tags/tagGroupPresentation';
+import { t, translateMessage } from '../../i18n';
 
 const store = getDefaultStore();
 
 function reportRatingFailure(reason: unknown): void {
   showErrorNotification({
-    title: 'Could not change rating',
+    title: t("Could not change rating"),
     message: reason instanceof Error ? reason.message : String(reason),
   });
 }
@@ -184,9 +185,9 @@ function confirmSelectionOverwrite(
   const label = field === 'notes' ? 'notes' : 'source URLs';
   store.set(confirmModalAtom, {
     open: true,
-    title: `Overwrite ${field}?`,
+    title: t("Overwrite {value0}?", { value0: field }),
     message: `This will replace existing ${label} on all ${selectedCount.toLocaleString()} selected items. Are you sure?`,
-    confirmLabel: `Overwrite ${field === 'notes' ? 'Notes' : 'Sources'}`,
+    confirmLabel: t("Overwrite {value0}", { value0: field === 'notes' ? 'Notes' : 'Sources' }),
     danger: true,
     onConfirm,
   });
@@ -231,7 +232,7 @@ function Preview({
             pixel_height: null,
             mime_type: null,
           }).catch((reason) => showErrorNotification({
-            title: 'Could not set library cover',
+            title: t("Could not set library cover"),
             message: reason instanceof Error ? reason.message : String(reason),
           }));
         })))}
@@ -249,7 +250,7 @@ function Preview({
             <span
               className={`${styles.previewTypeLabel} ${typeof formatLabel === 'string' ? '' : styles.previewTypeIcon}`}
               data-inspector-format-label
-              aria-label={typeof formatLabel === 'string' ? formatLabel : 'Group'}
+              aria-label={typeof formatLabel === 'string' ? formatLabel : t("Group")}
             >
               {formatLabel}
             </span>
@@ -569,6 +570,18 @@ const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
   { label: 'Date Modified', mono: true },
 ];
 
+const CORE_PROPERTY_TRANSLATIONS: Record<CorePropertyLabel, string> = {
+  Items: t('Items'),
+  Media: t('Media'),
+  Dimensions: t('Dimensions'),
+  Size: t('Size'),
+  Type: t('Type'),
+  Duration: t('Duration'),
+  'Date Imported': t('Date Imported'),
+  'Date Created': t('Date Created'),
+  'Date Modified': t('Date Modified'),
+};
+
 type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title' | 'loading' | 'showLoading'>>>;
 
 function normalizedCoreProperties(values: CorePropertyValues): CoreProperty[] {
@@ -657,17 +670,16 @@ export function InspectorSkeleton({
 
       {selectionCount != null && (
         <div className={styles.selectionCount} data-inspector-selection-count="">
-          {selectionCount.toLocaleString()} items selected
-        </div>
+          {selectionCount.toLocaleString()} {t("items selected")}</div>
       )}
       {(name || notes || (showSource && source)) && (
         <InspectorFieldGroup>
         <div className={styles.fieldStack} data-inspector-identity="">
           {name && <div data-inspector-anchor="name">
-            <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
+            <InspectorField value={name.value} placeholder={t("Name")} readOnly={name.readOnly} onCommit={name.onCommit} />
           </div>}
           {notes && <div data-inspector-anchor="notes">
-            <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
+            <InspectorField value={notes.value} placeholder={t("Notes")} readOnly={notes.readOnly} onCommit={notes.onCommit} />
           </div>}
           {showSource && source && (
             <div data-inspector-anchor="source">
@@ -689,14 +701,14 @@ export function InspectorSkeleton({
         </div>
       )}
       <div data-inspector-section="properties">
-        <InspectorSection title="Properties">
+        <InspectorSection title={t("Properties")}>
           <div className={styles.propsStack} data-inspector-core-properties="">
             {rating && (summaryPending
-              ? <div className={styles.pendingRating}>{showSummaryLoading && <SummarySpinner label="Loading shared rating" />}</div>
+              ? <div className={styles.pendingRating}>{showSummaryLoading && <SummarySpinner label={t("Loading shared rating")} />}</div>
               : <StarRating value={rating.value} onChange={rating.onChange} onError={reportRatingFailure} />)}
             {coreProperties.filter((property) => property.loading || (property.value !== '' && property.value !== '—')).map((property) => (
               <div key={property.label} data-inspector-core-property={property.label}>
-                <PropertyRow {...property} />
+                <PropertyRow {...property} label={translateMessage(CORE_PROPERTY_TRANSLATIONS[property.label])} />
               </div>
             ))}
           </div>
@@ -706,7 +718,7 @@ export function InspectorSkeleton({
 
       {extras.length > 0 && (
         <div data-inspector-section="details">
-          <InspectorSection title="Details">
+          <InspectorSection title={t("Details")}>
             <div className={styles.propsStack}>
               {extras.map((property) => <PropertyRow key={property.label} {...property} />)}
             </div>
@@ -758,7 +770,7 @@ function InspectorExportAction({ target, count }: { target: EntityTarget; count:
         onClick={() => store.set(exportModalAtom, { open: true, fileCount: count, target })}
       >
         <InspectorExportIcon />
-        <span>Export</span>
+        <span>{t("Export")}</span>
       </InspectorActionButton>
     </div>
   );
@@ -891,7 +903,7 @@ export function Inspector() {
       action={<InspectorAutoTagAction count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
       summaryPending={summaryPending}
       showSummaryLoading={showSummaryLoading}
-      status={summaryFailed ? { kind: 'error', message: 'Could not load selection details.' } : undefined}
+      status={summaryFailed ? { kind: 'error', message: t('Could not load selection details.') } : undefined}
     />;
   }
 
@@ -922,9 +934,9 @@ export function Inspector() {
       : null;
 
   const extras = [
-    scopeVM.searchText ? { label: 'Search', value: scopeVM.searchText } : null,
-    node.kind === 'folder' ? { label: 'Auto tags', value: scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No' } : null,
-    node.kind === 'folder' ? { label: 'Watch', value: scopeVM.folder!.watchEnabled ? 'Yes' : 'No' } : null,
+    scopeVM.searchText ? { label: t("Search"), value: scopeVM.searchText } : null,
+    node.kind === 'folder' ? { label: t("Auto tags"), value: scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No' } : null,
+    node.kind === 'folder' ? { label: t("Watch"), value: scopeVM.folder!.watchEnabled ? 'Yes' : 'No' } : null,
   ].filter((property): property is { label: string; value: string } => property !== null);
 
   return <InspectorSkeleton
@@ -982,7 +994,7 @@ function InspectorAutoTagAction({ count, enabled }: { count: number; enabled: bo
   const autoTagDef = getShortcut('organize.autoTag');
   return (
     <KbdTooltip
-      label={enabled ? 'Suggest tags with AI' : 'AI tagging requires an explicit image selection'}
+      label={enabled ? t("Suggest tags with AI") : t("AI tagging requires an explicit image selection")}
       shortcut={autoTagDef ? formatKeysDisplay(autoTagDef.keys) : undefined}
     >
       <InspectorActionButton
@@ -992,7 +1004,7 @@ function InspectorAutoTagAction({ count, enabled }: { count: number; enabled: bo
         disabled={!enabled}
       >
         <IconAutoTag size={14} />
-        <span>{count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}</span>
+        <span>{count > 1 ? t("Auto Tag {value0} Images", { value0: count.toLocaleString() }) : t("Auto Tag")}</span>
       </InspectorActionButton>
     </KbdTooltip>
   );
@@ -1046,14 +1058,14 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
   }, []);
   return (
     <InspectorSection
-      title="Tags"
+      title={t("Tags")}
       onContextMenu={editable ? (event) => {
         event.preventDefault();
         event.stopPropagation();
         openPortal(event, tagSelectPortalAtom);
       } : undefined}
     >
-      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared tags" />}</div> : hasTags || editable ? <div className={styles.tagsWrap}>
+      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label={t("Loading shared tags")} />}</div> : hasTags || editable ? <div className={styles.tagsWrap}>
         {hasTags && tags.map((t) => (
           <TagChip
             key={t.raw} namespace={t.ns} subtag={t.sub}
@@ -1075,15 +1087,15 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
             }}
           />
         ))}
-        {editable && !hasTags && <KbdTooltip label="Add Tags" shortcutId="organize.addTag">
+        {editable && !hasTags && <KbdTooltip label={t("Add Tags")} shortcutId="organize.addTag">
           <InspectorActionButton action="add-tags" variant="empty-section" onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
             <InspectorAddIcon />
-            <span>Add Tags</span>
+            <span>{t("Add Tags")}</span>
           </InspectorActionButton>
         </KbdTooltip>}
-        {editable && hasTags && <KbdTooltip label="Add Tags" shortcutId="organize.addTag">
+        {editable && hasTags && <KbdTooltip label={t("Add Tags")} shortcutId="organize.addTag">
           <button
-            aria-label="Add Tags"
+            aria-label={t("Add Tags")}
             className={styles.tagAddBtn}
             data-inspector-action="add-tags"
             onClick={(e) => openPortal(e, tagSelectPortalAtom)}
@@ -1110,14 +1122,14 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
   const hasFolders = folders.length > 0;
   return (
     <InspectorSection
-      title="Folders"
+      title={t("Folders")}
       onContextMenu={editable ? (event) => {
         event.preventDefault();
         event.stopPropagation();
         openPortal(event, folderPickerPortalAtom);
       } : undefined}
     >
-      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared folders" />}</div> : hasFolders || editable ? <div className={styles.foldersWrap}>
+      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label={t("Loading shared folders")} />}</div> : hasFolders || editable ? <div className={styles.foldersWrap}>
         {hasFolders && folders.map((f) => (
           <TagChip
             key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)}
@@ -1125,20 +1137,20 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
             onContextMenu={(e) => {
               e.preventDefault();
               chipMenu.openAt({ x: e.clientX, y: e.clientY }, [
-                ...(onNavigate ? [{ label: 'Open Folder', action: () => onNavigate(f.id) }] : []),
-                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(f.id) }] : []),
+                ...(onNavigate ? [{ label: t("Open Folder"), action: () => onNavigate(f.id) }] : []),
+                ...(onRemove ? [{ label: t("Remove"), action: () => onRemove(f.id) }] : []),
               ]);
             }}
           />
         ))}
-        {editable && !hasFolders && <KbdTooltip label="Add to Folder" shortcutId="organize.addFolder">
+        {editable && !hasFolders && <KbdTooltip label={t("Add to Folder")} shortcutId="organize.addFolder">
           <InspectorActionButton action="add-folder" variant="empty-section" onClick={(e) => openPortal(e, folderPickerPortalAtom)}>
             <InspectorAddIcon />
-            <span>Add to Folder</span>
+            <span>{t("Add to Folder")}</span>
           </InspectorActionButton>
         </KbdTooltip>}
-        {editable && hasFolders && <KbdTooltip label="Add to Folder" shortcutId="organize.addFolder">
-          <button aria-label="Add to Folder" className={styles.tagAddBtn} data-inspector-action="add-folder" onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
+        {editable && hasFolders && <KbdTooltip label={t("Add to Folder")} shortcutId="organize.addFolder">
+          <button aria-label={t("Add to Folder")} className={styles.tagAddBtn} data-inspector-action="add-folder" onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
             <InspectorAddIcon />
           </button>
         </KbdTooltip>}

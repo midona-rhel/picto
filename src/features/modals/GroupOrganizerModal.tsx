@@ -6,6 +6,7 @@ import type { GroupCandidate } from '../../state/modals';
 import type { EntityTarget } from '../../shared/types/canonical';
 import styles from './GroupOrganizerModal.module.css';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
+import { t } from '../../i18n';
 
 interface GroupOrganizerModalProps {
   open: boolean;
@@ -92,16 +93,16 @@ export function GroupOrganizerModal({
       size="md"
       footer={(
         <>
-          <button className={modalStyles.btn} onClick={onClose} disabled={saving} type="button">Cancel</button>
+          <button className={modalStyles.btn} onClick={onClose} disabled={saving} type="button">{t("Cancel")}</button>
           <button data-modal-primary="true" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} onClick={() => { void submit(); }} disabled={!canSubmit} type="button">
-            {saving ? 'Saving...' : submitLabel}
+            {saving ? t("Saving...") : submitLabel}
           </button>
         </>
       )}
     >
       {choosingWinner ? (
         <div className={styles.choices}>
-          <p className={styles.help}>The selected group keeps its name, cover, order, folders, and lifecycle. Every other selected item is appended to it.</p>
+          <p className={styles.help}>{t("The selected group keeps its name, cover, order, folders, and lifecycle. Every other selected item is appended to it.")}</p>
           {groups.map((group) => (
             <label className={styles.choice} key={group.collection_id}>
               <input
@@ -111,35 +112,34 @@ export function GroupOrganizerModal({
                 onChange={() => setWinnerId(group.collection_id)}
               />
               <span className={styles.choiceName}>{group.label || `Group ${group.collection_id}`}</span>
-              <span className={styles.choiceCount}>{group.member_count.toLocaleString()} items</span>
+              <span className={styles.choiceCount}>{group.member_count.toLocaleString()} {t("items")}</span>
             </label>
           ))}
         </div>
       ) : (
         <label className={styles.field}>
-          <span>Name</span>
+          <span>{t("Name")}</span>
           <GlassInput
             autoFocus
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submit(); } }}
-            placeholder="Group name"
+            placeholder={t("Group name")}
           />
         </label>
       )}
       <label className={styles.field}>
-        <span>Collection notes</span>
+        <span>{t("Collection notes")}</span>
         <GlassTextarea
           value={notes}
           onChange={(event) => setNotes(event.target.value)}
-          placeholder="Optional notes for the collection"
+          placeholder={t("Optional notes for the collection")}
           rows={8}
         />
         <span className={notesTooLong ? styles.counterError : styles.counter}>
-          {notesBytes.toLocaleString()} / {maximumNoteBytes.toLocaleString()} bytes
-        </span>
+          {notesBytes.toLocaleString()} / {maximumNoteBytes.toLocaleString()} {t("bytes")}</span>
         {notesTooLong && (
-          <span className={styles.noteError}>Trim the collection notes before continuing.</span>
+          <span className={styles.noteError}>{t("Trim the collection notes before continuing.")}</span>
         )}
       </label>
       {error && <p className={styles.error}>{error}</p>}

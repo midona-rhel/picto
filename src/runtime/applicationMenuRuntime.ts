@@ -1,7 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { appController } from '../controllers/appController';
 import * as entityMutations from '../controllers/entityMutations';
-import { chooseAndImportFiles, chooseAndImportFolder, filesController } from '../controllers/filesController';
+import { chooseAndImportFiles, chooseAndImportFolder, chooseAndImportPictoPack, filesController } from '../controllers/filesController';
 import { foldersController } from '../controllers/foldersController';
 import { windowController } from '../controllers/windowController';
 import { listen } from '../platform/ipc';
@@ -24,12 +24,15 @@ import {
 } from '../state/selection';
 import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
 import { showErrorNotification, showInfoNotification, showSuccessNotification } from '../shared/lib/notifications';
+import { t } from '../i18n';
 
 type ApplicationMenuEvent =
   | 'menu:import-files'
   | 'menu:import-folder'
+  | 'menu:import-picto-pack'
   | 'menu:export-basic'
   | 'menu:export-advanced'
+  | 'menu:export-picto-pack'
   | 'menu:show-updates';
 
 type SelectionMenuAction =
@@ -97,6 +100,8 @@ function menuContext(): Record<string, unknown> {
       && selected.length === count
       && selected.length > 0
       && selected.every((item) => item.kind === 'media' && Boolean(item.content_hash)),
+    importPictoPackLabel: t("Import Picto Pack..."),
+    exportPictoPackLabel: t("Export as Picto Pack..."),
   };
 }
 
@@ -110,20 +115,20 @@ function selectedExport() {
 async function exportOriginals(): Promise<void> {
   const { count, target } = selectedExport();
   if (!target || count === 0) {
-    showInfoNotification({ title: 'Select files to export', message: '' });
+    showInfoNotification({ title: t("Select files to export"), message: '' });
     return;
   }
   const result = await (window as any).picto.dialog.open({
     properties: ['openDirectory'],
     multiple: false,
-    title: 'Choose export folder',
+    title: t("Choose export folder"),
   });
   if (!result) return;
   const outputDir = typeof result === 'string' ? result : result[0];
   if (!outputDir) return;
   await filesController.exportMedia(target, { output_dir: outputDir, format: 'original' });
   showSuccessNotification({
-    title: `Exported ${count} file${count === 1 ? '' : 's'}`,
+    title: t("Exported {value0} file{value1}", { value0: count, value1: count === 1 ? '' : 's' }),
     message: '',
   });
 }
@@ -141,13 +146,21 @@ async function runMenuAction(name: ApplicationMenuEvent): Promise<void> {
     await chooseAndImportFolder(store.get(gridScopeAtom));
     return;
   }
+  if (name === 'menu:import-picto-pack') {
+    await chooseAndImportPictoPack();
+    return;
+  }
   if (name === 'menu:export-basic') {
     await exportOriginals();
     return;
   }
   const { count, target } = selectedExport();
   if (!target || count === 0) {
-    showInfoNotification({ title: 'Select files to export', message: '' });
+    showInfoNotification({ title: t("Select files to export"), message: '' });
+    return;
+  }
+  if (name === 'menu:export-picto-pack') {
+    filesController.requestPictoPackExport({ kind: 'items', target }, count);
     return;
   }
   store.set(exportModalAtom, { open: true, fileCount: count, target });
@@ -221,9 +234,9 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
     const count = snapshot.count;
     store.set(confirmModalAtom, {
       open: true,
-      title: count === 1 ? 'Delete permanently?' : `Delete ${count} items permanently?`,
+      title: count === 1 ? t("Delete permanently?") : t("Delete {value0} items permanently?", { value0: count }),
       message: 'This removes the files from the library and cannot be undone.',
-      confirmLabel: 'Delete Permanently',
+      confirmLabel: t("Delete Permanently"),
       danger: true,
       onConfirm: () => { void entityMutations.permanentlyDeleteTarget(target).catch(reportMenuError); },
     });
@@ -276,7 +289,7 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
 
 function reportMenuError(error: unknown): void {
   showErrorNotification({
-    title: 'Menu action failed',
+    title: t("Menu action failed"),
     message: error instanceof Error ? error.message : String(error),
   });
 }
@@ -305,8 +318,10 @@ export function startApplicationMenuRuntime(): () => void {
   const names: ApplicationMenuEvent[] = [
     'menu:import-files',
     'menu:import-folder',
+    'menu:import-picto-pack',
     'menu:export-basic',
     'menu:export-advanced',
+    'menu:export-picto-pack',
     'menu:show-updates',
   ];
   for (const name of names) {

@@ -9,6 +9,7 @@ import {
 } from './tutorialRuntime';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import styles from './HelpOverlay.module.css';
+import { t } from '../../i18n';
 
 type HelpMode = 'closed' | 'launcher' | 'tour';
 interface RectSnapshot { top: number; left: number; right: number; bottom: number; width: number; height: number }
@@ -183,7 +184,7 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
   return (
     <>
       {mode === 'closed' && (
-        <button className={styles.helpButton} type="button" aria-label="Help and tutorial" onClick={() => setMode('launcher')}>
+        <button className={styles.helpButton} type="button" aria-label={t("Help and tutorial")} onClick={() => setMode('launcher')}>
           <IconQuestionMark size={16} stroke={2} />
         </button>
       )}
@@ -206,23 +207,23 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
           {mode === 'launcher' && (
             <section className={styles.exploreCard} data-tutorial-controls onPointerDown={(event) => event.stopPropagation()}>
               <div className={styles.closeButton}><WindowCloseButton ariaLabel="Close help" onClick={() => setMode('closed')} /></div>
-              <strong>Explore Picto</strong>
-              <span>The guided tour opens a temporary offline library and restores this one when you exit.</span>
+              <strong>{t("Explore Picto")}</strong>
+              <span>{t("The guided tour opens a temporary offline library and restores this one when you exit.")}</span>
               {error && <span className={styles.error}>{error}</span>}
-              <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void start()}>{busy ? 'Preparing…' : 'Start guided tour'}</button>
+              <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void start()}>{busy ? t("Preparing…") : t("Start guided tour")}</button>
             </section>
           )}
           {mode === 'tour' && active && card && (
             <section className={styles.coachmark} data-tutorial-controls style={{ top: card.top, left: card.left } as CSSProperties} role="dialog" aria-modal="true" aria-labelledby="picto-help-title" onPointerDown={(event) => event.stopPropagation()}>
               <div className={styles.closeButton}><WindowCloseButton ariaLabel="Exit tutorial" disabled={busy} onClick={() => void exit()} /></div>
-              <span className={styles.progress}>{active.chapter.replace('-', ' ')} · {index + 1} of {GUIDED_TOUR_STEPS.length}</span>
+              <span className={styles.progress}>{active.chapter.replace('-', ' ')} · {index + 1} {t("of ")}{GUIDED_TOUR_STEPS.length}</span>
               <h2 id="picto-help-title">{active.title}</h2>
-              <p>{busy ? 'Preparing the real interface…' : active.description}</p>
+              <p>{busy ? t("Preparing the real interface…") : active.description}</p>
               {error && <p className={styles.error}>{error}</p>}
               <div className={styles.actions}>
-                <button type="button" disabled={busy || index === 0} onClick={() => void previous()}><IconChevronLeft size={14} /> Previous</button>
-                <button type="button" disabled={busy} onClick={() => void exit()}>Skip</button>
-                <button type="button" disabled={busy} onClick={() => void next()}>{index === GUIDED_TOUR_STEPS.length - 1 ? 'Exit' : <>Next <IconChevronRight size={14} /></>}</button>
+                <button type="button" disabled={busy || index === 0} onClick={() => void previous()}><IconChevronLeft size={14} /> {t("Previous")}</button>
+                <button type="button" disabled={busy} onClick={() => void exit()}>{t("Skip")}</button>
+                <button type="button" disabled={busy} onClick={() => void next()}>{index === GUIDED_TOUR_STEPS.length - 1 ? t("Exit") : <>{t("Next ")}<IconChevronRight size={14} /></>}</button>
               </div>
             </section>
           )}

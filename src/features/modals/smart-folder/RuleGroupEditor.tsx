@@ -14,6 +14,7 @@ import { RuleEditor } from './RuleEditor';
 import { defaultOperator } from './fieldConfig';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import styles from '../SmartFolderModal.module.css';
+import { t } from '../../../i18n';
 
 export interface RuleGroupEditorProps {
   group: SmartFolderPredicateGroup;
@@ -25,8 +26,8 @@ export interface RuleGroupEditorProps {
 }
 
 const MATCH_MODE_OPTIONS = [
-  { value: 'all', label: 'all' },
-  { value: 'any', label: 'any' },
+  { value: 'all', label: t("all") },
+  { value: 'any', label: t("any") },
 ];
 
 function makeDefaultRule(): SmartFolderPredicateRule {
@@ -74,17 +75,17 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove, c
     <div className={styles.condition}>
       {/* Header row: sentence-style group logic. */}
       <div className={styles.conditionHeader}>
-        <span className={modalStyles.inlineLabel}>Match</span>
+        <span className={modalStyles.inlineLabel}>{t("Match")}</span>
         <CmSelect
           value={group.match_mode}
           options={MATCH_MODE_OPTIONS}
           onChange={handleMatchModeChange}
           width={72}
         />
-        <span className={modalStyles.inlineLabel}>of the following</span>
+        <span className={modalStyles.inlineLabel}>{t("of the following")}</span>
         <CmSelect
           value={group.negate ? 'exclude' : 'include'}
-          options={[{ value: 'include', label: 'included' }, { value: 'exclude', label: 'excluded' }]}
+          options={[{ value: 'include', label: t("included") }, { value: 'exclude', label: t("excluded") }]}
           onChange={handleNegateChange}
           width={112}
         />
@@ -106,20 +107,20 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove, c
         </div>
 
         <div className={styles.conditionActions}>
-          <KbdTooltip label="Remove group"><button
+          <KbdTooltip label={t("Remove group")}><button
             className={styles.conditionButton}
             onClick={onRemove}
             type="button"
-            aria-label="Remove group"
+            aria-label={t("Remove group")}
             disabled={!canRemove}
           >
             <span className={styles.conditionGlyph} aria-hidden="true" />
           </button></KbdTooltip>
-          <KbdTooltip label={canAdd ? 'Add group' : 'Maximum 10 rules'}><button
+          <KbdTooltip label={canAdd ? t("Add group") : t("Maximum 10 rules")}><button
             className={styles.conditionButton}
             onClick={onAdd}
             type="button"
-            aria-label="Add group"
+            aria-label={t("Add group")}
             disabled={!canAdd}
           >
             <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCalendar, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import styles from './DatePickerButton.module.css';
+import { t } from '../../../i18n';
 
 function parseDate(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -97,7 +98,7 @@ export function DatePickerButton({
       </button>
       {open && createPortal(
         <>
-          <button type="button" className={styles.backdrop} aria-label="Close calendar" onClick={() => setOpen(false)} />
+          <button type="button" className={styles.backdrop} aria-label={t("Close calendar")} onClick={() => setOpen(false)} />
           <div
             className={styles.popover}
             style={position}
@@ -109,7 +110,7 @@ export function DatePickerButton({
               <button
                 type="button"
                 className={styles.navButton}
-                aria-label="Previous month"
+                aria-label={t("Previous month")}
                 onClick={() => setMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
               >
                 <IconChevronLeft size={15} stroke={1.8} />
@@ -120,7 +121,7 @@ export function DatePickerButton({
               <button
                 type="button"
                 className={styles.navButton}
-                aria-label="Next month"
+                aria-label={t("Next month")}
                 onClick={() => setMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
               >
                 <IconChevronRight size={15} stroke={1.8} />
@@ -150,8 +151,8 @@ export function DatePickerButton({
               })}
             </div>
             <div className={styles.footer}>
-              <button type="button" className={styles.footerButton} onClick={() => choose(today)}>Today</button>
-              <button type="button" className={styles.footerButton} disabled={!selected} onClick={() => { onChange(''); setOpen(false); }}>Clear</button>
+              <button type="button" className={styles.footerButton} onClick={() => choose(today)}>{t("Today")}</button>
+              <button type="button" className={styles.footerButton} disabled={!selected} onClick={() => { onChange(''); setOpen(false); }}>{t("Clear")}</button>
             </div>
           </div>
         </>,

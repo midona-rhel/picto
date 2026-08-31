@@ -16,6 +16,7 @@ import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorFilterEditor } from '../../shared/ui/ColorFilterEditor';
 import { IconChangeColor } from '../../shared/ui/icons/sidebar-menu-icons';
 import styles from './GridFilterMenu.module.css';
+import { t } from '../../i18n';
 
 type PinnedFilter = 'color' | 'tags' | 'folders' | 'rating' | 'type'
   | 'imported' | 'modified' | 'duration' | 'size' | 'resolution' | 'notes' | 'url';
@@ -42,9 +43,10 @@ function serializeFilters(filters: ItemFilters): string {
 }
 
 function deserializeFilters(value: string): ItemFilters {
-  return JSON.parse(value, (_key, item) => item && typeof item === 'object' && '$bigint' in item
+  const parsed = JSON.parse(value, (_key, item) => item && typeof item === 'object' && '$bigint' in item
     ? BigInt(item.$bigint)
-    : item) as ItemFilters;
+    : item) as Partial<ItemFilters>;
+  return { ...createEmptyItemFilters(), ...parsed };
 }
 
 function loadSavedFilters(): SavedFilter[] {
@@ -135,7 +137,7 @@ interface FilterControlProps {
 
 function FilterControl({ label, icon, active, onOpen, onClear }: FilterControlProps) {
   return (
-    <KbdTooltip label={active ? `${label} · Right-click to clear` : label}>
+    <KbdTooltip label={active ? t("{value0} · Right-click to clear", { value0: label }) : label}>
       <div
         className={`${styles.filterItem} ${active ? styles.filterItemActive : ''}`}
         role="button"
@@ -158,7 +160,7 @@ function FilterControl({ label, icon, active, onOpen, onClear }: FilterControlPr
           <button
             type="button"
             className={styles.clearButton}
-            aria-label={`Clear ${label} filter`}
+            aria-label={t("Clear {value0} filter", { value0: label })}
             onClick={(event) => { event.stopPropagation(); onClear(); }}
           >
             <IconX size={12} stroke={2} />
@@ -221,12 +223,12 @@ function NumericRangeEditor({
   );
   return (
     <div className={styles.rangeEditor}>
-      <input aria-label="Minimum" inputMode="decimal" placeholder="Min" value={min} onChange={(event) => { setMin(event.target.value); commitValues(event.target.value, max); }} />
+      <input aria-label={t("Minimum")} inputMode="decimal" placeholder={t("Min")} value={min} onChange={(event) => { setMin(event.target.value); commitValues(event.target.value, max); }} />
       <span>–</span>
-      <input aria-label="Maximum" inputMode="decimal" placeholder="Max" value={max} onChange={(event) => { setMax(event.target.value); commitValues(min, event.target.value); }} />
+      <input aria-label={t("Maximum")} inputMode="decimal" placeholder={t("Max")} value={max} onChange={(event) => { setMax(event.target.value); commitValues(min, event.target.value); }} />
       {units ? (
         <select
-          aria-label="Unit"
+          aria-label={t("Unit")}
           value={selectedUnit.label}
           onChange={(event) => {
             const next = units.find((candidate) => candidate.label === event.target.value) ?? unit;
@@ -248,7 +250,7 @@ function ResolutionEditor({ filters, update }: { filters: ItemFilters; update: (
       <NumericRangeEditor
         minimum={min}
         maximum={max}
-        unit={{ label: 'px', multiplier: 1n }}
+        unit={{ label: t("px"), multiplier: 1n }}
         onCommit={(minimum, maximum) => update({ [minKey]: minimum, [maxKey]: maximum })}
       />
     </label>
@@ -278,8 +280,8 @@ function DateRangeEditor({ after, before, onCommit }: {
   const [start, setStart] = useState(dateValue(after));
   const [end, setEnd] = useState(before ? dateValue(new Date(new Date(before).getTime() - 86_400_000).toISOString()) : '');
   return <div className={styles.dateEditor}>
-    <label>From<input aria-label="From" type="date" value={start} onChange={(event) => { setStart(event.target.value); onCommit(event.target.value ? `${event.target.value}T00:00:00Z` : null, nextDate(end)); }} /></label>
-    <label>To<input aria-label="To" type="date" value={end} onChange={(event) => { setEnd(event.target.value); onCommit(start ? `${start}T00:00:00Z` : null, nextDate(event.target.value)); }} /></label>
+    <label>{t("From")}<input aria-label={t("From")} type="date" value={start} onChange={(event) => { setStart(event.target.value); onCommit(event.target.value ? `${event.target.value}T00:00:00Z` : null, nextDate(end)); }} /></label>
+    <label>{t("To")}<input aria-label={t("To")} type="date" value={end} onChange={(event) => { setEnd(event.target.value); onCommit(start ? `${start}T00:00:00Z` : null, nextDate(event.target.value)); }} /></label>
   </div>;
 }
 
@@ -416,7 +418,7 @@ export function GridFilterToolbar() {
   ];
 
   const ratingEntries: MenuEntry[] = [5, 4, 3, 2, 1, 0].map((rating) => ({
-    label: rating === 0 ? 'Unrated' : `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}`,
+    label: rating === 0 ? t("Unrated") : t("{value0}{value1}", { value0: '★'.repeat(rating), value1: '☆'.repeat(5 - rating) }),
     checked: filters.ratings.includes(rating),
     keepOpen: true,
     action: () => update({
@@ -478,12 +480,12 @@ export function GridFilterToolbar() {
       update({ [patchKeys.after]: start.toISOString(), [patchKeys.before]: end.toISOString() });
     };
     return [
-      { label: 'Today', action: () => setDays(1) },
-      { label: 'Yesterday', action: () => setDays(1, 0) },
-      { label: 'Last 7 Days', action: () => setDays(7) },
-      { label: 'Last 30 Days', action: () => setDays(30) },
-      { label: 'Last 90 Days', action: () => setDays(90) },
-      { label: 'Last 365 Days', action: () => setDays(365) },
+      { label: t("Today"), action: () => setDays(1) },
+      { label: t("Yesterday"), action: () => setDays(1, 0) },
+      { label: t("Last 7 Days"), action: () => setDays(7) },
+      { label: t("Last 30 Days"), action: () => setDays(30) },
+      { label: t("Last 90 Days"), action: () => setDays(90) },
+      { label: t("Last 365 Days"), action: () => setDays(365) },
       { separator: true },
       {
         custom: true,
@@ -502,7 +504,7 @@ export function GridFilterToolbar() {
     containsKey: 'notes_contains' | 'source_url_contains',
   ): MenuEntry[] => [
     {
-      label: `Has ${kind === 'notes' ? 'Notes' : 'URL'}`,
+      label: t("Has {value0}", { value0: kind === 'notes' ? 'Notes' : 'URL' }),
       checked: filters[presentKey] === true,
       keepOpen: true,
       action: () => update(filters[presentKey] === true
@@ -510,7 +512,7 @@ export function GridFilterToolbar() {
         : { [presentKey]: true }),
     },
     {
-      label: `Has No ${kind === 'notes' ? 'Notes' : 'URL'}`,
+      label: t("Has No {value0}", { value0: kind === 'notes' ? 'Notes' : 'URL' }),
       checked: filters[presentKey] === false,
       keepOpen: true,
       action: () => update({ [presentKey]: filters[presentKey] === false ? null : false, [containsKey]: null }),
@@ -521,7 +523,7 @@ export function GridFilterToolbar() {
       render: () => <PresenceKeywordEditor
         value={filters[containsKey]}
         enabled={filters[presentKey] === true}
-        placeholder={kind === 'notes' ? 'Search notes' : 'Search URLs'}
+        placeholder={kind === 'notes' ? t("Search notes") : t("Search URLs")}
         onChange={(value) => update({ [containsKey]: value })}
       />,
     },
@@ -535,8 +537,8 @@ export function GridFilterToolbar() {
       render: () => <NumericRangeEditor
         minimum={filters.min_duration_ms}
         maximum={filters.max_duration_ms}
-        unit={{ label: 's', multiplier: 1000n }}
-        units={[{ label: 's', multiplier: 1000n }, { label: 'm', multiplier: 60_000n }, { label: 'h', multiplier: 3_600_000n }]}
+        unit={{ label: t("s"), multiplier: 1000n }}
+        units={[{ label: t("s"), multiplier: 1000n }, { label: t("m"), multiplier: 60_000n }, { label: t("h"), multiplier: 3_600_000n }]}
         onCommit={(minimum, maximum) => update({ min_duration_ms: minimum, max_duration_ms: maximum })}
       />,
     }],
@@ -546,8 +548,8 @@ export function GridFilterToolbar() {
       render: () => <NumericRangeEditor
         minimum={filters.min_size_bytes}
         maximum={filters.max_size_bytes}
-        unit={{ label: 'MB', multiplier: 1_000_000n }}
-        units={[{ label: 'KB', multiplier: 1000n }, { label: 'MB', multiplier: 1_000_000n }]}
+        unit={{ label: t("MB"), multiplier: 1_000_000n }}
+        units={[{ label: t("KB"), multiplier: 1000n }, { label: t("MB"), multiplier: 1_000_000n }]}
         onCommit={(minimum, maximum) => update({ min_size_bytes: minimum, max_size_bytes: maximum })}
       />,
     }],
@@ -566,7 +568,7 @@ export function GridFilterToolbar() {
       key: 'save-current-filter',
       render: () => <div className={styles.saveFilterEditor}>
         <input
-          aria-label="Saved filter name"
+          aria-label={t("Saved filter name")}
           value={saveName}
           onChange={(event) => setSaveName(event.target.value)}
           onKeyDown={(event) => {
@@ -574,13 +576,13 @@ export function GridFilterToolbar() {
             event.preventDefault();
             saveCurrentFilter();
           }}
-          placeholder="Filter name"
+          placeholder={t("Filter name")}
         />
         <button
           type="button"
           disabled={!saveName.trim() || countActiveGridFilters(filters) === 0}
           onClick={saveCurrentFilter}
-        >Save</button>
+        >{t("Save")}</button>
       </div>,
     },
     ...(savedFilters.length > 0 ? [{ separator: true } as MenuEntry] : []),
@@ -596,7 +598,12 @@ export function GridFilterToolbar() {
     : activeMenu?.kind === 'color' ? [{
     custom: true as const,
     key: 'color-filter',
-    render: () => <ColorFilterEditor value={filters.color_hex} onCommit={(colorHex) => update({ color_hex: colorHex })} />,
+    render: () => <ColorFilterEditor
+      value={filters.color_hex}
+      deltaE={filters.color_delta_e}
+      showSensitivity
+      onCommit={(colorHex, deltaE) => update({ color_hex: colorHex, color_delta_e: deltaE })}
+    />,
   }]
     : activeMenu?.kind === 'rating' ? ratingEntries
     : activeMenu?.kind === 'type' ? typeEntries
@@ -623,14 +630,14 @@ export function GridFilterToolbar() {
           onClear={() => update({ color_hex: null })}
         /> : null}
         {(pinnedFilters.has('tags') || tagLabels.length > 0) ? <FilterControl
-          label={tagLabels.length ? tagLabels.join(', ') : 'Tags'}
+          label={tagLabels.length ? tagLabels.join(', ') : t("Tags")}
           icon={<IconBookmark size={16} stroke={1.6} />}
           active={tagLabels.length > 0}
           onOpen={openTagFilter}
           onClear={() => update({ include_tags: [], exclude_tags: [] })}
         /> : null}
         {(pinnedFilters.has('folders') || folderLabels.length > 0) ? <FilterControl
-          label={folderLabels.length ? folderLabels.join(', ') : 'Folders'}
+          label={folderLabels.length ? folderLabels.join(', ') : t("Folders")}
           icon={<IconFolder size={16} stroke={1.6} />}
           active={folderLabels.length > 0}
           onOpen={openFolderFilter}
@@ -638,7 +645,7 @@ export function GridFilterToolbar() {
         /> : null}
         {(pinnedFilters.has('rating') || filters.ratings.length > 0) ? <FilterControl
           label={filters.ratings.length === 0
-            ? 'Rating'
+            ? t("Rating")
             : filters.ratings.map((rating) => rating === 0 ? 'Unrated' : String(rating)).join(', ')}
           icon={<IconStar size={16} stroke={1.6} />}
           active={filters.ratings.length > 0}
@@ -646,7 +653,7 @@ export function GridFilterToolbar() {
           onClear={() => update({ ratings: [] })}
         /> : null}
         {(pinnedFilters.has('type') || typeLabels.length > 0) ? <FilterControl
-          label={typeLabels.length > 0 ? typeLabels.join(', ') : 'Type'}
+          label={typeLabels.length > 0 ? typeLabels.join(', ') : t("Type")}
           icon={<IconPhoto size={16} stroke={1.6} />}
           active={typeLabels.length > 0}
           onOpen={(element) => openMenu(element, 'type')}
@@ -667,9 +674,7 @@ export function GridFilterToolbar() {
           onClear={() => update({ modified_after: null, modified_before: null })}
         /> : null}
         {(pinnedFilters.has('resolution') || filters.min_width != null || filters.max_width != null || filters.min_height != null || filters.max_height != null) ? <FilterControl
-          label={(filters.min_width == null && filters.max_width == null && filters.min_height == null && filters.max_height == null)
-            ? 'Resolution'
-            : `${filters.min_width ?? 0}–${filters.max_width ?? '∞'} × ${filters.min_height ?? 0}–${filters.max_height ?? '∞'}`}
+          label={(filters.min_width == null && filters.max_width == null && filters.min_height == null && filters.max_height == null) ? t("Resolution") : t("{value0}–{value1} × {value2}–{value3}", { value0: String(filters.min_width ?? 0), value1: String(filters.max_width ?? '∞'), value2: String(filters.min_height ?? 0), value3: String(filters.max_height ?? '∞') })}
           icon={<IconDimensions size={16} stroke={1.6} />}
           active={filters.min_width != null || filters.max_width != null || filters.min_height != null || filters.max_height != null}
           onOpen={(element) => openMenu(element, 'resolution')}
@@ -690,24 +695,24 @@ export function GridFilterToolbar() {
           onClear={() => update({ min_size_bytes: null, max_size_bytes: null })}
         /> : null}
         {(pinnedFilters.has('notes') || filters.notes_present != null || filters.notes_contains) ? <FilterControl
-          label={filters.notes_present === false ? 'Has No Notes' : filters.notes_contains ? `Notes: ${filters.notes_contains}` : filters.notes_present ? 'Has Notes' : 'Notes'}
+          label={filters.notes_present === false ? t("Has No Notes") : filters.notes_contains ? t("Notes: {value0}", { value0: filters.notes_contains }) : filters.notes_present ? t("Has Notes") : t("Notes")}
           icon={<IconNotes size={16} stroke={1.6} />}
           active={filters.notes_present != null || Boolean(filters.notes_contains)}
           onOpen={(element) => openMenu(element, 'notes')}
           onClear={() => update({ notes_present: null, notes_contains: null })}
         /> : null}
         {(pinnedFilters.has('url') || filters.source_url_present != null || filters.source_url_contains) ? <FilterControl
-          label={filters.source_url_present === false ? 'Has No URL' : filters.source_url_contains ? `URL: ${filters.source_url_contains}` : filters.source_url_present ? 'Has URL' : 'URL'}
+          label={filters.source_url_present === false ? t("Has No URL") : filters.source_url_contains ? t("URL: {value0}", { value0: filters.source_url_contains }) : filters.source_url_present ? t("Has URL") : t("URL")}
           icon={<IconLink size={16} stroke={1.6} />}
           active={filters.source_url_present != null || Boolean(filters.source_url_contains)}
           onOpen={(element) => openMenu(element, 'url')}
           onClear={() => update({ source_url_present: null, source_url_contains: null })}
         /> : null}
-        <KbdTooltip label="Add or remove filter fields">
+        <KbdTooltip label={t("Add or remove filter fields")}>
           <button
             type="button"
             className={styles.addButton}
-            aria-label="Add filter"
+            aria-label={t("Add filter")}
             onClick={(event) => openMenu(event.currentTarget, 'pin')}
           >
             <IconFilterPlus size={16} stroke={1.6} />
@@ -717,28 +722,28 @@ export function GridFilterToolbar() {
       </div>
       <div className={styles.filterRight}>
         <span className={styles.filterSeparator} />
-        <KbdTooltip label="Save or apply a filter">
+        <KbdTooltip label={t("Save or apply a filter")}>
           <button
             type="button"
             className={styles.filterAction}
-            aria-label="Saved filters"
+            aria-label={t("Saved filters")}
             onClick={(event) => openMenu(event.currentTarget, 'saved')}
           ><IconDeviceFloppy size={16} stroke={1.6} /></button>
         </KbdTooltip>
-        <KbdTooltip label={filterLocked ? 'Keep filters on navigation: on' : 'Keep filters on navigation'}>
+        <KbdTooltip label={filterLocked ? t("Keep filters on navigation: on") : t("Keep filters on navigation")}>
           <button
             type="button"
             className={`${styles.filterAction} ${filterLocked ? styles.filterActionActive : ''}`}
-            aria-label={filterLocked ? 'Unlock filters' : 'Lock filters'}
+            aria-label={filterLocked ? t("Unlock filters") : t("Lock filters")}
             aria-pressed={filterLocked}
             onClick={() => setFilterLocked((value) => !value)}
           >{filterLocked ? <IconLock size={16} stroke={1.6} /> : <IconLockOpen size={16} stroke={1.6} />}</button>
         </KbdTooltip>
-        <KbdTooltip label="Clear all filters">
+        <KbdTooltip label={t("Clear all filters")}>
           <button
             type="button"
             className={styles.filterAction}
-            aria-label="Clear filters"
+            aria-label={t("Clear filters")}
             disabled={countActiveGridFilters(filters) === 0}
             onClick={() => gridController.setFilters(createEmptyItemFilters())}
           ><IconRestore size={16} stroke={1.6} /></button>

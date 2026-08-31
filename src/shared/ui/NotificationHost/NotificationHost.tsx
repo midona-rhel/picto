@@ -15,6 +15,7 @@ import {
   type NotificationTone,
 } from '../../lib/notifications';
 import styles from './NotificationHost.module.css';
+import { t } from '../../../i18n';
 
 const EXIT_DURATION_MS = 400;
 
@@ -94,7 +95,7 @@ export function NotificationHost() {
         <button
           type="button"
           className={styles.close}
-          aria-label="Dismiss notification"
+          aria-label={t("Dismiss notification")}
           onClick={() => dismissNotification(displayed.id)}
         >
           <IconX size={14} stroke={1.75} aria-hidden="true" />

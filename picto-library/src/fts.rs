@@ -4,6 +4,8 @@ use rusqlite::{params, Connection, Transaction};
 use crate::predicate::TextField;
 use crate::{Result, RootId};
 
+pub const MINIMUM_TEXT_SEARCH_CHARACTERS: usize = 3;
+
 fn field_column(field: TextField) -> Option<&'static str> {
     match field {
         TextField::Global => None,
@@ -42,14 +44,16 @@ fn substring_match(
     Ok(rows.collect::<std::result::Result<RoaringBitmap, _>>()?)
 }
 
-/// Matches the complete trimmed query as a literal substring. Text is lowered
-/// before indexing and querying so the trigram path has consistent Unicode
-/// case behavior independent of SQLite's ASCII-only NOCASE rules.
+/// Matches a complete trimmed query of at least three characters as a literal
+/// substring. Text is lowered before indexing and querying so the trigram path
+/// has consistent Unicode case behavior independent of SQLite's ASCII-only
+/// NOCASE rules.
 pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<RoaringBitmap> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
+    let query = query.trim();
+    if query.chars().count() < MINIMUM_TEXT_SEARCH_CHARACTERS {
         return Ok(RoaringBitmap::new());
     }
+    let query = query.to_lowercase();
     substring_match(connection, field_column(field), &query)
 }
 
@@ -143,4 +147,42 @@ pub fn dirty_age_ms(connection: &Connection, now_ms: i64) -> Result<Option<u64>>
 
 pub fn mark_one(transaction: &Transaction<'_>, root_id: RootId, now_ms: i64) -> Result<()> {
     mark_dirty(transaction, &[root_id.0].into_iter().collect(), 1, now_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE VIRTUAL TABLE root_fts USING fts5(
+                     name, notes, urls, source_text, tokenize = 'trigram'
+                 );
+                 INSERT INTO root_fts(rowid, name, notes, urls, source_text)
+                 VALUES (1, 'alphabet', '', '', '');",
+            )
+            .unwrap();
+        connection
+    }
+
+    #[test]
+    fn text_search_requires_three_trimmed_characters() {
+        let empty_connection = Connection::open_in_memory().unwrap();
+
+        for query in ["", "   ", "a", "al", " α ", "İx"] {
+            assert!(search(&empty_connection, TextField::Global, query)
+                .unwrap()
+                .is_empty());
+        }
+        let connection = fixture();
+        assert_eq!(
+            search(&connection, TextField::Global, " alp ")
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
 }

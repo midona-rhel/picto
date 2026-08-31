@@ -11,6 +11,7 @@
     "prepare:viewer-assets": "node scripts/prepare-viewer-assets.mjs",
     "generate:app-icons": "node scripts/generate-app-icons.mjs",
     "generate:license-notices": "node scripts/generate-license-notices.mjs",
+    "check:localization": "node scripts/check-localization.mjs",
     "release:audit": "node scripts/release-audit.mjs",
     "predev": "npm run prepare:viewer-assets",
     "dev": "vite",
@@ -21,14 +22,14 @@
     "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",
     "build:native": "node scripts/build-native.mjs --release",
     "prebuild": "npm run prepare:viewer-assets",
-    "build": "tsc && vite build && npm run generate:license-notices",
-    "build:electron": "tsc && vite build && npm run generate:license-notices",
+    "build": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
+    "build:electron": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
     "dist:electron": "electron-builder",
     "preview": "vite preview",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch",
-    "alpha:verify": "npm run release:audit && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --workspace --lib --tests --quiet && cargo clippy --workspace --all-targets -- -D warnings && npm run check:command-parity",
+    "alpha:verify": "npm run release:audit && npm run check:localization && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --workspace --lib --tests --quiet && cargo clippy --workspace --all-targets -- -D warnings && npm run check:command-parity",
     "alpha:package": "node scripts/package-alpha.mjs",
     "alpha:smoke": "node ./scripts/ci/alpha-smoke.mjs",
     "duplicate:smoke": "node ./scripts/ci/duplicate-review-smoke.mjs",
@@ -102,10 +103,21 @@
       {
         "ext": "library",
         "name": "Picto Library",
-        "icon": "library.icns",
+        "description": "Picto media library",
+        "mimeType": "application/vnd.picto.library",
+        "icon": "library",
         "role": "Editor",
         "rank": "Owner",
         "isPackage": true
+      },
+      {
+        "ext": "picto-pack",
+        "name": "Picto Pack",
+        "description": "Portable Picto media package",
+        "mimeType": "application/vnd.picto.pack+zip",
+        "icon": "picto-pack",
+        "role": "Editor",
+        "rank": "Owner"
       }
     ],
     "mac": {

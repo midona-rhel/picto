@@ -8,6 +8,7 @@ import {
 } from '../../../shared/ui/TitlebarControls';
 import { ToolbarChevronIcon } from '../../../shared/ui/icons/toolbar-icons';
 import styles from './DocumentViewerShell.module.css';
+import { t } from '../../../i18n';
 
 interface Props {
   children?: ReactNode;
@@ -51,16 +52,16 @@ export function DocumentViewerShell({
       <div ref={viewportRef} className={`${styles.viewport} ${viewportClassName ?? ''}`}>
         {error ? <div className={styles.message} role="alert">{error}</div> : children}
       </div>
-      <footer className={styles.footer} aria-label={`${navigationLabel} page navigation`}>
+      <footer className={styles.footer} aria-label={t("{value0} page navigation", { value0: navigationLabel })}>
         <TitlebarControlGroup>
-          <KbdTooltip label="Previous page" shortcutId="document.previousPage">
-            <TitlebarControlButton aria-label={`Previous ${navigationLabel} page`} disabled={!canGoPrevious} onClick={onPreviousPage}>
+          <KbdTooltip label={t("Previous page")} shortcutId="document.previousPage">
+            <TitlebarControlButton aria-label={t("Previous {value0} page", { value0: navigationLabel })} disabled={!canGoPrevious} onClick={onPreviousPage}>
               <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
           </KbdTooltip>
-          <span className={styles.pageStatus}>Page {pageNumber} of {pageCount || '—'}</span>
-          <KbdTooltip label="Next page" shortcutId="document.nextPage">
-            <TitlebarControlButton aria-label={`Next ${navigationLabel} page`} disabled={!canGoNext} onClick={onNextPage}>
+          <span className={styles.pageStatus}>{t("Page ")}{pageNumber} {t("of ")}{pageCount || '—'}</span>
+          <KbdTooltip label={t("Next page")} shortcutId="document.nextPage">
+            <TitlebarControlButton aria-label={t("Next {value0} page", { value0: navigationLabel })} disabled={!canGoNext} onClick={onNextPage}>
               <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>
           </KbdTooltip>

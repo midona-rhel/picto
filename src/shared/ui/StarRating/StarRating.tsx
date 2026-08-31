@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { IconStar, IconStarFilled } from '@tabler/icons-react';
 import { PropertyRow } from '../PropertyRow/PropertyRow';
 import styles from './StarRating.module.css';
+import { t } from '../../../i18n';
 
 interface Props {
   value: number;
@@ -10,7 +11,7 @@ interface Props {
   onError?: (reason: unknown) => void;
 }
 
-export function StarRating({ value, label = 'Rating', onChange, onError }: Props) {
+export function StarRating({ value, label, onChange, onError }: Props) {
   const [hovered, setHovered] = useState(0);
   const [pending, setPending] = useState(false);
   const interactive = !!onChange && !pending;
@@ -34,7 +35,7 @@ export function StarRating({ value, label = 'Rating', onChange, onError }: Props
 
   return (
     <PropertyRow
-      label={label}
+      label={label ?? t('Rating')}
       value={null}
       content={(
       <div className={styles.stars} onMouseLeave={() => setHovered(0)}>
@@ -46,7 +47,7 @@ export function StarRating({ value, label = 'Rating', onChange, onError }: Props
             onMouseEnter={() => interactive && setHovered(star)}
             disabled={!interactive}
             type="button"
-            aria-label={star === value ? 'Clear rating' : `Set rating to ${star} star${star === 1 ? '' : 's'}`}
+            aria-label={star === value ? t("Clear rating") : t("Set rating to {value0} star{value1}", { value0: star, value1: star === 1 ? '' : 's' })}
             aria-pressed={star <= value}
           >
             {star <= display

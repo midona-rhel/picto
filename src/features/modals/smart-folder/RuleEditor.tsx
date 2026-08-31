@@ -24,6 +24,7 @@ import {
   RATING_OPTIONS,
 } from './fieldConfig';
 import styles from '../SmartFolderModal.module.css';
+import { t } from '../../../i18n';
 
 export interface RuleEditorProps {
   rule: SmartFolderPredicateRule;
@@ -62,8 +63,8 @@ function ColorRuleInput({ value, onChange }: { value: string; onChange: (value: 
       </button>
       {open && createPortal(
         <>
-          <button className={styles.colorPickerBackdrop} type="button" aria-label="Close color picker" onClick={() => setOpen(false)} />
-          <div className={styles.colorPickerPopover} style={position} role="dialog" aria-label="Choose color">
+          <button className={styles.colorPickerBackdrop} type="button" aria-label={t("Close color picker")} onClick={() => setOpen(false)} />
+          <div className={styles.colorPickerPopover} style={position} role="dialog" aria-label={t("Choose color")}>
             <ColorFilterEditor value={value} allowClear={false} onCommit={(next) => { if (next) onChange(next); }} />
           </div>
         </>,
@@ -165,17 +166,17 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
               type="number"
               value={rule.value == null ? '' : String(rule.value)}
               onChange={(e) => onChange({ ...rule, value: Number(e.target.value || 0) })}
-              placeholder="Size"
+              placeholder={t("Size")}
               style={{ flex: 1 }}
             />
             {isBetween && (
               <>
-                <span className={modalStyles.inlineLabel}>and</span>
+                <span className={modalStyles.inlineLabel}>{t("and")}</span>
                 <GlassInput
                   type="number"
                   value={rule.value2 == null ? '' : String(rule.value2)}
                   onChange={(e) => onChange({ ...rule, value2: Number(e.target.value || 0) })}
-                  placeholder="Max"
+                  placeholder={t("Max")}
                   style={{ flex: 1 }}
                 />
               </>
@@ -205,7 +206,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
               {ratingSelect(rule.value, 'value')}
               {isBetween && (
                 <>
-                  <span className={modalStyles.inlineLabel}>and</span>
+                  <span className={modalStyles.inlineLabel}>{t("and")}</span>
                   {ratingSelect(rule.value2 ?? rule.value, 'value2')}
                 </>
               )}
@@ -218,17 +219,17 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
               type="number"
               value={rule.value == null ? '' : String(rule.value)}
               onChange={(e) => onChange({ ...rule, value: Number(e.target.value || 0) })}
-              placeholder="Value"
+              placeholder={t("Value")}
               style={{ flex: 1 }}
             />
             {isBetween && (
               <>
-                <span className={modalStyles.inlineLabel}>and</span>
+                <span className={modalStyles.inlineLabel}>{t("and")}</span>
                 <GlassInput
                   type="number"
                   value={rule.value2 == null ? '' : String(rule.value2)}
                   onChange={(e) => onChange({ ...rule, value2: Number(e.target.value || 0) })}
-                  placeholder="Max"
+                  placeholder={t("Max")}
                   style={{ flex: 1 }}
                 />
               </>
@@ -249,7 +250,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
             />
             {isBetween && (
               <>
-                <span className={modalStyles.inlineLabel}>and</span>
+                <span className={modalStyles.inlineLabel}>{t("and")}</span>
                 <DatePickerButton
                   value={rule.value2 == null ? '' : String(rule.value2)}
                   onChange={(value) => onChange({ ...rule, value2: value })}
@@ -265,7 +266,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
           <GlassInput
             value={rule.value == null ? '' : String(rule.value)}
             onChange={(e) => onChange({ ...rule, value: e.target.value })}
-            placeholder="Value"
+            placeholder={t("Value")}
           />
         );
     }
@@ -292,20 +293,20 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove, canAdd 
           {renderValueInput()}
         </div>
       )}
-      <KbdTooltip label="Remove rule"><button
+      <KbdTooltip label={t("Remove rule")}><button
         className={styles.conditionButton}
         onClick={onRemove}
         type="button"
-        aria-label="Remove rule"
+        aria-label={t("Remove rule")}
         disabled={!canRemove}
       >
         <span className={styles.conditionGlyph} aria-hidden="true" />
       </button></KbdTooltip>
-      <KbdTooltip label={canAdd ? 'Add rule' : 'Maximum 10 rules'}><button
+      <KbdTooltip label={canAdd ? t("Add rule") : t("Maximum 10 rules")}><button
         className={styles.conditionButton}
         onClick={onAdd}
         type="button"
-        aria-label="Add rule"
+        aria-label={t("Add rule")}
         disabled={!canAdd}
       >
         <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />

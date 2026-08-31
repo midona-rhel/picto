@@ -9,6 +9,7 @@ import {
   type RufflePlayerElement,
 } from '../../../shared/flash/ruffleRuntime';
 import { useShortcutSuspension } from '../../../shared/hooks/useShortcutScope';
+import { t } from '../../../i18n';
 
 export interface FlashPlaybackController {
   isPlaying: boolean;
@@ -151,7 +152,7 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
       if (!ready && player.ruffle(1).readyState === 2) setTimeout(markReady, 120);
     }).catch((reason: unknown) => {
       if (!disposed) {
-        setError(reason instanceof Error ? reason.message : 'Could not open this Flash file.');
+        setError(reason instanceof Error ? reason.message : t('Could not open this Flash file.'));
         onReady?.();
       }
     });

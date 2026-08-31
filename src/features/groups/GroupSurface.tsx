@@ -31,6 +31,7 @@ import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { contentSortSubmenu } from '../folders/folderContextMenu';
+import { t } from '../../i18n';
 import { useRecordMediaView } from '../viewer/hooks/useRecordMediaView';
 
 export interface GroupSurfaceProps {
@@ -550,7 +551,7 @@ export function GroupSurface({
       onExportOriginals: () => {
         void (async () => {
           const result = await (window as any).picto.dialog.open({
-            properties: ['openDirectory'], multiple: false, title: 'Export originals',
+            properties: ['openDirectory'], multiple: false, title: t("Export originals"),
           });
           const outputDir = typeof result === 'string' ? result : result?.[0];
           if (outputDir) await filesController.exportMedia(target, { output_dir: outputDir, format: 'original' });
@@ -558,7 +559,7 @@ export function GroupSurface({
       },
       onSearchByImage: (engine, hash) => {
         void reverseImageSearch(hash, engine).catch((reason) => showErrorNotification({
-          title: 'Reverse image search failed',
+          title: t("Reverse image search failed"),
           message: reason instanceof Error ? reason.message : String(reason),
         }));
       },
@@ -576,14 +577,14 @@ export function GroupSurface({
           pixel_height: single.height,
           mime_type: single.mime,
         }).catch((reason) => showErrorNotification({
-          title: 'Could not set library cover',
+          title: t("Could not set library cover"),
           message: reason instanceof Error ? reason.message : String(reason),
         }));
       } : undefined,
       onMoveToTrash: () => { void detachMembers(selected, 'trash'); },
     });
     const removeEntry = {
-      label: selected.length > 1 ? `Remove ${selected.length} from Group` : 'Remove from Group',
+      label: selected.length > 1 ? t("Remove {value0} from Group", { value0: selected.length }) : t("Remove from Group"),
       icon: <GroupRemoveIcon size={15} />,
       action: () => { void detachMembers(selected); },
     };
@@ -596,9 +597,9 @@ export function GroupSurface({
   const confirmUngroup = useCallback(() => {
     setConfirmModal({
       open: true,
-      title: 'Ungroup?',
+      title: t("Ungroup?"),
       message: 'The media will return to the library as separate items. Files and metadata will not be deleted.',
-      confirmLabel: 'Ungroup',
+      confirmLabel: t("Ungroup"),
       onConfirm: () => {
         void ungroup(groupId)
           .then(() => announceUndoableMutation('collections.ungroup'))
@@ -617,7 +618,7 @@ export function GroupSurface({
       }, ['name', 'size']),
       { separator: true },
       {
-        label: 'Ungroup...',
+        label: t("Ungroup..."),
         icon: <GroupRemoveIcon size={15} />,
         action: confirmUngroup,
       },
@@ -672,7 +673,7 @@ export function GroupSurface({
           }}
         >
           {members.length === 0 ? (
-            <div className={styles.empty}>This group is empty.</div>
+            <div className={styles.empty}>{t("This group is empty.")}</div>
           ) : (
             <div className={styles.memberStack}>
               {members.map((item, index) => (

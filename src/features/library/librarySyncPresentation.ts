@@ -1,4 +1,5 @@
 import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
+import { t } from '../../i18n';
 
 export interface SyncRateSample {
   at: number;
@@ -19,7 +20,7 @@ export function presentCloudSync(status: CloudSyncStatus | null): CloudSyncPrese
   if (!status) {
     return {
       active: false,
-      label: 'Unavailable',
+      label: t("Unavailable"),
       tone: 'neutral',
       completed: 0,
       total: null,
@@ -37,20 +38,20 @@ export function presentCloudSync(status: CloudSyncStatus | null): CloudSyncPrese
   const workKey = total !== null ? `phase:${status.phase}:${total}` : active ? 'pending' : null;
 
   if (status.state === 'error') {
-    return { active: false, label: 'Needs attention', tone: 'negative', completed, total, remaining: null, workKey: null };
+    return { active: false, label: t("Needs attention"), tone: 'negative', completed, total, remaining: null, workKey: null };
   }
   if (status.state === 'offline') {
-    return { active: false, label: 'Offline', tone: 'warning', completed, total, remaining: null, workKey: null };
+    return { active: false, label: t("Offline"), tone: 'warning', completed, total, remaining: null, workKey: null };
   }
   if (status.state === 'paused') {
-    return { active: false, label: 'Paused', tone: 'neutral', completed, total, remaining: null, workKey: null };
+    return { active: false, label: t("Paused"), tone: 'neutral', completed, total, remaining: null, workKey: null };
   }
   if (active) {
-    return { active: true, label: 'Syncing', tone: 'positive', completed, total, remaining, workKey };
+    return { active: true, label: t("Syncing"), tone: 'positive', completed, total, remaining, workKey };
   }
   return {
     active: false,
-    label: 'Idle',
+    label: t("Idle"),
     tone: 'neutral',
     completed,
     total,
@@ -72,21 +73,23 @@ export function estimateRemainingSeconds(samples: SyncRateSample[], remaining: n
 
 export function formatRemainingTime(seconds: number | null): string | null {
   if (seconds === null) return null;
-  if (seconds < 60) return 'Less than a minute remaining';
-  if (seconds < 3600) return `About ${Math.ceil(seconds / 60)} min remaining`;
+  if (seconds < 60) return t('Less than a minute remaining');
+  if (seconds < 3600) return t('About {value0} min remaining', { value0: Math.ceil(seconds / 60) });
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.ceil((seconds % 3600) / 60);
-  return minutes > 0 ? `About ${hours} hr ${minutes} min remaining` : `About ${hours} hr remaining`;
+  return minutes > 0
+    ? t('About {value0} hr {value1} min remaining', { value0: hours, value1: minutes })
+    : t('About {value0} hr remaining', { value0: hours });
 }
 
 export function formatLastSync(value: string | null, now = Date.now()): string {
-  if (!value) return 'Never';
+  if (!value) return t('Never');
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
   const elapsedMinutes = Math.max(0, Math.floor((now - timestamp) / 60_000));
-  if (elapsedMinutes < 1) return 'Just now';
-  if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
+  if (elapsedMinutes < 1) return t('Just now');
+  if (elapsedMinutes < 60) return t('{value0} min ago', { value0: elapsedMinutes });
   const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) return `${elapsedHours} hr ago`;
+  if (elapsedHours < 24) return t('{value0} hr ago', { value0: elapsedHours });
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
 }

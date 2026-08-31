@@ -4,6 +4,7 @@ import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { analyzeFolderTree } from '../../platform/folderApi';
 import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
 import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
+import { t } from '../../i18n';
 
 export interface FolderImportOptions {
   preserveStructure: boolean;
@@ -88,11 +89,11 @@ export function FolderImportModal({
     <GlassModal
       open={open}
       onClose={onClose}
-      title="Import Folder"
+      title={t("Import Folder")}
       size="sm"
       footer={(
         <>
-          <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
+          <button className={modalStyles.btn} onClick={onClose} type="button">{t("Cancel")}</button>
           <button
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onImport(options)}
@@ -100,14 +101,13 @@ export function FolderImportModal({
             type="button"
             data-modal-primary="true"
           >
-            Import
-          </button>
+            {t("Import")}</button>
         </>
       )}
     >
       <div className={modalStyles.stack}>
-        <p className={modalStyles.helpText}>Import <strong>{folderName}</strong></p>
-        {analyzing && <p className={modalStyles.helpText}>Checking the folder structure...</p>}
+        <p className={modalStyles.helpText}>{t("Import ")}<strong>{folderName}</strong></p>
+        {analyzing && <p className={modalStyles.helpText}>{t("Checking the folder structure...")}</p>}
         {consolidationMessage && (
           <div className={modalStyles.warningBox} role="status">
             {consolidationMessage}
@@ -115,19 +115,18 @@ export function FolderImportModal({
         )}
         {analysisError && (
           <div className={modalStyles.warningBox} role="alert">
-            Picto could not inspect this folder. Choose it again or check that it is still available.
-          </div>
+            {t("Picto could not inspect this folder. Choose it again or check that it is still available.")}</div>
         )}
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Preserve folder structure</span>
+          <span className={modalStyles.fieldLabel}>{t("Preserve folder structure")}</span>
           <ToggleSwitch on={options.preserveStructure} onChange={() => toggle('preserveStructure')} />
         </div>
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Include subfolders</span>
+          <span className={modalStyles.fieldLabel}>{t("Include subfolders")}</span>
           <ToggleSwitch on={options.includeSubfolders} onChange={() => toggle('includeSubfolders')} />
         </div>
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Include folders without media</span>
+          <span className={modalStyles.fieldLabel}>{t("Include folders without media")}</span>
           <ToggleSwitch
             on={options.includeFoldersWithoutMedia}
             onChange={() => toggle('includeFoldersWithoutMedia')}
@@ -135,18 +134,16 @@ export function FolderImportModal({
           />
         </div>
         <div className={modalStyles.rowSpread}>
-          <span className={modalStyles.fieldLabel}>Watch this folder</span>
+          <span className={modalStyles.fieldLabel}>{t("Watch this folder")}</span>
           <ToggleSwitch
             on={options.watchSourceFolder}
             onChange={() => toggle('watchSourceFolder')}
           />
         </div>
         <p className={modalStyles.helpText}>
-          Automatically import new media added to this folder. Watching uses the same subfolder setting above.
-        </p>
+          {t("Automatically import new media added to this folder. Watching uses the same subfolder setting above.")}</p>
         <p className={modalStyles.helpText}>
-          Folders whose subtree contains no supported media are skipped by default.
-        </p>
+          {t("Folders whose subtree contains no supported media are skipped by default.")}</p>
       </div>
     </GlassModal>
   );
