@@ -12,6 +12,16 @@ export async function isFailedCloudJoinDirectory(fs, targetRoot) {
   );
 }
 
+export function isInsideLibraryPackage(pathApi, candidatePath) {
+  let current = pathApi.resolve(candidatePath);
+  while (true) {
+    if (pathApi.basename(current).toLowerCase().endsWith('.library')) return true;
+    const parent = pathApi.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 export function createLibraryHostService({
   fs,
   path,
@@ -446,7 +456,13 @@ export function createLibraryHostService({
   }
 
   async function createLibrary({ name, savePath }) {
-    const libraryPath = path.join(savePath, `${name}.library`);
+    const cleanName = String(name ?? '').trim();
+    if (!cleanName) throw new Error('Library name cannot be empty');
+    if (/[/\\]/.test(cleanName)) throw new Error('Library name cannot contain slashes');
+    if (isInsideLibraryPackage(path, savePath)) {
+      throw new Error('A library cannot be created inside another Picto library');
+    }
+    const libraryPath = path.join(savePath, `${cleanName}.library`);
     await fs.mkdir(libraryPath, { recursive: true });
     await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
     await switchLibrary(libraryPath);
@@ -466,6 +482,9 @@ export function createLibraryHostService({
       message: 'Picto will restore the verified database here and recover media in the background.',
     });
     if (picked.canceled || picked.filePaths.length === 0) return null;
+    if (isInsideLibraryPackage(path, picked.filePaths[0])) {
+      throw new Error('A library cannot be created inside another Picto library');
+    }
     const targetRoot = path.join(picked.filePaths[0], `${cleanName}.library`);
     if (await fs.access(targetRoot).then(() => true, () => false)) {
       if (await isFailedCloudJoinDirectory(fs, targetRoot)) {

@@ -1,8 +1,46 @@
 import { expect, test } from 'vitest';
-import { createLibraryHostService, isFailedCloudJoinDirectory } from './libraryHostService.mjs';
+import {
+  createLibraryHostService,
+  isFailedCloudJoinDirectory,
+  isInsideLibraryPackage,
+} from './libraryHostService.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+test('recognizes locations nested anywhere inside a library package', () => {
+  expect(isInsideLibraryPackage(path.posix, '/Pictures/Main.library')).toBe(true);
+  expect(isInsideLibraryPackage(path.posix, '/Pictures/Main.library/exports')).toBe(true);
+  expect(isInsideLibraryPackage(path.posix, '/Pictures/Libraries')).toBe(false);
+  expect(isInsideLibraryPackage(path.win32, 'D:\\Main.library\\exports')).toBe(true);
+  expect(isInsideLibraryPackage(path.win32, 'D:\\Libraries')).toBe(false);
+});
+
+test('refuses to create a library inside another library package', async () => {
+  const service = createLibraryHostService({
+    fs: { mkdir: async () => { throw new Error('must not create directories'); } },
+    path,
+    dialog: {},
+    openLibrary: async () => {},
+    closeLibrary: async () => {},
+    addLibraryToHistory: async () => {},
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({}),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => null,
+    setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {},
+    sendToAllWindows: () => {},
+    buildAppMenu: () => {},
+  });
+
+  await expect(service.createLibrary({
+    name: 'Nested',
+    savePath: '/Pictures/Main.library/Exports',
+  })).rejects.toThrow('cannot be created inside another Picto library');
+});
 
 test('recognizes only disposable remnants from an interrupted cloud join', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-failed-cloud-join-'));
