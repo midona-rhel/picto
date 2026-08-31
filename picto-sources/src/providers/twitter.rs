@@ -181,6 +181,7 @@ impl NativeSourceAdapter for TwitterSource {
                             user_id: user_id.clone(),
                             timeline_cursor: Some(cursor.clone()),
                             page_index: 0,
+                            next_tweet_id: None,
                         });
                         continue;
                     }
@@ -472,12 +473,35 @@ fn normalize_timeline_page(
     state: Option<&CursorState>,
     page: TimelinePage,
 ) -> Result<DiscoveryBatch, SourceError> {
-    let page_index = state.map_or(0, |state| state.page_index as usize);
-    if page_index >= page.tweets.len() && (page_index != 0 || !page.tweets.is_empty()) {
-        return Err(invalid_response(
-            "Twitter / X timeline changed before its persisted page index",
-        ));
+    let persisted_page_index = state.map_or(0, |state| state.page_index as usize);
+    let stable_page_index = state
+        .and_then(|state| state.next_tweet_id.as_deref())
+        .and_then(|next_tweet_id| {
+            page.tweets
+                .iter()
+                .position(|tweet| tweet_stable_id(tweet) == Some(next_tweet_id))
+        });
+    if let Some(expected_tweet_id) = state
+        .and_then(|state| state.next_tweet_id.as_deref())
+        .filter(|_| stable_page_index.is_none())
+    {
+        tracing::warn!(
+            expected_tweet_id,
+            persisted_page_index,
+            current_page_size = page.tweets.len(),
+            "Twitter / X timeline changed; falling back to the persisted position"
+        );
     }
+    let page_index = stable_page_index.unwrap_or_else(|| {
+        if !page.tweets.is_empty() && persisted_page_index >= page.tweets.len() {
+            tracing::warn!(
+                persisted_page_index,
+                current_page_size = page.tweets.len(),
+                "Twitter / X timeline changed; resuming from the last available post"
+            );
+        }
+        persisted_page_index.min(page.tweets.len().saturating_sub(1))
+    });
     let exhausted = page.tweets.is_empty()
         && (!page.continue_on_empty || page.bottom_cursor.as_deref().is_none());
     let posts = page
@@ -485,14 +509,19 @@ fn normalize_timeline_page(
         .get(page_index)
         .cloned()
         .map(|tweet| {
-            let (timeline_cursor, page_index) = if page_index + 1 < page.tweets.len() {
-                (
-                    state.and_then(|state| state.timeline_cursor.clone()),
-                    (page_index + 1) as u16,
-                )
-            } else {
-                (page.bottom_cursor, 0)
-            };
+            let (timeline_cursor, next_page_index, next_tweet_id) =
+                if page_index + 1 < page.tweets.len() {
+                    (
+                        state.and_then(|state| state.timeline_cursor.clone()),
+                        (page_index + 1) as u16,
+                        page.tweets
+                            .get(page_index + 1)
+                            .and_then(tweet_stable_id)
+                            .map(ToOwned::to_owned),
+                    )
+                } else {
+                    (page.bottom_cursor, 0, None)
+                };
             normalize_tweet(
                 request,
                 query_username,
@@ -500,7 +529,8 @@ fn normalize_timeline_page(
                 encode_cursor(&CursorState {
                     user_id: user_id.to_string(),
                     timeline_cursor,
-                    page_index,
+                    page_index: next_page_index,
+                    next_tweet_id,
                 })?,
             )
         })
@@ -634,6 +664,15 @@ fn normalize_tweet(
         media,
         resume_cursor_after: Some(resume_cursor_after),
     })
+}
+
+fn tweet_stable_id(raw: &Value) -> Option<&str> {
+    let tweet = unwrap_tweet(raw);
+    tweet
+        .get("rest_id")
+        .and_then(Value::as_str)
+        .or_else(|| tweet.pointer("/legacy/id_str").and_then(Value::as_str))
+        .filter(|value| valid_numeric_token(value))
 }
 
 fn normalize_media(
@@ -940,6 +979,8 @@ struct CursorState {
     user_id: String,
     timeline_cursor: Option<String>,
     page_index: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_tweet_id: Option<String>,
 }
 
 fn encode_cursor(state: &CursorState) -> Result<String, SourceError> {
@@ -960,6 +1001,10 @@ fn decode_cursor(raw: &str) -> Result<CursorState, SourceError> {
 fn validate_cursor_state(state: &CursorState) -> Result<(), SourceError> {
     if !valid_numeric_token(&state.user_id)
         || state.page_index > 100
+        || state
+            .next_tweet_id
+            .as_deref()
+            .is_some_and(|value| !valid_numeric_token(value))
         || state.timeline_cursor.as_deref().is_some_and(|value| {
             value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control)
         })
@@ -1115,9 +1160,14 @@ mod tests {
             user_id: "783214".to_string(),
             timeline_cursor: Some("DAABCgAB".to_string()),
             page_index: 4,
+            next_tweet_id: Some("1960123456789012345".to_string()),
         };
         let encoded = encode_cursor(&state).unwrap();
         assert_eq!(decode_cursor(&encoded).unwrap(), state);
+        let legacy =
+            decode_cursor(r#"{"user_id":"783214","timeline_cursor":null,"page_index":4}"#).unwrap();
+        assert_eq!(legacy.page_index, 4);
+        assert!(legacy.next_tweet_id.is_none());
         assert!(decode_cursor("{\"user_id\":\"bad\"}").is_err());
     }
 
@@ -1129,13 +1179,57 @@ mod tests {
             .unwrap()
             .as_array_mut()
             .unwrap();
-        entries.insert(1, entries[0].clone());
+        let mut second = entries[0].clone();
+        second["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+            Value::String("1960123456789012344".into());
+        second["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+            Value::String("1960123456789012344".into());
+        entries.insert(1, second);
         let batch =
             normalize_timeline(&request(None), "OpenAI", "783214", None, &response).unwrap();
         assert_eq!(batch.posts.len(), 1);
         let state = decode_cursor(batch.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
         assert_eq!(state.page_index, 1);
         assert!(state.timeline_cursor.is_none());
+        assert_eq!(state.next_tweet_id.as_deref(), Some("1960123456789012344"));
+    }
+
+    #[test]
+    fn stable_cursor_survives_timeline_entries_moving_between_requests() {
+        let mut response: Value = serde_json::from_str(MEDIA).unwrap();
+        let entries = response
+            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions/0/entries")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        let original_first = entries[0].clone();
+        let mut original_second = original_first.clone();
+        original_second["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+            Value::String("1960123456789012344".into());
+        original_second["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+            Value::String("1960123456789012344".into());
+        entries.insert(1, original_second);
+
+        let first =
+            normalize_timeline(&request(None), "OpenAI", "783214", None, &response).unwrap();
+        let state = decode_cursor(first.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
+
+        let entries = response
+            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions/0/entries")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        let mut newly_inserted = original_first;
+        newly_inserted["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+            Value::String("1960123456789012346".into());
+        newly_inserted["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+            Value::String("1960123456789012346".into());
+        entries.insert(0, newly_inserted);
+
+        let resumed =
+            normalize_timeline(&request(None), "OpenAI", "783214", Some(&state), &response)
+                .unwrap();
+        assert_eq!(resumed.posts[0].stable_id, "1960123456789012344");
     }
 
     #[test]
@@ -1174,6 +1268,7 @@ mod tests {
             user_id: "783214".into(),
             timeline_cursor: None,
             page_index: 2,
+            next_tweet_id: None,
         };
         let batch = normalize_timeline_page(&request(None), "OpenAI", "783214", Some(&state), page)
             .unwrap();
