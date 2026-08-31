@@ -17,6 +17,16 @@ const STATUS_NOT_DUPLICATE: u8 = 2;
 const STATUS_RESOLVED: u8 = 3;
 
 #[derive(Debug, Clone)]
+struct DuplicateNameChange {
+    media_id: MediaId,
+    root_id: RootId,
+    before_media: String,
+    after_media: String,
+    before_root: Option<String>,
+    after_root: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DuplicateHistoryState {
     file_id_a: FileId,
     file_id_b: FileId,
@@ -26,12 +36,24 @@ pub struct DuplicateHistoryState {
     loser_file_id: Option<FileId>,
     rewired_media_ids: Arc<Vec<MediaId>>,
     pair_roots: Arc<RoaringBitmap>,
+    name_changes: Arc<Vec<DuplicateNameChange>>,
 }
 
 impl DuplicateHistoryState {
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.rewired_media_ids.len() * std::mem::size_of::<MediaId>()
             + self.pair_roots.serialized_size()
+            + self
+                .name_changes
+                .iter()
+                .map(|change| {
+                    change.before_media.len()
+                        + change.after_media.len()
+                        + change.before_root.as_ref().map_or(0, String::len)
+                        + change.after_root.as_ref().map_or(0, String::len)
+                        + 32
+                })
+                .sum::<usize>()
             + 96
     }
 
@@ -49,6 +71,10 @@ impl DuplicateHistoryState {
 
     pub(crate) fn rewires_file(&self) -> bool {
         self.loser_file_id.is_some()
+    }
+
+    pub(crate) fn changes_names(&self) -> bool {
+        !self.name_changes.is_empty()
     }
 }
 
@@ -460,59 +486,69 @@ pub(crate) fn resolve(
         .chain(file_media_ids(transaction, file_id_b)?)
         .collect::<BTreeSet<_>>();
     let pair_roots = roots_for_media(&snapshot, pair_media_ids.iter().copied());
-    let (after_status, winner_file_id, loser_file_id, rewired_media_ids) = match choice {
-        DuplicateResolutionChoice::KeepBoth => {
-            transaction.execute(
-                "UPDATE duplicate_pair
+    let (after_status, winner_file_id, loser_file_id, rewired_media_ids, name_changes) =
+        match choice {
+            DuplicateResolutionChoice::KeepBoth => {
+                transaction.execute(
+                    "UPDATE duplicate_pair
                  SET status = ?3, decided_at_ms = ?4, winner_file_id = NULL
                  WHERE file_id_a = ?1 AND file_id_b = ?2",
-                params![
-                    file_id_a.0,
-                    file_id_b.0,
-                    STATUS_NOT_DUPLICATE,
-                    decided_at_ms
-                ],
-            )?;
-            (DuplicateStatus::NotDuplicate, None, None, Vec::new())
-        }
-        DuplicateResolutionChoice::KeepFile { winner_file_id } => {
-            if winner_file_id != file_id_a && winner_file_id != file_id_b {
-                return Err(LibraryError::InvalidInput(
-                    "winner must be one of the duplicate files".into(),
-                ));
+                    params![
+                        file_id_a.0,
+                        file_id_b.0,
+                        STATUS_NOT_DUPLICATE,
+                        decided_at_ms
+                    ],
+                )?;
+                (
+                    DuplicateStatus::NotDuplicate,
+                    None,
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                )
             }
-            let loser_file_id = if winner_file_id == file_id_a {
-                file_id_b
-            } else {
-                file_id_a
-            };
-            let rewired_media_ids = file_media_ids(transaction, loser_file_id)?;
-            transaction.execute(
-                "UPDATE media_item SET file_id = ?1 WHERE file_id = ?2",
-                params![winner_file_id.0, loser_file_id.0],
-            )?;
-            transaction.execute(
-                "UPDATE duplicate_pair
+            DuplicateResolutionChoice::KeepFile { winner_file_id } => {
+                if winner_file_id != file_id_a && winner_file_id != file_id_b {
+                    return Err(LibraryError::InvalidInput(
+                        "winner must be one of the duplicate files".into(),
+                    ));
+                }
+                let loser_file_id = if winner_file_id == file_id_a {
+                    file_id_b
+                } else {
+                    file_id_a
+                };
+                let rewired_media_ids = file_media_ids(transaction, loser_file_id)?;
+                transaction.execute(
+                    "UPDATE media_item SET file_id = ?1 WHERE file_id = ?2",
+                    params![winner_file_id.0, loser_file_id.0],
+                )?;
+                let name_changes = duplicate_name_changes(transaction, &snapshot, &pair_media_ids)?;
+                apply_name_changes(transaction, &name_changes, true, decided_at_ms)?;
+                transaction.execute(
+                    "UPDATE duplicate_pair
                  SET status = ?3, decided_at_ms = ?4, winner_file_id = ?5
                  WHERE file_id_a = ?1 AND file_id_b = ?2",
-                params![
-                    file_id_a.0,
-                    file_id_b.0,
-                    STATUS_RESOLVED,
-                    decided_at_ms,
-                    winner_file_id.0
-                ],
-            )?;
-            enqueue_cleanup(transaction, loser_file_id, revision)?;
-            settle_rewired_media(transaction, &mut snapshot, &rewired_media_ids)?;
-            (
-                DuplicateStatus::Resolved,
-                Some(winner_file_id),
-                Some(loser_file_id),
-                rewired_media_ids,
-            )
-        }
-    };
+                    params![
+                        file_id_a.0,
+                        file_id_b.0,
+                        STATUS_RESOLVED,
+                        decided_at_ms,
+                        winner_file_id.0
+                    ],
+                )?;
+                enqueue_cleanup(transaction, loser_file_id, revision)?;
+                settle_rewired_media(transaction, &mut snapshot, &rewired_media_ids)?;
+                (
+                    DuplicateStatus::Resolved,
+                    Some(winner_file_id),
+                    Some(loser_file_id),
+                    rewired_media_ids,
+                    name_changes,
+                )
+            }
+        };
 
     Ok(ResolutionOutput {
         snapshot,
@@ -526,6 +562,7 @@ pub(crate) fn resolve(
             loser_file_id,
             rewired_media_ids: Arc::new(rewired_media_ids),
             pair_roots: Arc::new(pair_roots),
+            name_changes: Arc::new(name_changes),
         },
     })
 }
@@ -573,6 +610,12 @@ pub(crate) fn replay(
         }
         settle_rewired_media(transaction, snapshot, &state.rewired_media_ids)?;
     }
+    apply_name_changes(
+        transaction,
+        &state.name_changes,
+        use_after,
+        state.decided_at_ms,
+    )?;
 
     if use_after {
         transaction.execute(
@@ -596,6 +639,137 @@ pub(crate) fn replay(
         )?;
     }
     Ok(state.pair_roots.as_ref().clone())
+}
+
+fn duplicate_name_changes(
+    transaction: &Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    media_ids: &BTreeSet<MediaId>,
+) -> Result<Vec<DuplicateNameChange>> {
+    let mut names = Vec::with_capacity(media_ids.len());
+    for media_id in media_ids {
+        let name = transaction.query_row(
+            "SELECT media_name FROM media_item WHERE media_id = ?1",
+            [media_id.0],
+            |row| row.get::<_, String>(0),
+        )?;
+        names.push((*media_id, name));
+    }
+    let Some((_, first_name)) = names.first() else {
+        return Ok(Vec::new());
+    };
+    let best_name = names
+        .iter()
+        .skip(1)
+        .fold(first_name.as_str(), |best, (_, name)| {
+            crate::name_quality::preferred(best, name)
+        })
+        .to_string();
+
+    let mut changes = Vec::new();
+    for (media_id, media_name) in names {
+        let owner = snapshot
+            .media_owner
+            .get(media_id.0)
+            .copied()
+            .ok_or_else(|| {
+                LibraryError::InvalidState(format!("media {} has no owning root", media_id.0))
+            })?;
+        let standalone_root = Some(owner).filter(|root_id| {
+            root_id.0 == media_id.0
+                && snapshot
+                    .root_kinds
+                    .get(&crate::RootKind::Media)
+                    .is_some_and(|roots| roots.contains(root_id.0))
+        });
+        let root_name = standalone_root
+            .map(|root_id| {
+                transaction.query_row(
+                    "SELECT name FROM library_root WHERE root_id = ?1",
+                    [root_id.0],
+                    |row| row.get::<_, String>(0),
+                )
+            })
+            .transpose()?;
+        let baseline = root_name.as_deref().map_or(media_name.as_str(), |name| {
+            crate::name_quality::preferred(&media_name, name)
+        });
+        let preferred = crate::name_quality::preferred(baseline, &best_name);
+        let root_changed = root_name.as_deref().is_some_and(|name| name != preferred);
+        if preferred != media_name || root_changed {
+            let after_name = preferred.to_string();
+            changes.push(DuplicateNameChange {
+                media_id,
+                root_id: owner,
+                before_media: media_name,
+                after_media: after_name.clone(),
+                before_root: root_name.clone(),
+                after_root: root_name.map(|_| after_name),
+            });
+        }
+    }
+    Ok(changes)
+}
+
+fn apply_name_changes(
+    transaction: &Transaction<'_>,
+    changes: &[DuplicateNameChange],
+    use_after: bool,
+    now_ms: i64,
+) -> Result<()> {
+    for change in changes {
+        let (expected_media, replacement_media, expected_root, replacement_root) = if use_after {
+            (
+                &change.before_media,
+                &change.after_media,
+                &change.before_root,
+                &change.after_root,
+            )
+        } else {
+            (
+                &change.after_media,
+                &change.before_media,
+                &change.after_root,
+                &change.before_root,
+            )
+        };
+        let current_media = transaction.query_row(
+            "SELECT media_name FROM media_item WHERE media_id = ?1",
+            [change.media_id.0],
+            |row| row.get::<_, String>(0),
+        )?;
+        if &current_media != expected_media {
+            return Err(LibraryError::InvalidState(format!(
+                "cannot replay duplicate naming because media {} changed",
+                change.media_id.0
+            )));
+        }
+        transaction.execute(
+            "UPDATE media_item SET media_name = ?2 WHERE media_id = ?1",
+            params![change.media_id.0, replacement_media],
+        )?;
+
+        if expected_root.is_some() {
+            let root_id = change.root_id;
+            let current_root = transaction.query_row(
+                "SELECT name FROM library_root WHERE root_id = ?1",
+                [root_id.0],
+                |row| row.get::<_, String>(0),
+            )?;
+            if expected_root.as_deref() != Some(current_root.as_str()) {
+                return Err(LibraryError::InvalidState(format!(
+                    "cannot replay duplicate naming because root {} changed",
+                    root_id.0
+                )));
+            }
+            transaction.execute(
+                "UPDATE library_root SET name = ?2 WHERE root_id = ?1",
+                params![root_id.0, replacement_root],
+            )?;
+        }
+        crate::fts::mark_one(transaction, change.root_id, now_ms)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn ready_cleanup(

@@ -2,7 +2,8 @@ use picto_library::predicate::{FilterClause, FilterExpr, ItemSort, ViewQuerySpec
 use picto_library::selection::SelectionTarget;
 use picto_library::{
     DuplicateResolutionChoice, DuplicateStatus, FileId, GroupRequest, ImmutableMediaFacts,
-    LabColor, Library, Lifecycle, PreparedImport, Rating, RootDetails, RootId, SmartFolderInput,
+    LabColor, Library, Lifecycle, PreparedCollectionImport, PreparedImport, Rating, RootDetails,
+    RootId, SmartFolderInput,
 };
 use tempfile::TempDir;
 
@@ -47,6 +48,21 @@ fn imported(
         imported_at_ms: 1_700_000_000_000,
         captured_at_ms: Some(1_600_000_000_000),
     }
+}
+
+fn named_import(key: &str, hash: &str, name: &str, color: LabColor) -> PreparedImport {
+    let mut input = imported(
+        key,
+        hash,
+        "image/png",
+        1_024,
+        Some(100),
+        Some(100),
+        None,
+        color,
+    );
+    input.media_name = name.into();
+    input
 }
 
 fn file_id(library: &Library, root_id: RootId) -> FileId {
@@ -596,6 +612,162 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
             content_hash: "shared-loser".into(),
             file_path: "/tmp/loser-standalone.bin".into(),
         }]
+    );
+}
+
+#[test]
+fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let color = LabColor {
+        l: 50.0,
+        a: 0.0,
+        b: 0.0,
+        weight: 1.0,
+    };
+    let (weak_root, _) = library
+        .ingest(&named_import(
+            "weak-name",
+            "weak-file",
+            "938475938475.png",
+            color.clone(),
+        ))
+        .unwrap();
+    let (meaningful_root, _) = library
+        .ingest(&named_import(
+            "meaningful-name",
+            "meaningful-file",
+            "A quiet landscape",
+            color,
+        ))
+        .unwrap();
+    let weak_file = file_id(&library, weak_root);
+    let meaningful_file = file_id(&library, meaningful_root);
+    library
+        .record_duplicate_pair(weak_file, meaningful_file, 0, 1_700_000_000_100)
+        .unwrap()
+        .unwrap();
+
+    let result = library
+        .resolve_duplicate(
+            weak_file,
+            meaningful_file,
+            DuplicateResolutionChoice::KeepFile {
+                winner_file_id: weak_file,
+            },
+            1_700_000_000_200,
+        )
+        .unwrap();
+    assert!(result.receipt.resources.contains(&"library".to_string()));
+    for root_id in [weak_root, meaningful_root] {
+        let details = library.details(root_id).unwrap();
+        assert_eq!(details.root.name, "A quiet landscape");
+        assert_eq!(details.media[0].media_name, "A quiet landscape");
+    }
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(
+        library.details(weak_root).unwrap().root.name,
+        "938475938475.png"
+    );
+    assert_eq!(
+        library.details(meaningful_root).unwrap().root.name,
+        "A quiet landscape"
+    );
+
+    library.redo().unwrap().unwrap();
+    for root_id in [weak_root, meaningful_root] {
+        assert_eq!(
+            library.details(root_id).unwrap().root.name,
+            "A quiet landscape"
+        );
+    }
+}
+
+#[test]
+fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let color = LabColor {
+        l: 50.0,
+        a: 0.0,
+        b: 0.0,
+        weight: 1.0,
+    };
+    let weak_member = named_import(
+        "collection-weak",
+        "collection-weak-file",
+        "gelbooru_14583420",
+        color.clone(),
+    );
+    let other_member = named_import(
+        "collection-other",
+        "collection-other-file",
+        "Other member",
+        color.clone(),
+    );
+    let (collection, _) = library
+        .ingest_collection(&PreparedCollectionImport {
+            members: vec![weak_member, other_member],
+            cover_index: 0,
+            existing_root_id: None,
+            name: Some("Collection-owned title".into()),
+            modified_at_ms: 1_700_000_000_000,
+        })
+        .unwrap();
+    let weak_media = library
+        .details(collection)
+        .unwrap()
+        .media
+        .into_iter()
+        .find(|media| media.media_name == "gelbooru_14583420")
+        .unwrap();
+    let (standalone, _) = library
+        .ingest(&named_import(
+            "standalone-human",
+            "standalone-human-file",
+            "Meaningful member title",
+            color,
+        ))
+        .unwrap();
+    let standalone_file = file_id(&library, standalone);
+    library
+        .record_duplicate_pair(weak_media.file_id, standalone_file, 0, 1_700_000_000_100)
+        .unwrap()
+        .unwrap();
+    library
+        .resolve_duplicate(
+            weak_media.file_id,
+            standalone_file,
+            DuplicateResolutionChoice::KeepFile {
+                winner_file_id: standalone_file,
+            },
+            1_700_000_000_200,
+        )
+        .unwrap();
+
+    let details = library.details(collection).unwrap();
+    assert_eq!(details.root.name, "Collection-owned title");
+    assert_eq!(
+        details
+            .media
+            .iter()
+            .find(|media| media.media_id == weak_media.media_id)
+            .unwrap()
+            .media_name,
+        "Meaningful member title"
+    );
+    library.undo().unwrap().unwrap();
+    let details = library.details(collection).unwrap();
+    assert_eq!(details.root.name, "Collection-owned title");
+    assert_eq!(
+        details
+            .media
+            .iter()
+            .find(|media| media.media_id == weak_media.media_id)
+            .unwrap()
+            .media_name,
+        "gelbooru_14583420"
     );
 }
 

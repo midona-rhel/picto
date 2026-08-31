@@ -486,16 +486,44 @@ fn refresh_existing_file(
         params![file_id, input.file_path],
     )?;
     let mut affected_roots = RoaringBitmap::new();
+    let owner = snapshot
+        .media_owner
+        .get(media_id.0)
+        .copied()
+        .unwrap_or(RootId(media_id.0));
+    let standalone = owner.0 == media_id.0
+        && snapshot
+            .root_kinds
+            .get(&RootKind::Media)
+            .is_some_and(|roots| roots.contains(owner.0));
     let (current_name, current_note) = transaction.query_row(
         "SELECT media_name, media_notes FROM media_item WHERE media_id = ?1",
         [media_id.0],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
     )?;
+    let current_root_name = standalone
+        .then(|| {
+            transaction.query_row(
+                "SELECT name FROM library_root WHERE root_id = ?1",
+                [owner.0],
+                |row| row.get::<_, String>(0),
+            )
+        })
+        .transpose()?;
     let incoming_note = input
         .notes
         .as_deref()
         .filter(|note| !note.trim().is_empty());
-    let replace_name = should_replace_name(&current_name, &input.media_name);
+    let baseline_name = current_root_name
+        .as_deref()
+        .map_or(current_name.as_str(), |root_name| {
+            crate::name_quality::preferred(&current_name, root_name)
+        });
+    let preferred_name = crate::name_quality::preferred(baseline_name, &input.media_name);
+    let replace_name = preferred_name != current_name;
+    let replace_root_name = current_root_name
+        .as_deref()
+        .is_some_and(|root_name| root_name != preferred_name);
     let replace_note = current_note
         .as_deref()
         .is_none_or(|note| note.trim().is_empty())
@@ -509,29 +537,19 @@ fn refresh_existing_file(
             params![
                 media_id.0,
                 replace_name,
-                input.media_name,
+                preferred_name,
                 replace_note,
                 incoming_note
             ],
         )?;
     }
 
-    let owner = snapshot
-        .media_owner
-        .get(media_id.0)
-        .copied()
-        .unwrap_or(RootId(media_id.0));
     affected_roots.insert(owner.0);
-    if owner.0 == media_id.0
-        && snapshot
-            .root_kinds
-            .get(&RootKind::Media)
-            .is_some_and(|roots| roots.contains(owner.0))
-    {
-        if replace_name {
+    if standalone {
+        if replace_root_name {
             transaction.execute(
                 "UPDATE library_root SET name = ?2 WHERE root_id = ?1",
-                params![owner.0, input.media_name],
+                params![owner.0, preferred_name],
             )?;
         }
         if replace_note {
@@ -541,7 +559,7 @@ fn refresh_existing_file(
             )?;
             Arc::make_mut(&mut snapshot.notes_present).insert(owner.0);
         }
-        if replace_name || replace_note {
+        if replace_name || replace_root_name || replace_note {
             fts::mark_one(transaction, owner, input.imported_at_ms)?;
         }
     }
@@ -671,10 +689,6 @@ fn exact_hash_owners(
         .collect()
 }
 
-fn should_replace_name(existing: &str, incoming: &str) -> bool {
-    is_weak_name(existing) && !is_weak_name(incoming)
-}
-
 fn inherit_standalone_tags(
     transaction: &Transaction<'_>,
     snapshot: &mut ProjectionSnapshot,
@@ -724,40 +738,6 @@ fn inherit_standalone_tags(
         );
     }
     Ok(changed)
-}
-
-fn is_weak_name(name: &str) -> bool {
-    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
-    let stem = basename.rsplit_once('.').map_or(basename, |(stem, _)| stem);
-    let compact = stem
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>();
-    if compact.is_empty() || compact.chars().all(|character| character.is_ascii_digit()) {
-        return true;
-    }
-    if compact.len() >= 12
-        && compact
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-    {
-        return true;
-    }
-    let alphabetic = compact
-        .chars()
-        .filter(|character| character.is_ascii_alphabetic())
-        .count();
-    let digits = compact.len().saturating_sub(alphabetic);
-    let words = stem
-        .split(|character: char| !character.is_ascii_alphabetic())
-        .filter(|part| part.len() >= 3)
-        .count();
-    // A single word fused to an id-sized digit run ("gelbooru_14583420",
-    // "post12345678") is a synthetic source name, not a human title.
-    if words <= 1 && digits >= 4 {
-        return true;
-    }
-    words == 0 || (digits >= 4 && alphabetic <= 4)
 }
 
 pub(crate) fn persist_touched(
@@ -894,7 +874,7 @@ fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod weak_name_tests {
-    use super::is_weak_name;
+    use crate::name_quality::{quality, NameQuality};
 
     #[test]
     fn synthetic_source_names_are_weak_and_human_titles_are_not() {
@@ -905,7 +885,11 @@ mod weak_name_tests {
             "2085395535410712592_1.jpg",
             "d92be9442094b7d22424a460cd5d5296",
         ] {
-            assert!(is_weak_name(weak), "{weak} should be weak");
+            assert_ne!(
+                quality(weak),
+                NameQuality::Meaningful,
+                "{weak} should be weak"
+            );
         }
         for strong in [
             "Lupa Hairpoon",
@@ -913,7 +897,11 @@ mod weak_name_tests {
             "wallpaper2",
             "commission for maythedong",
         ] {
-            assert!(!is_weak_name(strong), "{strong} should be strong");
+            assert_eq!(
+                quality(strong),
+                NameQuality::Meaningful,
+                "{strong} should be strong"
+            );
         }
     }
 
@@ -935,10 +923,17 @@ mod weak_name_tests {
             // hexadecimal stems are covered in the test above.
             "f1nn5ter - 2026-08-24",
         ] {
-            assert!(is_weak_name(generated), "{generated} should be weak");
+            assert_ne!(
+                quality(generated),
+                NameQuality::Meaningful,
+                "{generated} should be weak"
+            );
         }
         // OnlyFans post text used as a title is a human name and must never
         // be downgraded.
-        assert!(!is_weak_name("custom latex catsuit..? don't mind if I"));
+        assert_eq!(
+            quality("custom latex catsuit..? don't mind if I"),
+            NameQuality::Meaningful
+        );
     }
 }

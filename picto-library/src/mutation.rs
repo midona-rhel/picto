@@ -1803,12 +1803,16 @@ impl Library {
                 )?;
                 output.snapshot.revision = revision;
                 let resources = if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
-                    vec![
+                    let mut resources = vec![
                         "duplicates".into(),
                         "media".into(),
                         "roots".into(),
                         "smart-folders".into(),
-                    ]
+                    ];
+                    if output.history.changes_names() {
+                        resources.push("search".into());
+                    }
+                    resources
                 } else {
                     vec!["duplicates".into()]
                 };
@@ -6328,6 +6332,9 @@ fn apply_semantic_change(
                 resources.insert("roots".into());
                 resources.insert("media".into());
                 resources.insert("smart-folders".into());
+            }
+            if state.changes_names() {
+                resources.insert("search".into());
             }
         }
         SemanticChange::Compound(changes) => {

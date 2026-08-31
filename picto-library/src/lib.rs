@@ -16,6 +16,7 @@ pub mod ingest;
 pub mod ingest_queue;
 pub mod model;
 pub mod mutation;
+mod name_quality;
 pub mod ordering;
 pub mod predicate;
 pub mod projection;
