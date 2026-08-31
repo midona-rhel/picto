@@ -13,7 +13,6 @@ import {
   folderPickerModalAtom,
   smartFolderModalAtom,
   tagSelectModalAtom,
-  updateModalAtom,
 } from '../state/modals';
 import { aiTaggerPortalAtom, inspectorAnchor } from '../state/portals';
 import {
@@ -32,8 +31,7 @@ type ApplicationMenuEvent =
   | 'menu:import-picto-pack'
   | 'menu:export-basic'
   | 'menu:export-advanced'
-  | 'menu:export-picto-pack'
-  | 'menu:show-updates';
+  | 'menu:export-picto-pack';
 
 type SelectionMenuAction =
   | 'new-folder'
@@ -134,10 +132,6 @@ async function exportOriginals(): Promise<void> {
 }
 
 async function runMenuAction(name: ApplicationMenuEvent): Promise<void> {
-  if (name === 'menu:show-updates') {
-    store.set(updateModalAtom, { open: true });
-    return;
-  }
   if (name === 'menu:import-files') {
     await chooseAndImportFiles(store.get(gridScopeAtom));
     return;
@@ -322,7 +316,6 @@ export function startApplicationMenuRuntime(): () => void {
     'menu:export-basic',
     'menu:export-advanced',
     'menu:export-picto-pack',
-    'menu:show-updates',
   ];
   for (const name of names) {
     void listen(name, () => { void runMenuAction(name).catch(reportMenuError); }).then((dispose) => {

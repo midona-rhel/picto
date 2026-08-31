@@ -12,16 +12,50 @@ import {
 import styles from './UpdateModal.module.css';
 import { t } from '../../i18n';
 
-function NoteBody({ text }: { text: string }) {
-  const lines = text.trim().split(/\r?\n/);
-  if (!text.trim()) return <p className={styles.emptyNotes}>{t("No release notes were provided.")}</p>;
-  return <div className={styles.notes}>{lines.map((line, index) => {
-    const heading = line.match(/^#{1,3}\s+(.+)/);
+type NoteBlock = { kind: 'heading' | 'paragraph' | 'bullet'; text: string; level?: number };
+
+export function parseReleaseNotes(text: string): NoteBlock[] {
+  const blocks: NoteBlock[] = [];
+  let current: NoteBlock | null = null;
+  const flush = () => {
+    if (current?.text) blocks.push(current);
+    current = null;
+  };
+
+  for (const rawLine of text.trim().split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      flush();
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)/);
+    if (heading) {
+      flush();
+      blocks.push({ kind: 'heading', level: heading[1].length, text: heading[2] });
+      continue;
+    }
     const bullet = line.match(/^[-*]\s+(.+)/);
-    if (heading) return <h3 key={index}>{heading[1]}</h3>;
-    if (bullet) return <div className={styles.noteItem} key={index}><span>•</span><span>{bullet[1]}</span></div>;
-    if (!line.trim()) return <div className={styles.noteGap} key={index} />;
-    return <p key={index}>{line.replace(/\*\*/g, '')}</p>;
+    if (bullet) {
+      flush();
+      current = { kind: 'bullet', text: bullet[1] };
+      continue;
+    }
+    if (!current) current = { kind: 'paragraph', text: line };
+    else current.text += ` ${line}`;
+  }
+  flush();
+  return blocks;
+}
+
+function NoteBody({ text }: { text: string }) {
+  if (!text.trim()) return <p className={styles.emptyNotes}>{t("No release notes were provided.")}</p>;
+  const blocks = parseReleaseNotes(text);
+  if (blocks[0]?.kind === 'heading' && blocks[0].level === 1) blocks.shift();
+  return <div className={styles.notes}>{blocks.map((block, index) => {
+    const content = block.text.replace(/\*\*/g, '');
+    if (block.kind === 'heading') return <h3 key={index}>{content}</h3>;
+    if (block.kind === 'bullet') return <div className={styles.noteItem} key={index}><span aria-hidden="true">•</span><span>{content}</span></div>;
+    return <p key={index}>{content}</p>;
   })}</div>;
 }
 

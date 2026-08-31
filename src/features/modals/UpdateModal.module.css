@@ -5,12 +5,12 @@
 .progress { height: 4px; overflow: hidden; border-radius: 3px; background: var(--color-control-surface); }
 .progress span { display: block; height: 100%; border-radius: inherit; background: var(--color-primary); transition: width 180ms ease; }
 .release { margin-top: 16px; border: 1px solid var(--color-border-secondary); border-radius: var(--radius-md); overflow: hidden; background: var(--color-control-surface); }
-.releaseHeader { display: flex; justify-content: space-between; gap: 12px; padding: 12px 14px; color: var(--color-text-primary); border-bottom: 1px solid var(--color-border-secondary); }
+.releaseHeader { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 13px 18px; color: var(--color-text-primary); border-bottom: 1px solid var(--color-border-secondary); }
 .releaseHeader time { color: var(--color-text-tertiary); font-size: var(--font-size-sm); font-weight: normal; }
-.notes { max-height: 310px; overflow: auto; padding: 12px 14px; user-select: text; -webkit-user-select: text; }
-.notes h3 { margin: 10px 0 6px; color: var(--color-text-primary); font-size: var(--font-size-md); }
+.notes { max-height: 310px; overflow-y: auto; scrollbar-gutter: stable; padding: 16px 18px 20px; user-select: text; -webkit-user-select: text; line-height: 1.5; }
+.notes h3 { margin: 20px 0 8px; color: var(--color-text-primary); font-size: var(--font-size-md); line-height: 1.35; }
 .notes h3:first-child { margin-top: 0; }
-.notes p { margin: 4px 0; white-space: pre-wrap; }
-.noteItem { display: grid; grid-template-columns: 12px 1fr; gap: 4px; margin: 4px 0; }
-.noteGap { height: 6px; }
+.notes p { margin: 0 0 10px; }
+.noteItem { display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: start; gap: 8px; margin: 0 0 9px; }
+.noteItem > span:first-child { text-align: center; color: var(--color-text-tertiary); }
 .emptyNotes { margin: 0; padding: 14px; color: var(--color-text-tertiary); }

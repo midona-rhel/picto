@@ -6,6 +6,7 @@ import '@mantine/core/styles.css';
 import { AppShell } from '../app/AppShell';
 import { LibraryGate } from '../features/library/LibraryGate';
 import { NotificationHost } from '../shared/ui/NotificationHost/NotificationHost';
+import { ApplicationUpdateHost } from '../features/updates/ApplicationUpdateHost';
 import '../app/globals.css';
 import { startThemeRuntime } from '../runtime/themeRuntime';
 import { startLocalizedRenderer } from '../i18n';
@@ -23,6 +24,7 @@ startLocalizedRenderer(() => {
       <MantineProvider defaultColorScheme="dark">
         <Provider store={store}>
           <NotificationHost />
+          <ApplicationUpdateHost />
           <LibraryGate>
             <AppShell />
           </LibraryGate>

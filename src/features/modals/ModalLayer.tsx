@@ -14,7 +14,6 @@ import {
   folderImportModalAtom,
   multiFileImportModalAtom,
   groupOrganizerModalAtom,
-  updateModalAtom,
 } from '../../state/modals';
 import { ConfirmModal } from './ConfirmModal';
 import { SmartFolderModal } from './SmartFolderModal';
@@ -32,7 +31,6 @@ import { setItemNames } from '../../controllers/entityMutations';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import { FolderImportModal } from './FolderImportModal';
-import { UpdateModal } from './UpdateModal';
 import { PictoPackModal } from './PictoPackModal';
 import { t } from '../../i18n';
 
@@ -61,8 +59,6 @@ export function ModalLayer() {
   const setMultiFileImport = useSetAtom(multiFileImportModalAtom);
   const groupOrganizer = useAtomValue(groupOrganizerModalAtom);
   const setGroupOrganizer = useSetAtom(groupOrganizerModalAtom);
-  const updateModal = useAtomValue(updateModalAtom);
-  const setUpdateModal = useSetAtom(updateModalAtom);
 
   const submitMultiFileImport = (groupFiles: boolean) => {
     const request = multiFileImport;
@@ -235,7 +231,6 @@ export function ModalLayer() {
 
       <TagSelectModal />
       <FolderPickerModal />
-      <UpdateModal open={updateModal.open} onClose={() => setUpdateModal({ open: false })} />
     </>
   );
 }
