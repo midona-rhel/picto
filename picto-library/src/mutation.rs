@@ -4367,7 +4367,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let names = names
             .iter()
-            .filter_map(|name| (!name.trim().is_empty()).then_some(name))
+            .filter(|name| !name.trim().is_empty())
             .map(|name| ingest::canonical_tag_name(name))
             .collect::<Result<BTreeSet<_>>>()?
             .into_iter()
