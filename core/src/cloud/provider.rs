@@ -330,7 +330,23 @@ pub fn validate_root(
         candidate.provider == provider
             && path_identity(Path::new(&candidate.path)) == selected_identity
     });
-    detected.ok_or_else(|| {
+    if let Some(detected) = detected {
+        return Ok(detected);
+    }
+    #[cfg(target_os = "windows")]
+    if provider == "google_drive" && is_google_folder_mount_selection(&selected) {
+        return Ok(DetectedProviderRoot {
+            provider: provider.to_string(),
+            account_label: selected
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Google Drive")
+                .to_string(),
+            path: selected.to_string_lossy().into_owned(),
+        });
+    }
+    Err({
         let name = if provider == "google_drive" {
             "Google Drive"
         } else {
@@ -457,6 +473,28 @@ fn is_google_drive_volume(root: &Path) -> bool {
     String::from_utf16_lossy(&volume_name[..length])
         .to_lowercase()
         .contains("google drive")
+}
+
+#[cfg(target_os = "windows")]
+fn is_google_folder_mount_selection(selected: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
+    };
+
+    selected.is_dir()
+        && [selected, selected.parent().unwrap_or(selected)]
+            .into_iter()
+            .any(|path| {
+                let wide = path
+                    .as_os_str()
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<_>>();
+                let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+                attributes != INVALID_FILE_ATTRIBUTES
+                    && attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            })
 }
 
 fn push_if_directory(
