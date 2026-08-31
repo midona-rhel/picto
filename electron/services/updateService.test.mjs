@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { createUpdateService } from './updateService.mjs';
 
 function app(packaged = true) {
@@ -36,5 +37,40 @@ describe('update service', () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [{ draft: false, tag_name: 'v0.6.0-alpha' }] });
     const service = createUpdateService({ app: app(), net: { fetch }, sendToAllWindows: vi.fn(), platform: 'darwin' });
     expect((await service.check()).status).toBe('current');
+  });
+
+  test('loads the packaged updater from its CommonJS default export', async () => {
+    const autoUpdater = Object.assign(new EventEmitter(), {
+      checkForUpdates: vi.fn().mockResolvedValue(undefined),
+    });
+    const service = createUpdateService({
+      app: app(),
+      net: { fetch: vi.fn() },
+      sendToAllWindows: vi.fn(),
+      platform: 'win32',
+      loadUpdaterModule: async () => ({ default: { autoUpdater } }),
+    });
+
+    await service.check();
+
+    expect(autoUpdater.autoDownload).toBe(true);
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  test('reports a stable error when the packaged updater cannot be loaded', async () => {
+    const service = createUpdateService({
+      app: app(),
+      net: { fetch: vi.fn() },
+      sendToAllWindows: vi.fn(),
+      platform: 'win32',
+      loadUpdaterModule: async () => ({}),
+    });
+
+    expect(await service.check()).toMatchObject({
+      status: 'error',
+      error: 'The packaged update service is unavailable.',
+    });
   });
 });

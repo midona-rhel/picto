@@ -27,7 +27,13 @@ function isNewer(candidate, current) {
   return false;
 }
 
-export function createUpdateService({ app, net, sendToAllWindows, platform = process.platform }) {
+export function createUpdateService({
+  app,
+  net,
+  sendToAllWindows,
+  platform = process.platform,
+  loadUpdaterModule = () => import('electron-updater'),
+}) {
   let updater = null;
   let checkPromise = null;
   let state = {
@@ -78,8 +84,10 @@ export function createUpdateService({ app, net, sendToAllWindows, platform = pro
 
   async function ensureUpdater() {
     if (updater) return updater;
-    const module = await import('electron-updater');
-    updater = module.autoUpdater;
+    const module = await loadUpdaterModule();
+    const updaterModule = module?.default ?? module;
+    updater = updaterModule?.autoUpdater ?? module?.autoUpdater;
+    if (!updater) throw new Error('The packaged update service is unavailable.');
     updater.autoDownload = true;
     updater.autoInstallOnAppQuit = true;
     updater.allowPrerelease = true;
