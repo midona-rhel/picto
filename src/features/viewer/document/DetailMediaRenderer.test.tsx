@@ -88,6 +88,19 @@ describe('DetailMediaRenderer', () => {
     expect(container.querySelector('[data-document-page-preview]')).toBeNull();
   });
 
+  it('fits the JPEG XL thumbnail to the full viewer before decoding finishes', () => {
+    const { container } = render(
+      <DetailMediaRenderer hash="jxl-hash" mimeType="image/jxl" displayName="Photo" />,
+    );
+
+    const preview = container.querySelector('[data-jpeg-xl-thumbnail-preview]') as HTMLElement;
+    const thumbnail = preview.querySelector('img') as HTMLImageElement;
+    expect(getComputedStyle(preview).position).toBe('absolute');
+    expect(getComputedStyle(thumbnail).width).toBe('100%');
+    expect(getComputedStyle(thumbnail).height).toBe('100%');
+    expect(getComputedStyle(thumbnail).objectFit).toBe('contain');
+  });
+
   it('uses a generated full-renderer document thumbnail without nesting another shell', async () => {
     const { container } = render(
       <DetailMediaRenderer hash="text-hash" mimeType="text/plain" displayName="Notes" />,

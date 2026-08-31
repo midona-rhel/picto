@@ -16,7 +16,6 @@ import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 import {
   computePlanFingerprint,
-  shouldLoadFullQualityOriginal,
   sortPlanTilesByViewportDistance,
   type PlanTile,
 } from './thumbnailPlan';
@@ -88,7 +87,8 @@ export class ThumbnailPipeline {
     buf.length = tiles.length;
     for (let i = 0; i < tiles.length; i++) {
       const t = tiles[i];
-      const needsFull = shouldLoadFullQualityOriginal(t, FULL_QUALITY_THRESHOLD_PX);
+      const isImage = t.mime.startsWith('image/') && t.mime !== 'image/gif';
+      const needsFull = isImage && (t.w > FULL_QUALITY_THRESHOLD_PX || t.h > FULL_QUALITY_THRESHOLD_PX);
       const revision = this.revisions.get(t.fileHash) ?? 0;
       const url = needsFull
         ? mediaFileUrl(t.fileHash, t.mime)

@@ -29,6 +29,20 @@
   object-fit: contain;
 }
 
+.imagePreview {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--color-bg-app);
+}
+
+.imagePreviewImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .videoPreview {
   position: absolute;
   inset: 0;

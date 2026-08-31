@@ -150,7 +150,17 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
     return null;
   }
 
-  const preview = kind === 'video' ? (
+  const preview = kind === 'jpeg-xl' ? (
+    <div className={styles.imagePreview} data-jpeg-xl-thumbnail-preview>
+      <ThumbnailImage
+        className={styles.imagePreviewImage}
+        src={mediaThumbnailUrl(hash)}
+        fallback="broken"
+        alt=""
+        draggable={false}
+      />
+    </div>
+  ) : kind === 'video' ? (
     <div className={styles.videoPreview} data-video-frame-preview>
       <ThumbnailImage
         className={styles.videoPreviewImage}
