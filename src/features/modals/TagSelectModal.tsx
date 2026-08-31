@@ -31,6 +31,14 @@ import { t } from '../../i18n';
 type SidebarMode = 'recent' | 'selected' | 'all' | 'namespace';
 const PAGE_SIZE = 100;
 
+export function mergeUniqueTagRecords(
+  current: CanonicalTagRecord[],
+  incoming: CanonicalTagRecord[],
+): CanonicalTagRecord[] {
+  const merged = new Map(current.map((tag) => [tag.tag_id, tag]));
+  for (const tag of incoming) merged.set(tag.tag_id, tag);
+  return [...merged.values()];
+}
 
 function tagRecord(name: string): CanonicalTagRecord {
   const separator = name.indexOf(':');
@@ -68,6 +76,8 @@ export function TagSelectModal() {
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestGenerationRef = useRef(0);
+  const loadingCursorRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,33 +94,42 @@ export function TagSelectModal() {
     return () => { cancelled = true; };
   }, [entityData?.tag_ids.join(','), open]);
 
-  const loadTags = useCallback((search: string, ns?: string | null) => {
+  const requestTags = useCallback((search: string, ns: string | null, generation: number) => {
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: search.trim() || null,
-      namespace: ns ?? null,
+      namespace: ns,
     }).then((result) => {
-      setTags(result.tags);
+      if (generation !== requestGenerationRef.current) return;
+      setTags(mergeUniqueTagRecords([], result.tags));
       setCursor(result.next_cursor);
       setFocusIdx(-1);
     }).catch(() => {});
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!cursor || loadingMore) return;
+    if (!cursor || loadingCursorRef.current === cursor) return;
+    const requestedCursor = cursor;
+    const generation = requestGenerationRef.current;
     setLoadingMore(true);
+    loadingCursorRef.current = requestedCursor;
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: query.trim() || null,
       namespace: ns,
-      cursor,
+      cursor: requestedCursor,
     }).then((result) => {
-      setTags((prev) => [...prev, ...result.tags]);
-      setCursor(result.next_cursor);
-      setLoadingMore(false);
-    }).catch(() => { setLoadingMore(false); });
-  }, [cursor, loadingMore, query, sidebarMode, activeNamespace]);
+      if (generation !== requestGenerationRef.current) return;
+      setTags((current) => mergeUniqueTagRecords(current, result.tags));
+      setCursor(result.next_cursor === requestedCursor ? null : result.next_cursor);
+    }).catch(() => {}).finally(() => {
+      if (generation === requestGenerationRef.current && loadingCursorRef.current === requestedCursor) {
+        loadingCursorRef.current = null;
+        setLoadingMore(false);
+      }
+    });
+  }, [cursor, query, sidebarMode, activeNamespace]);
 
   useEffect(() => {
     if (!open) return;
@@ -120,12 +139,15 @@ export function TagSelectModal() {
   useEffect(() => {
     if (!open) return;
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const generation = ++requestGenerationRef.current;
+    loadingCursorRef.current = null;
+    setLoadingMore(false);
     searchTimerRef.current = setTimeout(() => {
       const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-      loadTags(query, ns);
+      requestTags(query, ns, generation);
     }, 150);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
-  }, [query, open, loadTags, sidebarMode, activeNamespace]);
+  }, [query, open, requestTags, sidebarMode, activeNamespace]);
 
   useEffect(() => {
     if (open) {
@@ -135,17 +157,9 @@ export function TagSelectModal() {
       setSidebarMode('all');
       setActiveNamespace(null);
       setFocusIdx(-1);
-      loadTags('');
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, loadTags]);
-
-  useEffect(() => {
-    if (!open) return;
-    if (sidebarMode === 'selected' || sidebarMode === 'recent') return;
-    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    loadTags(query, ns);
-  }, [sidebarMode, activeNamespace]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const displayTags = useMemo(() => {
     if (sidebarMode === 'selected') {
@@ -367,10 +381,7 @@ export function TagSelectModal() {
                 <div className={styles.tagListInner} style={{ height: virtualizer.getTotalSize() }}>
                   {virtualizer.getVirtualItems().map((vItem) => {
                     const tag = displayTags[vItem.index];
-                    if (!tag) {
-                      if (cursor && !loadingMore && vItem.index >= displayTags.length) loadMore();
-                      return null;
-                    }
+                    if (!tag) return null;
                     const fullTag = formatTag(tag);
                     const ns = (tag.namespace ?? '').toLowerCase();
                     const isOnEntity = entityTagKeys.has(fullTag);
@@ -380,7 +391,7 @@ export function TagSelectModal() {
                     const isFocused = vItem.index === focusIdx;
                     return (
                       <div
-                        key={vItem.index}
+                        key={tag.tag_id}
                         className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''}`}
                         style={{ height: vItem.size, transform: `translateY(${vItem.start}px)` }}
                         onClick={() => toggleTag(fullTag)}
