@@ -1,21 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="paper" x1="178" y1="112" x2="846" y2="910" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#f0f1f3"/>
-      <stop offset="1" stop-color="#bfc2c8"/>
+    <linearGradient id="front" x1="512" y1="408" x2="512" y2="800" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b8bac1"/>
+      <stop offset="1" stop-color="#92959e"/>
     </linearGradient>
-    <linearGradient id="parcel" x1="291" y1="395" x2="733" y2="783" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#d5a55a"/>
-      <stop offset="1" stop-color="#aa7138"/>
-    </linearGradient>
+    <radialGradient id="top" cx="43%" cy="-12%" r="104%">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.34" stop-color="#edeef1"/>
+      <stop offset="0.72" stop-color="#d9dae0"/>
+      <stop offset="1" stop-color="#c7c9d0"/>
+    </radialGradient>
+    <filter id="inner-shadow" x="-8%" y="-12%" width="116%" height="124%" color-interpolation-filters="sRGB">
+      <feComponentTransfer in="SourceAlpha" result="inverse">
+        <feFuncA type="table" tableValues="1 0"/>
+      </feComponentTransfer>
+      <feGaussianBlur in="inverse" stdDeviation="28" result="blurred"/>
+      <feComposite in="blurred" in2="SourceAlpha" operator="in" result="shadow"/>
+      <feColorMatrix in="shadow" type="matrix" values="0 0 0 0 0
+                                                           0 0 0 0 0
+                                                           0 0 0 0 0
+                                                           0 0 0 .30 0" result="dark-shadow"/>
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="dark-shadow"/>
+      </feMerge>
+    </filter>
   </defs>
-  <path d="M218 90H648L826 268V894Q826 934 786 934H218Q178 934 178 894V130Q178 90 218 90Z" fill="url(#paper)"/>
-  <path d="M648 90V228Q648 268 688 268H826" fill="#aeb2ba"/>
-  <path d="M648 90L826 268" fill="none" stroke="#8c9098" stroke-width="24" stroke-linejoin="round"/>
-  <rect x="291" y="395" width="442" height="388" rx="48" fill="url(#parcel)" stroke="#35363b" stroke-width="28"/>
-  <path d="M512 400V778M296 514H728" fill="none" stroke="#f0d39a" stroke-width="54"/>
-  <g fill="none" stroke="#35363b" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M512 674C468 636 416 616 359 623L387 501C433 492 476 512 512 550C548 512 591 492 637 501L665 623C608 616 556 636 512 674Z" fill="#e9e3d8"/>
-    <path d="M512 550V674"/>
+
+  <!-- The front stays orthogonal while the shorter rear edge gives the lid its perspective. -->
+  <path d="M174 408H850V800H174Z"
+        fill="url(#front)" filter="url(#inner-shadow)"/>
+  <path d="M174 408L322 252H702L850 408Z"
+        fill="url(#top)" filter="url(#inner-shadow)"/>
+
+  <!-- One hairline contour surrounds the box; its internal seams stay deliberately quiet. -->
+  <path d="M174 408L322 252H702L850 408V800H174Z"
+        fill="none" stroke="#292a2e" stroke-width="2" stroke-linejoin="miter"/>
+  <path d="M174 408H850" fill="none" stroke="#292a2e" stroke-width="2" opacity="0.6"/>
+  <path d="M512 252V408" fill="none" stroke="#292a2e" stroke-width="2" opacity="0.3"/>
+
+  <!-- The complete Picto mark is reused without a fill or altered proportions. -->
+  <g transform="translate(235 328) scale(0.54)" fill="none" stroke="#292a2e" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 630C430 558 332 520 226 534L278 306C364 288 444 326 512 398C580 326 660 288 746 306L798 534C692 520 594 558 512 630Z"/>
+    <path d="M512 398V630"/>
+    <path d="M190 612Q350 604 512 674"/>
+    <path d="M834 612Q674 604 512 674"/>
+    <path d="M178 688H418C460 688 480 716 512 716C544 716 564 688 606 688H846"/>
+    <g stroke-linecap="butt">
+      <path d="M190 612L200 570"/>
+      <path d="M834 612L824 570"/>
+      <path d="M178 688L187 648"/>
+      <path d="M846 688L837 648"/>
+    </g>
   </g>
 </svg>
