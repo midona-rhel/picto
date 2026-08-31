@@ -379,17 +379,14 @@ fn path_identity(path: &Path) -> String {
 }
 
 fn detect_dropbox_roots(roots: &mut Vec<DetectedProviderRoot>, home: &Path) {
-    let mut info_files = Vec::new();
     #[cfg(target_os = "windows")]
-    {
-        for variable in ["APPDATA", "LOCALAPPDATA"] {
-            if let Some(directory) = std::env::var_os(variable) {
-                info_files.push(PathBuf::from(directory).join("Dropbox").join("info.json"));
-            }
-        }
-    }
+    let info_files: Vec<_> = ["APPDATA", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|directory| PathBuf::from(directory).join("Dropbox").join("info.json"))
+        .collect();
     #[cfg(not(target_os = "windows"))]
-    info_files.push(home.join(".dropbox").join("info.json"));
+    let info_files = vec![home.join(".dropbox").join("info.json")];
 
     for info_file in info_files {
         let Ok(contents) = std::fs::read(&info_file) else {
