@@ -150,6 +150,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "Picto-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": null,

@@ -2,6 +2,8 @@ import { shell } from 'electron';
 
 const RELEASES_API = 'https://api.github.com/repos/midona-rhel/picto/releases?per_page=20';
 const RELEASES_PAGE = 'https://github.com/midona-rhel/picto/releases';
+const RELEASE_DOWNLOADS = 'https://github.com/midona-rhel/picto/releases/download';
+const APP_RELEASE_TAG = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/;
 
 function releaseNotes(value) {
   if (Array.isArray(value)) return value.map((entry) => entry.note).filter(Boolean).join('\n\n');
@@ -27,6 +29,10 @@ function isNewer(candidate, current) {
   return false;
 }
 
+function isAppRelease(release) {
+  return !release?.draft && APP_RELEASE_TAG.test(String(release.tag_name ?? ''));
+}
+
 export function createUpdateService({
   app,
   net,
@@ -36,6 +42,7 @@ export function createUpdateService({
 }) {
   let updater = null;
   let checkPromise = null;
+  let selectedRelease = null;
   let state = {
     status: app.isPackaged ? 'idle' : 'unavailable',
     currentVersion: app.getVersion(),
@@ -58,18 +65,22 @@ export function createUpdateService({
 
   const normalizeInfo = (info) => ({
     version: info?.version ?? null,
-    releaseName: info?.releaseName ?? null,
-    releaseDate: info?.releaseDate ?? null,
-    releaseNotes: releaseNotes(info?.releaseNotes),
+    releaseName: info?.releaseName ?? selectedRelease?.name ?? null,
+    releaseDate: info?.releaseDate ?? selectedRelease?.published_at ?? null,
+    releaseNotes: releaseNotes(info?.releaseNotes) || selectedRelease?.body || '',
   });
 
-  async function checkMac() {
+  async function latestAppRelease() {
     const response = await net.fetch(RELEASES_API, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Picto-Updater' },
     });
     if (!response.ok) throw new Error(`Release check failed (${response.status})`);
     const releases = await response.json();
-    const release = releases.find((entry) => !entry.draft && isNewer(entry.tag_name, app.getVersion()));
+    return releases.find((entry) => isAppRelease(entry) && isNewer(entry.tag_name, app.getVersion())) ?? null;
+  }
+
+  async function checkMac() {
+    const release = await latestAppRelease();
     if (!release) return publish({ status: 'current', error: null });
     return publish({
       status: 'available',
@@ -117,7 +128,15 @@ export function createUpdateService({
       publish({ status: 'checking', error: null });
       try {
         if (platform === 'darwin') return await checkMac();
+        selectedRelease = await latestAppRelease();
+        if (!selectedRelease) return publish({ status: 'current', error: null });
         const activeUpdater = await ensureUpdater();
+        activeUpdater.channel = 'latest';
+        activeUpdater.setFeedURL({
+          provider: 'generic',
+          url: `${RELEASE_DOWNLOADS}/${encodeURIComponent(selectedRelease.tag_name)}/`,
+          channel: 'latest',
+        });
         await activeUpdater.checkForUpdates();
         return state;
       } catch (error) {

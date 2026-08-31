@@ -94,6 +94,7 @@ assert(windowsLibraryIcon?.from === 'build/library.ico', 'Windows packages must 
 const macLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.icns');
 assert(macLibraryIcon?.from === 'build/library.icns', 'macOS packages must include the custom library package icon');
 assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
+assert(packageManifest.build.nsis?.artifactName === 'Picto-Setup-${version}.${ext}', 'Windows update manifests and installer assets must use the same URL-safe name');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
 assert(

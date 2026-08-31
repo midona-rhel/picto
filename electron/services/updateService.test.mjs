@@ -6,6 +6,10 @@ function app(packaged = true) {
   return { isPackaged: packaged, getVersion: () => '0.6.0-alpha' };
 }
 
+function releases(...entries) {
+  return { ok: true, json: async () => entries };
+}
+
 describe('update service', () => {
   test('does not contact update servers in development', async () => {
     const fetch = vi.fn();
@@ -34,18 +38,29 @@ describe('update service', () => {
   });
 
   test('reports the current version when no newer Mac release exists', async () => {
-    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [{ draft: false, tag_name: 'v0.6.0-alpha' }] });
+    const fetch = vi.fn().mockResolvedValue(releases({ draft: false, tag_name: 'v0.6.0-alpha' }));
     const service = createUpdateService({ app: app(), net: { fetch }, sendToAllWindows: vi.fn(), platform: 'darwin' });
     expect((await service.check()).status).toBe('current');
   });
 
-  test('loads the packaged updater from its CommonJS default export', async () => {
+  test('ignores non-application releases when checking for updates', async () => {
+    const fetch = vi.fn().mockResolvedValue(releases(
+      { draft: false, tag_name: 'v0.6.0-alpha' },
+      { draft: false, tag_name: 'ai-models-v2', name: 'Picto AI Models v2' },
+    ));
+    const service = createUpdateService({ app: app(), net: { fetch }, sendToAllWindows: vi.fn(), platform: 'darwin' });
+
+    expect(await service.check()).toMatchObject({ status: 'current', error: null });
+  });
+
+  test('loads the packaged updater from its CommonJS default export and pins it to the selected app release', async () => {
     const autoUpdater = Object.assign(new EventEmitter(), {
       checkForUpdates: vi.fn().mockResolvedValue(undefined),
+      setFeedURL: vi.fn(),
     });
     const service = createUpdateService({
       app: app(),
-      net: { fetch: vi.fn() },
+      net: { fetch: vi.fn().mockResolvedValue(releases({ draft: false, tag_name: 'v0.6.1-alpha' })) },
       sendToAllWindows: vi.fn(),
       platform: 'win32',
       loadUpdaterModule: async () => ({ default: { autoUpdater } }),
@@ -56,13 +71,19 @@ describe('update service', () => {
     expect(autoUpdater.autoDownload).toBe(true);
     expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
     expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(autoUpdater.channel).toBe('latest');
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+      provider: 'generic',
+      url: 'https://github.com/midona-rhel/picto/releases/download/v0.6.1-alpha/',
+      channel: 'latest',
+    });
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
   });
 
   test('reports a stable error when the packaged updater cannot be loaded', async () => {
     const service = createUpdateService({
       app: app(),
-      net: { fetch: vi.fn() },
+      net: { fetch: vi.fn().mockResolvedValue(releases({ draft: false, tag_name: 'v0.6.1-alpha' })) },
       sendToAllWindows: vi.fn(),
       platform: 'win32',
       loadUpdaterModule: async () => ({}),
