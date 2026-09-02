@@ -483,7 +483,7 @@ export function CanvasGrid({
     if (!container || !canvas || !pipeline) return;
 
     const vp = snapshotViewport(container, committedSizeRef.current);
-    const ctx = canvas.getContext('2d', { desynchronized: true });
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeight);
@@ -593,7 +593,7 @@ export function CanvasGrid({
     if (!container || !canvas) return;
 
     const vp = snapshotViewport(container, committedSizeRef.current);
-    const ctx = canvas.getContext('2d', { desynchronized: true });
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const renderWindow = renderWindowRef.current;

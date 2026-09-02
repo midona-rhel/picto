@@ -7,6 +7,67 @@ vi.mock('../../../shared/ui/ThumbnailImage/drawBrokenThumbnail', () => ({
 }));
 
 describe('drawCanvasBaseLayer', () => {
+  it('contains video thumbnails even when image thumbnails are configured to fill', () => {
+    const drawImage = vi.fn();
+    const ctx = {
+      beginPath: vi.fn(),
+      clip: vi.fn(),
+      drawImage,
+      fillRect: vi.fn(),
+      filter: 'none',
+      globalAlpha: 1,
+      restore: vi.fn(),
+      roundRect: vi.fn(),
+      save: vi.fn(),
+      stroke: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const bitmap = { width: 200, height: 100 } as ImageBitmap;
+
+    drawCanvasBaseLayer({
+      ctx,
+      positions: [{ x: 0, y: 0, w: 100, h: 100 }],
+      items: [{
+        itemId: 1,
+        kind: 'media',
+        displayFileHash: 'video',
+        hash: '1',
+        thumbnailHash: 'video',
+        name: null,
+        mime: 'video/webm',
+        width: 200,
+        height: 100,
+        rating: null,
+        durationMs: null,
+        dominantColor: null,
+        aspectRatio: 2,
+        numFrames: null,
+        mediaCount: 1,
+      }],
+      atlasGet: () => ({ thumb: bitmap, state: 'shown', lastAccessed: 0, bytes: 1 }),
+      revealProgress: () => 1,
+      activeTiles: [0],
+      draw: { scrollTop: 0, viewportHeight: 100, textHeight: 0, borderRadius: 4 },
+      theme: {
+        placeholderBg: '#202124',
+        isLight: false,
+        borderRadius: 4,
+        textPrimary: '#fff',
+        textTertiary: '#aaa',
+        glassBorder: '#444',
+      },
+      viewMode: 'grid',
+      fitThumbnails: true,
+      grayscale: false,
+      showTileName: false,
+      showResolution: false,
+      showExtension: false,
+      showExtensionLabel: false,
+      showItemCount: false,
+    });
+
+    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 200, 100, 0, 25, 100, 50);
+  });
+
   it('uses a neutral surface behind broken media instead of its dominant color', () => {
     const fills: string[] = [];
     const ctx = {

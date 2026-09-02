@@ -70,6 +70,7 @@ describe('update service', () => {
 
     expect(autoUpdater.autoDownload).toBe(true);
     expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+    expect(autoUpdater.disableDifferentialDownload).toBe(true);
     expect(autoUpdater.allowPrerelease).toBe(true);
     expect(autoUpdater.channel).toBe('latest');
     expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
@@ -78,6 +79,29 @@ describe('update service', () => {
       channel: 'latest',
     });
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
+  });
+
+  test('publishes Windows availability before background download progress', async () => {
+    const autoUpdater = Object.assign(new EventEmitter(), {
+      checkForUpdates: vi.fn().mockImplementation(async () => {
+        autoUpdater.emit('update-available', { version: '0.6.1-alpha' });
+      }),
+      setFeedURL: vi.fn(),
+    });
+    const sendToAllWindows = vi.fn();
+    const service = createUpdateService({
+      app: app(),
+      net: { fetch: vi.fn().mockResolvedValue(releases({ draft: false, tag_name: 'v0.6.1-alpha' })) },
+      sendToAllWindows,
+      platform: 'win32',
+      loadUpdaterModule: async () => ({ autoUpdater }),
+    });
+
+    expect(await service.check()).toMatchObject({ status: 'available', version: '0.6.1-alpha' });
+    expect(sendToAllWindows).toHaveBeenLastCalledWith(
+      'picto:update-state',
+      expect.objectContaining({ status: 'available', version: '0.6.1-alpha' }),
+    );
   });
 
   test('reports a stable error when the packaged updater cannot be loaded', async () => {

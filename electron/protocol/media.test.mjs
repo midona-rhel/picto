@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMediaProtocolService, extToMime, isValidHash, parseMediaUrl, parseRange } from './media.mjs';
 
 describe('media protocol helpers', () => {
@@ -107,12 +107,13 @@ describe('media protocol helpers', () => {
     }
   });
 
-  it('queues a missing raster thumbnail durably without blocking the response', async () => {
+  it('renders a missing raster thumbnail once and publishes readiness without blocking the response', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-deferred-thumb-'));
     const hash = 'c'.repeat(64);
     let handler;
     let releaseRequest;
     const commands = [];
+    const onThumbnailReady = vi.fn();
     try {
       const originalDirectory = path.join(root, 'blobs', 'f', 'cc', 'cc');
       await fs.mkdir(originalDirectory, { recursive: true });
@@ -123,26 +124,29 @@ describe('media protocol helpers', () => {
         invoke: async (command, args) => {
           commands.push([command, args]);
           await new Promise((resolve) => { releaseRequest = resolve; });
-          return { queued: 1 };
+          const thumbnailDirectory = path.join(root, 'blobs', 't', 'cc', 'cc');
+          await fs.mkdir(thumbnailDirectory, { recursive: true });
+          await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'thumbnail');
+          return true;
         },
         isDev: true,
         getCurrentLibraryRoot: () => root,
+        onThumbnailReady,
       });
       await service.registerMediaProtocol();
 
       const response = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
 
       expect(response.status).toBe(404);
-      expect(commands).toEqual([['media.regenerate_thumbnails', { file_hashes: [hash] }]]);
+      expect(commands).toEqual([['media.render_thumbnail_now', { file_hash: hash }]]);
+      expect((await handler(new Request(`media://localhost/thumb/${hash}.jpg`))).status).toBe(404);
+      expect(commands).toHaveLength(1);
       releaseRequest();
-      const thumbnailDirectory = path.join(root, 'blobs', 't', 'cc', 'cc');
-      await fs.mkdir(thumbnailDirectory, { recursive: true });
-      await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'thumbnail');
-      service.invalidateThumbnail(hash);
+      await vi.waitFor(() => expect(onThumbnailReady).toHaveBeenCalledWith(hash));
       const generated = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
       expect(generated.status).toBe(200);
       expect(await generated.text()).toBe('thumbnail');
-      expect(commands).toEqual([['media.regenerate_thumbnails', { file_hashes: [hash] }]]);
+      expect(commands).toHaveLength(1);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -236,6 +240,44 @@ describe('media protocol helpers', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
       await fs.rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('delegates video byte ranges to the native Chromium file loader', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-video-stream-'));
+    const hash = '9'.repeat(64);
+    let handler;
+    const fetchFile = vi.fn().mockResolvedValue(new Response('video bytes', {
+      status: 206,
+      headers: {
+        'Content-Type': 'video/webm',
+        'Content-Range': 'bytes 0-10/100',
+      },
+    }));
+    try {
+      const originalDirectory = path.join(root, 'blobs', 'f', '99', '99');
+      const originalPath = path.join(originalDirectory, `${hash}.webm`);
+      await fs.mkdir(originalDirectory, { recursive: true });
+      await fs.writeFile(originalPath, 'video bytes');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async () => null,
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+        fetchFile,
+      });
+      await service.registerMediaProtocol();
+      const request = new Request(`media://localhost/file/${hash}.webm`, {
+        headers: { Range: 'bytes=0-' },
+      });
+
+      const response = await handler(request);
+
+      expect(response.status).toBe(206);
+      expect(fetchFile).toHaveBeenCalledWith(originalPath, request);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

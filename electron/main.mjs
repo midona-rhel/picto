@@ -2,7 +2,7 @@ import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, 
 import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { copyFiles, getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, openTutorialLibrary, closeLibrary, openWithApplication, setFileIcon, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
@@ -218,6 +218,13 @@ const mediaProtocol = createMediaProtocolService({
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,
+  fetchFile: (filePath, request) => net.fetch(pathToFileURL(filePath).href, {
+    method: request.method,
+    headers: request.headers,
+  }),
+  onThumbnailReady: (fileHash) => {
+    windowManager.sendToAllWindows('picto:thumbnail-changed', { fileHash });
+  },
 });
 
 

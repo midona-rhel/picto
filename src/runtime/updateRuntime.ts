@@ -13,9 +13,16 @@ export function startUpdateRuntime(): () => void {
     if (!state.version) return;
     const key = `${state.status}:${state.version}`;
     if (announced === key) return;
-    if (state.status === 'available' && state.platform === 'darwin') {
+    if (state.status === 'available') {
       announced = key;
-      showInfoNotification({ title: t("Picto {value0} is available", { value0: state.version }), message: 'Open the release notes to download it.', duration: 10_000, action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) } });
+      showInfoNotification({
+        title: t("Picto {value0} is available", { value0: state.version }),
+        message: state.platform === 'darwin'
+          ? 'Open the release notes to download it.'
+          : t("Updates download in the background and install after Picto closes."),
+        duration: 10_000,
+        action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) },
+      });
     } else if (state.status === 'downloaded') {
       announced = key;
       showSuccessNotification({ title: t("Picto {value0} is ready", { value0: state.version }), message: 'Restart to finish updating.', duration: 10_000, action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) } });

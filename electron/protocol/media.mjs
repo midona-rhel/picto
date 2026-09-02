@@ -83,9 +83,10 @@ export function createMediaProtocolService({
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,
+  fetchFile,
+  onThumbnailReady = () => {},
 }) {
   const thumbRequestInFlight = new Map();
-  const thumbQueueRequested = new Set();
   const thumbMetaCache = new Map();
   const fileMetaCache = new Map();
   let cachedRoot = null;
@@ -97,7 +98,6 @@ export function createMediaProtocolService({
     thumbMetaCache.clear();
     fileMetaCache.clear();
     thumbRequestInFlight.clear();
-    thumbQueueRequested.clear();
     return root;
   }
 
@@ -210,8 +210,6 @@ export function createMediaProtocolService({
 
   function invalidateThumbnail(hash) {
     thumbMetaCache.delete(hash);
-    thumbRequestInFlight.delete(hash);
-    thumbQueueRequested.delete(hash);
   }
 
   async function resolveLibraryCoverMeta(libraryRoot) {
@@ -247,28 +245,27 @@ export function createMediaProtocolService({
   async function renderThumbnailNow(hash) {
     const existing = thumbRequestInFlight.get(hash);
     if (existing) {
-      await existing;
-      return;
+      return existing;
     }
     const task = (async () => {
       try {
         await invoke('media.render_thumbnail_now', { file_hash: hash });
       } catch {}
       if (!await resolveThumbMeta(hash)) await renderExternalThumbnail(hash);
+      return Boolean(await resolveThumbMeta(hash));
     })().finally(() => {
       thumbRequestInFlight.delete(hash);
     });
     thumbRequestInFlight.set(hash, task);
-    await task;
+    return task;
   }
 
   function scheduleThumbnailAfterMiss(hash) {
-    if (thumbQueueRequested.has(hash)) return;
-    thumbQueueRequested.add(hash);
-    void invoke('media.regenerate_thumbnails', { file_hashes: [hash] }).catch((error) => {
-      forwardWarn('media', `Failed to queue missing thumbnail ${hash.slice(0, 12)}: ${error?.message ?? String(error)}`);
-    }).finally(() => {
-      thumbQueueRequested.delete(hash);
+    if (thumbRequestInFlight.has(hash)) return;
+    void renderThumbnailNow(hash).then((ready) => {
+      if (ready) onThumbnailReady(hash);
+    }).catch((error) => {
+      forwardWarn('media', `Failed to render missing thumbnail ${hash.slice(0, 12)}: ${error?.message ?? String(error)}`);
     });
   }
 
@@ -378,6 +375,16 @@ export function createMediaProtocolService({
       const cacheControl = parsed.kind === 'thumb' || parsed.kind === 'library-cover'
         ? 'no-store'
         : 'public, max-age=31536000, immutable';
+
+      // Chromium's native file loader owns media buffering and byte ranges.
+      // Re-wrapping video/audio in a JavaScript stream breaks playback on
+      // some Windows Chromium builds even when the headers look equivalent.
+      if (parsed.kind === 'file'
+        && (mime.startsWith('video/') || mime.startsWith('audio/'))
+        && fetchFile) {
+        return fetchFile(meta.filePath, request);
+      }
+
       const range = parseRange(request.headers.get('range'), meta.size);
 
       if (!range) {

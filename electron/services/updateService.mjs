@@ -101,11 +101,19 @@ export function createUpdateService({
     if (!updater) throw new Error('The packaged update service is unavailable.');
     updater.autoDownload = true;
     updater.autoInstallOnAppQuit = true;
+    // GitHub release assets do not support electron-updater's multi-range
+    // differential request reliably. Download the Windows installer directly.
+    updater.disableDifferentialDownload = platform === 'win32';
     updater.allowPrerelease = true;
     updater.fullChangelog = true;
     updater.logger = console;
     updater.on('checking-for-update', () => publish({ status: 'checking', error: null }));
-    updater.on('update-available', (info) => publish({ status: 'downloading', ...normalizeInfo(info), error: null }));
+    updater.on('update-available', (info) => publish({
+      status: 'available',
+      ...normalizeInfo(info),
+      progress: null,
+      error: null,
+    }));
     updater.on('update-not-available', () => publish({ status: 'current', error: null }));
     updater.on('download-progress', (progress) => publish({
       status: 'downloading',
