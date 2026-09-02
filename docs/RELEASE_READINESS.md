@@ -1,4 +1,4 @@
-# Picto 0.6.8-alpha release readiness
+# Picto 0.6.9-alpha release readiness
 
 Picto ships for these platforms only:
 
@@ -39,7 +39,7 @@ native addons, and downloaded native tools must not imply otherwise.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Public Apple Developer ID signing and notarization are not part of the `0.6.8-alpha` gate. The
+- Public Apple Developer ID signing and notarization are not part of the `0.6.9-alpha` gate. The
   macOS alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
