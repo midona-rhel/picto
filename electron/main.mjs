@@ -88,7 +88,7 @@ let smokeExitRequested = false;
 
 function reportPackagedSmoke(event, details = {}) {
   if (!isPackagedSmoke) return;
-  process.stdout.write(`[picto-packaged-smoke] ${JSON.stringify({ event, ...details })}\n`);
+  process.stdout.write(`[picto-packaged-smoke] ${JSON.stringify({ ...details, event })}\n`);
 }
 
 function closeNativeLibraryOnce() {
