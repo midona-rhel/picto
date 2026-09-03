@@ -1128,6 +1128,8 @@ pub fn interrupt_query(
                 [query.run_query_id],
             )?
         };
+        #[cfg(not(debug_assertions))]
+        let _ = abandoned_attempts;
         #[cfg(debug_assertions)]
         if abandoned_attempts != 0 {
             tracing::debug!(

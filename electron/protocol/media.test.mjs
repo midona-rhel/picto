@@ -107,6 +107,39 @@ describe('media protocol helpers', () => {
     }
   });
 
+  it('routes Flash thumbnails to the browser renderer', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-flash-thumb-'));
+    const hash = '8'.repeat(64);
+    const originalDirectory = path.join(root, 'blobs', 'f', '88', '88');
+    const thumbnailPath = path.join(root, 'blobs', 't', '88', '88', `${hash}.png`);
+    const render = vi.fn(async ({ outputPath }) => {
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.writeFile(outputPath, 'flash thumbnail');
+    });
+    try {
+      await fs.mkdir(originalDirectory, { recursive: true });
+      await fs.writeFile(path.join(originalDirectory, `${hash}.swf`), 'FWS');
+      const service = createMediaProtocolService({
+        protocol: { handle() {} },
+        path,
+        invoke: async () => { throw new Error('Thumbnail requires browser renderer'); },
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+        flashThumbnail: { render },
+      });
+
+      await service.regenerateThumbnail(hash);
+
+      expect(render).toHaveBeenCalledWith({
+        sourceUrl: `media://localhost/file/${hash}.swf`,
+        outputPath: thumbnailPath,
+      });
+      expect(await fs.readFile(thumbnailPath, 'utf8')).toBe('flash thumbnail');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('renders a missing raster thumbnail once and publishes readiness without blocking the response', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-deferred-thumb-'));
     const hash = 'c'.repeat(64);
@@ -243,17 +276,11 @@ describe('media protocol helpers', () => {
     }
   });
 
-  it('delegates video byte ranges to the native Chromium file loader', async () => {
+  it('normalizes native video byte ranges for Chromium playback', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-video-stream-'));
     const hash = '9'.repeat(64);
     let handler;
-    const fetchFile = vi.fn().mockResolvedValue(new Response('video bytes', {
-      status: 206,
-      headers: {
-        'Content-Type': 'video/webm',
-        'Content-Range': 'bytes 0-10/100',
-      },
-    }));
+    const fetchFile = vi.fn().mockResolvedValue(new Response('video bytes'));
     try {
       const originalDirectory = path.join(root, 'blobs', 'f', '99', '99');
       const originalPath = path.join(originalDirectory, `${hash}.webm`);
@@ -275,7 +302,42 @@ describe('media protocol helpers', () => {
       const response = await handler(request);
 
       expect(response.status).toBe(206);
-      expect(fetchFile).toHaveBeenCalledWith(originalPath, request);
+      expect(response.headers.get('content-range')).toBe('bytes 0-10/11');
+      expect(response.headers.get('content-length')).toBe('11');
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(response.headers.get('content-type')).toBe('video/webm');
+      expect(fetchFile).toHaveBeenCalledWith(originalPath, { start: 0, end: 10 });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unsatisfiable media ranges with the canonical file size', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-video-invalid-range-'));
+    const hash = '7'.repeat(64);
+    let handler;
+    const fetchFile = vi.fn();
+    try {
+      const originalDirectory = path.join(root, 'blobs', 'f', '77', '77');
+      await fs.mkdir(originalDirectory, { recursive: true });
+      await fs.writeFile(path.join(originalDirectory, `${hash}.webm`), 'video bytes');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async () => null,
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+        fetchFile,
+      });
+      await service.registerMediaProtocol();
+
+      const response = await handler(new Request(`media://localhost/file/${hash}.webm`, {
+        headers: { Range: 'bytes=99-100' },
+      }));
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get('content-range')).toBe('bytes */11');
+      expect(fetchFile).not.toHaveBeenCalled();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

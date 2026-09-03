@@ -1,4 +1,4 @@
-# Picto 0.6.9-alpha release readiness
+# Picto 0.6.10-alpha release readiness
 
 Picto ships for these platforms only:
 
@@ -16,8 +16,8 @@ native addons, and downloaded native tools must not imply otherwise.
    pass on every supported runner.
 3. `npm run release:audit -- --artifacts` passes after native binaries are built.
 4. The packaged smoke test opens the app with an isolated library, loads and settles the renderer,
-   closes the native library, and removes its temporary data without native-module errors. Import,
-   subscription, and thumbnail behavior remains covered by
+   plays a VP9 WebM through Picto's media protocol, closes the native library, and removes its
+   temporary data without native-module errors. Import, subscription, and thumbnail behavior remains covered by
    focused integration tests rather than being overstated as part of this smoke test.
 5. Cloud Sync and Tutorials pass their separately owned persistence, accessibility, packaged-build,
    and restart-recovery gates.
@@ -39,7 +39,7 @@ native addons, and downloaded native tools must not imply otherwise.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Public Apple Developer ID signing and notarization are not part of the `0.6.9-alpha` gate. The
+- Public Apple Developer ID signing and notarization are not part of the `0.6.10-alpha` gate. The
   macOS alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows

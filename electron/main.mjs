@@ -129,6 +129,54 @@ async function completePackagedSmoke() {
   }
 }
 
+async function verifyPackagedSmokeMediaPlayback() {
+  const hash = process.env.PICTO_SMOKE_MEDIA_HASH;
+  if (!isValidHash(hash)) throw new Error('Packaged smoke media hash is missing or invalid.');
+  const smokeWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    const source = `media://localhost/file/${hash}.webm`;
+    const markup = `<video id="media" muted src="${source}"></video>`;
+    await smokeWindow.loadURL(`data:text/html,${encodeURIComponent(markup)}`);
+    const result = await smokeWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+      const media = document.querySelector('#media');
+      let settled = false;
+      const finish = (event) => {
+        if (settled) return;
+        settled = true;
+        resolve({
+          event,
+          currentTime: media.currentTime,
+          duration: media.duration,
+          readyState: media.readyState,
+          errorCode: media.error?.code ?? null,
+          errorMessage: media.error?.message ?? null,
+        });
+      };
+      media.addEventListener('loadedmetadata', () => media.play().catch(() => {}), { once: true });
+      media.addEventListener('timeupdate', () => {
+        if (media.currentTime > 0.05) finish('playing');
+      });
+      media.addEventListener('error', () => finish('error'), { once: true });
+      setTimeout(() => finish('timeout'), 10000);
+      media.load();
+    })`, true);
+    if (result.event !== 'playing') {
+      throw new Error(`Packaged WebM playback ${result.event}: ${result.errorMessage ?? `media error ${result.errorCode ?? 'unknown'}`}`);
+    }
+    reportPackagedSmoke('media-playback-ready', result);
+  } finally {
+    if (!smokeWindow.isDestroyed()) smokeWindow.destroy();
+  }
+}
+
 function awaitNativeShutdownBeforeQuit(event) {
   if (nativeShutdownSettled) return;
   event.preventDefault();
@@ -218,9 +266,8 @@ const mediaProtocol = createMediaProtocolService({
   flashThumbnail,
   pdfThumbnail,
   documentThumbnail,
-  fetchFile: (filePath, request) => net.fetch(pathToFileURL(filePath).href, {
-    method: request.method,
-    headers: request.headers,
+  fetchFile: (filePath, range) => net.fetch(pathToFileURL(filePath).href, {
+    headers: range ? { Range: `bytes=${range.start}-${range.end}` } : undefined,
   }),
   onThumbnailReady: (fileHash) => {
     windowManager.sendToAllWindows('picto:thumbnail-changed', { fileHash });
@@ -243,8 +290,12 @@ const windowManager = createWindowManager({
     if (event === 'did-finish-load' && details.label === 'main') {
       reportPackagedSmoke(event, details);
       setTimeout(() => {
-        reportPackagedSmoke('settle-complete');
-        void completePackagedSmoke();
+        void verifyPackagedSmokeMediaPlayback().then(() => {
+          reportPackagedSmoke('settle-complete');
+          return completePackagedSmoke();
+        }).catch((error) => {
+          failPackagedSmoke('packaged-smoke-failed', { message: error?.message ?? String(error) });
+        });
       }, SMOKE_SETTLE_MS);
       return;
     }

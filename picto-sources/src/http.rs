@@ -267,6 +267,8 @@ impl HttpRuntime {
                     cancel,
                 )
                 .await?;
+            #[cfg(not(debug_assertions))]
+            let _ = wait;
             #[cfg(debug_assertions)]
             tracing::debug!(
                 target: "picto_sources::http",
@@ -788,6 +790,8 @@ impl HttpRuntime {
             let wait = self
                 .wait_for_domain(&domain, minimum_interval, maximum_interval, cancel)
                 .await?;
+            #[cfg(not(debug_assertions))]
+            let _ = wait;
             #[cfg(debug_assertions)]
             tracing::debug!(
                 target: "picto_sources::http",
@@ -1035,6 +1039,8 @@ impl HttpRuntime {
 }
 
 fn trace_media_fallback(fallback: &MediaDescriptor) {
+    #[cfg(not(debug_assertions))]
+    let _ = fallback;
     #[cfg(debug_assertions)]
     tracing::debug!(
         target: "picto_sources::http",

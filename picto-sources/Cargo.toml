@@ -1,6 +1,6 @@
 [package]
 name = "picto_sources"
-version = "0.6.9-alpha"
+version = "0.6.10-alpha"
 edition = "2021"
 license = "MIT"
 

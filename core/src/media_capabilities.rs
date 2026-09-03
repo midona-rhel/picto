@@ -6,6 +6,7 @@ pub enum ThumbnailBackend {
     Inline,
     GenericAdapter,
     Ffmpeg,
+    Browser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,13 @@ pub fn capabilities_for_detected_mime(mime: MimeType) -> MediaCapabilities {
     }
 
     match mime {
+        MimeType::ApplicationFlash => MediaCapabilities {
+            ingest_supported: true,
+            thumbnail_backend: Some(ThumbnailBackend::Browser),
+            can_preview_image: false,
+            can_dominant_colors: false,
+            can_perceptual_hash: false,
+        },
         MimeType::AnimationGif
         | MimeType::AnimationApng
         | MimeType::AnimationWebp
@@ -108,6 +116,16 @@ pub fn capabilities_for_stored_media(
             thumbnail_backend: Some(ThumbnailBackend::GenericAdapter),
             can_preview_image: true,
             can_dominant_colors: true,
+            can_perceptual_hash: false,
+        };
+    }
+
+    if mime_type == "application/x-shockwave-flash" {
+        return MediaCapabilities {
+            ingest_supported: true,
+            thumbnail_backend: Some(ThumbnailBackend::Browser),
+            can_preview_image: false,
+            can_dominant_colors: false,
             can_perceptual_hash: false,
         };
     }
@@ -327,5 +345,15 @@ mod tests {
         assert_eq!(caps.thumbnail_backend, Some(ThumbnailBackend::Inline));
         assert!(caps.can_dominant_colors);
         assert!(caps.can_perceptual_hash);
+    }
+
+    #[test]
+    fn flash_thumbnails_are_owned_by_the_browser_renderer() {
+        let detected = capabilities_for_detected_mime(MimeType::ApplicationFlash);
+        let stored = capabilities_for_stored_media("application/x-shockwave-flash", Some(30));
+        assert_eq!(detected.thumbnail_backend, Some(ThumbnailBackend::Browser));
+        assert_eq!(stored.thumbnail_backend, Some(ThumbnailBackend::Browser));
+        assert!(!stored.can_dominant_colors);
+        assert!(!stored.can_perceptual_hash);
     }
 }

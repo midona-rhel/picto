@@ -376,16 +376,38 @@ export function createMediaProtocolService({
         ? 'no-store'
         : 'public, max-age=31536000, immutable';
 
-      // Chromium's native file loader owns media buffering and byte ranges.
-      // Re-wrapping video/audio in a JavaScript stream breaks playback on
-      // some Windows Chromium builds even when the headers look equivalent.
+      const rangeHeader = request.headers.get('range');
+      const range = parseRange(rangeHeader, meta.size);
+      if (rangeHeader && !range) {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            'Content-Range': `bytes */${meta.size}`,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': cacheControl,
+          },
+        });
+      }
+
+      // Keep Electron's native file stream, but normalize its range response.
+      // net.fetch(file://) returns the requested bytes with status 200 and no
+      // Content-Range, which Chromium rejects as an invalid media response.
       if (parsed.kind === 'file'
         && (mime.startsWith('video/') || mime.startsWith('audio/'))
         && fetchFile) {
-        return fetchFile(meta.filePath, request);
+        const response = await fetchFile(meta.filePath, range);
+        const headers = {
+          'Content-Type': mime,
+          'Content-Length': String(range ? range.end - range.start + 1 : meta.size),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': cacheControl,
+        };
+        if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${meta.size}`;
+        return new Response(response.body, {
+          status: range ? 206 : 200,
+          headers,
+        });
       }
-
-      const range = parseRange(request.headers.get('range'), meta.size);
 
       if (!range) {
         const stream = createReadStream(meta.filePath);

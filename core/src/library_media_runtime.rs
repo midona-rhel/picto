@@ -220,6 +220,11 @@ async fn execute(
     );
     match work.kind {
         MediaWorkKind::Thumbnail => {
+            // Browser-rendered formats are generated on the first protocol
+            // request. The durable worker only needs to settle its queue row.
+            if source.caps.thumbnail_backend == Some(ThumbnailBackend::Browser) {
+                return Ok((false, None));
+            }
             ensure_thumbnail(application, &target, &mut source).await?;
             Ok((false, Some(target.content_hash)))
         }
@@ -365,6 +370,12 @@ async fn ensure_thumbnail(
     }
     if !source.caps.can_thumbnail() {
         return Err(format!("No thumbnail backend for {}", target.mime));
+    }
+    if source.caps.thumbnail_backend == Some(ThumbnailBackend::Browser) {
+        return Err(format!(
+            "Thumbnail requires browser renderer for {}",
+            target.mime
+        ));
     }
     let (bytes, extension) = if source.caps.thumbnail_backend == Some(ThumbnailBackend::Inline) {
         source
@@ -545,6 +556,72 @@ mod tests {
             .find_thumbnail_path(&content_hash)
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn derivative_worker_hands_flash_thumbnail_work_to_electron() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let source = directory.path().join("movie.swf");
+        fs::write(&source, b"FWS").unwrap();
+        let content_hash = hex::encode(Sha256::digest(b"FWS"));
+        application
+            .library()
+            .enqueue_ingest_job(
+                &PreparedIngestJob {
+                    job_key: "manual:flash-root".into(),
+                    source_kind: "manual".into(),
+                    source_path: source.to_string_lossy().into_owned(),
+                    source_item_id: None,
+                    delete_after_ingest: false,
+                    payload: PreparedIngestPayload::Item(PreparedImport {
+                        stable_key: "flash-root".into(),
+                        media_name: "movie.swf".into(),
+                        file_path: source.to_string_lossy().into_owned(),
+                        facts: ImmutableMediaFacts {
+                            mime: "application/x-shockwave-flash".into(),
+                            size_bytes: 3,
+                            width: Some(320),
+                            height: Some(240),
+                            duration_ms: Some(1_000),
+                            frame_count: Some(30),
+                            content_hash: content_hash.clone(),
+                            perceptual_hash: None,
+                            palette: Vec::new(),
+                        },
+                        lifecycle: Lifecycle::Active,
+                        rating: Rating::Unrated,
+                        notes: None,
+                        tags: Vec::new(),
+                        folders: Vec::new(),
+                        source_urls: Vec::new(),
+                        source_identity: None,
+                        imported_at_ms: 1_700_000_000_000,
+                        captured_at_ms: None,
+                    }),
+                },
+                "2026-09-03T00:00:00Z",
+            )
+            .unwrap();
+        crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+
+        let report = drain_batch(&application, 8).await.unwrap();
+
+        assert_eq!(report.claimed, 3);
+        assert_eq!(report.succeeded, 3);
+        assert_eq!(report.retried, 0);
+        assert_eq!(report.failed, 0);
+        assert!(report.thumbnails_changed.is_empty());
+        assert!(application
+            .library()
+            .claim_derivative_work(8, &chrono::Utc::now().to_rfc3339())
+            .unwrap()
+            .is_empty());
+        assert!(application
+            .blobs()
+            .find_thumbnail_path(&content_hash)
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

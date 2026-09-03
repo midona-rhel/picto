@@ -10,6 +10,7 @@ const SMOKE_PREFIX = '[picto-packaged-smoke] ';
 const REQUIRED_EVENTS = new Set([
   'native-library-initialized',
   'did-finish-load',
+  'media-playback-ready',
   'settle-complete',
   'native-library-closed',
 ]);
@@ -26,6 +27,8 @@ const FAILURE_EVENTS = new Set([
 ]);
 const PROCESS_TIMEOUT_MS = 30_000;
 const OUTPUT_LIMIT = 64 * 1024;
+const SMOKE_MEDIA_HASH = '9b48cf90816815161d3ccd393efb04c85a7d26d141ab9a7b0a94adaa4a3cea94';
+const SMOKE_MEDIA_BASE64 = 'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAHoEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuMU6uEElTDZ1OsggEjTbuMU6uEHFO7a1OsggHS7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjIuMy4xMDBXQYxMYXZmNjIuMy4xMDBEiYhAj0AAAAAAABZUrmvIrgEAAAAAAAA/14EBc8WIWlKCpHdY/Q2cgQAitZyDdW5kiIEAhoVWX1ZQOYOBASPjg4Q7msoA4JCwgRC6gRCagQJVsIRVuYEBElTDZ0B/c3OfY8CAZ8iZRaOHRU5DT0RFUkSHjExhdmY2Mi4zLjEwMHNz2mPAi2PFiFpSgqR3WP0NZ8ilRaOHRU5DT0RFUkSHmExhdmM2Mi4xMS4xMDAgbGlidnB4LXZwOWfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDEuMDAwMDAwMDAwAB9DtnWl54EAo6CBAACAgkmDQgAA8AD2ADgkHBhKAAAwYAAAEL///UiMABxTu2uRu4+zgQC3iveBAfGCAajwgQM=';
 
 export function parseArgs(argv) {
   const args = {};
@@ -215,6 +218,16 @@ async function main() {
       fs.mkdir(appData),
       fs.mkdir(library),
     ]);
+    const mediaPath = path.join(
+      library,
+      'blobs',
+      'f',
+      SMOKE_MEDIA_HASH.slice(0, 2),
+      SMOKE_MEDIA_HASH.slice(2, 4),
+      `${SMOKE_MEDIA_HASH}.webm`,
+    );
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, Buffer.from(SMOKE_MEDIA_BASE64, 'base64'));
     const env = {
       ...process.env,
       HOME: home,
@@ -222,6 +235,7 @@ async function main() {
       PICTO_PACKAGED_SMOKE: '1',
       PICTO_SMOKE_APP_DATA: appData,
       PICTO_LIBRARY_ROOT: library,
+      PICTO_SMOKE_MEDIA_HASH: SMOKE_MEDIA_HASH,
     };
     delete env.ELECTRON_RUN_AS_NODE;
     const launchArgs = platform === 'linux' ? ['--no-sandbox'] : [];
