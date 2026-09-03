@@ -12,6 +12,7 @@ const REQUIRED_EVENTS = new Set([
   'native-library-initialized',
   'did-finish-load',
   'media-playback-ready',
+  'flash-runtime-ready',
   'settle-complete',
   'native-library-closed',
 ]);
@@ -30,6 +31,8 @@ const PROCESS_TIMEOUT_MS = 30_000;
 const OUTPUT_LIMIT = 64 * 1024;
 const SMOKE_MEDIA_HASH = '611b3709e57e0e7a1c3fa5aa740b3167fe3a0594d34a7e4f7e2d3dbc8c61463b';
 const SMOKE_MEDIA_BASE64 = 'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAKmEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuMU6uEElTDZ1OsggEjTbuMU6uEHFO7a1OsggKQ7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjIuMy4xMDBXQYxMYXZmNjIuMy4xMDBEiYhAj0AAAAAAABZUrmvIrgEAAAAAAAA/14EBc8WIPPRGNMoo3n+cgQAitZyDdW5kiIEAhoVWX1ZQOYOBASPjg4QF9eEA4JCwgRC6gRCagQJVsIRVuYEBElTDZ0B/c3OfY8CAZ8iZRaOHRU5DT0RFUkSHjExhdmY2Mi4zLjEwMHNz2mPAi2PFiDz0RjTKKN5/Z8ilRaOHRU5DT0RFUkSHmExhdmM2Mi4xMS4xMDAgbGlidnB4LXZwOWfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDEuMDAwMDAwMDAwAB9DtnVA4ueBAKOggQAAgIJJg0IAAPAA9gA4JBwYSgAAMGAAABC///1IjACjk4EAZACGAECSnABQAAADIAAAQkCjk4EAyACGAECSnABO4AADIAAAQkCjk4EBLACGAECSnABQAAADIAAAQkCjk4EBkACGAECSnABNQAADIAAAQkCjk4EB9ACGAECSnABQAAADIAAAQkCjk4ECWACGAECSnABO4AADIAAAQkCjk4ECvACGAECSnABQAAADIAAAQkCjk4EDIACGAECSnABKIAADIAAAQkCjk4EDhACGAECSnABQAAADIAAAQkAcU7trkbuPs4EAt4r3gQHxggGo8IED';
+const SMOKE_FLASH_HASH = '32a5b6867fa51e0b1ca0013287eb969ceb68a4db4ee8a62d31cceda28a90df4e';
+const SMOKE_FLASH_BASE64 = 'RldTD74CAAB4AAVfAAAPoAAAGAEARBEAAAAAQwL///8/A5QCAACI0QARAG9ial8xAHZhbHVlT2YAT0JKXzEAb2JqXzIAT0JKXzIANAAvLyAnYWInICsgJ2NkJwBhAAAvLyAzMDAgKyAnMTUwJyArIHRydWUALy8gJzMwMCcgKyAnMTUwYScALy8gJzMwMCcgKyAnMHg5NicgKyAnMDEwJwAvLyAnMzAwJyArIHVuZGVmaW5lZAAvLyAnMzAwJyArIG51bGwALy8gJzMwMCcgKyBOYU4ALy8gJzMwMCcgKyBJbmZpbml0eQAvLyBvYmpfMSArIG9ial8yAJYEAAgACAGbBQAAAAAPAJYCAAgCJpYFAAcBAAAAPpYFAAcBAAAAQx2WBAAIAwgBmwUAAAAADACWAgAIBCaWAgAIBT6WBQAHAQAAAEMdlgIACAYmlgsAAGEAAGFiAABjZAAKHZYCAAgHHCaWAgAICCaWAgAICSaWDQAAYQAHLAEAAAeWAAAACpYCAAUBCh2WAgAIBxwmlgIACAgmlgIACAomlg4AAGEAADMwMAAAMTUwYQAKHZYCAAgHHCaWAgAICCaWAgAICyaWDgAAYQAAMzAwAAAweDk2AAqWBQAAMDEwAAodlgIACAccJpYCAAgIJpYCAAgMJpYJAABhAAAzMDAAAwodlgIACAccJpYCAAgIJpYCAAgNJpYJAABhAAAzMDAAAgodlgIACAccJpYCAAgIJpYCAAgOJpYRAABhAAAzMDAABgAA+H8AAAAACh2WAgAIBxwmlgIACAgmlgIACA8mlhEAAGEAADMwMAAGAADwfwAAAAAKHZYCAAgHHCaWAgAICCaWAgAIECaWCgAAYQAAb2JqXzEAHJYHAABvYmpfMgAcCh2WAgAIBxwmgxAARlNDb21tYW5kOnF1aXQAAABAAAAA';
 
 export function parseArgs(argv) {
   const args = {};
@@ -234,6 +237,21 @@ async function main() {
       throw new Error(`Packaged smoke media hash mismatch: expected ${SMOKE_MEDIA_HASH}, received ${smokeMediaHash}`);
     }
     await fs.writeFile(mediaPath, smokeMedia);
+    const flashPath = path.join(
+      library,
+      'blobs',
+      'f',
+      SMOKE_FLASH_HASH.slice(0, 2),
+      SMOKE_FLASH_HASH.slice(2, 4),
+      `${SMOKE_FLASH_HASH}.swf`,
+    );
+    await fs.mkdir(path.dirname(flashPath), { recursive: true });
+    const smokeFlash = Buffer.from(SMOKE_FLASH_BASE64, 'base64');
+    const smokeFlashHash = createHash('sha256').update(smokeFlash).digest('hex');
+    if (smokeFlashHash !== SMOKE_FLASH_HASH) {
+      throw new Error(`Packaged smoke Flash hash mismatch: expected ${SMOKE_FLASH_HASH}, received ${smokeFlashHash}`);
+    }
+    await fs.writeFile(flashPath, smokeFlash);
     const env = {
       ...process.env,
       HOME: home,
@@ -242,6 +260,7 @@ async function main() {
       PICTO_SMOKE_APP_DATA: appData,
       PICTO_LIBRARY_ROOT: library,
       PICTO_SMOKE_MEDIA_HASH: SMOKE_MEDIA_HASH,
+      PICTO_SMOKE_FLASH_HASH: SMOKE_FLASH_HASH,
     };
     delete env.ELECTRON_RUN_AS_NODE;
     const launchArgs = platform === 'linux' ? ['--no-sandbox'] : [];

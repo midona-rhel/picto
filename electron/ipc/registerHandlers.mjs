@@ -695,6 +695,7 @@ export function registerIpcHandlers({
   handle('picto:updates:state', () => updateService.getState());
   handle('picto:updates:install', () => updateService.install());
   handle('picto:updates:open-release', () => updateService.openRelease());
+  handle('picto:updates:acknowledge-installed', () => updateService.acknowledgeInstalled());
 
   handle('picto:monitor:current', () => {
     const point = screen.getCursorScreenPoint();

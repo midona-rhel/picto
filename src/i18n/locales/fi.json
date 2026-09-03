@@ -951,6 +951,7 @@
   "Picto {value0}": "Picto {value0}",
   "Picto {value0} is available": "Picto {value0} on saatavilla",
   "Picto {value0} is ready": "Picto {value0} on valmis",
+  "Picto was updated successfully. Here’s what changed.": "Picto päivitettiin onnistuneesti. Tässä ovat muutokset.",
   "Picto contributors": "Kuvantekijät",
   "Picto could not inspect this folder. Choose it again or check that it is still available.": "Picto ei voinut tarkastaa tätä kansiota. Valitse se uudelleen tai tarkista, että se on edelleen saatavilla.",
   "Picto is up to date.": "Picto on ajan tasalla.",

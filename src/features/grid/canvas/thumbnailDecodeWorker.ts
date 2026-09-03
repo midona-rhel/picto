@@ -11,7 +11,13 @@
 // ── Messages ────────────────────────────────────────────────────
 
 type DecodeQuality = 'thumbnail' | 'full';
-type PlanEntry = { fileHash: string; url: string; quality: DecodeQuality };
+type PlanEntry = {
+  fileHash: string;
+  url: string;
+  quality: DecodeQuality;
+  resizeWidth?: number;
+  resizeHeight?: number;
+};
 type PlanMessage = { type: 'plan'; entries: PlanEntry[] };
 type ClearMessage = { type: 'clear' };
 type InvalidateMessage = { type: 'invalidate'; fileHash: string };
@@ -29,6 +35,11 @@ const failCounts = new Map<string, number>();
 const MAX_CONCURRENT = 6;
 const MAX_FAILURES = 2;
 
+function requestKey(entry: PlanEntry | undefined): string {
+  if (!entry) return '';
+  return `${entry.url}|${entry.resizeWidth ?? 0}x${entry.resizeHeight ?? 0}`;
+}
+
 // ── Plan ────────────────────────────────────────────────────────
 
 function handlePlan(entries: PlanEntry[]): void {
@@ -42,14 +53,15 @@ function handlePlan(entries: PlanEntry[]): void {
 
   // Cancel loads no longer in plan
   for (const [fileHash, controller] of inFlight) {
-    if (!nextFileHashes.has(fileHash) || currentPlan.get(fileHash)?.url !== nextEntries.get(fileHash)?.url) {
+    if (!nextFileHashes.has(fileHash)
+      || requestKey(currentPlan.get(fileHash)) !== requestKey(nextEntries.get(fileHash))) {
       controller.abort();
       inFlight.delete(fileHash);
     }
   }
 
-  for (const [fileHash, url] of delivered) {
-    if (!nextFileHashes.has(fileHash) || nextEntries.get(fileHash)?.url !== url) delivered.delete(fileHash);
+  for (const [fileHash, key] of delivered) {
+    if (!nextFileHashes.has(fileHash) || requestKey(nextEntries.get(fileHash)) !== key) delivered.delete(fileHash);
   }
 
   currentPlan.clear();
@@ -85,7 +97,8 @@ function pumpLoads(): void {
 }
 
 function startLoad(entry: PlanEntry): void {
-  const { fileHash, url, quality } = entry;
+  const { fileHash, url, quality, resizeWidth, resizeHeight } = entry;
+  const key = requestKey(entry);
   const controller = new AbortController();
   inFlight.set(fileHash, controller);
 
@@ -102,14 +115,20 @@ function startLoad(entry: PlanEntry): void {
       stage = 'decode';
       const blob = await response.blob();
       contentBytes = blob.size;
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = quality === 'full' && resizeWidth && resizeHeight
+        ? await createImageBitmap(blob, {
+            resizeWidth,
+            resizeHeight,
+            resizeQuality: 'high',
+          })
+        : await createImageBitmap(blob);
 
       if (controller.signal.aborted) { bitmap.close(); return; }
       inFlight.delete(fileHash);
 
-      if (currentPlan.get(fileHash)?.url !== url) { bitmap.close(); return; }
+      if (requestKey(currentPlan.get(fileHash)) !== key) { bitmap.close(); return; }
 
-      delivered.set(fileHash, url);
+      delivered.set(fileHash, key);
       ctx.postMessage({ type: 'bitmap', fileHash, quality, bitmap }, [bitmap]);
     } catch (error) {
       inFlight.delete(fileHash);

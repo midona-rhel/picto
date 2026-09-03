@@ -276,7 +276,7 @@ describe('media protocol helpers', () => {
     }
   });
 
-  it('normalizes native video byte ranges for Chromium playback', async () => {
+  it('normalizes native WebM byte ranges for Chromium playback', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-video-stream-'));
     const hash = '9'.repeat(64);
     let handler;
@@ -295,11 +295,9 @@ describe('media protocol helpers', () => {
         fetchFile,
       });
       await service.registerMediaProtocol();
-      const request = new Request(`media://localhost/file/${hash}.webm`, {
+      const response = await handler(new Request(`media://localhost/file/${hash}.webm`, {
         headers: { Range: 'bytes=0-' },
-      });
-
-      const response = await handler(request);
+      }));
 
       expect(response.status).toBe(206);
       expect(response.headers.get('content-range')).toBe('bytes 0-10/11');

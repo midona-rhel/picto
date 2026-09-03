@@ -55,7 +55,6 @@ async fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
     .kill_on_drop(true);
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
@@ -94,7 +93,6 @@ async fn run_ffmpeg_frame(
     cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     cmd.args(["-v", "quiet"]);
@@ -148,7 +146,6 @@ pub async fn render_audio_waveform(
     cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
     cmd.args(["-v", "quiet", "-i"]).arg(path).args([

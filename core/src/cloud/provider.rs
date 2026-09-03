@@ -225,14 +225,19 @@ fn publish_file(
         return Err("Cloud upload checksum does not match its bytes".to_string());
     }
     if let Some(parent) = resolved.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create cloud object directory: {error}"))?;
     }
     let temporary = resolved.with_extension(format!("picto-uploading-{}", uuid::Uuid::new_v4()));
-    std::fs::copy(source, &temporary).map_err(|error| error.to_string())?;
-    std::fs::File::open(&temporary)
+    std::fs::copy(source, &temporary)
+        .map_err(|error| format!("Failed to stage cloud object: {error}"))?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&temporary)
         .and_then(|file| file.sync_all())
-        .map_err(|error| error.to_string())?;
-    replace_atomically(&temporary, resolved)?;
+        .map_err(|error| format!("Failed to flush staged cloud object: {error}"))?;
+    replace_atomically(&temporary, resolved)
+        .map_err(|error| format!("Failed to publish cloud object: {error}"))?;
     #[cfg(unix)]
     if let Some(parent) = resolved.parent() {
         std::fs::File::open(parent)
@@ -242,7 +247,7 @@ fn publish_file(
     Ok(RemoteObject {
         path: object_path,
         size_bytes: std::fs::metadata(resolved)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| format!("Failed to inspect published cloud object: {error}"))?
             .len(),
         checksum: Some(checksum.clone()),
         revision: Some(checksum),

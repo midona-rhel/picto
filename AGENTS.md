@@ -69,6 +69,11 @@ prefetch, download, or ingest media from a later post before the current post se
 
 # Release Completion
 
+Land and push finished release changes on `main` first. Create each `release/*` branch from that
+exact `main` commit, never from a feature branch, and tag only after the release branch gates pass.
+Track fixes with GitHub issues and reference them in commits. Release notes are user-facing:
+describe what changed for users without issue IDs, verification details, or implementation notes.
+
 The executable backlog is `docs/RELEASE_COMPLETION_PLAN.md`. Do not start broad feature work while
 the Git index has unresolved entries. Subagents receive disjoint write scopes and do not stage or
 commit. The integration owner reviews and may stage and commit coherent slices after explicit user

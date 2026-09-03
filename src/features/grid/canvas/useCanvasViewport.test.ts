@@ -1,6 +1,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { snapshotViewport } from './canvasViewportUtils';
+import {
+  canvasScrollBufferIsExhausted,
+  canvasScrollBufferNeedsRecenter,
+  canvasScrollBufferTransform,
+  snapshotViewport,
+} from './canvasViewportUtils';
 import {
   applyCommittedViewportSize,
   GRID_RESIZE_SETTLE_MS,
@@ -74,6 +79,24 @@ describe('verticalResizeScrollDelta', () => {
   it('ignores unrelated window movement and internal height changes', () => {
     expect(verticalResizeScrollDelta(300, 250, 400, 420)).toBe(0);
     expect(verticalResizeScrollDelta(300, 300, 400, 420)).toBe(0);
+  });
+});
+
+describe('retained canvas scroll buffer', () => {
+  it('translates completed pixels with the scroll delta', () => {
+    expect(canvasScrollBufferTransform(1_000, 1_120, 500)).toBe(-620);
+    expect(canvasScrollBufferTransform(1_000, 900, 500)).toBe(-400);
+  });
+
+  it('recenters before the retained margin is exhausted', () => {
+    expect(canvasScrollBufferNeedsRecenter(1_000, 600, 1_349, 600, 350)).toBe(false);
+    expect(canvasScrollBufferNeedsRecenter(1_000, 600, 1_351, 600, 350)).toBe(true);
+    expect(canvasScrollBufferNeedsRecenter(1_000, 600, 649, 600, 350)).toBe(true);
+  });
+
+  it('reserves the full margin for safe asynchronous repainting', () => {
+    expect(canvasScrollBufferIsExhausted(1_000, 600, 1_499, 600, 500)).toBe(false);
+    expect(canvasScrollBufferIsExhausted(1_000, 600, 1_501, 600, 500)).toBe(true);
   });
 });
 

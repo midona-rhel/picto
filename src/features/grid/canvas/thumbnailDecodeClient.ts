@@ -19,6 +19,8 @@ export interface ThumbnailDecodePlanEntry {
   fileHash: string;
   url: string;
   quality: ThumbnailDecodeQuality;
+  resizeWidth?: number;
+  resizeHeight?: number;
 }
 
 type BitmapCallback = (

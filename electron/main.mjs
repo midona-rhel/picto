@@ -1,6 +1,5 @@
 import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, protocol, screen } from 'electron';
 import fs from 'node:fs/promises';
-import fsModule from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { copyFiles, getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, openTutorialLibrary, closeLibrary, openWithApplication, setFileIcon, startNativeDrag } from './nativeClient.mjs';
@@ -177,6 +176,24 @@ async function verifyPackagedSmokeMediaPlayback() {
   }
 }
 
+async function verifyPackagedSmokeFlashPlayback() {
+  const hash = process.env.PICTO_SMOKE_FLASH_HASH;
+  if (!isValidHash(hash)) throw new Error('Packaged smoke Flash hash is missing or invalid.');
+  const outputPath = path.join(app.getPath('temp'), `picto-flash-smoke-${process.pid}.png`);
+  try {
+    const result = await flashThumbnail.render({
+      sourceUrl: `media://localhost/file/${hash}.swf`,
+      outputPath,
+      settleMs: 250,
+    });
+    const output = await fs.stat(outputPath);
+    if (output.size === 0) throw new Error('Packaged Flash playback produced an empty frame.');
+    reportPackagedSmoke('flash-runtime-ready', { ...result, bytes: output.size });
+  } finally {
+    await fs.rm(outputPath, { force: true });
+  }
+}
+
 function awaitNativeShutdownBeforeQuit(event) {
   if (nativeShutdownSettled) return;
   event.preventDefault();
@@ -289,8 +306,9 @@ const windowManager = createWindowManager({
   onWindowEvent: (event, details) => {
     if (event === 'did-finish-load' && details.label === 'main') {
       reportPackagedSmoke(event, details);
+      if (!isPackagedSmoke) return;
       setTimeout(() => {
-        void verifyPackagedSmokeMediaPlayback().then(() => {
+        void verifyPackagedSmokeMediaPlayback().then(() => verifyPackagedSmokeFlashPlayback()).then(() => {
           reportPackagedSmoke('settle-complete');
           return completePackagedSmoke();
         }).catch((error) => {
@@ -557,34 +575,8 @@ app.on('second-instance', (_event, argv, workingDirectory) => {
   focusMainWindow();
 });
 
-// Dev-only: capture the main window to a PNG when the trigger file is
-// touched (lets tooling screenshot the app without macOS screen-recording
-// permission). `touch /tmp/picto-capture-request` → /tmp/picto-capture.png
-function startDevCaptureWatcher() {
-  if (!isDev) return;
-  const fsSync = fsModule;
-  const trigger = '/tmp/picto-capture-request';
-  try {
-    fsSync.writeFileSync(trigger, '');
-    fsSync.watch(trigger, async () => {
-      try {
-        const win = windowManager.getWindow('main');
-        if (!win || win.isDestroyed()) return;
-        const image = await win.webContents.capturePage();
-        fsSync.writeFileSync('/tmp/picto-capture.png', image.toPNG());
-        console.info('[main] dev capture written to /tmp/picto-capture.png');
-      } catch (err) {
-        console.error('[main] dev capture failed:', err);
-      }
-    });
-  } catch {
-    // non-fatal dev helper
-  }
-}
-
 app.whenReady().then(async () => {
   await bootstrapApplication();
-  startDevCaptureWatcher();
   updateService.start();
   void subscriptionNotifications.refresh();
 

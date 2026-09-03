@@ -1,9 +1,9 @@
 /**
  * Canvas2D grid renderer — dual-canvas (base + overlay) with thumbnail pipeline.
  *
- * Activation zone: viewport ± 100px. Tiles inside are drawn and loaded;
- * reveal eligibility is tracked against the actual viewport.
- * One linear scan per frame drives everything.
+ * A retained viewport buffer keeps completed pixels moving during scroll.
+ * Lightweight viewport scans own decode/reveal dwell, while full multi-pass
+ * paints happen only when the buffer recenters or visible content changes.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -48,7 +48,14 @@ import {
 } from './scrollState';
 import type { GridScrollPosition } from '../../../shared/types/gridScroll';
 import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
-import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
+import {
+  CANVAS_SCROLL_BUFFER_MARGIN_PX,
+  canvasScrollBufferIsExhausted,
+  canvasScrollBufferNeedsRecenter,
+  canvasScrollBufferTransform,
+  ensureCanvasSize,
+  snapshotViewport,
+} from './canvasViewportUtils';
 import { useCanvasViewport } from './useCanvasViewport';
 import styles from './CanvasGrid.module.css';
 import type { BaseScope } from '../../../shared/types/canonical';
@@ -66,7 +73,6 @@ import { useScrollToTop } from '../../../shared/hooks/useScrollToTop';
 import { ScrollToTopButton } from '../../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 
 const TEXT_NAME_ROW_H = 20;
-const GRID_RESIZE_RENDER_MARGIN = 500;
 const RETURN_TO_TOP_THRESHOLD = 200;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 const EMPTY_FOLDER_NODE_SET = new Set<string>();
@@ -240,6 +246,7 @@ export function CanvasGrid({
   }, [onContainerRef]);
   const headerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
+  const baseBufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const contentFrameRef = useRef<HTMLDivElement>(null);
   const viewportLayerRef = useRef<HTMLDivElement>(null);
@@ -256,6 +263,13 @@ export function CanvasGrid({
     activeHashes: activeHashesRef.current,
     viewportHashes: viewportHashesRef.current,
     planTiles: planTilesRef.current,
+  });
+  const viewportCandidateBufRef = useRef<number[]>([]);
+  const viewportActivationBuffersRef = useRef({
+    activeTiles: [] as number[],
+    activeHashes: new Set<string>(),
+    viewportHashes: new Set<string>(),
+    planTiles: [] as PlanTile[],
   });
 
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
@@ -483,14 +497,19 @@ export function CanvasGrid({
     if (!container || !canvas || !pipeline) return;
 
     const vp = snapshotViewport(container, committedSizeRef.current);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const visibleCtx = canvas.getContext('2d', { desynchronized: true });
+    if (!visibleCtx) return;
+    const bufferCanvas = baseBufferCanvasRef.current ?? document.createElement('canvas');
+    baseBufferCanvasRef.current = bufferCanvas;
 
     const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeight);
-    const renderHeight = vp.viewportHeight + GRID_RESIZE_RENDER_MARGIN * 2;
-    const scrollTop = visibleScrollTop - GRID_RESIZE_RENDER_MARGIN;
+    const renderHeight = vp.viewportHeight + CANVAS_SCROLL_BUFFER_MARGIN_PX * 2;
+    const scrollTop = visibleScrollTop - CANVAS_SCROLL_BUFFER_MARGIN_PX;
     ensureCanvasSize(canvas, vp.containerWidth, renderHeight, vp.dpr);
-    canvas.style.transform = `translateY(-${GRID_RESIZE_RENDER_MARGIN}px)`;
+    ensureCanvasSize(bufferCanvas, vp.containerWidth, renderHeight, vp.dpr);
+    const ctx = bufferCanvas.getContext('2d');
+    if (!ctx) return;
+    canvas.style.transform = `translateY(-${CANVAS_SCROLL_BUFFER_MARGIN_PX}px)`;
     renderWindowRef.current = { scrollTop: visibleScrollTop, viewportHeight: vp.viewportHeight };
 
     // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
@@ -526,16 +545,20 @@ export function CanvasGrid({
       zoneBottom,
       visibleScrollTop,
       visibleScrollTop + vp.viewportHeight,
+      textHeight,
+      viewMode,
+      fitThumbnails,
       activationBuffersRef.current,
     );
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
-    pipeline.updatePlan(planTiles, visibleScrollTop + vp.viewportHeight / 2);
+    pipeline.updatePlan(planTiles, visibleScrollTop + vp.viewportHeight / 2, vp.dpr, now);
     revealTrackerRef.current.updateViewport(
       viewportHashes,
       now,
       (itemId) => {
-        const item = layoutModel.items.find((candidate) => candidate.hash === itemId);
+        const itemIndex = layoutModel.itemIdToIndex.get(Number(itemId));
+        const item = itemIndex == null ? null : layoutModel.items[itemIndex];
         return item != null && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
       },
     );
@@ -555,6 +578,7 @@ export function CanvasGrid({
       items: layoutModel.items,
       atlasGet: (hash) => pipeline.get(hash),
       revealProgress: (entityHash) => revealTrackerRef.current.getProgress(entityHash, now),
+      revealAnimating: (entityHash) => revealTrackerRef.current.isAnimating(entityHash, now),
       activeTiles,
       draw: drawCtx,
       theme: cachedThemeRef.current,
@@ -569,6 +593,18 @@ export function CanvasGrid({
     });
 
     ctx.restore();
+
+    // The visible desynchronized canvas receives one completed frame instead
+    // of observing clear/image/badge/text passes independently.
+    visibleCtx.save();
+    visibleCtx.setTransform(1, 0, 0, 1, 0, 0);
+    visibleCtx.globalCompositeOperation = 'copy';
+    visibleCtx.drawImage(bufferCanvas, 0, 0);
+    visibleCtx.restore();
+
+    // A base recenter changes the shared buffered coordinate origin. Keep any
+    // visible selection/interaction layer on that same completed origin.
+    if (!overlayBlankRef.current) markDirty('overlay');
 
     // Evict main-thread bitmaps outside the draw zone.
     // The worker handles load cancellation via the plan diff.
@@ -597,15 +633,15 @@ export function CanvasGrid({
     if (!ctx) return;
 
     const renderWindow = renderWindowRef.current;
-    const renderHeight = renderWindow.viewportHeight + GRID_RESIZE_RENDER_MARGIN * 2;
+    const renderHeight = renderWindow.viewportHeight + CANVAS_SCROLL_BUFFER_MARGIN_PX * 2;
     ensureCanvasSize(canvas, vp.containerWidth, renderHeight, vp.dpr);
     const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeight);
-    canvas.style.transform = `translateY(${renderWindow.scrollTop - visibleScrollTop - GRID_RESIZE_RENDER_MARGIN}px)`;
+    canvas.style.transform = `translateY(${canvasScrollBufferTransform(renderWindow.scrollTop, visibleScrollTop)}px)`;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    const scrollTop = renderWindow.scrollTop - GRID_RESIZE_RENDER_MARGIN;
+    const scrollTop = renderWindow.scrollTop - CANVAS_SCROLL_BUFFER_MARGIN_PX;
 
     // Selection follows the rendered thumbnail, not the empty tile cell.
     const paintedSelection = marqueeSelectionRef.current?.itemIds ?? selectedItemIdsRef.current;
@@ -679,8 +715,8 @@ export function CanvasGrid({
       const hovPos = layoutModel.positions[hovIdx];
       if (hovItem && hovPos && !hovItem.mime.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
-        if (drawY + hovPos.h >= GRID_RESIZE_RENDER_MARGIN
-          && drawY <= GRID_RESIZE_RENDER_MARGIN + vp.viewportHeight) {
+        if (drawY + hovPos.h >= CANVAS_SCROLL_BUFFER_MARGIN_PX
+          && drawY <= CANVAS_SCROLL_BUFFER_MARGIN_PX + vp.viewportHeight) {
           const imgH = hovPos.h - textHeight;
           const ZOOM_SIZE = 24;
           const bgW = ZOOM_SIZE + 4;
@@ -784,13 +820,16 @@ export function CanvasGrid({
     if (!container || !viewportLayer) return true;
     const currentScrollTop = Math.max(0, container.scrollTop - headerHeightRef.current);
     const rendered = renderWindowRef.current;
-    const scrollDelta = rendered.scrollTop - currentScrollTop;
     const heightGrowth = container.clientHeight - rendered.viewportHeight;
-    const transform = scrollDelta - GRID_RESIZE_RENDER_MARGIN;
+    const transform = canvasScrollBufferTransform(rendered.scrollTop, currentScrollTop);
     if (baseCanvasRef.current) baseCanvasRef.current.style.transform = `translateY(${transform}px)`;
     if (overlayCanvasRef.current) overlayCanvasRef.current.style.transform = `translateY(${transform}px)`;
-    return Math.abs(scrollDelta) > GRID_RESIZE_RENDER_MARGIN
-      || heightGrowth > GRID_RESIZE_RENDER_MARGIN;
+    return canvasScrollBufferIsExhausted(
+      rendered.scrollTop,
+      rendered.viewportHeight,
+      currentScrollTop,
+      container.clientHeight,
+    ) || heightGrowth > CANVAS_SCROLL_BUFFER_MARGIN_PX;
   };
 
   // ── Redraw on layout/prop changes ──
@@ -848,6 +887,52 @@ export function CanvasGrid({
   onSelectionChangeRef.current = onSelectionChange;
   const onReorderRef = useRef(onReorder);
   onReorderRef.current = onReorder;
+
+  const updateThumbnailViewport = useCallback((
+    visibleScrollTop: number,
+    viewportHeight: number,
+    dpr: number,
+    now: number,
+  ) => {
+    const pipeline = pipelineRef.current;
+    const model = layoutModelRef.current;
+    if (!pipeline || viewportHeight <= 0) return;
+
+    const candidates = viewportCandidateBufRef.current;
+    candidates.length = 0;
+    const viewportBottom = visibleScrollTop + viewportHeight;
+    model.spatialIndex.queryYRange(visibleScrollTop, viewportBottom, candidates);
+    const buffers = viewportActivationBuffersRef.current;
+    collectThumbnailActivation(
+      candidates,
+      model.positions,
+      model.items,
+      visibleScrollTop,
+      viewportBottom,
+      visibleScrollTop,
+      viewportBottom,
+      textHeightRef.current,
+      viewMode,
+      fitThumbnails,
+      buffers,
+    );
+    pipeline.updatePlan(
+      buffers.planTiles,
+      visibleScrollTop + viewportHeight / 2,
+      dpr,
+      now,
+    );
+    revealTrackerRef.current.updateViewport(
+      buffers.viewportHashes,
+      now,
+      (itemIdentity) => {
+        const itemIndex = model.itemIdToIndex.get(Number(itemIdentity));
+        const item = itemIndex == null ? null : model.items[itemIndex];
+        return item != null
+          && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
+      },
+    );
+  }, [fitThumbnails, viewMode]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -989,7 +1074,8 @@ export function CanvasGrid({
     isScrollingRef.current = nextScrollState.phase !== 'idle';
 
     // Clear hover and preview during scroll
-    if (hoveredTileRef.current != null) {
+    const clearedHover = hoveredTileRef.current != null;
+    if (clearedHover) {
       hoveredTileRef.current = null;
     }
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
@@ -1002,18 +1088,48 @@ export function CanvasGrid({
       headerHeightRef.current + estimatedScrollHeight,
       container.clientHeight,
     ));
-    const overlayNeedsRedraw =
+
+    const vp = snapshotViewport(container, committedSizeRef.current);
+    const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeightRef.current);
+    updateThumbnailViewport(visibleScrollTop, vp.viewportHeight, vp.dpr, now);
+
+    const rendered = renderWindowRef.current;
+    const transform = canvasScrollBufferTransform(rendered.scrollTop, visibleScrollTop);
+    if (baseCanvasRef.current) baseCanvasRef.current.style.transform = `translateY(${transform}px)`;
+    if (overlayCanvasRef.current) overlayCanvasRef.current.style.transform = `translateY(${transform}px)`;
+
+    const overlayHasContent =
       selectedItemIdsRef.current.size > 0 ||
       reorderDropRef.current != null ||
       !overlayBlankRef.current;
-    markDirty(overlayNeedsRedraw ? 'both' : 'base');
+    const bufferExhausted = canvasScrollBufferIsExhausted(
+      rendered.scrollTop,
+      rendered.viewportHeight,
+      visibleScrollTop,
+      vp.viewportHeight,
+    );
+    if (bufferExhausted) {
+      // A scrollbar jump can cross the entire reserve in one event. Repaint
+      // before returning so the compositor never receives an uncovered strip.
+      drawBaseRef.current();
+      if (overlayHasContent) drawOverlayRef.current();
+    } else if (canvasScrollBufferNeedsRecenter(
+      rendered.scrollTop,
+      rendered.viewportHeight,
+      visibleScrollTop,
+      vp.viewportHeight,
+    )) {
+      markDirty(overlayHasContent ? 'both' : 'base');
+    } else if (clearedHover) {
+      markDirty('overlay');
+    }
 
     // Transition to idle after inactivity
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
       scrollStateRef.current = createIdleCanvasScrollState();
       isScrollingRef.current = false;
-      markDirty('base');
+      markDirty(overlayBlankRef.current ? 'base' : 'both');
     }, CANVAS_SCROLL_IDLE_DELAY_MS);
 
     // Prefetch against real loaded content, not the estimated full extent.
@@ -1022,7 +1138,7 @@ export function CanvasGrid({
     if (distanceFromLoadedEnd < container.clientHeight * 3) {
       onLoadMoreRef.current?.();
     }
-  }, [estimatedScrollHeight, interactive, layoutModel.totalHeight, markDirty]);
+  }, [estimatedScrollHeight, interactive, layoutModel.totalHeight, markDirty, updateThumbnailViewport]);
 
   // Continue filling the runway after each append, including when the user
   // drags the scrollbar into an estimated-but-not-yet-loaded region.

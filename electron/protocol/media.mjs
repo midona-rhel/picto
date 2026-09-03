@@ -375,7 +375,6 @@ export function createMediaProtocolService({
       const cacheControl = parsed.kind === 'thumb' || parsed.kind === 'library-cover'
         ? 'no-store'
         : 'public, max-age=31536000, immutable';
-
       const rangeHeader = request.headers.get('range');
       const range = parseRange(rangeHeader, meta.size);
       if (rangeHeader && !range) {
@@ -389,9 +388,11 @@ export function createMediaProtocolService({
         });
       }
 
-      // Keep Electron's native file stream, but normalize its range response.
+      // Keep Electron's native file loader for media bytes, while normalizing
+      // its range response. On Windows, wrapping a video/audio file in a
+      // JavaScript stream can prevent Chromium from buffering or decoding it.
       // net.fetch(file://) returns the requested bytes with status 200 and no
-      // Content-Range, which Chromium rejects as an invalid media response.
+      // Content-Range, so expose the HTTP-equivalent response Chromium expects.
       if (parsed.kind === 'file'
         && (mime.startsWith('video/') || mime.startsWith('audio/'))
         && fetchFile) {

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ItemFilters } from '../../shared/lib/itemFilters';
 import { gridFilterLockedAtom, gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
@@ -12,6 +12,12 @@ import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 vi.mock('../../shared/ui/KbdTooltip', () => ({
   KbdTooltip: ({ children }: { children: unknown }) => children,
 }));
+
+const { queryMimeFacets } = vi.hoisted(() => ({
+  queryMimeFacets: vi.fn(),
+}));
+
+vi.mock('../../platform/entityApi', () => ({ queryMimeFacets }));
 
 const emptyFilters: ItemFilters = createEmptyItemFilters();
 
@@ -69,6 +75,11 @@ describe('countActiveGridFilters', () => {
 });
 
 describe('GridFilterToolbar', () => {
+  beforeEach(() => {
+    queryMimeFacets.mockReset();
+    queryMimeFacets.mockImplementation(() => new Promise(() => {}));
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.removeItem('picto:grid:pinned-filters');
@@ -154,38 +165,35 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ min_size_bytes: 2_000_000n }));
   });
 
-  it('keeps initial-grid types available while a type filter is active', async () => {
+  it('loads type choices from the complete query facet rather than loaded grid pages', async () => {
+    queryMimeFacets.mockResolvedValue({
+      values: [
+        { mime: 'application/x-shockwave-flash', count: 1 },
+        { mime: 'image/gif', count: 12 },
+        { mime: 'image/jpeg', count: 340 },
+        { mime: 'video/mp4', count: 7 },
+      ],
+      revision: 8,
+    });
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      items: [
-        gridItem(1, 'image/gif'),
-        gridItem(2, 'image/jpeg'),
-        gridItem(3, 'video/mp4'),
-      ],
-      filters: emptyFilters,
+      items: [gridItem(1, 'image/gif')],
+      filters: { ...emptyFilters, include_mime_types: ['image/gif'] },
     });
     const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
-    const view = render(<GridFilterToolbar />);
-
-    act(() => {
-      store.set(gridSessionAtom, {
-        ...store.get(gridSessionAtom),
-        items: [gridItem(1, 'image/gif')],
-        filters: { ...emptyFilters, include_mime_types: ['image/gif'] },
-      });
-    });
-    view.rerender(<GridFilterToolbar />);
+    render(<GridFilterToolbar />);
 
     fireEvent.click(screen.getByRole('button', { name: 'GIF' }));
-    fireEvent.click(await screen.findByText('JPG'));
+    fireEvent.click(await screen.findByText('SHOCKWAVE-FLASH'));
 
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({
-      include_mime_types: ['image/gif', 'image/jpeg'],
+      include_mime_types: ['image/gif', 'application/x-shockwave-flash'],
     }));
     expect(screen.getByText('Videos')).toBeTruthy();
-    expect(screen.queryByText('PDF')).toBeNull();
+    expect(queryMimeFacets).toHaveBeenCalledOnce();
+    expect(JSON.stringify(queryMimeFacets.mock.calls[0][0])).not.toContain('"clause":"mime"');
   });
 
   it('commits date presets as canonical half-open ranges', () => {

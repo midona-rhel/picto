@@ -1,3 +1,5 @@
+import type { ThumbnailDecodeQuality } from './thumbnailDecodeClient';
+
 export type ThumbnailPipelineState = 'idle' | 'shown' | 'error';
 
 export interface ThumbnailPipelineEntry {
@@ -5,4 +7,5 @@ export interface ThumbnailPipelineEntry {
   state: ThumbnailPipelineState;
   lastAccessed: number;
   bytes: number;
+  quality?: ThumbnailDecodeQuality | null;
 }

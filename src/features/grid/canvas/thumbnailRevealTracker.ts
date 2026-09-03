@@ -1,7 +1,10 @@
+import { THUMBNAIL_VIEWPORT_DWELL_MS } from './thumbnailTiming';
+
 const REVEAL_DURATION_MS = 500;
 
 interface RevealState {
   startedAt: number | null;
+  enteredAt: number;
   instant: boolean;
 }
 
@@ -28,7 +31,8 @@ export class ThumbnailRevealTracker {
     for (const hash of entityHashes) {
       if (this.visible.has(hash)) continue;
       this.visible.set(hash, {
-        startedAt: !suppress && hasBitmap(hash) ? now : null,
+        startedAt: !suppress && hasBitmap(hash) ? now + THUMBNAIL_VIEWPORT_DWELL_MS : null,
+        enteredAt: now,
         instant: suppress,
       });
     }
@@ -41,7 +45,7 @@ export class ThumbnailRevealTracker {
       state.instant = true;
       return;
     }
-    state.startedAt = now;
+    state.startedAt = Math.max(now, state.enteredAt + THUMBNAIL_VIEWPORT_DWELL_MS);
   }
 
   getProgress(entityHash: string, now: number): number {
@@ -49,6 +53,17 @@ export class ThumbnailRevealTracker {
     if (!state || state.instant) return 1;
     if (state.startedAt == null) return 0;
     return Math.min(1, Math.max(0, (now - state.startedAt) / REVEAL_DURATION_MS));
+  }
+
+  isAnimating(entityHash: string, now: number): boolean {
+    const state = this.visible.get(entityHash);
+    return Boolean(
+      state
+      && !state.instant
+      && state.startedAt != null
+      && now >= state.startedAt
+      && now - state.startedAt < REVEAL_DURATION_MS,
+    );
   }
 
   clear(): void {

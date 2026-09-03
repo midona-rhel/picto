@@ -12,12 +12,15 @@ import {
   gridFilterLockedAtom,
   gridFiltersAtom,
   gridFilterToolbarOpenAtom,
-  gridItemsAtom,
+  gridRevisionAtom,
+  gridSearchTextAtom,
+  gridShowSubfoldersAtom,
   gridScopeAtom,
 } from '../../state/grid';
 import { folderNodesAtom } from '../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
-import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { queryMimeFacets } from '../../platform/entityApi';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorFilterEditor } from '../../shared/ui/ColorFilterEditor';
 import { IconChangeColor } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -306,8 +309,10 @@ function DateRangeEditor({ after, before, onCommit }: {
 export function GridFilterToolbar() {
   const open = useAtomValue(gridFilterToolbarOpenAtom);
   const filters = useAtomValue(gridFiltersAtom);
-  const items = useAtomValue(gridItemsAtom);
   const scope = useAtomValue(gridScopeAtom);
+  const searchText = useAtomValue(gridSearchTextAtom);
+  const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
+  const revision = useAtomValue(gridRevisionAtom);
   const filterLocked = useAtomValue(gridFilterLockedAtom);
   const setFilterLocked = useSetAtom(gridFilterLockedAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
@@ -316,10 +321,7 @@ export function GridFilterToolbar() {
   const [pinnedFilters, setPinnedFilters] = useState(loadPinnedFilters);
   const [savedFilters, setSavedFilters] = useState(loadSavedFilters);
   const [saveName, setSaveName] = useState('');
-  const scopeKey = JSON.stringify(scope);
-  const visibleMimeTypes = [...new Set(items.map((item) => item.mime).filter(Boolean))];
-  const hasTypeFilter = filters.include_mime_types.length > 0 || filters.exclude_mime_types.length > 0;
-  const [mimeBaseline, setMimeBaseline] = useState({ scopeKey, mimeTypes: visibleMimeTypes });
+  const [facetMimeTypes, setFacetMimeTypes] = useState<string[]>([]);
   const [activeMenu, setActiveMenu] = useState<{
     kind: FilterMenuKind;
     position: { x: number; y: number };
@@ -394,13 +396,29 @@ export function GridFilterToolbar() {
   }, [filters, persistSavedFilters, saveName, savedFilters]);
 
   useEffect(() => {
-    setMimeBaseline((current) => {
-      if (current.scopeKey !== scopeKey) return { scopeKey, mimeTypes: visibleMimeTypes };
-      if (hasTypeFilter) return current;
-      const mimeTypes = [...new Set([...current.mimeTypes, ...visibleMimeTypes])];
-      return mimeTypes.length === current.mimeTypes.length ? current : { scopeKey, mimeTypes };
-    });
-  }, [hasTypeFilter, items, scopeKey]);
+    if (!open) return undefined;
+    let active = true;
+    const facetFilters = {
+      ...filters,
+      include_mime_types: [],
+      exclude_mime_types: [],
+    };
+    const query = compileGridQuery(
+      scope,
+      facetFilters,
+      { field: 'imported_at', direction: 'descending', random_seed: null },
+      searchText,
+      showSubfolders,
+    );
+    void queryMimeFacets(query)
+      .then((result) => {
+        if (active) setFacetMimeTypes(result.values.map((entry) => entry.mime));
+      })
+      .catch(() => {
+        if (active) setFacetMimeTypes([]);
+      });
+    return () => { active = false; };
+  }, [filters, open, revision, scope, searchText, showSubfolders]);
 
   if (!open) return null;
 
@@ -414,13 +432,12 @@ export function GridFilterToolbar() {
     ...filters.exclude_folder_ids.map((id) => `Not ${folderNames.get(id) ?? `Folder ${id}`}`),
   ];
   const mimeTypes = [...new Set([
-    ...(mimeBaseline.scopeKey === scopeKey ? mimeBaseline.mimeTypes : visibleMimeTypes),
+    ...facetMimeTypes,
     ...filters.include_mime_types.filter((value) => !value.endsWith('/*')),
     ...filters.exclude_mime_types.filter((value) => !value.endsWith('/*')),
   ])].filter(Boolean).sort((left, right) => mimeLabel(left).localeCompare(mimeLabel(right)));
   const mimeFamilies = [...new Set([
-    ...(mimeBaseline.scopeKey === scopeKey ? mimeBaseline.mimeTypes : visibleMimeTypes)
-      .map((mime) => `${mime.split('/', 1)[0]}/*`),
+    ...facetMimeTypes.map((mime) => `${mime.split('/', 1)[0]}/*`),
     ...filters.include_mime_types.filter((value) => value.endsWith('/*')),
     ...filters.exclude_mime_types.filter((value) => value.endsWith('/*')),
   ])].sort((left, right) => mimeLabel(left).localeCompare(mimeLabel(right)));

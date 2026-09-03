@@ -54,6 +54,7 @@ export interface BaseLayerArgs {
   items: CanvasRenderItem[];
   atlasGet: (fileHash: string) => ThumbnailPipelineEntry | null;
   revealProgress: (entityHash: string) => number;
+  revealAnimating?: (entityHash: string) => boolean;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
   draw: DrawContext;
@@ -108,6 +109,7 @@ export function drawCanvasBaseLayer({
   items,
   atlasGet,
   revealProgress,
+  revealAnimating,
   activeTiles,
   draw,
   theme,
@@ -202,7 +204,7 @@ export function drawCanvasBaseLayer({
       const imageProgress = Math.min(1, progress * 2);
       const placeholderAlpha = progress < 0.5 ? 1 : Math.max(0, 2 - progress * 2);
 
-      if (imageProgress < 1 || placeholderAlpha > 0) {
+      if (revealAnimating?.(item.hash) ?? (imageProgress < 1 || placeholderAlpha > 0)) {
         hasActiveReveal = true;
       }
 

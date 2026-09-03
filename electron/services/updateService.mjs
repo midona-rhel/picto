@@ -1,9 +1,12 @@
 import { shell } from 'electron';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const RELEASES_API = 'https://api.github.com/repos/midona-rhel/picto/releases?per_page=20';
 const RELEASES_PAGE = 'https://github.com/midona-rhel/picto/releases';
 const RELEASE_DOWNLOADS = 'https://github.com/midona-rhel/picto/releases/download';
 const APP_RELEASE_TAG = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/;
+const PENDING_RELEASE_FILE = 'pending-update-release.json';
 
 function releaseNotes(value) {
   if (Array.isArray(value)) return value.map((entry) => entry.note).filter(Boolean).join('\n\n');
@@ -43,6 +46,7 @@ export function createUpdateService({
   let updater = null;
   let checkPromise = null;
   let selectedRelease = null;
+  const pendingReleasePath = () => path.join(app.getPath('userData'), PENDING_RELEASE_FILE);
   let state = {
     status: app.isPackaged ? 'idle' : 'unavailable',
     currentVersion: app.getVersion(),
@@ -69,6 +73,47 @@ export function createUpdateService({
     releaseDate: info?.releaseDate ?? selectedRelease?.published_at ?? null,
     releaseNotes: releaseNotes(info?.releaseNotes) || selectedRelease?.body || '',
   });
+
+  const releaseSnapshot = (source = state) => ({
+    version: source.version,
+    releaseName: source.releaseName,
+    releaseDate: source.releaseDate,
+    releaseNotes: source.releaseNotes,
+    releaseUrl: source.releaseUrl,
+  });
+
+  async function persistPendingRelease(source = state) {
+    const snapshot = releaseSnapshot(source);
+    if (!snapshot.version) return;
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    await fs.writeFile(pendingReleasePath(), JSON.stringify(snapshot), 'utf8');
+  }
+
+  async function restoreInstalledRelease() {
+    let pending;
+    try {
+      pending = JSON.parse(await fs.readFile(pendingReleasePath(), 'utf8'));
+    } catch {
+      return false;
+    }
+    if (!pending?.version || pending.version !== app.getVersion()) {
+      if (pending?.version && isNewer(app.getVersion(), pending.version)) {
+        await fs.rm(pendingReleasePath(), { force: true });
+      }
+      return false;
+    }
+    publish({
+      status: 'installed',
+      version: pending.version,
+      releaseName: typeof pending.releaseName === 'string' ? pending.releaseName : null,
+      releaseDate: typeof pending.releaseDate === 'string' ? pending.releaseDate : null,
+      releaseNotes: typeof pending.releaseNotes === 'string' ? pending.releaseNotes : '',
+      releaseUrl: typeof pending.releaseUrl === 'string' ? pending.releaseUrl : RELEASES_PAGE,
+      progress: null,
+      error: null,
+    });
+    return true;
+  }
 
   async function latestAppRelease() {
     const response = await net.fetch(RELEASES_API, {
@@ -119,18 +164,24 @@ export function createUpdateService({
       status: 'downloading',
       progress: { percent: progress.percent, transferred: progress.transferred, total: progress.total },
     }));
-    updater.on('update-downloaded', (info) => publish({
-      status: 'downloaded',
-      ...normalizeInfo(info),
-      progress: { percent: 100, transferred: info.downloadedFile ? 1 : 0, total: 1 },
-      error: null,
-    }));
+    updater.on('update-downloaded', (info) => {
+      const downloaded = publish({
+        status: 'downloaded',
+        ...normalizeInfo(info),
+        progress: { percent: 100, transferred: info.downloadedFile ? 1 : 0, total: 1 },
+        error: null,
+      });
+      void persistPendingRelease(downloaded).catch((error) => {
+        console.error('[updates] could not preserve release notes:', error);
+      });
+    });
     updater.on('error', (error) => publish({ status: 'error', error: error?.message ?? String(error) }));
     return updater;
   }
 
   async function check() {
     if (!app.isPackaged) return state;
+    if (state.status === 'installed') return state;
     if (checkPromise) return checkPromise;
     checkPromise = (async () => {
       publish({ status: 'checking', error: null });
@@ -157,19 +208,41 @@ export function createUpdateService({
   }
 
   async function install() {
-    if (platform === 'darwin') return shell.openExternal(state.releaseUrl || RELEASES_PAGE);
+    if (platform === 'darwin') return openRelease();
     if (state.status !== 'downloaded') throw new Error('The update has not finished downloading.');
+    await persistPendingRelease();
     const activeUpdater = await ensureUpdater();
     setImmediate(() => activeUpdater.quitAndInstall(false, true));
   }
 
-  function start() {
+  async function openRelease() {
+    if (state.version) await persistPendingRelease();
+    return shell.openExternal(state.releaseUrl || RELEASES_PAGE);
+  }
+
+  async function acknowledgeInstalled() {
+    if (state.status !== 'installed') return state;
+    await fs.rm(pendingReleasePath(), { force: true });
+    return publish({
+      status: 'current',
+      version: null,
+      releaseName: null,
+      releaseDate: null,
+      releaseNotes: '',
+      releaseUrl: RELEASES_PAGE,
+      progress: null,
+      error: null,
+    });
+  }
+
+  async function start() {
     if (!app.isPackaged) return;
+    await restoreInstalledRelease();
     const initial = setTimeout(() => void check(), 15_000);
     initial.unref?.();
     const interval = setInterval(() => void check(), 6 * 60 * 60 * 1000);
     interval.unref?.();
   }
 
-  return { check, getState: () => state, install, openRelease: () => shell.openExternal(state.releaseUrl || RELEASES_PAGE), start };
+  return { acknowledgeInstalled, check, getState: () => state, install, openRelease, start };
 }

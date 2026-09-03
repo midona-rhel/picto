@@ -768,7 +768,7 @@ mod tests {
         .next()
         .unwrap();
         let html = include_str!("../../tests/fixtures/newgrounds/post.html").replace(
-            "    <meta property=\"og:description\" content=\"Gallery summary &amp; details.\">\n",
+            "<meta property=\"og:description\" content=\"Gallery summary &amp; details.\">",
             "",
         );
         let post = resolve_html(post, &html).unwrap();

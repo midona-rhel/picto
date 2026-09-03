@@ -91,6 +91,18 @@ pub struct RootPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MimeFacet {
+    pub mime: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MimeFacets {
+    pub values: Vec<MimeFacet>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryCounts {
     pub all: u64,
     pub inbox: u64,
@@ -389,6 +401,33 @@ pub fn matching_roots(
     let universe = scope_bitmap(connection, snapshot, &query.scope)?;
     let mut text = |field, value: &str| fts::search(connection, field, value);
     predicate::evaluate(&query.view.filter, &universe, snapshot, &mut text)
+}
+
+/// Returns MIME values for the complete query result, independent of paging.
+/// A collection contributes to every MIME represented by one of its members,
+/// matching the semantics of the MIME filter projection itself.
+pub fn mime_facets(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+) -> Result<MimeFacets> {
+    let matches = matching_roots(connection, snapshot, query)?;
+    let mut values = snapshot
+        .mime
+        .iter()
+        .filter_map(|(mime, roots)| {
+            let count = (roots & &matches).len();
+            (count > 0).then(|| MimeFacet {
+                mime: mime.clone(),
+                count,
+            })
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| left.mime.cmp(&right.mime));
+    Ok(MimeFacets {
+        values,
+        revision: snapshot.revision,
+    })
 }
 
 pub fn page(

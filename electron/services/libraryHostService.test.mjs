@@ -401,7 +401,7 @@ test('opening a library applies the persistent macOS package icon', async () => 
   const libraryPath = '/Pictures/Main.library';
   const service = createLibraryHostService({
     fs: {},
-    path,
+    path: path.posix,
     dialog: {},
     openLibrary: async () => {},
     closeLibrary: async () => {},
@@ -446,7 +446,7 @@ test('guided tour opens an unpersisted isolated library and restores the origina
       mkdir: async () => {},
       rm: async (...args) => calls.push(['rm', ...args]),
     },
-    path,
+    path: path.posix,
     dialog: {},
     openLibrary: async (libraryPath) => calls.push(['open', libraryPath]),
     openTutorialLibrary: async (...args) => calls.push(['open-tutorial', ...args]),

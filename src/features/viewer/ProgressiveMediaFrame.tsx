@@ -8,8 +8,6 @@ interface Props {
   dataAttributes?: Record<`data-${string}`, string>;
   preview: ReactNode;
   previewVisible: boolean;
-  /** Reveal a retained preview atomically when final content is withdrawn. */
-  instantPreviewWhenContentNotReady?: boolean;
   contentReady: boolean;
   children: ReactNode;
 }
@@ -22,7 +20,6 @@ export function ProgressiveMediaFrame({
   dataAttributes,
   preview,
   previewVisible,
-  instantPreviewWhenContentNotReady = false,
   contentReady,
   children,
 }: Props) {
@@ -34,7 +31,6 @@ export function ProgressiveMediaFrame({
       {...dataAttributes}
       data-progressive-media-frame
       data-ready={contentReady ? 'true' : 'false'}
-      data-instant-preview={instantPreviewWhenContentNotReady ? 'true' : undefined}
     >
       <div
         className={`${styles.preview} ${previewVisible ? styles.previewVisible : ''}`}

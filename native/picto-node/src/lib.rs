@@ -100,7 +100,7 @@ pub fn copy_files(file_paths: Vec<String>) -> Result<bool> {
             }
             CloseClipboard();
         }
-        return Ok(true);
+        Ok(true)
     }
 
     #[cfg(not(target_os = "windows"))]

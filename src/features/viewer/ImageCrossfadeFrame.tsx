@@ -17,7 +17,7 @@ type ImageCrossfadeFrameProps = {
   onFullLoad: (event: SyntheticEvent<HTMLImageElement>) => void;
 };
 
-/** One transform owner for both image layers prevents crossfade position drift. */
+/** One transform owner swaps thumbnail and full image layers atomically without position drift. */
 export function ImageCrossfadeFrame({
   frameRef,
   fullImageRef,
@@ -63,7 +63,6 @@ export function ImageCrossfadeFrame({
       frameRef={frameRef}
       preview={thumbnail}
       previewVisible={hasAuthoritativeSize && thumbnailVisible}
-      instantPreviewWhenContentNotReady
       contentReady={hasAuthoritativeSize && fullVisible}
       dataAttributes={{ 'data-image-crossfade-frame': '' }}
       style={{

@@ -1,9 +1,14 @@
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createUpdateService } from './updateService.mjs';
 
-function app(packaged = true) {
-  return { isPackaged: packaged, getVersion: () => '0.6.0-alpha' };
+const tempDirectories = [];
+
+function app(packaged = true, version = '0.6.0-alpha', userData = os.tmpdir()) {
+  return { isPackaged: packaged, getVersion: () => version, getPath: () => userData };
 }
 
 function releases(...entries) {
@@ -11,6 +16,10 @@ function releases(...entries) {
 }
 
 describe('update service', () => {
+  afterEach(async () => {
+    await Promise.all(tempDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
+  });
+
   test('does not contact update servers in development', async () => {
     const fetch = vi.fn();
     const service = createUpdateService({ app: app(false), net: { fetch }, sendToAllWindows: vi.fn(), platform: 'darwin' });
@@ -116,6 +125,79 @@ describe('update service', () => {
     expect(await service.check()).toMatchObject({
       status: 'error',
       error: 'The packaged update service is unavailable.',
+    });
+  });
+
+  test('restores installed release notes once after an update restart', async () => {
+    const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-update-'));
+    tempDirectories.push(userData);
+    await fs.writeFile(path.join(userData, 'pending-update-release.json'), JSON.stringify({
+      version: '0.6.1-alpha',
+      releaseName: 'Picto 0.6.1 Alpha',
+      releaseNotes: '* Smoother grid scrolling',
+      releaseUrl: 'https://example.test/release',
+    }));
+    const sendToAllWindows = vi.fn();
+    const service = createUpdateService({
+      app: app(true, '0.6.1-alpha', userData),
+      net: { fetch: vi.fn() },
+      sendToAllWindows,
+      platform: 'win32',
+    });
+
+    await service.start();
+
+    expect(service.getState()).toMatchObject({
+      status: 'installed',
+      version: '0.6.1-alpha',
+      releaseNotes: '* Smoother grid scrolling',
+    });
+    expect(sendToAllWindows).toHaveBeenLastCalledWith(
+      'picto:update-state',
+      expect.objectContaining({ status: 'installed', version: '0.6.1-alpha' }),
+    );
+    expect(await service.check()).toMatchObject({ status: 'installed' });
+
+    await service.acknowledgeInstalled();
+
+    expect(service.getState()).toMatchObject({ status: 'current', version: null });
+    await expect(fs.stat(path.join(userData, 'pending-update-release.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('persists downloaded release notes for the next packaged launch', async () => {
+    const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-update-'));
+    tempDirectories.push(userData);
+    const autoUpdater = Object.assign(new EventEmitter(), {
+      checkForUpdates: vi.fn().mockImplementation(async () => {
+        autoUpdater.emit('update-downloaded', {
+          version: '0.6.1-alpha',
+          releaseName: 'Picto 0.6.1 Alpha',
+          releaseNotes: '* More reliable playback',
+          downloadedFile: 'Picto-Setup.exe',
+        });
+      }),
+      setFeedURL: vi.fn(),
+    });
+    const service = createUpdateService({
+      app: app(true, '0.6.0-alpha', userData),
+      net: { fetch: vi.fn().mockResolvedValue(releases({
+        draft: false,
+        tag_name: 'v0.6.1-alpha',
+        body: '* More reliable playback',
+      })) },
+      sendToAllWindows: vi.fn(),
+      platform: 'win32',
+      loadUpdaterModule: async () => ({ autoUpdater }),
+    });
+
+    await service.check();
+
+    await vi.waitFor(async () => {
+      const pending = JSON.parse(await fs.readFile(path.join(userData, 'pending-update-release.json'), 'utf8'));
+      expect(pending).toMatchObject({
+        version: '0.6.1-alpha',
+        releaseNotes: '* More reliable playback',
+      });
     });
   });
 });

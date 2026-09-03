@@ -195,8 +195,11 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
     let _invocations = invocation_lock().read().await;
     let state = get_state()?;
     let started = Instant::now();
-    let cache_key = matches!(command, "items.query" | "sidebar.counts")
-        .then(|| format!("{command}\0{args_json}"));
+    let cache_key = matches!(
+        command,
+        "items.query" | "items.mime_facets" | "sidebar.counts"
+    )
+    .then(|| format!("{command}\0{args_json}"));
     let revision_before = state
         .application
         .library()

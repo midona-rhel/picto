@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { associatedFilesFromArguments, classifyAssociatedFile } from './associatedFileService.mjs';
 
 describe('associated file routing', () => {
   it('recognizes Picto Packs and library packages case-insensitively', () => {
-    expect(classifyAssociatedFile('/tmp/Portfolio.PICTO-PACK')).toEqual({
+    const pack = path.resolve('/tmp/Portfolio.PICTO-PACK');
+    const library = path.resolve('/tmp/Main.LIBRARY');
+    expect(classifyAssociatedFile(pack)).toEqual({
       kind: 'picto-pack',
-      path: '/tmp/Portfolio.PICTO-PACK',
+      path: pack,
     });
-    expect(classifyAssociatedFile('/tmp/Main.LIBRARY')).toEqual({
+    expect(classifyAssociatedFile(library)).toEqual({
       kind: 'library',
-      path: '/tmp/Main.LIBRARY',
+      path: library,
     });
   });
 
@@ -19,13 +23,17 @@ describe('associated file routing', () => {
       'Portfolio.picto-pack',
       'Portfolio.picto-pack',
       'photo.jpg',
-    ], '/tmp')).toEqual([{ kind: 'picto-pack', path: '/tmp/Portfolio.picto-pack' }]);
+    ], path.resolve('/tmp'))).toEqual([{
+      kind: 'picto-pack',
+      path: path.resolve('/tmp/Portfolio.picto-pack'),
+    }]);
   });
 
   it('accepts encoded file URLs from desktop launchers', () => {
-    expect(classifyAssociatedFile('file:///tmp/My%20Library.library')).toEqual({
+    const library = path.resolve('/tmp/My Library.library');
+    expect(classifyAssociatedFile(pathToFileURL(library).href)).toEqual({
       kind: 'library',
-      path: '/tmp/My Library.library',
+      path: library,
     });
   });
 });

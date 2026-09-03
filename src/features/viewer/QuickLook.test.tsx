@@ -111,7 +111,7 @@ describe('QuickLook', () => {
     expect(await screen.findByRole('menuitem', { name: 'Set as Library Cover' })).toBeInTheDocument();
   });
 
-  it('keeps a JPEG quick look transparent until its thumbnail is ready', async () => {
+  it('opens a JPEG quick look immediately while reporting media readiness separately', async () => {
     imagePipeline.thumbLoaded = false;
     const props = {
       items: [{
@@ -127,11 +127,14 @@ describe('QuickLook', () => {
     };
     const { rerender } = render(<QuickLook {...props} />);
 
-    expect(document.body.querySelector('[data-quick-look-overlay]')).toHaveAttribute('data-media-ready', 'false');
+    const openingOverlay = document.body.querySelector('[data-quick-look-overlay]');
+    expect(openingOverlay).toHaveAttribute('data-media-ready', 'false');
+    const openingClass = openingOverlay?.className;
 
     imagePipeline.thumbLoaded = true;
     rerender(<QuickLook {...props} />);
     await waitFor(() => expect(document.body.querySelector('[data-quick-look-overlay]')).toHaveAttribute('data-media-ready', 'true'));
+    expect(document.body.querySelector('[data-quick-look-overlay]')?.className).toBe(openingClass);
     imagePipeline.thumbLoaded = false;
   });
 

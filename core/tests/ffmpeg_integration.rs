@@ -22,7 +22,7 @@ fn find_ffmpeg() -> PathBuf {
 
 fn test_video() -> &'static Path {
     TEST_VIDEO.get_or_init(|| {
-        let path = PathBuf::from("/tmp/picto_ffmpeg_test.mp4");
+        let path = std::env::temp_dir().join("picto_ffmpeg_test.mp4");
         let ffmpeg = find_ffmpeg();
         let status = std::process::Command::new(&ffmpeg)
             .args([
@@ -48,7 +48,7 @@ fn test_video() -> &'static Path {
 
 fn test_audio() -> &'static Path {
     TEST_AUDIO.get_or_init(|| {
-        let path = PathBuf::from("/tmp/picto_ffmpeg_test.mp3");
+        let path = std::env::temp_dir().join("picto_ffmpeg_test.mp3");
         let ffmpeg = find_ffmpeg();
         let status = std::process::Command::new(&ffmpeg)
             .args([

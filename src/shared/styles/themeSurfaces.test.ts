@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+const source = (relativePath: string) => readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
+
 const CORE_THEME_SURFACES = [
   'src/app/AppShell.module.css',
   'src/features/sidebar/Sidebar.module.css',
@@ -24,15 +26,15 @@ const DARK_ONLY_NEUTRALS = [
 describe('theme surface ownership', () => {
   it('keeps theme colors in tokens instead of core surface modules', () => {
     for (const relativePath of CORE_THEME_SURFACES) {
-      const source = readFileSync(resolve(process.cwd(), relativePath), 'utf8');
+      const contents = source(relativePath);
       for (const fixedColor of DARK_ONLY_NEUTRALS) {
-        expect(source, `${relativePath} contains ${fixedColor}`).not.toMatch(fixedColor);
+        expect(contents, `${relativePath} contains ${fixedColor}`).not.toMatch(fixedColor);
       }
     }
   });
 
   it('derives both rails and text from the active theme family', () => {
-    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
+    const tokens = source('src/shared/styles/tokens.css');
     expect(tokens).toContain('--color-rail-surface: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));');
     expect(tokens).toContain('--color-text-primary: var(--theme-text);');
     expect(tokens).toContain(':root[data-mantine-color-scheme="light"]');
@@ -40,18 +42,18 @@ describe('theme surface ownership', () => {
   });
 
   it('lets Font Viewer auto mode inherit the application theme', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/features/viewer/document/FontViewer.module.css'), 'utf8');
-    expect(source).toContain('background: var(--color-bg-app);');
-    expect(source).toContain('--font-page-bg: var(--color-bg-app);');
-    expect(source).toContain('--font-page-fg: var(--color-text-primary);');
+    const contents = source('src/features/viewer/document/FontViewer.module.css');
+    expect(contents).toContain('background: var(--color-bg-app);');
+    expect(contents).toContain('--font-page-bg: var(--color-bg-app);');
+    expect(contents).toContain('--font-page-fg: var(--color-text-primary);');
   });
 
   it('keeps tag and folder selection typography and selection neutral', () => {
-    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
-    const overlay = readFileSync(resolve(process.cwd(), 'src/shared/ui/OverlayShell/OverlayShell.module.css'), 'utf8');
-    const tags = readFileSync(resolve(process.cwd(), 'src/features/tags/TagSelectPanel.module.css'), 'utf8');
-    const tagPanel = readFileSync(resolve(process.cwd(), 'src/features/tags/TagSelectPanel.tsx'), 'utf8');
-    const folders = readFileSync(resolve(process.cwd(), 'src/shared/ui/FolderTree/FolderTree.module.css'), 'utf8');
+    const tokens = source('src/shared/styles/tokens.css');
+    const overlay = source('src/shared/ui/OverlayShell/OverlayShell.module.css');
+    const tags = source('src/features/tags/TagSelectPanel.module.css');
+    const tagPanel = source('src/features/tags/TagSelectPanel.tsx');
+    const folders = source('src/shared/ui/FolderTree/FolderTree.module.css');
 
     expect(overlay).toContain('font-family: var(--font-family-ui);');
     expect(tokens).toContain("--font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Geist'");
@@ -81,9 +83,9 @@ describe('theme surface ownership', () => {
   });
 
   it('aligns enabled portal and filter toolbar icon actions', () => {
-    const overlay = readFileSync(resolve(process.cwd(), 'src/shared/ui/OverlayShell/OverlayShell.module.css'), 'utf8');
-    const filterLogic = readFileSync(resolve(process.cwd(), 'src/shared/ui/FilterLogicTabs/FilterLogicTabs.module.css'), 'utf8');
-    const gridFilters = readFileSync(resolve(process.cwd(), 'src/features/grid/GridFilterMenu.module.css'), 'utf8');
+    const overlay = source('src/shared/ui/OverlayShell/OverlayShell.module.css');
+    const filterLogic = source('src/shared/ui/FilterLogicTabs/FilterLogicTabs.module.css');
+    const gridFilters = source('src/features/grid/GridFilterMenu.module.css');
     expect(overlay).toMatch(/\.pinBtn \{[\s\S]*?color: var\(--color-text-primary\);/);
     expect(overlay).toMatch(/\.viewTab \{[\s\S]*?color: var\(--color-text-primary\);/);
     expect(filterLogic).toMatch(/\.button \{[\s\S]*?color: var\(--color-text-primary\);/);
@@ -93,13 +95,13 @@ describe('theme surface ownership', () => {
   });
 
   it('uses the canonical typography roles for application chrome', () => {
-    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
-    const modal = readFileSync(resolve(process.cwd(), 'src/shared/ui/GlassModal/GlassModal.module.css'), 'utf8');
-    const sidebarRows = readFileSync(resolve(process.cwd(), 'src/shared/ui/SidebarRow/SidebarRow.module.css'), 'utf8');
-    const sidebar = readFileSync(resolve(process.cwd(), 'src/features/sidebar/Sidebar.module.css'), 'utf8');
-    const librarySwitcher = readFileSync(resolve(process.cwd(), 'src/features/library/LibrarySwitcherButton.module.css'), 'utf8');
-    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
-    const tooltip = readFileSync(resolve(process.cwd(), 'src/shared/ui/KbdTooltip/KbdTooltip.module.css'), 'utf8');
+    const tokens = source('src/shared/styles/tokens.css');
+    const modal = source('src/shared/ui/GlassModal/GlassModal.module.css');
+    const sidebarRows = source('src/shared/ui/SidebarRow/SidebarRow.module.css');
+    const sidebar = source('src/features/sidebar/Sidebar.module.css');
+    const librarySwitcher = source('src/features/library/LibrarySwitcherButton.module.css');
+    const appShell = source('src/app/AppShell.module.css');
+    const tooltip = source('src/shared/ui/KbdTooltip/KbdTooltip.module.css');
 
     expect(tokens).toContain('--font-size-caption: 11px;');
     expect(tokens).toContain('--font-size-sm: 12px;');
@@ -125,11 +127,11 @@ describe('theme surface ownership', () => {
   });
 
   it('uses the canonical action and icon button geometry', () => {
-    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
-    const actions = readFileSync(resolve(process.cwd(), 'src/shared/styles/actionButton.module.css'), 'utf8');
-    const icons = readFileSync(resolve(process.cwd(), 'src/shared/styles/iconButton.module.css'), 'utf8');
-    const subscriptions = readFileSync(resolve(process.cwd(), 'src/features/subscriptions/SubscriptionsScreen.module.css'), 'utf8');
-    const libraries = readFileSync(resolve(process.cwd(), 'src/features/library/LibraryManager.module.css'), 'utf8');
+    const tokens = source('src/shared/styles/tokens.css');
+    const actions = source('src/shared/styles/actionButton.module.css');
+    const icons = source('src/shared/styles/iconButton.module.css');
+    const subscriptions = source('src/features/subscriptions/SubscriptionsScreen.module.css');
+    const libraries = source('src/features/library/LibraryManager.module.css');
 
     expect(tokens).toContain('--action-button-height: 30px;');
     expect(tokens).toContain('--icon-button-size: 24px;');
@@ -142,15 +144,15 @@ describe('theme surface ownership', () => {
   });
 
   it('keeps feature surfaces on the shared Picto role hierarchy', () => {
-    const select = readFileSync(resolve(process.cwd(), 'src/shared/ui/CmSelect/CmSelect.module.css'), 'utf8');
-    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
-    const inspectorSection = readFileSync(resolve(process.cwd(), 'src/shared/ui/InspectorSection/InspectorSection.module.css'), 'utf8');
-    const propertyRow = readFileSync(resolve(process.cwd(), 'src/shared/ui/PropertyRow/PropertyRow.module.css'), 'utf8');
-    const toolbar = readFileSync(resolve(process.cwd(), 'src/features/grid/GridToolbar.module.css'), 'utf8');
-    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
-    const subscriptions = readFileSync(resolve(process.cwd(), 'src/features/subscriptions/SubscriptionsScreen.module.css'), 'utf8');
-    const duplicates = readFileSync(resolve(process.cwd(), 'src/features/duplicates/DuplicatesScreen.module.css'), 'utf8');
-    const tagManager = readFileSync(resolve(process.cwd(), 'src/features/tags/TagManagerScreen.module.css'), 'utf8');
+    const select = source('src/shared/ui/CmSelect/CmSelect.module.css');
+    const tokens = source('src/shared/styles/tokens.css');
+    const inspectorSection = source('src/shared/ui/InspectorSection/InspectorSection.module.css');
+    const propertyRow = source('src/shared/ui/PropertyRow/PropertyRow.module.css');
+    const toolbar = source('src/features/grid/GridToolbar.module.css');
+    const appShell = source('src/app/AppShell.module.css');
+    const subscriptions = source('src/features/subscriptions/SubscriptionsScreen.module.css');
+    const duplicates = source('src/features/duplicates/DuplicatesScreen.module.css');
+    const tagManager = source('src/features/tags/TagManagerScreen.module.css');
 
     expect(select.match(/font-size: var\(--font-size-md\);/g)?.length).toBeGreaterThanOrEqual(2);
     expect(inspectorSection).toContain('font-size: 12px;');
@@ -180,8 +182,8 @@ describe('theme surface ownership', () => {
   });
 
   it('gives the settings window the same directional macOS rim as the main window', () => {
-    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
-    const settings = readFileSync(resolve(process.cwd(), 'src/features/settings/Settings.module.css'), 'utf8');
+    const appShell = source('src/app/AppShell.module.css');
+    const settings = source('src/features/settings/Settings.module.css');
 
     for (const declaration of [
       'border-top: var(--glass-border-top);',

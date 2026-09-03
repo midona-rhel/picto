@@ -22,7 +22,6 @@ describe('ImageCrossfadeFrame', () => {
     />);
 
     const frame = container.querySelector('.image-crossfade-frame');
-    expect(frame).toHaveAttribute('data-instant-preview', 'true');
     expect(frame).toHaveStyle({
       left: '50%',
       top: '50%',

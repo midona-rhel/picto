@@ -232,6 +232,16 @@ export interface EntityViewPage {
   revision: number;
 }
 
+export interface MimeFacet {
+  mime: string;
+  count: number;
+}
+
+export interface MimeFacets {
+  values: MimeFacet[];
+  revision: number;
+}
+
 export type FilterOp = 'eq' | 'gte' | 'lte' | 'gt' | 'lt';
 
 export interface RatingFilter {

@@ -24,7 +24,11 @@ export function writeClipboardFilePaths(
   }
   if (copyFiles?.(paths)) return;
   if (platform === 'linux') {
-    const uriList = `${paths.map((path) => pathToFileURL(path).href).join('\r\n')}\r\n`;
+    const uriList = `${paths.map((filePath) => {
+      const url = new URL('file://');
+      url.pathname = filePath;
+      return url.href;
+    }).join('\r\n')}\r\n`;
     clipboard.writeBuffer('text/uri-list', Buffer.from(uriList, 'utf8'));
     return;
   }

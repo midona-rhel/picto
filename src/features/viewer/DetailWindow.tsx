@@ -29,7 +29,6 @@ import { DetailMediaRenderer } from './document/DetailMediaRenderer';
 import { detailRendererKind } from './document/detailRendererKind';
 import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
 import type { FlashPlaybackController } from './document/FlashPlayer';
-import { FlashControls } from './document/FlashControls';
 import type { CurrentFrameCapture } from './currentFrameCapture';
 import type { ViewerZoomControls } from '../../state/viewer';
 import { filesController } from '../../controllers/filesController';
@@ -455,7 +454,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             onFlashContextMenu={contextMenu.open}
             onFrameCaptureChange={handleFrameCaptureChange}
           />
-          <FlashControls controller={flashPlayback} />
         </div>
       ) : !isImage && currentImage ? (
         <div className={styles.container}>

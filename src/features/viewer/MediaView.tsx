@@ -25,7 +25,6 @@ import { DetailMediaRenderer } from './document/DetailMediaRenderer';
 import { detailRendererKind } from './document/detailRendererKind';
 import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
 import type { FlashPlaybackController } from './document/FlashPlayer';
-import { FlashControls } from './document/FlashControls';
 import type { CurrentFrameCapture } from './currentFrameCapture';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
@@ -248,7 +247,7 @@ export function MediaView({
 
   return (
     <div
-      className={`${styles.mediaView} ${presentationReady ? styles.mediaViewReady : ''}`}
+      className={styles.mediaView}
       data-media-view-ready={presentationReady ? 'true' : 'false'}
       onContextMenuCapture={(event) => {
         if (!(event.target as Element).closest('[data-flash-player]')) contextMenu.open(event);
@@ -264,7 +263,6 @@ export function MediaView({
             onFlashContextMenu={contextMenu.open}
             onFrameCaptureChange={handleFrameCaptureChange}
           />
-          <FlashControls controller={flashPlayback} />
         </div>
       ) : !isImage ? (
         <DetailMediaRenderer

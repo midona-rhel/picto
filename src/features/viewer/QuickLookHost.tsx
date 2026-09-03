@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ToolbarCloseIcon } from '../../shared/ui/icons/toolbar-icons';
@@ -27,19 +27,11 @@ export function QuickLookHost({
   onNavigate,
   onClose,
 }: QuickLookHostProps) {
-  const [revealed, setRevealed] = useState(contentReady);
-
-  useEffect(() => {
-    if (revealed || !contentReady) return;
-    const frame = requestAnimationFrame(() => setRevealed(true));
-    return () => cancelAnimationFrame(frame);
-  }, [contentReady, revealed]);
-
   return createPortal(
     <div
-      className={`${styles.overlay} ${revealed ? styles.open : ''}`}
+      className={styles.overlay}
       data-quick-look-overlay
-      data-media-ready={revealed ? 'true' : 'false'}
+      data-media-ready={contentReady ? 'true' : 'false'}
     >
       <KbdTooltip label={t("Close")} shortcutId="view.quicklook" position="bottom">
         <button className={styles.closeButton} type="button" onClick={onClose} aria-label={t("Close Quick Look")}>

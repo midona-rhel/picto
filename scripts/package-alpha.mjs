@@ -22,6 +22,7 @@ function run(label, script, args = []) {
 
 run('Generate application icons', 'scripts/generate-app-icons.mjs');
 run('Build native addon', 'scripts/build-native.mjs', ['--release']);
+run('Prepare viewer assets', 'scripts/prepare-viewer-assets.mjs');
 run('Compile TypeScript', 'node_modules/typescript/bin/tsc');
 run('Build renderer', 'node_modules/vite/bin/vite.js', ['build']);
 run('Generate license notices', 'scripts/generate-license-notices.mjs');

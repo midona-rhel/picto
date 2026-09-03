@@ -558,16 +558,16 @@ type CoreProperty = {
   showLoading?: boolean;
 };
 
-const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
-  { label: 'Items', mono: true },
-  { label: 'Media', mono: true },
-  { label: 'Dimensions', mono: true },
-  { label: 'Size', mono: true },
-  { label: 'Type', mono: true },
-  { label: 'Duration', mono: true },
-  { label: 'Date Imported', mono: true },
-  { label: 'Date Created', mono: true },
-  { label: 'Date Modified', mono: true },
+const CORE_PROPERTIES: Array<{ key: CorePropertyLabel; mono: boolean }> = [
+  { key: 'Items', mono: true },
+  { key: 'Media', mono: true },
+  { key: 'Dimensions', mono: true },
+  { key: 'Size', mono: true },
+  { key: 'Type', mono: true },
+  { key: 'Duration', mono: true },
+  { key: 'Date Imported', mono: true },
+  { key: 'Date Created', mono: true },
+  { key: 'Date Modified', mono: true },
 ];
 
 const CORE_PROPERTY_TRANSLATIONS: Record<CorePropertyLabel, string> = {
@@ -585,10 +585,10 @@ const CORE_PROPERTY_TRANSLATIONS: Record<CorePropertyLabel, string> = {
 type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title' | 'loading' | 'showLoading'>>>;
 
 function normalizedCoreProperties(values: CorePropertyValues): CoreProperty[] {
-  return CORE_PROPERTIES.flatMap(({ label, mono }) => {
-    const property = values[label];
+  return CORE_PROPERTIES.flatMap(({ key, mono }) => {
+    const property = values[key];
     if (!property || (!property.loading && (property.value === '' || property.value === '—'))) return [];
-    return [{ label, mono, ...property }];
+    return [{ label: key, mono, ...property }];
   });
 }
 

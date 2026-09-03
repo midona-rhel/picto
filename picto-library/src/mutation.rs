@@ -377,6 +377,14 @@ impl Library {
         )
     }
 
+    pub fn mime_facets(&self, query: &RootQuery) -> Result<crate::query::MimeFacets> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| crate::query::mime_facets(connection, &snapshot, query),
+        )
+    }
+
     pub fn details(&self, root_id: RootId) -> Result<crate::RootDetails> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,

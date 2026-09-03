@@ -112,6 +112,7 @@ const updates = {
   state: () => ipcRenderer.invoke('picto:updates:state'),
   install: () => ipcRenderer.invoke('picto:updates:install'),
   openRelease: () => ipcRenderer.invoke('picto:updates:open-release'),
+  acknowledgeInstalled: () => ipcRenderer.invoke('picto:updates:acknowledge-installed'),
   onState: (handler) => on('picto:update-state', handler),
 };
 

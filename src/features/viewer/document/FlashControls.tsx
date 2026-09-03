@@ -8,20 +8,26 @@ import { t } from '../../../i18n';
 
 interface FlashControlsProps {
   controller: FlashPlaybackController | null;
+  visible?: boolean;
 }
 
-export function FlashControls({ controller }: FlashControlsProps) {
+export function FlashControls({ controller, visible = true }: FlashControlsProps) {
   const isPlaying = controller?.isPlaying ?? false;
 
   return (
     <div
-      className={`${videoStyles.controls} ${styles.controls}`}
-      data-flash-controls
-      onMouseDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
+      className={visible ? '' : videoStyles.controlsHidden}
+      data-media-controls
+      data-visible={visible ? 'true' : 'false'}
     >
-      <div className={videoStyles.buttonRow}>
-        <div className={videoStyles.buttonRowLeft}>
+      <div
+        className={`${videoStyles.controls} ${styles.controls}`}
+        data-flash-controls
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={videoStyles.buttonRow}>
+          <div className={videoStyles.buttonRowLeft}>
           <KbdTooltip label={isPlaying ? t("Pause") : t("Play")}>
             <button
               className={videoStyles.icBtn}
@@ -42,14 +48,15 @@ export function FlashControls({ controller }: FlashControlsProps) {
               <IconPlayerStop size={18} />
             </button>
           </KbdTooltip>
-        </div>
-        <div className={videoStyles.buttonRowRight}>
-          <VolumePanel
-            volume={controller?.volume ?? 1}
-            muted={controller?.muted ?? false}
-            onVolumeChange={(volume) => controller?.setVolume(volume)}
-            onMuteToggle={() => controller?.toggleMute()}
-          />
+          </div>
+          <div className={videoStyles.buttonRowRight}>
+            <VolumePanel
+              volume={controller?.volume ?? 1}
+              muted={controller?.muted ?? false}
+              onVolumeChange={(volume) => controller?.setVolume(volume)}
+              onMuteToggle={() => controller?.toggleMute()}
+            />
+          </div>
         </div>
       </div>
     </div>

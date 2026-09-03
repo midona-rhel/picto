@@ -132,6 +132,7 @@ export const gridItemsAtom = pick((s) => s.items);
 export const gridCursorAtom = pick((s) => s.cursor);
 export const gridTotalCountAtom = pick((s) => s.totalCount);
 export const gridTotalSizeBytesAtom = pick((s) => s.totalSizeBytes);
+export const gridRevisionAtom = pick((s) => s.revision);
 export const gridLoadingAtom = pick((s) => s.status === 'loading');
 export const gridErrorAtom = pick((s) => s.error);
 export const gridActiveAtom = pick((s) => s.active);

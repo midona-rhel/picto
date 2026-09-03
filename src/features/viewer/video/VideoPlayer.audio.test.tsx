@@ -1,8 +1,9 @@
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VideoPlayer } from './VideoPlayer';
 import { resetShortcutRuntimeForTests } from '../../../runtime/shortcutRuntime';
+import { CONTROLS_HIDE_DELAY } from './videoConstants';
 
 const actions = vi.hoisted(() => ({
   play: vi.fn(), pause: vi.fn(), togglePlay: vi.fn(), seek: vi.fn(), seekRelative: vi.fn(),
@@ -40,6 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   resetShortcutRuntimeForTests();
   vi.restoreAllMocks();
 });
@@ -92,5 +94,25 @@ describe('VideoPlayer audio mode', () => {
     expect(container.querySelector('[data-tooltip-label="Loop on"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.toggleLoop');
     expect(container.querySelector('[data-tooltip-label="Mute"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.toggleMute');
     expect(container.querySelector('[data-tooltip-label="Fullscreen"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.fullscreen');
+  });
+
+  it('fades paused audio and video controls after inactivity and reveals them for activity', () => {
+    vi.useFakeTimers();
+    const { container } = render(<VideoPlayer kind="audio" src="media://localhost/file/hash.mp3" />);
+    const surface = container.firstElementChild as HTMLElement;
+    const controls = container.querySelector('[data-media-controls]');
+
+    expect(controls).toHaveAttribute('data-visible', 'true');
+    act(() => vi.advanceTimersByTime(CONTROLS_HIDE_DELAY));
+    expect(controls).toHaveAttribute('data-visible', 'false');
+
+    fireEvent.mouseMove(surface);
+    expect(controls).toHaveAttribute('data-visible', 'true');
+    act(() => vi.advanceTimersByTime(CONTROLS_HIDE_DELAY));
+    expect(controls).toHaveAttribute('data-visible', 'false');
+
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(actions.togglePlay).toHaveBeenCalledOnce();
+    expect(controls).toHaveAttribute('data-visible', 'true');
   });
 });

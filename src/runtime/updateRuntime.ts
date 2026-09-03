@@ -13,7 +13,10 @@ export function startUpdateRuntime(): () => void {
     if (!state.version) return;
     const key = `${state.status}:${state.version}`;
     if (announced === key) return;
-    if (state.status === 'available') {
+    if (state.status === 'installed') {
+      announced = key;
+      store.set(updateModalAtom, { open: true });
+    } else if (state.status === 'available') {
       announced = key;
       showInfoNotification({
         title: t("Picto {value0} is available", { value0: state.version }),

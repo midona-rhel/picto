@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { IconDownload, IconRefresh } from '@tabler/icons-react';
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import {
+  acknowledgeInstalledUpdate,
   checkForUpdates,
   getUpdateState,
   installUpdate,
@@ -70,6 +71,10 @@ export function UpdateModal({ open, onClose }: { open: boolean; onClose: () => v
   }, [open]);
 
   const busy = state?.status === 'checking' || state?.status === 'downloading';
+  const close = () => {
+    if (state?.status === 'installed') void acknowledgeInstalledUpdate();
+    onClose();
+  };
   const action = state?.platform === 'darwin'
     ? () => void openUpdateRelease()
     : () => void installUpdate();
@@ -77,10 +82,14 @@ export function UpdateModal({ open, onClose }: { open: boolean; onClose: () => v
 
   return <GlassModal
     open={open}
-    onClose={onClose}
+    onClose={close}
     title={state?.version ? t("Picto {value0}", { value0: state.version }) : t("Software Update")}
     size="md"
-    footer={<>
+    footer={state?.status === 'installed' ? (
+      <button className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} data-modal-primary="true" type="button" onClick={close}>
+        {t("Done")}
+      </button>
+    ) : <>
       <button className={modalStyles.btn} type="button" disabled={busy} onClick={() => void checkForUpdates().then(setState)}>
         <IconRefresh size={15} /> {t("Check Again")}</button>
       {state?.status === 'downloaded' || (state?.status === 'available' && state.platform === 'darwin') ? (
@@ -101,6 +110,7 @@ export function UpdateModal({ open, onClose }: { open: boolean; onClose: () => v
         <div className={styles.progress}><span style={{ width: `${state.progress?.percent ?? 2}%` }} /></div>
       </> : null}
       {state?.status === 'downloaded' ? <p>{t("The update is ready. Picto will close before the installer starts.")}</p> : null}
+      {state?.status === 'installed' ? <p>{t("Picto was updated successfully. Here’s what changed.")}</p> : null}
       {state?.status === 'available' && state.platform === 'darwin' ? <p>{t("A new version is available. Download it from the release page to update this Mac.")}</p> : null}
     </div>
     {state?.version ? <section className={styles.release}>

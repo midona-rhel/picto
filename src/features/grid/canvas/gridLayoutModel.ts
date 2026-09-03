@@ -33,6 +33,9 @@ export function collectThumbnailActivation(
   activeBottom: number,
   viewportTop: number,
   viewportBottom: number,
+  textHeight: number,
+  viewMode: GridViewMode,
+  fitThumbnails: boolean,
   buffers: ThumbnailActivationBuffers,
 ): void {
   buffers.activeTiles.length = 0;
@@ -53,7 +56,12 @@ export function collectThumbnailActivation(
       planTile.fileHash = item.thumbnailHash;
       planTile.mime = item.mime;
       planTile.w = position.w;
-      planTile.h = position.h;
+      planTile.h = Math.max(0, position.h - textHeight);
+      planTile.sourceWidth = item.width;
+      planTile.sourceHeight = item.height;
+      planTile.fit = viewMode === 'grid' && !fitThumbnails ? 'contain' : 'cover';
+      planTile.inViewport = position.y + position.h >= viewportTop && position.y <= viewportBottom;
+      planTile.fullQualityEligible = false;
       planTile.cy = position.y + position.h / 2;
       buffers.planTiles[planCount] = planTile;
       planCount++;

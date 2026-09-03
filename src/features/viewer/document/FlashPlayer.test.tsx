@@ -1,24 +1,18 @@
-import { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FlashControls } from './FlashControls';
-import { FlashPlayer, type FlashPlaybackController } from './FlashPlayer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FlashPlayer } from './FlashPlayer';
+import { fitFlashStage } from './flashStageGeometry';
 import type { CurrentFrameCapture } from '../currentFrameCapture';
 import { windowController } from '../../../controllers/windowController';
 import { registerShortcutScope, resetShortcutRuntimeForTests } from '../../../runtime/shortcutRuntime';
 
 function FlashPlayerHarness({ onFrameCaptureChange }: { onFrameCaptureChange?: (capture: CurrentFrameCapture | null) => void } = {}) {
-  const [controller, setController] = useState<FlashPlaybackController | null>(null);
   return (
-    <>
-      <FlashPlayer
-        src="media://localhost/file/example.swf"
-        onPlaybackChange={setController}
-        onFrameCaptureChange={onFrameCaptureChange}
-      />
-      <FlashControls controller={controller} />
-    </>
+    <FlashPlayer
+      src="media://localhost/file/example.swf"
+      onFrameCaptureChange={onFrameCaptureChange}
+    />
   );
 }
 
@@ -29,13 +23,28 @@ describe('FlashPlayer', () => {
     delete window.RufflePlayer;
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fits the native Flash stage inside the available viewer without changing its aspect ratio', () => {
+    expect(fitFlashStage({ width: 1200, height: 600 }, { width: 400, height: 800 })).toEqual({
+      width: 300,
+      height: 600,
+    });
+    expect(fitFlashStage({ width: 600, height: 900 }, { width: 800, height: 400 })).toEqual({
+      width: 600,
+      height: 300,
+    });
+  });
+
   it('loads the SWF through Ruffle with network and script access constrained', async () => {
     const load = vi.fn().mockResolvedValue(undefined);
     let suspended = false;
     const runtime = {
       load,
       readyState: 0,
-      metadata: null,
+      metadata: { width: 400, height: 800 },
       get suspended() { return suspended; },
       suspend: vi.fn(() => { suspended = true; }),
       resume: vi.fn(() => { suspended = false; }),
@@ -51,6 +60,16 @@ describe('FlashPlayer', () => {
     window.RufflePlayer = {
       newest: () => ({ createPlayer: () => player as any }),
     };
+
+    class TestResizeObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback([{ contentRect: { width: 1200, height: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver);
 
     render(
       <MantineProvider>
@@ -76,9 +95,18 @@ describe('FlashPlayer', () => {
 
     await act(async () => { player.dispatchEvent(new Event('loadeddata')); });
     await waitFor(() => expect(document.querySelector('[data-flash-player]')).toHaveAttribute('data-status', 'ready'));
+    expect(document.querySelector('[data-flash-stage]')).toHaveStyle({ width: '300px', height: '600px' });
     expect(screen.getByRole('button', { name: 'Pause Flash content' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Stop Flash content' })).toBeVisible();
-    expect(document.querySelector('[data-flash-player]')).not.toContainElement(document.querySelector('[data-flash-controls]'));
+    expect(document.querySelector('[data-flash-player]')).toContainElement(document.querySelector('[data-flash-controls]'));
+    expect(document.querySelector('[data-media-controls]')).toHaveAttribute('data-visible', 'true');
+
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(runtime.suspend).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Play Flash content' })).toBeVisible();
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(runtime.resume).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Pause Flash content' })).toBeVisible();
 
     const appShortcut = vi.fn(() => true);
     const escapedKey = vi.fn();
@@ -115,7 +143,7 @@ describe('FlashPlayer', () => {
         <FlashPlayerHarness onFrameCaptureChange={(next) => { capture = next; }} />
       </MantineProvider>,
     );
-    const stage = document.querySelector<HTMLElement>('[data-flash-player]');
+    const stage = document.querySelector<HTMLElement>('[data-flash-stage]');
     expect(stage).not.toBeNull();
     vi.spyOn(stage!, 'getBoundingClientRect').mockReturnValue({
       x: 10, y: 20, width: 300, height: 200,

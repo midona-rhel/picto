@@ -68,6 +68,14 @@ fn main() -> picto_library::Result<()> {
         })
         .collect::<Vec<_>>();
 
+    let mime_facet_latencies = (0..100)
+        .map(|_| {
+            let started = Instant::now();
+            library.mime_facets(&query).unwrap();
+            started.elapsed()
+        })
+        .collect::<Vec<_>>();
+
     let summary_started = Instant::now();
     let summary = library.selection_summary(&SelectionTarget::Query {
         query: query.clone(),
@@ -112,6 +120,10 @@ fn main() -> picto_library::Result<()> {
     println!(
         "warm_read_p95_ms={:.3}",
         millis(percentile(&mut read_latencies.clone(), 95))
+    );
+    println!(
+        "mime_facets_p95_ms={:.3}",
+        millis(percentile(&mut mime_facet_latencies.clone(), 95))
     );
     let mut concurrent_latencies = concurrent_latencies.lock().unwrap().clone();
     println!(

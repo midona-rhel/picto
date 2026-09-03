@@ -3,7 +3,7 @@
  *
  * Standalone image viewer with minimal chrome. Same zoom/image model as MediaView
  * (frame at left:50% top:50%, zoom hook applies translate(calc(-50% + tx)) scale(s)).
- * No navigator minimap. Fade-in on open. Exit button top-right, nav toolbar bottom.
+ * No navigator minimap. Opens atomically with the other viewer surfaces.
  */
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';

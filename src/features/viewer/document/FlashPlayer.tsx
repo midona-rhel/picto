@@ -8,8 +8,13 @@ import {
   loadRuffleMovie,
   type RufflePlayerElement,
 } from '../../../shared/flash/ruffleRuntime';
-import { useShortcutSuspension } from '../../../shared/hooks/useShortcutScope';
+import { useShortcutScope, useShortcutSuspension } from '../../../shared/hooks/useShortcutScope';
 import { t } from '../../../i18n';
+import { fitFlashStage, type FlashStageSize } from './flashStageGeometry';
+import { FlashControls } from './FlashControls';
+import { useMediaControlsVisibility } from '../video/useMediaControlsVisibility';
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
+import { VOLUME_STEP } from '../video/videoConstants';
 
 export interface FlashPlaybackController {
   isPlaying: boolean;
@@ -39,10 +44,33 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
   const [muted, setMuted] = useState(false);
   const [hasInputFocus, setHasInputFocus] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewportSize, setViewportSize] = useState<FlashStageSize>({ width: 0, height: 0 });
+  const [movieSize, setMovieSize] = useState<FlashStageSize | null>(null);
+  const { controlsVisible, revealControls } = useMediaControlsVisibility();
   useShortcutSuspension(hasInputFocus);
 
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const updateSize = (width: number, height: number) => {
+      setViewportSize((current) => current.width === width && current.height === height
+        ? current
+        : { width, height });
+    };
+    const bounds = stage.getBoundingClientRect();
+    updateSize(bounds.width, bounds.height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      updateSize(entry.contentRect.width, entry.contentRect.height);
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  const fittedStage = useMemo(() => fitFlashStage(viewportSize, movieSize), [movieSize, viewportSize]);
+
   const captureFrame = useCallback<CurrentFrameCapture>(async () => {
-    const bounds = stageRef.current?.getBoundingClientRect();
+    const bounds = hostRef.current?.getBoundingClientRect();
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
       throw new Error('The Flash frame is not ready yet.');
     }
@@ -68,6 +96,7 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
   }, [captureFrame, onFrameCaptureChange]);
 
   const togglePlay = useCallback(() => {
+    revealControls();
     const player = playerRef.current;
     if (!player) return;
     const runtime = player.ruffle(1);
@@ -79,30 +108,33 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
       setStatus('ready');
       setIsPlaying(true);
     }
-  }, []);
+  }, [revealControls]);
 
   const stop = useCallback(() => {
+    revealControls();
     const player = playerRef.current;
     if (!player) return;
     player.ruffle(1).suspend();
     setStatus('stopped');
     setIsPlaying(false);
     void loadRuffleMovie(player, src, 'off').then(() => player.ruffle(1).suspend()).catch(() => {});
-  }, [src]);
+  }, [revealControls, src]);
 
   const setVolume = useCallback((nextVolume: number) => {
+    revealControls();
     const clamped = Math.min(1, Math.max(0, nextVolume));
     setVolumeState(clamped);
     if (clamped > 0) setMuted(false);
     if (playerRef.current) playerRef.current.ruffle(1).volume = clamped;
-  }, []);
+  }, [revealControls]);
 
   const toggleMute = useCallback(() => {
+    revealControls();
     setMuted((wasMuted) => {
       if (playerRef.current) playerRef.current.ruffle(1).volume = wasMuted ? volume : 0;
       return !wasMuted;
     });
-  }, [volume]);
+  }, [revealControls, volume]);
 
   const controller = useMemo<FlashPlaybackController>(() => ({
     isPlaying,
@@ -113,6 +145,28 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
     toggleMute,
     setVolume,
   }), [isPlaying, muted, setVolume, stop, toggleMute, togglePlay, volume]);
+
+  useShortcutScope((event) => {
+    if (matchesShortcutDef(event, getShortcut('video.togglePlay')!)) {
+      event.preventDefault();
+      togglePlay();
+      return;
+    }
+    if (matchesShortcutDef(event, getShortcut('video.volumeUp')!)) {
+      event.preventDefault();
+      setVolume(volume + VOLUME_STEP);
+      return;
+    }
+    if (matchesShortcutDef(event, getShortcut('video.volumeDown')!)) {
+      event.preventDefault();
+      setVolume(volume - VOLUME_STEP);
+      return;
+    }
+    if (matchesShortcutDef(event, getShortcut('video.toggleMute')!)) {
+      event.preventDefault();
+      toggleMute();
+    }
+  }, { priority: 70 });
 
   useEffect(() => {
     onPlaybackChange?.(controller);
@@ -126,6 +180,7 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
     setStatus('loading');
     setIsPlaying(false);
     setError(null);
+    setMovieSize(null);
 
     void createRufflePlayer().then(async (createdPlayer) => {
       if (disposed || !hostRef.current) return;
@@ -139,6 +194,10 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
       const markReady = () => {
         if (disposed || ready) return;
         ready = true;
+        const metadata = player?.ruffle(1).metadata;
+        if (metadata?.width && metadata?.height) {
+          setMovieSize({ width: metadata.width, height: metadata.height });
+        }
         requestAnimationFrame(() => requestAnimationFrame(() => {
           if (!disposed) {
             setStatus('ready');
@@ -173,7 +232,16 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
       data-status={error ? 'error' : status}
       tabIndex={0}
       onContextMenu={onContextMenu}
+      onKeyDownCapture={(event) => {
+        const mediaShortcutIds = [
+          'video.togglePlay', 'video.volumeUp', 'video.volumeDown', 'video.toggleMute',
+        ];
+        if (mediaShortcutIds.some((id) => matchesShortcutDef(event.nativeEvent, getShortcut(id)!))) revealControls();
+      }}
+      onMouseMove={revealControls}
+      onMouseEnter={revealControls}
       onPointerDownCapture={(event) => {
+        revealControls();
         event.currentTarget.focus();
         setHasInputFocus(true);
       }}
@@ -184,7 +252,13 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
         }
       }}
     >
-      <div ref={hostRef} className={styles.host} />
+      <div
+        ref={hostRef}
+        className={styles.host}
+        data-flash-stage
+        style={fittedStage ? { width: fittedStage.width, height: fittedStage.height } : undefined}
+      />
+      <FlashControls controller={controller} visible={controlsVisible} />
       {error ? <div className={styles.message} role="alert">{error}</div> : null}
     </div>
   );

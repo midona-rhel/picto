@@ -131,9 +131,14 @@ describe('collectThumbnailActivation', () => {
       planTiles: [],
     };
 
-    collectThumbnailActivation([0, 1], model.positions, model.items, 0, model.totalHeight, 0, model.totalHeight, buffers);
+    collectThumbnailActivation(
+      [0, 1], model.positions, model.items,
+      0, model.totalHeight, 0, model.totalHeight,
+      20, 'grid', false, buffers,
+    );
 
     expect(buffers.activeTiles).toEqual([0, 1]);
     expect(buffers.planTiles.map((tile) => tile.fileHash)).toEqual(['file-10']);
+    expect(buffers.planTiles[0].h).toBe(model.positions[0].h - 20);
   });
 });

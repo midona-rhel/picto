@@ -17,7 +17,7 @@ function productionSources(directory: string): string[] {
 describe('renderer shortcut ownership', () => {
   it('keeps the only global keydown listener in the shortcut runtime', () => {
     const offenders = productionSources(SRC_ROOT)
-      .filter((path) => relative(SRC_ROOT, path) !== OWNER)
+      .filter((path) => relative(SRC_ROOT, path).replace(/\\/g, '/') !== OWNER)
       .filter((path) => /window\.addEventListener\(['"]keydown/.test(readFileSync(path, 'utf8')))
       .map((path) => relative(SRC_ROOT, path));
 

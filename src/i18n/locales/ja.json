@@ -951,6 +951,7 @@
   "Picto {value0}": "ピクト {value0}",
   "Picto {value0} is available": "Picto {value0} が利用可能",
   "Picto {value0} is ready": "Picto {value0} は準備が整います",
+  "Picto was updated successfully. Here’s what changed.": "Picto が正常にアップデートされました。変更内容はこちらです。",
   "Picto contributors": "ピクトコントリビューター",
   "Picto could not inspect this folder. Choose it again or check that it is still available.": "ピクトはこのフォルダを点検できませんでした。 もう一度選択するか、まだ利用可能なことを確認してください。",
   "Picto is up to date.": "ピクトは最新です。",

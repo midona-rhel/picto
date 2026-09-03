@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -97,6 +97,7 @@ assert(packageManifest.build.win.target.every((target) => target.arch?.length ==
 assert(packageManifest.build.nsis?.artifactName === 'Picto-Setup-${version}.${ext}', 'Windows update manifests and installer assets must use the same URL-safe name');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
+assert(packageManifest.build.files.includes('dist/vendor/**/*'), 'packaged files must include viewer runtime assets');
 assert(
   !(packageManifest.build.extraResources ?? []).some((resource) =>
     /gallery[-_]?dl|onlyfans|of[-_]?scraper|python/i.test(`${resource.from ?? ''} ${resource.to ?? ''}`)),
@@ -182,6 +183,23 @@ if (checkArtifacts) {
     'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
     'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
   ]) assert(existsSync(path.join(root, file)), `release artifact is missing: ${file}`);
+
+  const ruffleDirectory = path.join(root, 'dist/vendor/ruffle');
+  const ruffleRuntimeManifest = path.join(ruffleDirectory, 'picto-runtime.json');
+  for (const file of ['ruffle.js', 'picto-runtime.json', 'LICENSE_APACHE', 'LICENSE_MIT']) {
+    const artifact = path.join(ruffleDirectory, file);
+    assert(existsSync(artifact) && statSync(artifact).size > 0, `Flash runtime asset is missing or empty: dist/vendor/ruffle/${file}`);
+  }
+  if (existsSync(ruffleDirectory)) {
+    const ruffleAssets = readdirSync(ruffleDirectory);
+    assert(ruffleAssets.some((file) => file.endsWith('.wasm')), 'Flash runtime has no packaged WebAssembly module');
+    assert(ruffleAssets.some((file) => file.startsWith('core.ruffle.') && file.endsWith('.js')), 'Flash runtime has no packaged core JavaScript chunk');
+  }
+  if (existsSync(ruffleRuntimeManifest)) {
+    const runtime = JSON.parse(readFileSync(ruffleRuntimeManifest, 'utf8'));
+    assert(runtime.package === '@ruffle-rs/ruffle', 'packaged Flash runtime identifies the wrong package');
+    assert(runtime.version === packageManifest.dependencies?.['@ruffle-rs/ruffle'], 'packaged Flash runtime version does not match package.json');
+  }
 
   const executableSuffix = process.platform === 'win32' ? '.exe' : '';
   for (const file of [

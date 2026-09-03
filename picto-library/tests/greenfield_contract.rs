@@ -3249,6 +3249,69 @@ fn name_text_filter_uses_the_root_fts_column_in_every_lifecycle_scope() {
 }
 
 #[test]
+fn mime_facets_cover_the_complete_query_result_without_paging() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    for (key, mime) in [
+        ("png-one", "image/png"),
+        ("png-two", "image/png"),
+        ("video", "video/webm"),
+        ("flash", "application/x-shockwave-flash"),
+    ] {
+        library
+            .ingest(&imported_as(
+                key,
+                mime,
+                LabColor {
+                    l: 50.0,
+                    a: 0.0,
+                    b: 0.0,
+                    weight: 1.0,
+                },
+            ))
+            .unwrap();
+    }
+    let mut inbox = imported_as(
+        "inbox-audio",
+        "audio/mpeg",
+        LabColor {
+            l: 50.0,
+            a: 0.0,
+            b: 0.0,
+            weight: 1.0,
+        },
+    );
+    inbox.lifecycle = Lifecycle::Inbox;
+    library.ingest(&inbox).unwrap();
+
+    let page = library
+        .query(
+            &query(ItemScope::All),
+            &PageRequest {
+                limit: 1,
+                cursor: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total, 4);
+
+    let facets = library.mime_facets(&query(ItemScope::All)).unwrap();
+    assert_eq!(
+        facets
+            .values
+            .iter()
+            .map(|facet| (facet.mime.as_str(), facet.count))
+            .collect::<Vec<_>>(),
+        vec![
+            ("application/x-shockwave-flash", 1),
+            ("image/png", 2),
+            ("video/webm", 1),
+        ]
+    );
+}
+
+#[test]
 fn collections_are_one_root_and_mime_filters_include_every_member() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

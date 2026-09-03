@@ -1,7 +1,6 @@
 .frame {
   position: relative;
   overflow: hidden;
-  --progressive-media-fade-duration: 130ms;
 }
 
 .preview,
@@ -14,21 +13,15 @@
   z-index: 1;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--progressive-media-fade-duration) ease;
 }
 
 .previewVisible {
   opacity: 1;
 }
 
-.frame[data-instant-preview='true'][data-ready='false'] .previewVisible {
-  transition: none;
-}
-
 .content {
   z-index: 2;
   opacity: 0;
-  transition: opacity var(--progressive-media-fade-duration) ease-out;
 }
 
 .contentReady {
@@ -37,12 +30,4 @@
 
 .frame[data-ready='true'] .preview {
   opacity: 0;
-  transition-delay: var(--progressive-media-fade-duration);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .preview,
-  .content {
-    transition: none;
-  }
 }

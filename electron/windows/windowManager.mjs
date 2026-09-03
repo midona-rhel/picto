@@ -296,7 +296,9 @@ export function createWindowManager({
                       backgroundColor: themeBg,
                     }),
               }),
-      show: false,
+      // In development, show the main window immediately so a debugger run is
+      // directly usable even while renderer starts.
+      show: isDev && isMain,
       ...(isMac && { roundedCorners: true }),
       // macOS vibrancy — applied at creation time (zero-frame)
       ...(useVibrancy && !isLibraryManager && {
@@ -348,8 +350,8 @@ export function createWindowManager({
       if (!win.isDestroyed() && !win.isVisible()) {
         console.warn(`[main] window '${label}' forcing show fallback (ready-to-show timeout)`);
         try {
-          if (isDev && isMain) win.showInactive();
-          else win.show();
+          win.show();
+          if (isMain) win.focus();
         } catch (err) {
           console.error('[main] force-show failed:', err);
         }
@@ -362,12 +364,8 @@ export function createWindowManager({
         if (isMain && savedMainState?.maximized) {
           win.maximize();
         }
-        if (isDev && isMain) {
-          win.showInactive();
-        } else {
-          win.show();
-          if (isMain) win.focus();
-        }
+        win.show();
+        if (isMain) win.focus();
       } catch (err) {
         console.error('[main] failed to show window:', err);
       }

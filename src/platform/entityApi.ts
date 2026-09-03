@@ -7,6 +7,7 @@ import type {
   Lifecycle,
   MediaEntityPatch,
   MutationReceipt,
+  MimeFacets,
   OrganizeCollectionInput,
   CollectionNoteDraft,
   OrganizeCollectionResult,
@@ -17,6 +18,10 @@ import type {
 
 export function queryItems(query: EntityViewQuery, page: QueryPage): Promise<EntityViewPage> {
   return invoke<EntityViewPage>('items.query', { query, page });
+}
+
+export function queryMimeFacets(query: EntityViewQuery): Promise<MimeFacets> {
+  return invoke<MimeFacets>('items.mime_facets', { query });
 }
 
 export function recordMediaView(rootId: number): Promise<unknown> {

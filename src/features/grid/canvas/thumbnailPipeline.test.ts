@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ThumbnailDecodeQuality } from './thumbnailDecodeClient';
+import type { ThumbnailDecodePlanEntry, ThumbnailDecodeQuality } from './thumbnailDecodeClient';
 
 let deliverBitmap: ((hash: string, bitmap: ImageBitmap, quality: ThumbnailDecodeQuality) => void) | null = null;
 let deliverError: ((hash: string, quality: ThumbnailDecodeQuality) => void) | null = null;
 const invalidated: string[] = [];
-const plans: Array<Array<{ fileHash: string; url: string; quality: ThumbnailDecodeQuality }>> = [];
+const plans: ThumbnailDecodePlanEntry[][] = [];
 
 vi.mock('./thumbnailDecodeClient', () => ({
   ThumbnailDecodeClient: class {
@@ -12,7 +12,7 @@ vi.mock('./thumbnailDecodeClient', () => ({
       deliverBitmap = onBitmap;
       deliverError = onError;
     }
-    sendPlan(entries: Array<{ fileHash: string; url: string; quality: ThumbnailDecodeQuality }>) {
+    sendPlan(entries: ThumbnailDecodePlanEntry[]) {
       plans.push(entries.map((entry) => ({ ...entry })));
     }
     invalidate(hash: string) { invalidated.push(hash); }
@@ -21,11 +21,127 @@ vi.mock('./thumbnailDecodeClient', () => ({
   },
 }));
 
-import { ThumbnailPipeline } from './thumbnailPipeline';
+import {
+  FULL_QUALITY_VIEWPORT_DWELL_MS,
+  THUMBNAIL_VIEWPORT_DWELL_MS,
+  ThumbnailPipeline,
+} from './thumbnailPipeline';
 
 function bitmap(width = 100, height = 100): ImageBitmap {
   return { width, height, close: vi.fn() } as unknown as ImageBitmap;
 }
+
+describe('ThumbnailPipeline viewport admission', () => {
+  beforeEach(() => {
+    deliverBitmap = null;
+    deliverError = null;
+    plans.length = 0;
+  });
+
+  it('waits 100ms for a thumbnail and 250ms total for a display-sized original', () => {
+    const scheduledDelays: number[] = [];
+    const pipeline = new ThumbnailPipeline(
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      (_callback, delayMs) => { scheduledDelays.push(delayMs); return scheduledDelays.length; },
+      vi.fn(),
+    );
+    const cannon = {
+      fileHash: 'cannon',
+      mime: 'image/png',
+      w: 474,
+      h: 723,
+      sourceWidth: 2755,
+      sourceHeight: 4200,
+      fit: 'cover',
+      inViewport: true,
+      cy: 400,
+    } as const;
+
+    pipeline.updatePlan([cannon], 400, 1, 0);
+    expect(plans).toEqual([[]]);
+
+    pipeline.updatePlan([cannon], 400, 1, THUMBNAIL_VIEWPORT_DWELL_MS - 1);
+    expect(plans).toEqual([[]]);
+
+    pipeline.updatePlan([cannon], 400, 1, THUMBNAIL_VIEWPORT_DWELL_MS);
+    expect(plans[plans.length - 1]).toEqual([{
+      fileHash: 'cannon',
+      url: 'media://localhost/thumb/cannon.jpg?v=0',
+      quality: 'thumbnail',
+      resizeWidth: undefined,
+      resizeHeight: undefined,
+    }]);
+
+    deliverBitmap?.('cannon', bitmap(335, 512), 'thumbnail');
+    pipeline.updatePlan([cannon], 400, 1, FULL_QUALITY_VIEWPORT_DWELL_MS - 1);
+    expect(plans[plans.length - 1]).toEqual([]);
+
+    pipeline.updatePlan([cannon], 400, 1, FULL_QUALITY_VIEWPORT_DWELL_MS);
+
+    expect(plans[plans.length - 1]).toEqual([{
+      fileHash: 'cannon',
+      url: 'media://localhost/file/cannon.png',
+      quality: 'full',
+      resizeWidth: 475,
+      resizeHeight: 723,
+    }]);
+    expect(scheduledDelays).toContain(THUMBNAIL_VIEWPORT_DWELL_MS);
+  });
+
+  it('resets dwell time when a tile leaves the viewport during a fast scroll', () => {
+    const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const tile = {
+      fileHash: 'passing-item',
+      mime: 'image/jpeg',
+      w: 200,
+      h: 200,
+      cy: 100,
+      inViewport: true,
+    };
+
+    pipeline.updatePlan([tile], 100, 1, 0);
+    tile.inViewport = false;
+    pipeline.updatePlan([tile], 100, 1, 50);
+    tile.inViewport = true;
+    pipeline.updatePlan([tile], 100, 1, 60);
+    pipeline.updatePlan([tile], 100, 1, 159);
+    expect(plans).toEqual([[]]);
+
+    pipeline.updatePlan([tile], 100, 1, 160);
+    expect(plans[plans.length - 1]?.[0]).toMatchObject({
+      fileHash: 'passing-item',
+      quality: 'thumbnail',
+    });
+  });
+
+  it('wakes the grid when the next visible tile reaches its dwell threshold', () => {
+    const scheduledCallbacks: Array<() => void> = [];
+    const onDirty = vi.fn();
+    const pipeline = new ThumbnailPipeline(
+      onDirty,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      (callback) => { scheduledCallbacks.push(callback); return 1; },
+      vi.fn(),
+    );
+
+    pipeline.updatePlan([{
+      fileHash: 'waiting-item',
+      mime: 'image/jpeg',
+      w: 200,
+      h: 200,
+      cy: 100,
+      inViewport: true,
+    }], 100, 1, 0);
+    scheduledCallbacks[0]();
+
+    expect(onDirty).toHaveBeenCalledOnce();
+  });
+});
 
 describe('ThumbnailPipeline full-resolution admission', () => {
   beforeEach(() => {
@@ -104,30 +220,6 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     deliverError?.('item', 'full');
     expect(pipeline.get('item')?.thumb).toBe(thumbnail);
     expect(pipeline.get('item')?.state).toBe('shown');
-  });
-
-  it('loads a thumbnail before upgrading a large tile to the original', () => {
-    const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn());
-    const tile = { fileHash: 'large', mime: 'image/png', w: 1200, h: 900, cy: 100 };
-
-    pipeline.updatePlan([tile], 100);
-    expect(plans[plans.length - 1]?.[0]).toMatchObject({
-      fileHash: 'large',
-      quality: 'thumbnail',
-      url: 'media://localhost/thumb/large.jpg?v=0',
-    });
-
-    deliverBitmap?.('large', bitmap(512, 384), 'thumbnail');
-    pipeline.updatePlan([tile], 100);
-    expect(plans[plans.length - 1]?.[0]).toMatchObject({
-      fileHash: 'large',
-      quality: 'full',
-      url: 'media://localhost/file/large.png',
-    });
-
-    deliverError?.('large', 'full');
-    expect(pipeline.get('large')?.thumb).not.toBeNull();
-    expect(pipeline.get('large')?.state).toBe('shown');
   });
 
   it('closes queued full-resolution bitmaps during teardown', () => {

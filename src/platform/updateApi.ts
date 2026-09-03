@@ -1,4 +1,4 @@
-export type UpdateStatus = 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'downloaded' | 'error' | 'unavailable';
+export type UpdateStatus = 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'downloaded' | 'installed' | 'error' | 'unavailable';
 
 export interface UpdateState {
   status: UpdateStatus;
@@ -24,4 +24,5 @@ export const getUpdateState = (): Promise<UpdateState> => updates().state();
 export const checkForUpdates = (): Promise<UpdateState> => updates().check();
 export const installUpdate = (): Promise<void> => updates().install();
 export const openUpdateRelease = (): Promise<void> => updates().openRelease();
+export const acknowledgeInstalledUpdate = (): Promise<UpdateState> => updates().acknowledgeInstalled();
 export const onUpdateState = (handler: (state: UpdateState) => void): Promise<() => void> => Promise.resolve(updates().onState(handler));

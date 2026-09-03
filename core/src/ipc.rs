@@ -37,6 +37,10 @@ pub fn dispatch_library(
             let input: QueryItemsInput = parse(args_json)?;
             read(application.query(&input.query, input.page)?)
         }
+        "items.mime_facets" => {
+            let input: QueryFacetsInput = parse(args_json)?;
+            read(application.mime_facets(&input.query)?)
+        }
         "items.details" => {
             let input: RootInput = parse(args_json)?;
             read(application.details(input.root_id)?)
@@ -809,6 +813,11 @@ fn now() -> String {
 struct QueryItemsInput {
     query: picto_library::query::RootQuery,
     page: picto_library::query::PageRequest,
+}
+
+#[derive(Deserialize)]
+struct QueryFacetsInput {
+    query: picto_library::query::RootQuery,
 }
 
 #[derive(Deserialize)]

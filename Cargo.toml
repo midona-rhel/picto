@@ -23,6 +23,12 @@ opt-level = 3
 [profile.dev.package.webp]
 opt-level = 3
 
+# BoringSSL and the prebuilt ONNX Runtime must use the same MSVC runtime.
+# An unoptimized BoringSSL dependency selects the debug CRT on Windows, while
+# ONNX Runtime's distributed libraries use the release CRT.
+[profile.dev.package.boring-sys2]
+opt-level = 2
+
 # The desktop debugger uses the native core directly. Leaving the application
 # crates at opt-level 0 makes ordinary query row mapping and JSON serialization
 # dominate IPC latency even though SQLite itself is fast.
