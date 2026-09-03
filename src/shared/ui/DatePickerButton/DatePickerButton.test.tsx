@@ -13,7 +13,7 @@ describe('DatePickerButton', () => {
 
     fireEvent.click(within(calendar).getByRole('button', { name: 'Next month' }));
     expect(within(calendar).getByText('September 2026')).toBeVisible();
-    fireEvent.click(within(calendar).getByRole('button', { name: /15 September 2026/ }));
+    fireEvent.click(within(calendar).getByText('15', { selector: 'button' }));
 
     expect(onChange).toHaveBeenCalledWith('2026-09-15');
     expect(screen.queryByRole('dialog', { name: 'Choose date' })).not.toBeInTheDocument();
