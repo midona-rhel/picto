@@ -2,6 +2,7 @@ import { addDiagnostic, sourceForTarget, type DiagnosticLevel } from '../feature
 import { listen } from '../platform/ipc';
 
 interface ForwardedLog {
+  source?: string;
   level?: string;
   target?: string;
   message?: string;
@@ -22,7 +23,7 @@ function accept(raw: ForwardedLog, fallbackSource: 'core' | 'main') {
   if (target === 'picto::ipc') return;
   addDiagnostic({
     level: normalizeLevel(raw.level),
-    source: fallbackSource === 'main' ? 'main' : sourceForTarget(target),
+    source: raw.source === 'renderer' ? 'renderer' : fallbackSource === 'main' ? 'main' : sourceForTarget(target),
     target,
     message: raw.message || '',
     timestamp: raw.timestamp || new Date().toISOString(),

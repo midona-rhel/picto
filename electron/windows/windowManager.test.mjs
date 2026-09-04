@@ -1,16 +1,45 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   calcDetailWindowAspectRatio,
   resolveThemeInfo,
   windowResizePersistenceEvent,
+  createWindowManager,
 } from './windowManager.mjs';
 
-test('resolves the globally persisted theme before creating a window', () => {
-  expect(resolveThemeInfo('purple')).toEqual({ theme: 'purple', bgColor: '#1e1526' });
-  expect(resolveThemeInfo('auto', false)).toEqual({ theme: 'light', bgColor: '#ebedef' });
-  expect(resolveThemeInfo('auto', true)).toEqual({ theme: 'dark', bgColor: '#1a1a1e' });
+test('resolves native window backgrounds to the library theme colors', () => {
+  expect(resolveThemeInfo('purple')).toEqual({ theme: 'purple', bgColor: '#1c1424' });
+  expect(resolveThemeInfo('auto', false)).toEqual({ theme: 'light', bgColor: '#ffffff' });
+  expect(resolveThemeInfo('auto', true)).toEqual({ theme: 'dark', bgColor: '#18191c' });
+});
+
+test.each(['darwin', 'win32', 'linux'])('uses supported native themes on %s', (platform) => {
+  expect(resolveThemeInfo('mica', false, platform).theme).toBe(platform === 'win32' ? 'mica' : 'dark');
+  expect(resolveThemeInfo('vibrancy', false, platform).theme).toBe(platform === 'darwin' ? 'vibrancy' : 'dark');
+});
+
+test('preload and reload snapshots follow the current library, never stale global config', async () => {
+  let theme = 'light';
+  const save = vi.fn();
+  const nativeTheme = { shouldUseDarkColors: false };
+  const manager = createWindowManager({
+    BrowserWindow: { getAllWindows: () => [] },
+    invoke: async () => ({ value: { colorScheme: theme } }),
+    getCachedConfig: () => ({ theme: 'purple', lastLibrary: '/old/library' }),
+    saveGlobalConfig: save,
+    nativeTheme,
+  });
+  await manager.loadLibraryTheme();
+  expect(manager.getStartupTheme()).toMatchObject({ requested: 'light', applied: 'light', colorScheme: 'light', backgroundColor: '#ffffff' });
+  theme = 'blue';
+  await manager.loadLibraryTheme();
+  expect(manager.getStartupTheme()).toMatchObject({ requested: 'blue', applied: 'blue', colorScheme: 'dark' });
+  theme = 'auto';
+  await manager.loadLibraryTheme();
+  nativeTheme.shouldUseDarkColors = true;
+  expect(manager.getStartupTheme()).toMatchObject({ requested: 'auto', applied: 'dark' });
+  expect(save).not.toHaveBeenCalled();
 });
 
 test('persists bounds only after native resize settles on macOS and Windows', () => {

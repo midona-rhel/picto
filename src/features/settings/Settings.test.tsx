@@ -43,13 +43,8 @@ vi.mock('../../controllers/settingsController', () => ({
 }));
 
 const appSettings = {
-  gridTargetSize: 220,
-  gridViewMode: 'waterfall',
   gridSpacing: 'wide' as const,
-  inspectorWidth: 320,
   colorScheme: 'dark',
-  gridSortField: 'date_added',
-  gridSortOrder: 'desc',
   zoomFactor: 1,
   showTreeGuides: true,
   showSidebarCounts: true,

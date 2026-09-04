@@ -29,8 +29,8 @@ const model = {
 };
 
 const settings = {
-  gridTargetSize: 200, gridViewMode: 'grid', gridSpacing: 'wide' as const, inspectorWidth: 320, colorScheme: 'dark',
-  gridSortField: 'added_at', gridSortOrder: 'desc', zoomFactor: null, showTreeGuides: true,
+  gridSpacing: 'wide' as const, colorScheme: 'dark',
+  zoomFactor: null, showTreeGuides: true,
   showSidebarCounts: true, showSidebarInbox: true,
   showSidebarRecentlyViewed: true, showSidebarUncategorized: true, showSidebarUntagged: true,
   showSidebarTagManager: true, showSidebarRandom: true, showSidebarSubscriptions: true,

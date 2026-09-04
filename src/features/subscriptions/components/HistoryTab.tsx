@@ -56,7 +56,7 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
               <StatusBadge tone={tone} label={label} title={run.error_message ?? undefined} />
             </span>
             <span className={styles.qCellNum}>{run.files_downloaded}</span>
-            <span className={styles.qCellNum}>{run.files_skipped}</span>
+            <span className={styles.qCellNum} title={t("Files already in library")}>{run.files_already_in_library}</span>
             <span className={styles.historyNote} title={run.error_message ?? undefined}>
               {run.error_message
                 ?? (run.metadata_invalid > 0 ? `${run.metadata_invalid} invalid metadata` : '')}

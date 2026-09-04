@@ -74,6 +74,8 @@ pub struct SubscriptionProgress {
     #[ts(type = "number")]
     pub posts_skipped: i64,
     #[ts(type = "number")]
+    pub files_already_in_library: i64,
+    #[ts(type = "number")]
     pub discovered: i64,
     #[ts(type = "number")]
     pub downloaded: i64,
@@ -320,7 +322,19 @@ fn query_subscription_views(
                     COALESCE(item_progress.downloaded, 0),
                     COALESCE(item_progress.ingested, 0),
                     COALESCE(item_progress.failed, 0),
-                    COALESCE(item_progress.deleted, 0)
+                    COALESCE(item_progress.deleted, 0),
+                    (SELECT COUNT(*)
+                     FROM subscription_run_query query
+                     JOIN source_post_attempt duplicate USING(run_query_id)
+                     JOIN source_item existing USING(source_post_id)
+                     WHERE query.run_id = COALESCE(active.run_id, latest.run_id)
+                       AND ((duplicate.state = 'skipped'
+                             AND duplicate.terminal_reason = 'exact_duplicate'
+                             AND existing.media_item_id IS NOT NULL)
+                            OR EXISTS(SELECT 1 FROM source_file_attempt file
+                                      WHERE file.attempt_id = duplicate.attempt_id
+                                        AND file.source_item_id = existing.source_item_id
+                                        AND file.state = 'duplicate')))
              FROM subscription s
              LEFT JOIN active_runs active
                ON active.subscription_id = s.subscription_id
@@ -361,6 +375,7 @@ fn query_subscription_views(
                     ingested: row.get(16)?,
                     failed: row.get(17)?,
                     deleted: row.get(18)?,
+                    files_already_in_library: row.get(19)?,
                 },
                 destination: SubscriptionDestinationPolicy::default(),
                 queries: Vec::new(),

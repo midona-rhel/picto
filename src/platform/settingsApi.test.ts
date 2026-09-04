@@ -60,6 +60,21 @@ describe('settings API', () => {
     await expect(getSettingsSnapshot()).rejects.toThrow('showTreeGuides');
   });
 
+  it('drops obsolete fields instead of restoring and saving them with current preferences', async () => {
+    invoke.mockResolvedValue({ value: {
+      colorScheme: 'purple', showTreeGuides: false,
+      gridTargetSize: 'old', gridViewMode: 'old', inspectorWidth: 'old',
+      gridSortField: 'old', gridSortOrder: 'old', theme: 'light', retiredSetting: true,
+    }, revision: 4 });
+    const { value } = await getSettingsSnapshot();
+    expect(value).toMatchObject({ colorScheme: 'purple', showTreeGuides: false });
+    for (const key of ['gridTargetSize', 'gridViewMode', 'inspectorWidth', 'gridSortField', 'gridSortOrder', 'theme', 'retiredSetting']) {
+      expect(value).not.toHaveProperty(key);
+    }
+    await replaceSettings(value);
+    expect(invoke).toHaveBeenLastCalledWith('settings.replace', { value });
+  });
+
   it('rejects malformed starred tag preferences', async () => {
     invoke.mockResolvedValue({ value: { starredTags: ['creator:alice', 2] }, revision: 1 });
 

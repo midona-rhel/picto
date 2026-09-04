@@ -39,7 +39,7 @@ const AUTO_MODEL_SETTING_KEYS: Record<string, keyof AppSettings> = {
 };
 
 /** Threshold settings keys with their tag-namespace dot colors. */
-const THRESHOLDS: Array<{ key: string; label: string; namespace: string }> = [
+const THRESHOLDS: Array<{ key: Extract<keyof AppSettings, `aiThreshold${string}`>; label: string; namespace: string }> = [
   { key: 'aiThresholdGeneral', label: t("General"), namespace: 'general' },
   { key: 'aiThresholdCharacter', label: t("Character"), namespace: 'character' },
   { key: 'aiThresholdSpecies', label: t("Species"), namespace: 'species' },

@@ -160,6 +160,7 @@ export function SubscriptionDetail({
   const postsAddedCount = progress?.posts_added ?? latestRun?.posts_added ?? persistedPostCount;
   const postsSkippedCount = progress?.posts_skipped ?? latestRun?.posts_skipped ?? 0;
   const filesDownloadedCount = progress?.files_downloaded ?? latestRun?.files_downloaded ?? 0;
+  const filesAlreadyInLibraryCount = progress?.files_already_in_library ?? latestRun?.files_already_in_library ?? 0;
   const runTarget = getSubscriptionRunTarget(subscription, progress?.mode);
   const runActionLabel = getSubscriptionRunActionLabel(subscription);
   const runAdded = progress?.posts_added ?? (active ? latestRun?.posts_added ?? 0 : 0);
@@ -314,6 +315,7 @@ export function SubscriptionDetail({
           <div className={styles.subscriptionProperty}><span>{t("Posts added")}</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>{t("Posts skipped")}</span><strong>{postsSkippedCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>{t("Files downloaded")}</span><strong>{filesDownloadedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>{t("Files already in library")}</span><strong>{filesAlreadyInLibraryCount.toLocaleString()}</strong></div>
           <div className={styles.subscriptionProperty}><span>{t("Last check")}</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
           <div className={styles.subscriptionProperty}>
             <span>{t("Schedule")}</span>

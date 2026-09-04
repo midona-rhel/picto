@@ -43,7 +43,6 @@ export interface RuffleLoadOptions {
   showSwfDownload: false;
   allowFullscreen: false;
   menu: false;
-  preloader: false;
   splashScreen: false;
 }
 
@@ -95,7 +94,6 @@ export function loadRuffleMovie(player: RufflePlayerElement, url: string, autopl
     showSwfDownload: false,
     allowFullscreen: false,
     menu: false,
-    preloader: false,
     splashScreen: false,
   });
 }

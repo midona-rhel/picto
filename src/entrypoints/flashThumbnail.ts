@@ -19,13 +19,16 @@ async function render() {
 
   const player = await createRufflePlayer();
   const runtime = player.ruffle(1);
-  runtime.volume = 0;
   document.querySelector('#player')?.appendChild(player);
 
   let markedReady = false;
   const markReady = () => {
     if (markedReady) return;
     markedReady = true;
+    // Ruffle ignores volume assignments before its instance exists. Load paused,
+    // then mute the live runtime before advancing any frames.
+    runtime.volume = 0;
+    runtime.resume();
     const metadata = runtime.metadata;
     window.__pictoFlashThumbnail = {
       ready: true,
@@ -34,7 +37,7 @@ async function render() {
     };
   };
   player.addEventListener('loadeddata', markReady, { once: true });
-  await loadRuffleMovie(player, src, 'on');
+  await loadRuffleMovie(player, src, 'off');
   if (runtime.readyState === 2) markReady();
 }
 

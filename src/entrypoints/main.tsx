@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Provider, getDefaultStore } from 'jotai';
-import { MantineProvider } from '@mantine/core';
+import { PictoThemeProvider } from '../runtime/PictoThemeProvider';
 import '@mantine/core/styles.css';
 import { AppShell } from '../app/AppShell';
 import { LibraryGate } from '../features/library/LibraryGate';
@@ -21,7 +21,7 @@ const root = createRoot(document.getElementById('root')!);
 startLocalizedRenderer(() => {
   root.render(
     <StrictMode>
-      <MantineProvider defaultColorScheme="dark">
+      <PictoThemeProvider>
         <Provider store={store}>
           <NotificationHost />
           <ApplicationUpdateHost />
@@ -29,7 +29,7 @@ startLocalizedRenderer(() => {
             <AppShell />
           </LibraryGate>
         </Provider>
-      </MantineProvider>
+      </PictoThemeProvider>
     </StrictMode>,
   );
 });

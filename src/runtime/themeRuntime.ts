@@ -25,6 +25,16 @@ const THEMES = new Set<PictoTheme>([
 const LIGHT_THEMES = new Set<PictoTheme>(['light', 'lightgray']);
 const MAC_NATIVE = new Set<PictoTheme>(['vibrancy', 'liquidglass']);
 const WINDOWS_NATIVE = new Set<PictoTheme>(['mica', 'acrylic']);
+const themeListeners = new Set<() => void>();
+
+export function getThemeColorScheme(): 'light' | 'dark' {
+  return document.documentElement.dataset.mantineColorScheme === 'light' ? 'light' : 'dark';
+}
+
+export function subscribeThemeColorScheme(listener: () => void): () => void {
+  themeListeners.add(listener);
+  return () => { themeListeners.delete(listener); };
+}
 
 export interface ResolvedTheme {
   requested: PictoTheme;
@@ -71,10 +81,14 @@ export function applyTheme(
   root.dataset.theme = resolved.applied;
   root.dataset.mantineColorScheme = resolved.colorScheme;
   root.style.colorScheme = resolved.colorScheme;
+  // CSS owns subsequent previews and settings updates, not the preload color.
+  root.style.removeProperty('background-color');
+  for (const listener of themeListeners) listener();
   return resolved;
 }
 
 let requestedTheme: PictoTheme = 'dark';
+let themeVersion = 0;
 let stopRuntime: (() => void) | null = null;
 
 function applyRequested(osDark?: boolean): void {
@@ -82,6 +96,7 @@ function applyRequested(osDark?: boolean): void {
 }
 
 export function previewTheme(value: unknown, publish = true): PictoTheme {
+  themeVersion += 1;
   requestedTheme = normalizeTheme(value);
   applyRequested();
   if (publish) void appController.publishThemePreview(requestedTheme).catch(() => {});
@@ -96,12 +111,26 @@ export function getRequestedTheme(): PictoTheme {
 export function startThemeRuntime(): () => void {
   publishPlatform();
   stopRuntime?.();
+  try {
+    localStorage.removeItem('picto-theme');
+    localStorage.removeItem('mantine-color-scheme-value');
+  } catch (error) {
+    console.warn('[theme] Could not remove obsolete browser theme settings', error);
+  }
   let disposed = false;
   const cleanups: Array<() => void> = [];
+  const startupTheme = (window as any).picto?.startupTheme;
+  if (startupTheme) previewTheme(startupTheme.requested, false);
 
-  const loadPersistedTheme = () => void settingsController.getSettings().then((settings) => {
-    if (!disposed) previewTheme(settings.colorScheme, false);
-  }).catch(() => {});
+  let latestLoad = 0;
+  const loadPersistedTheme = () => {
+    const version = themeVersion;
+    const load = ++latestLoad;
+    void settingsController.getSettings().then((settings) => {
+      // An older read must not undo a newer preview or library-switch event.
+      if (!disposed && load === latestLoad && version === themeVersion) previewTheme(settings.colorScheme, false);
+    }).catch(() => {});
+  };
   loadPersistedTheme();
   cleanups.push(registerAppSettingsReload(loadPersistedTheme));
 

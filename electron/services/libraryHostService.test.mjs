@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import {
   createLibraryHostService,
   isFailedCloudJoinDirectory,
@@ -7,6 +7,8 @@ import {
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 test('recognizes locations nested anywhere inside a library package', () => {
   expect(isInsideLibraryPackage(path.posix, '/Pictures/Main.library')).toBe(true);
@@ -319,6 +321,7 @@ test('open dialog accepts a macOS library package as well as a directory', async
   const openDialogCalls = [];
   const opened = [];
   const service = createLibraryHostService({
+    platform: 'darwin',
     fs: {},
     path,
     dialog: {
@@ -348,14 +351,16 @@ test('open dialog accepts a macOS library package as well as a directory', async
 });
 
 test('opening a library installs standard Windows folder icon metadata', async () => {
-  const copies = [];
   const writes = [];
   const attributes = [];
   const winPath = path.win32;
   const libraryPath = 'C:\\Libraries\\Main.library';
   const service = createLibraryHostService({
     fs: {
-      copyFile: async (...args) => copies.push(args),
+      readFile: async (filePath) => {
+        if (filePath === 'C:\\Picto\\resources\\library-icons\\library.ico') return Buffer.from('icon');
+        throw Object.assign(new Error('not found'), { code: 'ENOENT' });
+      },
       writeFile: async (...args) => writes.push(args),
     },
     path: winPath,
@@ -383,17 +388,82 @@ test('opening a library installs standard Windows folder icon metadata', async (
 
   const iconPath = `${libraryPath}\\.picto-library.ico`;
   const desktopIniPath = `${libraryPath}\\desktop.ini`;
-  expect(copies).toEqual([['C:\\Picto\\resources\\library-icons\\library.ico', iconPath]]);
-  expect(writes).toEqual([[
+  expect(writes).toEqual([[iconPath, Buffer.from('icon')], [
     desktopIniPath,
-    '[.ShellClassInfo]\r\nIconResource=.picto-library.ico,0\r\n',
-    'utf8',
+    Buffer.from('[.ShellClassInfo]\r\nIconResource=.picto-library.ico,0\r\n'),
   ]]);
   expect(attributes).toEqual([
     ['attrib', ['+h', '+s', iconPath]],
     ['attrib', ['+h', '+s', desktopIniPath]],
     ['attrib', ['+r', libraryPath]],
   ]);
+});
+
+test.skipIf(process.platform !== 'win32')('Windows library reopen preserves hidden icons and refreshes changed bytes', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-windows-icon-'));
+  const libraryPath = path.join(directory, 'Main.library');
+  const resources = path.join(directory, 'resources');
+  const source = path.join(resources, 'library-icons', 'library.ico');
+  const icon = path.join(libraryPath, '.picto-library.ico');
+  const ini = path.join(libraryPath, 'desktop.ini');
+  const run = promisify(execFile);
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const writes = [];
+  let rejectIconWrite = false;
+  const service = createLibraryHostService({
+    fs: new Proxy(fs, { get(target, key) {
+      if (key !== 'writeFile') return target[key];
+      return async (filePath, ...args) => {
+        if (filePath === icon && rejectIconWrite) throw Object.assign(new Error('blocked icon update'), { code: 'EACCES' });
+        writes.push(filePath);
+        return target.writeFile(filePath, ...args);
+      };
+    } }),
+    path, dialog: {}, openLibrary: async () => {}, closeLibrary: async () => {},
+    addLibraryToHistory: async () => {}, removeLibraryFromHistory: async () => {}, togglePinned: async () => {},
+    getCachedConfig: () => ({}), saveGlobalConfig: async () => {}, updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => null, setCurrentLibraryRoot: () => {}, createMainWindow: () => {},
+    sendToAllWindows: () => {}, buildAppMenu: () => {},
+    platform: 'win32', resourcesPath: resources, isDefaultApp: false,
+  });
+  try {
+    await fs.mkdir(libraryPath);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    const original = await fs.readFile(path.join(process.cwd(), 'build', 'library.ico'));
+    await fs.writeFile(source, original);
+    await service.switchLibrary(libraryPath);
+    // Reproduce the old failure using actual Windows hidden/system attributes.
+    await expect(fs.copyFile(source, icon)).rejects.toMatchObject({ code: 'EPERM' });
+    writes.length = 0;
+    await service.switchLibrary(libraryPath);
+    expect(writes).toEqual([]);
+    expect(await fs.readFile(icon)).toEqual(original);
+    expect(warning).not.toHaveBeenCalled();
+
+    const updated = Buffer.concat([original, Buffer.from('updated-icon')]);
+    await fs.writeFile(source, updated);
+    await service.switchLibrary(libraryPath);
+    expect(writes).toEqual([icon]);
+    expect(await fs.readFile(icon)).toEqual(updated);
+    expect(warning).not.toHaveBeenCalled();
+
+    rejectIconWrite = true;
+    await fs.writeFile(source, original);
+    await service.switchLibrary(libraryPath);
+    expect(warning).toHaveBeenCalledWith('[library] unable to apply Windows folder icon', expect.objectContaining({ message: 'blocked icon update' }));
+    expect(await fs.readFile(icon)).toEqual(updated);
+    for (const filePath of [icon, ini]) {
+      const { stdout } = await run('attrib', [filePath]);
+      const attributes = stdout.slice(0, stdout.indexOf(filePath));
+      expect(attributes).toContain('H');
+      expect(attributes).toContain('S');
+    }
+  } finally {
+    warning.mockRestore();
+    for (const filePath of [icon, ini]) await run('attrib', ['-h', '-s', filePath]).catch(() => {});
+    await run('attrib', ['-r', libraryPath]).catch(() => {});
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('opening a library applies the persistent macOS package icon', async () => {
@@ -496,6 +566,7 @@ test('forced startup libraries do not replace the user last-opened library', asy
   const opened = [];
   let current = null;
   const service = createLibraryHostService({
+    platform: 'linux',
     fs: { readdir: async () => [] },
     path,
     dialog: {},

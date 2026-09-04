@@ -38,13 +38,8 @@ export interface ViewPrefsPatch {
 export const GRID_DEFAULTS_SCOPE = 'grid:defaults';
 
 export interface AppSettings {
-  gridTargetSize: number;
-  gridViewMode: string;
   gridSpacing: GridSpacing;
-  inspectorWidth: number;
   colorScheme: string;
-  gridSortField: string;
-  gridSortOrder: string;
   zoomFactor: number | null;
   showTreeGuides: boolean;
   showSidebarCounts: boolean;
@@ -96,17 +91,11 @@ export interface AppSettings {
   aiThresholdArtist: number;
   aiThresholdSpecies: number;
   aiThresholdRating: number;
-  [key: string]: unknown;
 }
 
 const APP_SETTINGS_DEFAULTS: AppSettings = {
-  gridTargetSize: 250,
-  gridViewMode: 'waterfall',
   gridSpacing: 'wide',
-  inspectorWidth: 280,
   colorScheme: 'dark',
-  gridSortField: 'imported_at',
-  gridSortOrder: 'ascending',
   zoomFactor: null,
   showTreeGuides: true,
   showSidebarCounts: true,
@@ -259,14 +248,8 @@ function storedOrDefault(source: JsonObject, key: string, fallback: unknown): un
 function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; revision: number } {
   const source = objectValue(snapshot.value, 'Application settings');
   const value: AppSettings = {
-    ...source,
-    gridTargetSize: numberValue(storedOrDefault(source, 'gridTargetSize', APP_SETTINGS_DEFAULTS.gridTargetSize), 'gridTargetSize'),
-    gridViewMode: stringValue(storedOrDefault(source, 'gridViewMode', APP_SETTINGS_DEFAULTS.gridViewMode), 'gridViewMode'),
     gridSpacing: gridSpacingValue(storedOrDefault(source, 'gridSpacing', APP_SETTINGS_DEFAULTS.gridSpacing)),
-    inspectorWidth: numberValue(storedOrDefault(source, 'inspectorWidth', APP_SETTINGS_DEFAULTS.inspectorWidth), 'inspectorWidth'),
     colorScheme: stringValue(storedOrDefault(source, 'colorScheme', APP_SETTINGS_DEFAULTS.colorScheme), 'colorScheme'),
-    gridSortField: stringValue(storedOrDefault(source, 'gridSortField', APP_SETTINGS_DEFAULTS.gridSortField), 'gridSortField'),
-    gridSortOrder: stringValue(storedOrDefault(source, 'gridSortOrder', APP_SETTINGS_DEFAULTS.gridSortOrder), 'gridSortOrder'),
     zoomFactor: nullableNumberValue(storedOrDefault(source, 'zoomFactor', APP_SETTINGS_DEFAULTS.zoomFactor), 'zoomFactor'),
     showTreeGuides: booleanValue(storedOrDefault(source, 'showTreeGuides', APP_SETTINGS_DEFAULTS.showTreeGuides), 'showTreeGuides'),
     showSidebarCounts: booleanValue(storedOrDefault(source, 'showSidebarCounts', APP_SETTINGS_DEFAULTS.showSidebarCounts), 'showSidebarCounts'),
@@ -371,11 +354,6 @@ export function patchSettings(settings: Partial<AppSettings>): Promise<MutationR
 
 export function replaceSettings(settings: AppSettings): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('settings.replace', { value: settings });
-}
-
-// Existing callers use this as the incremental settings write path.
-export function saveSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
-  return patchSettings(settings);
 }
 
 export async function getViewPrefsSnapshot(scopeKey: string): Promise<{ value: ViewPrefsDto; revision: number }> {

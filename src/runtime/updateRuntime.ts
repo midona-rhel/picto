@@ -8,9 +8,11 @@ const store = getDefaultStore();
 
 export function startUpdateRuntime(): () => void {
   let dispose: (() => void) | undefined;
+  let disposed = false;
+  let eventsReceived = 0;
   let announced = '';
   const announce = (state: UpdateState) => {
-    if (!state.version) return;
+    if (disposed || !state.version) return;
     const key = `${state.status}:${state.version}`;
     if (announced === key) return;
     if (state.status === 'installed') {
@@ -31,7 +33,9 @@ export function startUpdateRuntime(): () => void {
       showSuccessNotification({ title: t("Picto {value0} is ready", { value0: state.version }), message: 'Restart to finish updating.', duration: 10_000, action: { label: t("View"), onClick: () => store.set(updateModalAtom, { open: true }) } });
     }
   };
-  void getUpdateState().then(announce).catch(() => {});
-  void onUpdateState(announce).then((value) => { dispose = value; });
-  return () => dispose?.();
+  void onUpdateState((state) => { eventsReceived += 1; announce(state); }).then((value) => {
+    if (disposed) value(); else dispose = value;
+  }).catch((error) => console.error('[updates] Could not subscribe to update state', error));
+  void getUpdateState().then((state) => { if (eventsReceived === 0) announce(state); }).catch(() => {});
+  return () => { disposed = true; dispose?.(); };
 }

@@ -145,6 +145,26 @@ export function createLibraryHostService({
     return base.endsWith('.library') ? base.slice(0, -8) : base;
   }
 
+  async function writeWindowsShellFile(filePath, contents) {
+    const previous = await fs.readFile(filePath).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    const changed = !previous?.equals(contents);
+    let exists = previous !== null;
+    try {
+      // Windows refuses to overwrite hidden shell metadata. Only clear our
+      // shell attributes when the bytes changed, and restore them on failure.
+      if (changed && exists) await runFileAttributeCommand('attrib', ['-h', '-s', filePath]);
+      if (changed) {
+        await fs.writeFile(filePath, contents);
+        exists = true;
+      }
+    } finally {
+      if (exists) await runFileAttributeCommand('attrib', ['+h', '+s', filePath]);
+    }
+  }
+
   async function applyPlatformLibraryIcon(libraryPath) {
     if (platform === 'darwin') {
       if (typeof setFileIcon !== 'function') return;
@@ -171,10 +191,8 @@ export function createLibraryHostService({
     const iconPath = path.join(libraryPath, iconName);
     const desktopIniPath = path.join(libraryPath, 'desktop.ini');
     try {
-      await fs.copyFile(sourceIcon, iconPath);
-      await fs.writeFile(desktopIniPath, `[.ShellClassInfo]\r\nIconResource=${iconName},0\r\n`, 'utf8');
-      await runFileAttributeCommand('attrib', ['+h', '+s', iconPath]);
-      await runFileAttributeCommand('attrib', ['+h', '+s', desktopIniPath]);
+      await writeWindowsShellFile(iconPath, await fs.readFile(sourceIcon));
+      await writeWindowsShellFile(desktopIniPath, Buffer.from(`[.ShellClassInfo]\r\nIconResource=${iconName},0\r\n`, 'utf8'));
       await runFileAttributeCommand('attrib', ['+r', libraryPath]);
     } catch (error) {
       console.warn('[library] unable to apply Windows folder icon', {

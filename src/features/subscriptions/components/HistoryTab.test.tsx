@@ -13,6 +13,7 @@ const run: SubscriptionRunRecord = {
   posts_traversed: 6,
   posts_added: 3,
   posts_skipped: 3,
+  files_already_in_library: 7,
   media_added: 4,
   files_downloaded: 4,
   files_skipped: 2,
@@ -33,6 +34,7 @@ describe('HistoryTab', () => {
       styles.historyRow,
     );
     expect(screen.getByText('Reused')).toBeInTheDocument();
+    expect(screen.getByTitle('Files already in library')).toHaveTextContent('7');
     expect(screen.queryByText('Reused duplicate')).not.toBeInTheDocument();
   });
 

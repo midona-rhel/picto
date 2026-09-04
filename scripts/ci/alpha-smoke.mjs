@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 const SMOKE_PREFIX = '[picto-packaged-smoke] ';
 const REQUIRED_EVENTS = new Set([
+  'release-notes-ready',
   'native-library-initialized',
   'did-finish-load',
   'media-playback-ready',

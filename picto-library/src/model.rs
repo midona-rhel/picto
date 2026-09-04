@@ -641,6 +641,15 @@ pub struct MediaFactsUpdate {
     pub palette: Option<Vec<LabColor>>,
 }
 
+/// A validated encoding repair; logical media identity and metadata stay intact.
+#[derive(Debug, Clone)]
+pub struct RepairedMediaContent {
+    pub expected_hash: String,
+    pub content_hash: String,
+    pub file_path: String,
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CloudJournalRecord {
     pub journal_id: u64,

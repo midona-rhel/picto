@@ -733,6 +733,10 @@ pub async fn dispatch_library_async(
                     .await?,
             )
         }
+        "media.repair_vp9" => {
+            let input: FileHashInput = parse(args_json)?;
+            read(crate::video_repair::repair(application, &input.file_hash.0).await?)
+        }
         "imports.enqueue" => {
             let input: crate::library_import::ManualImportInput = parse(args_json)?;
             read(crate::library_import::enqueue_manual_import(application, &input).await?)

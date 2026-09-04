@@ -15,6 +15,7 @@ import { FlashControls } from './FlashControls';
 import { useMediaControlsVisibility } from '../video/useMediaControlsVisibility';
 import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import { VOLUME_STEP } from '../video/videoConstants';
+import { reportPlaybackFailure } from '../video/mediaPlaybackDiagnostics';
 
 export interface FlashPlaybackController {
   isPlaying: boolean;
@@ -117,7 +118,9 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
     player.ruffle(1).suspend();
     setStatus('stopped');
     setIsPlaying(false);
-    void loadRuffleMovie(player, src, 'off').then(() => player.ruffle(1).suspend()).catch(() => {});
+    void loadRuffleMovie(player, src, 'off').then(() => player.ruffle(1).suspend()).catch((reason: unknown) => {
+      reportPlaybackFailure(src, { code: 'RUFFLE_RESET_ERROR', message: String(reason) });
+    });
   }, [revealControls, src]);
 
   const setVolume = useCallback((nextVolume: number) => {
@@ -211,6 +214,7 @@ export function FlashPlayer({ src, onPlaybackChange, onContextMenu, onFrameCaptu
       if (!ready && player.ruffle(1).readyState === 2) setTimeout(markReady, 120);
     }).catch((reason: unknown) => {
       if (!disposed) {
+        reportPlaybackFailure(src, { code: 'RUFFLE_LOAD_ERROR', message: String(reason) });
         setError(reason instanceof Error ? reason.message : t('Could not open this Flash file.'));
         onReady?.();
       }

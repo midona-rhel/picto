@@ -1,19 +1,16 @@
-import fs from 'node:fs';
 import { createAuthSessions } from './authSessions.mjs';
-import { createRequire } from 'node:module';
 
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
-const esmRequire = createRequire(import.meta.url);
 
 /** Map theme name to a background color for BrowserWindow creation. */
 const THEME_BG_COLORS = {
-  dark:        '#1a1a1e',
-  blue:        '#0f1732',
-  purple:      '#1e1526',
-  gray:        '#323236',
-  light:       '#ebedef',
-  lightgray:   '#c8cacd',
+  dark:        '#18191c',
+  blue:        '#0d1630',
+  purple:      '#1c1424',
+  gray:        '#37383c',
+  light:       '#ffffff',
+  lightgray:   '#e3e4e6',
   auto:        null,
   // Native transparency themes — bg is transparent
   vibrancy:    '#00000000',
@@ -25,33 +22,14 @@ const THEME_BG_COLORS = {
 /** Native transparency themes that need special BrowserWindow options. */
 const NATIVE_THEMES = new Set(['vibrancy', 'liquidglass', 'mica', 'acrylic']);
 
-export function resolveThemeInfo(value, shouldUseDarkColors = false) {
+export function resolveThemeInfo(value, shouldUseDarkColors = false, platform = process.platform) {
   let theme = typeof value === 'string' && Object.hasOwn(THEME_BG_COLORS, value)
     ? value
     : 'dark';
   if (theme === 'auto') theme = shouldUseDarkColors ? 'dark' : 'light';
+  if ((['vibrancy', 'liquidglass'].includes(theme) && platform !== 'darwin') ||
+      (['mica', 'acrylic'].includes(theme) && platform !== 'win32')) theme = 'dark';
   return { theme, bgColor: THEME_BG_COLORS[theme] ?? THEME_BG_COLORS.dark };
-}
-
-/** Read the app-level preference, with one legacy settings.json fallback. */
-function getThemeInfo(getCachedConfig) {
-  const config = getCachedConfig();
-  let theme = config?.theme;
-  try {
-    const libraryPath = config?.lastLibrary;
-    if (!theme && libraryPath) {
-      const settingsPath = libraryPath + '/settings.json';
-      const raw = fs.readFileSync(settingsPath, 'utf-8');
-      const settings = JSON.parse(raw);
-      theme = settings.colorScheme || settings.theme || 'dark';
-    }
-  } catch {}
-  try {
-    const { nativeTheme } = esmRequire('electron');
-    return resolveThemeInfo(theme, nativeTheme.shouldUseDarkColors);
-  } catch {
-    return resolveThemeInfo(theme);
-  }
 }
 
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
@@ -122,9 +100,11 @@ export function createWindowManager({
   isDev,
   getCachedConfig,
   saveGlobalConfig,
+  nativeTheme,
   onWindowEvent = () => {},
 }) {
   const windowsByLabel = new Map();
+  let libraryTheme = 'dark';
   const shouldOpenDevTools = isDev && process.env.PICTO_OPEN_DEVTOOLS === '1';
   const authSessions = createAuthSessions({
     BrowserWindow,
@@ -213,7 +193,7 @@ export function createWindowManager({
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
     const initialHeight = savedMainState?.height ?? height;
-    const { theme: currentTheme, bgColor: themeBg } = getThemeInfo(getCachedConfig);
+    const { applied: currentTheme, backgroundColor: themeBg } = getStartupTheme();
     const isNativeTheme = NATIVE_THEMES.has(currentTheme);
     // Native themes: transparent + vibrancy on macOS for main, settings, and subscriptions windows.
     // Liquid glass falls back to vibrancy (addView blocks input — see above).
@@ -509,11 +489,27 @@ export function createWindowManager({
     return BrowserWindow.getAllWindows();
   }
 
-  async function setThemePreference(theme) {
-    if (typeof theme !== 'string' || !Object.hasOwn(THEME_BG_COLORS, theme)) return;
-    const config = getCachedConfig();
-    if (config.theme === theme) return;
-    await saveGlobalConfig({ ...config, theme });
+  function setThemePreference(theme) {
+    libraryTheme = typeof theme === 'string' && Object.hasOwn(THEME_BG_COLORS, theme) ? theme : 'dark';
+  }
+
+  async function loadLibraryTheme() {
+    const settings = await invoke('settings.get');
+    setThemePreference(settings.value.colorScheme);
+    sendToAllWindows('picto:theme-preview', { theme: libraryTheme });
+  }
+
+  // Preload reads this in-memory snapshot synchronously, before HTML/CSS paint.
+  // Never read a database or an app-wide/renderer theme cache on that path.
+  function getStartupTheme() {
+    const { theme, bgColor } = resolveThemeInfo(libraryTheme, nativeTheme.shouldUseDarkColors);
+    return {
+      requested: libraryTheme,
+      applied: theme,
+      colorScheme: ['light', 'lightgray'].includes(theme) ? 'light' : 'dark',
+      backgroundColor: bgColor,
+      platform: isMac ? 'mac' : isWin ? 'windows' : 'linux',
+    };
   }
 
   function ownsWebContents(contents) {
@@ -600,5 +596,7 @@ export function createWindowManager({
     sendToFocusedWindow,
     sendToMainWindow,
     setThemePreference,
+    loadLibraryTheme,
+    getStartupTheme,
   };
 }

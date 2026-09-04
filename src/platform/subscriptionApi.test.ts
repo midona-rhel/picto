@@ -204,12 +204,13 @@ describe('replacement subscription API', () => {
         subscription_id: 7,
         run_id: 11,
         status: 'running',
-        counts: { posts_traversed: 6, posts_added: 4, fetched: 8, downloaded: 7, queued: 2, ingested: 5, failed: 1, deleted: 0 },
+        counts: { posts_traversed: 6, posts_added: 4, posts_skipped: 2, files_already_in_library: 3, fetched: 8, downloaded: 7, queued: 2, ingested: 5, failed: 1, deleted: 0 },
       });
 
     await expect(getRunningSubscriptionProgress()).resolves.toEqual([
       expect.objectContaining({
         files_downloaded: 7,
+        files_already_in_library: 3,
         media_added: 5,
         failed_ingest: 1,
         posts_traversed: 6,
@@ -288,7 +289,7 @@ describe('replacement subscription API', () => {
           error_message: null,
           created_at: '2026-08-23T10:00:00Z',
           query_count: 1,
-          counts: { posts_traversed: 7, posts_added: 2, fetched: 3, downloaded: 3, queued: 0, ingested: 3, failed: 0, deleted: 0 },
+          counts: { posts_traversed: 7, posts_added: 2, posts_skipped: 5, files_already_in_library: 8, fetched: 3, downloaded: 3, queued: 0, ingested: 3, failed: 0, deleted: 0 },
         }],
       })
       .mockResolvedValueOnce({ subscription_id: 7, issues: [{
@@ -311,6 +312,7 @@ describe('replacement subscription API', () => {
       posts_added: 2,
       media_added: 3,
       files_downloaded: 3,
+      files_already_in_library: 8,
     })]);
     await expect(listSubscriptionIssues('7')).resolves.toEqual({
       items: [expect.objectContaining({ issue_id: 1, recovery_action: 'fix_credentials' })],

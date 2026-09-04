@@ -29,6 +29,8 @@ pub struct ActivityCounts {
     #[ts(type = "number")]
     pub posts_skipped: i64,
     #[ts(type = "number")]
+    pub files_already_in_library: i64,
+    #[ts(type = "number")]
     pub fetched: i64,
     #[ts(type = "number")]
     pub downloaded: i64,
@@ -592,7 +594,18 @@ fn activity_counts_for_query(
                                     THEN file.file_attempt_id END),
                 COUNT(DISTINCT CASE WHEN file.state = 'retained' THEN file.file_attempt_id END),
                 COUNT(DISTINCT CASE WHEN file.state = 'failed' THEN file.file_attempt_id END),
-                0
+                0,
+                (SELECT COUNT(*)
+                 FROM source_post_attempt duplicate
+                 JOIN source_item existing USING(source_post_id)
+                 WHERE duplicate.run_query_id = ?1
+                   AND ((duplicate.state = 'skipped'
+                         AND duplicate.terminal_reason = 'exact_duplicate'
+                         AND existing.media_item_id IS NOT NULL)
+                        OR EXISTS(SELECT 1 FROM source_file_attempt file
+                                  WHERE file.attempt_id = duplicate.attempt_id
+                                    AND file.source_item_id = existing.source_item_id
+                                    AND file.state = 'duplicate')))
          FROM source_post_attempt attempt
          LEFT JOIN source_file_attempt file USING(attempt_id)
          LEFT JOIN ingest_job job ON job.source_item_id = file.source_item_id
@@ -609,6 +622,7 @@ fn activity_counts_for_query(
                 ingested: row.get(6)?,
                 failed: row.get(7)?,
                 deleted: row.get(8)?,
+                files_already_in_library: row.get(9)?,
             })
         },
     )
@@ -636,6 +650,7 @@ fn run_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Subscriptio
             ingested: row.get(16)?,
             failed: row.get(17)?,
             deleted: row.get(18)?,
+            files_already_in_library: row.get(19)?,
         },
     })
 }
@@ -674,7 +689,19 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        COALESCE(c.posts_skipped, 0),
        COALESCE(c.fetched, 0), COALESCE(c.downloaded, 0),
        COALESCE(c.queued, 0), COALESCE(c.ingested, 0),
-       COALESCE(c.failed, 0), COALESCE(c.deleted, 0)
+       COALESCE(c.failed, 0), COALESCE(c.deleted, 0),
+       (SELECT COUNT(*)
+        FROM subscription_run_query query
+        JOIN source_post_attempt duplicate USING(run_query_id)
+        JOIN source_item existing USING(source_post_id)
+        WHERE query.run_id = sr.run_id
+          AND ((duplicate.state = 'skipped'
+                AND duplicate.terminal_reason = 'exact_duplicate'
+                AND existing.media_item_id IS NOT NULL)
+               OR EXISTS(SELECT 1 FROM source_file_attempt file
+                         WHERE file.attempt_id = duplicate.attempt_id
+                           AND file.source_item_id = existing.source_item_id
+                           AND file.state = 'duplicate')))
 FROM target_runs sr
 LEFT JOIN counts c ON c.run_id = sr.run_id
 ORDER BY sr.created_at DESC, sr.run_id DESC
@@ -707,7 +734,19 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        COALESCE(c.posts_skipped, 0),
        COALESCE(c.fetched, 0), COALESCE(c.downloaded, 0),
        COALESCE(c.queued, 0), COALESCE(c.ingested, 0),
-       COALESCE(c.failed, 0), COALESCE(c.deleted, 0)
+       COALESCE(c.failed, 0), COALESCE(c.deleted, 0),
+       (SELECT COUNT(*)
+        FROM subscription_run_query query
+        JOIN source_post_attempt duplicate USING(run_query_id)
+        JOIN source_item existing USING(source_post_id)
+        WHERE query.run_id = sr.run_id
+          AND ((duplicate.state = 'skipped'
+                AND duplicate.terminal_reason = 'exact_duplicate'
+                AND existing.media_item_id IS NOT NULL)
+               OR EXISTS(SELECT 1 FROM source_file_attempt file
+                         WHERE file.attempt_id = duplicate.attempt_id
+                           AND file.source_item_id = existing.source_item_id
+                           AND file.state = 'duplicate')))
 FROM subscription_run sr
 LEFT JOIN counts c ON c.run_id = sr.run_id
 WHERE sr.run_id = ?1
@@ -960,8 +999,15 @@ mod tests {
         assert_eq!(progress.counts.posts_traversed, 1);
         assert_eq!(progress.counts.posts_added, 0);
         assert_eq!(progress.counts.posts_skipped, 1);
+        assert_eq!(progress.counts.files_already_in_library, 1);
         assert_eq!(progress.counts.downloaded, 0);
         assert_eq!(progress.counts.ingested, 0);
+        let history = list_runs_library(&application, subscription_id, 10).unwrap();
+        assert_eq!(history.runs[0].counts.files_already_in_library, 1);
+        let activity = run_activity_library(&application, query.run_id, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(activity.summary.counts.files_already_in_library, 1);
     }
 
     #[test]
@@ -1049,6 +1095,7 @@ mod tests {
             .unwrap();
         assert_eq!(progress.counts.posts_traversed, 1);
         assert_eq!(progress.counts.fetched, 1);
+        assert_eq!(progress.counts.files_already_in_library, 1);
         assert_eq!(progress.counts.downloaded, 0);
         assert_eq!(progress.counts.ingested, 0);
         let state = application

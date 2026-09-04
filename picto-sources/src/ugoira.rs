@@ -54,6 +54,12 @@ pub(crate) async fn postprocess(
         "12",
         "-b:v",
         "0",
+        // JPEG frames carry full-range pixels. Convert, rather than merely
+        // relabel, so VP9 remains playable by Windows hardware decoders.
+        "-vf",
+        "scale=in_range=auto:out_range=tv",
+        "-color_range",
+        "tv",
         "-pix_fmt",
         "yuv420p",
         "-an",
@@ -295,27 +301,24 @@ mod tests {
 
     #[tokio::test]
     async fn converts_a_timed_pixiv_archive_to_vp9_webm() {
-        if !discover_ffmpeg().is_file() {
-            return;
-        }
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("animation.webm");
         let file = File::create(&path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
-        for (index, color) in [[255, 0, 0], [0, 0, 255]].into_iter().enumerate() {
-            let image = image::RgbImage::from_pixel(2, 2, image::Rgb(color));
+        for (index, color) in [[64, 64, 64], [192, 192, 192]].into_iter().enumerate() {
+            let image = image::RgbImage::from_pixel(600, 600, image::Rgb(color));
             let mut bytes = Cursor::new(Vec::new());
             image::DynamicImage::ImageRgb8(image)
-                .write_to(&mut bytes, image::ImageFormat::Png)
+                .write_to(&mut bytes, image::ImageFormat::Jpeg)
                 .unwrap();
             archive
-                .start_file(format!("{index:06}.png"), options)
+                .start_file(format!("{index:06}.jpg"), options)
                 .unwrap();
             io::copy(&mut Cursor::new(bytes.into_inner()), &mut archive).unwrap();
         }
         archive.finish().unwrap();
-        let frames = vec![frame("000000.png", 60), frame("000001.png", 100)];
+        let frames = vec![frame("000000.jpg", 60), frame("000001.jpg", 70)];
         let mut descriptor = crate::MediaDescriptorBuilder::new(
             "pixiv:1:ugoira",
             0,
@@ -338,12 +341,58 @@ mod tests {
         .await
         .unwrap();
 
-        let bytes = std::fs::read(path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..4], &[0x1a, 0x45, 0xdf, 0xa3]);
         assert_eq!(converted.size_bytes, bytes.len() as u64);
         assert_eq!(
             converted.descriptor.mime_hint.as_deref(),
             Some("video/webm")
         );
+        let ffmpeg = discover_ffmpeg();
+        let ffprobe = ffmpeg.with_file_name(if cfg!(windows) {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        });
+        let probe = Command::new(ffprobe)
+            .args(["-v", "error", "-show_streams", "-of", "json"])
+            .arg(&path)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        let video = &metadata["streams"][0];
+        assert_eq!(video["codec_name"], "vp9");
+        assert_eq!(video["pix_fmt"], "yuv420p");
+        assert_eq!(video["color_range"], "tv");
+        assert_eq!(video["width"], 600);
+        let decoded = Command::new(ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args([
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "rgb24",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            decoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+        assert_eq!(decoded.stdout.len(), 600 * 600 * 3);
+        // A metadata-only range change would shift this mid-gray's brightness.
+        assert!(decoded.stdout.iter().all(|value| (61..=67).contains(value)));
     }
 }

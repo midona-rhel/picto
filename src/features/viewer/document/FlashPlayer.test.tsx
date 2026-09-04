@@ -88,7 +88,6 @@ describe('FlashPlayer', () => {
       showSwfDownload: false,
       allowFullscreen: false,
       menu: false,
-      preloader: false,
       splashScreen: false,
     }));
     expect(shadow.querySelector('[data-picto-ruffle-chrome]')).toHaveTextContent('#play-button');

@@ -432,7 +432,8 @@ pub fn settled_post_outcome(
                             COALESCE(SUM(item.state = 'downloaded'), 0),
                             COALESCE(SUM(item.state = 'ingested'), 0),
                             COALESCE(SUM(item.state = 'failed'), 0),
-                            COALESCE(SUM(item.state = 'deleted'), 0)
+                            COALESCE(SUM(item.state = 'deleted'), 0),
+                            COALESCE(SUM(item.state = 'ingested' AND item.media_item_id IS NOT NULL), 0)
                      FROM subscription_run_query run_query
                      JOIN subscription_query definition USING(query_id)
                      JOIN source_post post
@@ -457,6 +458,7 @@ pub fn settled_post_outcome(
                                 row.get::<_, i64>(7)?,
                                 row.get::<_, i64>(8)?,
                                 row.get::<_, i64>(9)?,
+                                row.get::<_, i64>(10)?,
                             ))
                         },
                     )
@@ -472,6 +474,7 @@ pub fn settled_post_outcome(
                     ingested,
                     failed,
                     deleted,
+                    existing_media,
                 )) = row
                 else {
                     return Err(LibraryError::InvalidState(
@@ -483,7 +486,9 @@ pub fn settled_post_outcome(
                         "completed source post still has unsettled media".into(),
                     ));
                 }
-                let outcome = if root_id.is_some() {
+                // Grouping or ungrouping removes the original post root, not its
+                // media. The source-item references remain the durable identity.
+                let outcome = if root_id.is_some() || (ingested > 0 && existing_media == ingested) {
                     if created_this_attempt {
                         let roots = {
                             let mut statement = transaction.prepare(
@@ -526,7 +531,7 @@ pub fn settled_post_outcome(
                     }
                 } else if ingested != 0 {
                     return Err(LibraryError::InvalidState(
-                        "ingested source media has no canonical root".into(),
+                        "ingested source media is missing its library media reference".into(),
                     ));
                 } else {
                     let reason = if total == 0 {

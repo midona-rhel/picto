@@ -44,6 +44,33 @@ describe('update runtime', () => {
     }));
   });
 
+  it('does not open notes from a disposed startup or leak its delayed listener', async () => {
+    let finishState!: (state: unknown) => void;
+    let finishListener!: (dispose: () => void) => void;
+    mocks.getState.mockReturnValue(new Promise((resolve) => { finishState = resolve; }));
+    mocks.onState.mockReturnValue(new Promise((resolve) => { finishListener = resolve; }));
+    const stop = startUpdateRuntime();
+    stop();
+    const unsubscribe = vi.fn();
+    finishListener(unsubscribe);
+    finishState({ status: 'installed', version: '0.6.12-alpha' });
+    await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledOnce());
+    expect(getDefaultStore().get(updateModalAtom)).toEqual({ open: false });
+  });
+
+  it('does not reopen acknowledged notes from a stale initial read', async () => {
+    let finishState!: (state: unknown) => void;
+    let onState!: (state: unknown) => void;
+    mocks.getState.mockReturnValue(new Promise((resolve) => { finishState = resolve; }));
+    mocks.onState.mockImplementation((listener) => { onState = listener; return Promise.resolve(vi.fn()); });
+    const stop = startUpdateRuntime();
+    onState({ status: 'current', version: null });
+    finishState({ status: 'installed', version: '0.6.12-alpha' });
+    await Promise.resolve();
+    expect(getDefaultStore().get(updateModalAtom)).toEqual({ open: false });
+    stop();
+  });
+
   it('opens user-facing release notes after an installed update restarts', async () => {
     mocks.getState.mockResolvedValue({
       status: 'installed',

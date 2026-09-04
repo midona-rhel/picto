@@ -98,6 +98,9 @@ assert(packageManifest.build.nsis?.artifactName === 'Picto-Setup-${version}.${ex
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
 assert(packageManifest.build.files.includes('dist/vendor/**/*'), 'packaged files must include viewer runtime assets');
+assert(packageManifest.build.files.includes('docs/*-release-notes.md'), 'packaged files must include offline release notes');
+const releaseNotesPath = `docs/${packageManifest.version}-release-notes.md`;
+assert(existsSync(path.join(root, releaseNotesPath)) && read(releaseNotesPath).trim().length > 0, 'current version must have bundled release notes');
 assert(
   !(packageManifest.build.extraResources ?? []).some((resource) =>
     /gallery[-_]?dl|onlyfans|of[-_]?scraper|python/i.test(`${resource.from ?? ''} ${resource.to ?? ''}`)),

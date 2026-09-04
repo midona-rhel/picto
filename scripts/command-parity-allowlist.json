@@ -1,6 +1,7 @@
 {
   "_comment": "Intentional transport asymmetries only. Electron host and release scripts call rust_only commands directly; ts_only commands terminate in Electron and never reach Rust dispatch.",
   "rust_only": [
+    "media.repair_vp9"
   ],
   "ts_only": [
     "auth_onlyfans_manual",

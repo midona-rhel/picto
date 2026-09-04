@@ -194,6 +194,17 @@ async function verifyPackagedSmokeFlashPlayback() {
   }
 }
 
+async function verifyPackagedSmokeReleaseNotes() {
+  const installed = updateService.getState();
+  if (installed.status !== 'installed' || installed.version !== app.getVersion() || !installed.releaseNotes.trim()) {
+    throw new Error('Packaged startup did not restore the bundled release notes');
+  }
+  const mainWindow = windowManager.getMainWindow();
+  const notesVisible = await mainWindow.webContents.executeJavaScript(`Array.from(document.querySelectorAll('[role="dialog"]')).some((dialog) => dialog.textContent.includes(${JSON.stringify(`Picto ${app.getVersion()}`)}) && dialog.querySelector('section'))`);
+  if (!notesVisible) throw new Error('Installed release notes were not visible in the main window');
+  reportPackagedSmoke('release-notes-ready', { version: installed.version });
+}
+
 function awaitNativeShutdownBeforeQuit(event) {
   if (nativeShutdownSettled) return;
   event.preventDefault();
@@ -294,6 +305,7 @@ const mediaProtocol = createMediaProtocolService({
 
 const windowManager = createWindowManager({
   BrowserWindow,
+  nativeTheme,
   WebContentsView,
   screen,
   path,
@@ -308,7 +320,7 @@ const windowManager = createWindowManager({
       reportPackagedSmoke(event, details);
       if (!isPackagedSmoke) return;
       setTimeout(() => {
-        void verifyPackagedSmokeMediaPlayback().then(() => verifyPackagedSmokeFlashPlayback()).then(() => {
+        void verifyPackagedSmokeReleaseNotes().then(() => verifyPackagedSmokeMediaPlayback()).then(() => verifyPackagedSmokeFlashPlayback()).then(() => {
           reportPackagedSmoke('settle-complete');
           return completePackagedSmoke();
         }).catch((error) => {
@@ -330,12 +342,18 @@ const subscriptionNotifications = createSubscriptionNotificationService({
 
 let buildAppMenu = () => {};
 
+async function openLibraryWithTheme(open, ...args) {
+  const result = await open(...args);
+  await windowManager.loadLibraryTheme();
+  return result;
+}
+
 const libraryHost = createLibraryHostService({
   fs,
   path,
   dialog,
-  openLibrary,
-  openTutorialLibrary,
+  openLibrary: (...args) => openLibraryWithTheme(openLibrary, ...args),
+  openTutorialLibrary: (...args) => openLibraryWithTheme(openTutorialLibrary, ...args),
   closeLibrary,
   invokeSerialized,
   addLibraryToHistory,
@@ -526,13 +544,16 @@ async function bootstrapApplication() {
   if (libraryToOpen) {
     const rememberInitialLibrary = !(isAutomation && process.env.PICTO_LIBRARY_ROOT);
     console.info('[main] initializing library', { libraryToOpen });
-    const opening = libraryHost.initializeInitialLibrary(libraryToOpen, {
-      remember: rememberInitialLibrary,
-    });
-    console.info('[main] creating main window for library reconciliation');
-    const mainWin = windowManager.createWindow('main');
-    setMainWindow(mainWin);
-    await opening;
+    try {
+      await libraryHost.initializeInitialLibrary(libraryToOpen, {
+        remember: rememberInitialLibrary,
+      });
+    } finally {
+      // Construct native materials and the first document with the library's
+      // theme. Still show the app's error state if opening the library fails.
+      const mainWin = windowManager.createWindow('main');
+      setMainWindow(mainWin);
+    }
     reportPackagedSmoke('native-library-initialized');
     console.info('[main] library initialized in native core');
     if (rememberInitialLibrary) console.info('[main] library history updated');

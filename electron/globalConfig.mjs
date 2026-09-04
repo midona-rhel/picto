@@ -7,11 +7,19 @@ const DEFAULT_CONFIG = {
   pinnedLibraries: [],
   cloudLocations: {},
   lastLibrary: null,
-  theme: null,
   windowState: {
     main: null,
   },
+  libraryMeta: {},
 };
+
+// App configuration contains host state only. Library preferences belong in
+// SQLite; never carry obsolete theme/cloudRoots or arbitrary old keys forward.
+function currentConfig(value = {}) {
+  return Object.fromEntries(Object.entries(DEFAULT_CONFIG).map(([key, fallback]) => [
+    key, value[key] ?? structuredClone(fallback),
+  ]));
+}
 
 let cachedConfig = null;
 let configWriteQueue = Promise.resolve();
@@ -23,35 +31,29 @@ export function getConfigPath() {
 
 export async function loadGlobalConfig() {
   const configPath = getConfigPath();
-  let migratedLegacyCloudRoots = false;
+  let removedObsoleteKeys = false;
   try {
     const raw = await fs.readFile(configPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    cachedConfig = { ...DEFAULT_CONFIG, ...parsed, cloudLocations: parsed.cloudLocations ?? {} };
-    // cloudRoots allowed several arbitrary locations per provider. Do not
-    // migrate ambiguous/unvalidated choices into the stricter configuration.
-    if (Object.hasOwn(cachedConfig, 'cloudRoots')) {
-      delete cachedConfig.cloudRoots;
-      migratedLegacyCloudRoots = true;
-    }
+    cachedConfig = currentConfig(parsed);
+    removedObsoleteKeys = Object.keys(parsed).some((key) => !Object.hasOwn(DEFAULT_CONFIG, key));
   } catch {
-    cachedConfig = { ...DEFAULT_CONFIG };
+    cachedConfig = currentConfig();
   }
-  if (migratedLegacyCloudRoots) {
+  if (removedObsoleteKeys) {
     try {
       await saveGlobalConfig(cachedConfig);
-    } catch {
-      // Keep the usable in-memory configuration even if migration persistence
-      // must be retried on the next launch.
+    } catch (error) {
+      console.warn('[config] Could not persist obsolete settings cleanup; will retry next launch', error);
     }
   }
   return cachedConfig;
 }
 
 export async function saveGlobalConfig(config) {
-  cachedConfig = config;
+  cachedConfig = currentConfig(config);
   const configPath = getConfigPath();
-  const contents = JSON.stringify(config, null, 2);
+  const contents = JSON.stringify(cachedConfig, null, 2);
   const temporaryPath = `${configPath}.${process.pid}.${configWriteSequence += 1}.tmp`;
   const write = configWriteQueue.catch(() => {}).then(async () => {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -111,5 +113,5 @@ export async function updateLibraryPath(oldPath, newPath) {
 }
 
 export function getCachedConfig() {
-  return cachedConfig ?? { ...DEFAULT_CONFIG };
+  return cachedConfig ?? currentConfig();
 }

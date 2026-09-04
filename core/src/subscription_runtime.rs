@@ -1877,7 +1877,7 @@ mod tests {
         tick(
             &application,
             &mut schedule,
-            &KnownPostRunner { post },
+            &KnownPostRunner { post: post.clone() },
             "2026-08-30T00:01:01Z",
         )
         .await
@@ -1893,6 +1893,68 @@ mod tests {
         assert_eq!(rerun.runs[0].counts.posts_added, 0);
         assert_eq!(rerun.runs[0].counts.posts_skipped, 1);
         assert_eq!(rerun.runs[0].counts.downloaded, 0);
+        assert_eq!(rerun.runs[0].counts.files_already_in_library, 2);
+
+        let (members, _) = application
+            .library()
+            .ungroup_collection(picto_library::RootId(root_id), 1_800_000_000_000)
+            .unwrap();
+        assert_eq!(members.len(), 2);
+        for regroup in [false, true] {
+            if regroup {
+                application
+                    .library()
+                    .organize_into_collection(&picto_library::GroupRequest {
+                        target: picto_library::selection::SelectionTarget::Explicit {
+                            root_ids: members.clone(),
+                        },
+                        cover_root_id: members[0],
+                        winning_collection_id: None,
+                        name: Some("Regrouped".into()),
+                        notes: None,
+                        modified_at_ms: 1_800_000_000_001,
+                    })
+                    .unwrap();
+            }
+            let requested_at = if regroup {
+                "2026-08-30T00:03:00Z"
+            } else {
+                "2026-08-30T00:02:00Z"
+            };
+            let tick_at = if regroup {
+                "2026-08-30T00:03:01Z"
+            } else {
+                "2026-08-30T00:02:01Z"
+            };
+            application
+                .request_subscription_run_library(subscription_id, requested_at)
+                .unwrap();
+            // Known-post discovery can skip fetching the attachment listing.
+            // Count its persisted media even when this run has no file attempts.
+            let mut known = post.clone();
+            known.items.clear();
+            tick(
+                &application,
+                &mut schedule,
+                &KnownPostRunner { post: known },
+                tick_at,
+            )
+            .await
+            .unwrap();
+            let history =
+                crate::subscription_activity::list_runs_library(&application, subscription_id, 1)
+                    .unwrap();
+            assert_eq!(history.runs[0].status, "succeeded");
+            assert_eq!(history.runs[0].counts.posts_skipped, 1);
+            assert_eq!(history.runs[0].counts.posts_added, 0);
+            assert_eq!(history.runs[0].counts.downloaded, 0);
+            assert_eq!(history.runs[0].counts.files_already_in_library, 2);
+            let catalog = crate::subscription_catalog::list_library(&application).unwrap();
+            assert_eq!(
+                catalog.subscriptions[0].progress.files_already_in_library,
+                2
+            );
+        }
     }
 
     #[tokio::test]

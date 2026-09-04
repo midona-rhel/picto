@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { MantineProvider } from '@mantine/core';
+import { PictoThemeProvider } from '../runtime/PictoThemeProvider';
 import { DetailWindow } from '../features/viewer/DetailWindow';
 import { GroupDetailWindow } from '../features/groups/GroupDetailWindow';
 import '@mantine/core/styles.css';
@@ -17,7 +17,7 @@ const itemId = itemIdParam == null ? null : Number(itemIdParam);
 
 function DetailApp() {
   return (
-    <MantineProvider defaultColorScheme="dark" cssVariablesSelector=":root:root">
+    <PictoThemeProvider cssVariablesSelector=":root:root">
       {Number.isSafeInteger(itemId) && itemId! > 0 ? (
         <GroupDetailWindow groupId={itemId!} />
       ) : hash ? (
@@ -25,7 +25,7 @@ function DetailApp() {
       ) : (
         <div style={{ color: 'var(--color-text-secondary)', padding: 24 }}>{t("No detail item provided")}</div>
       )}
-    </MantineProvider>
+    </PictoThemeProvider>
   );
 }
 

@@ -6,7 +6,7 @@ const RELEASES_API = 'https://api.github.com/repos/midona-rhel/picto/releases?pe
 const RELEASES_PAGE = 'https://github.com/midona-rhel/picto/releases';
 const RELEASE_DOWNLOADS = 'https://github.com/midona-rhel/picto/releases/download';
 const APP_RELEASE_TAG = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/;
-const PENDING_RELEASE_FILE = 'pending-update-release.json';
+const ACKNOWLEDGED_RELEASE_FILE = 'acknowledged-update-release.json';
 
 function releaseNotes(value) {
   if (Array.isArray(value)) return value.map((entry) => entry.note).filter(Boolean).join('\n\n');
@@ -46,7 +46,7 @@ export function createUpdateService({
   let updater = null;
   let checkPromise = null;
   let selectedRelease = null;
-  const pendingReleasePath = () => path.join(app.getPath('userData'), PENDING_RELEASE_FILE);
+  const acknowledgedReleasePath = () => path.join(app.getPath('userData'), ACKNOWLEDGED_RELEASE_FILE);
   let state = {
     status: app.isPackaged ? 'idle' : 'unavailable',
     currentVersion: app.getVersion(),
@@ -74,41 +74,25 @@ export function createUpdateService({
     releaseNotes: releaseNotes(info?.releaseNotes) || selectedRelease?.body || '',
   });
 
-  const releaseSnapshot = (source = state) => ({
-    version: source.version,
-    releaseName: source.releaseName,
-    releaseDate: source.releaseDate,
-    releaseNotes: source.releaseNotes,
-    releaseUrl: source.releaseUrl,
-  });
-
-  async function persistPendingRelease(source = state) {
-    const snapshot = releaseSnapshot(source);
-    if (!snapshot.version) return;
-    await fs.mkdir(app.getPath('userData'), { recursive: true });
-    await fs.writeFile(pendingReleasePath(), JSON.stringify(snapshot), 'utf8');
-  }
-
   async function restoreInstalledRelease() {
-    let pending;
+    const version = app.getVersion();
     try {
-      pending = JSON.parse(await fs.readFile(pendingReleasePath(), 'utf8'));
-    } catch {
-      return false;
+      const acknowledged = JSON.parse(await fs.readFile(acknowledgedReleasePath(), 'utf8'));
+      if (acknowledged.version === version) return false;
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[updates] Could not read release-note acknowledgement:', error);
     }
-    if (!pending?.version || pending.version !== app.getVersion()) {
-      if (pending?.version && isNewer(app.getVersion(), pending.version)) {
-        await fs.rm(pendingReleasePath(), { force: true });
-      }
-      return false;
-    }
+    // The installed build owns its notes. This works offline and does not
+    // depend on the old app, its downloader, or how this version was installed.
+    const notes = await fs.readFile(path.join(app.getAppPath(), 'docs', `${version}-release-notes.md`), 'utf8');
+    if (!notes.trim()) throw new Error(`Bundled release notes are empty for ${version}`);
     publish({
       status: 'installed',
-      version: pending.version,
-      releaseName: typeof pending.releaseName === 'string' ? pending.releaseName : null,
-      releaseDate: typeof pending.releaseDate === 'string' ? pending.releaseDate : null,
-      releaseNotes: typeof pending.releaseNotes === 'string' ? pending.releaseNotes : '',
-      releaseUrl: typeof pending.releaseUrl === 'string' ? pending.releaseUrl : RELEASES_PAGE,
+      version,
+      releaseName: `Picto ${version}`,
+      releaseDate: null,
+      releaseNotes: notes,
+      releaseUrl: `${RELEASES_PAGE}/tag/v${version}`,
       progress: null,
       error: null,
     });
@@ -165,14 +149,11 @@ export function createUpdateService({
       progress: { percent: progress.percent, transferred: progress.transferred, total: progress.total },
     }));
     updater.on('update-downloaded', (info) => {
-      const downloaded = publish({
+      publish({
         status: 'downloaded',
         ...normalizeInfo(info),
         progress: { percent: 100, transferred: info.downloadedFile ? 1 : 0, total: 1 },
         error: null,
-      });
-      void persistPendingRelease(downloaded).catch((error) => {
-        console.error('[updates] could not preserve release notes:', error);
       });
     });
     updater.on('error', (error) => publish({ status: 'error', error: error?.message ?? String(error) }));
@@ -210,19 +191,20 @@ export function createUpdateService({
   async function install() {
     if (platform === 'darwin') return openRelease();
     if (state.status !== 'downloaded') throw new Error('The update has not finished downloading.');
-    await persistPendingRelease();
     const activeUpdater = await ensureUpdater();
     setImmediate(() => activeUpdater.quitAndInstall(false, true));
   }
 
   async function openRelease() {
-    if (state.version) await persistPendingRelease();
     return shell.openExternal(state.releaseUrl || RELEASES_PAGE);
   }
 
   async function acknowledgeInstalled() {
     if (state.status !== 'installed') return state;
-    await fs.rm(pendingReleasePath(), { force: true });
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    const temporaryPath = `${acknowledgedReleasePath()}.tmp`;
+    await fs.writeFile(temporaryPath, JSON.stringify({ version: app.getVersion() }), 'utf8');
+    await fs.rename(temporaryPath, acknowledgedReleasePath());
     return publish({
       status: 'current',
       version: null,
@@ -237,7 +219,12 @@ export function createUpdateService({
 
   async function start() {
     if (!app.isPackaged) return;
-    await restoreInstalledRelease();
+    try {
+      await restoreInstalledRelease();
+    } catch (error) {
+      console.error('[updates] Could not load installed release notes:', error);
+      publish({ status: 'error', error: error.message ?? String(error) });
+    }
     const initial = setTimeout(() => void check(), 15_000);
     initial.unref?.();
     const interval = setInterval(() => void check(), 6 * 60 * 60 * 1000);

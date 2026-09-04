@@ -6,7 +6,6 @@ import {
   patchSettings,
   replaceSettings,
   resetViewPrefs,
-  saveSettings,
   setViewPrefs,
   viewPrefsToPatch,
 } from '../platform/settingsApi';
@@ -26,12 +25,6 @@ export const settingsController = {
   },
 
   getSettingsSnapshot,
-
-  async saveSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
-    const receipt = await saveSettings(settings);
-    await announceUndoableMutation('settings.patch');
-    return receipt;
-  },
 
   async patchSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
     const receipt = await patchSettings(settings);

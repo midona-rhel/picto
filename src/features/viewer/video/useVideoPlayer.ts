@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PLAYBACK_RATES, DEFAULT_FPS } from './videoConstants';
 import { useFrameTime } from './useFrameTime';
+import { playMedia, reportMediaPlaybackFailure } from './mediaPlaybackDiagnostics';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
@@ -60,6 +61,14 @@ export function useVideoPlayer(options: UseVideoPlayerOptions = {}) {
   const seekingRef = useRef(false);
   const { frameTime, fps } = useFrameTime(videoRef);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onError = () => { setIsPlaying(false); reportMediaPlaybackFailure(video); };
+    video.addEventListener('error', onError);
+    return () => video.removeEventListener('error', onError);
+  }, []);
+
   useEffect(() => { const v = videoRef.current; if (v) v.volume = clamp(volume, 0, 1); }, [volume]);
   useEffect(() => { const v = videoRef.current; if (v) v.muted = muted; }, [muted]);
   useEffect(() => { const v = videoRef.current; if (v) v.playbackRate = playbackRate; }, [playbackRate]);
@@ -84,9 +93,9 @@ export function useVideoPlayer(options: UseVideoPlayerOptions = {}) {
     return () => { video.removeEventListener('play', onPlay); video.removeEventListener('pause', onPause); video.removeEventListener('loadedmetadata', onMeta); video.removeEventListener('timeupdate', onTime); video.removeEventListener('progress', onProgress); video.removeEventListener('seeking', onSeeking); video.removeEventListener('seeked', onSeeked); video.removeEventListener('durationchange', onDur); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const play = useCallback(() => { videoRef.current?.play().catch(() => {}); }, []);
+  const play = useCallback(() => { const v = videoRef.current; if (v) playMedia(v); }, []);
   const pause = useCallback(() => { videoRef.current?.pause(); }, []);
-  const togglePlay = useCallback(() => { const v = videoRef.current; if (!v) return; v.paused ? v.play().catch(() => {}) : v.pause(); }, []);
+  const togglePlay = useCallback(() => { const v = videoRef.current; if (!v) return; v.paused ? playMedia(v) : v.pause(); }, []);
   const seek = useCallback((t: number) => { const v = videoRef.current; if (!v) return; v.currentTime = clamp(t, 0, v.duration || 0); setCurrentTime(v.currentTime); }, []);
   const seekRelative = useCallback((d: number) => { const v = videoRef.current; if (!v) return; v.currentTime = clamp(v.currentTime + d, 0, v.duration || 0); setCurrentTime(v.currentTime); }, []);
   const stepFrame = useCallback((dir: 1 | -1) => { const v = videoRef.current; if (!v) return; v.pause(); v.currentTime = clamp(v.currentTime + dir / (fps || DEFAULT_FPS), 0, v.duration || 0); setCurrentTime(v.currentTime); }, [fps]);

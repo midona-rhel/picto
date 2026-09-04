@@ -1,5 +1,25 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// The main process has already read the opened library's canonical settings.
+// This synchronous call only reads its in-memory theme, including on reload.
+const startupTheme = ipcRenderer.sendSync('picto:startup-theme');
+function applyStartupTheme() {
+  const root = document.documentElement;
+  if (!root) return false;
+  root.dataset.theme = startupTheme.applied;
+  root.dataset.mantineColorScheme = startupTheme.colorScheme;
+  root.dataset.platform = startupTheme.platform;
+  root.style.colorScheme = startupTheme.colorScheme;
+  root.style.backgroundColor = startupTheme.backgroundColor;
+  return true;
+}
+if (!applyStartupTheme()) {
+  const observer = new MutationObserver(() => {
+    if (applyStartupTheme()) observer.disconnect();
+  });
+  observer.observe(document, { childList: true });
+}
+
 if (process.env.PICTO_PACKAGED_SMOKE === '1') {
   const reportRendererFailure = (event, message) => {
     ipcRenderer.send('picto:smoke:renderer-failure', { event, message });
@@ -227,6 +247,7 @@ const webview = {
 };
 
 contextBridge.exposeInMainWorld('picto', {
+  startupTheme,
   api,
   associatedFiles,
   windowControls,

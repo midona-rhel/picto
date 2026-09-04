@@ -1936,7 +1936,31 @@ impl Library {
         update: &MediaFactsUpdate,
         changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        if update == &MediaFactsUpdate::default() {
+        self.update_media_facts_and_content(media_id, update, None, changed_at_ms)
+    }
+
+    pub fn repair_media_content(
+        &self,
+        media_id: MediaId,
+        content: &crate::model::RepairedMediaContent,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        self.update_media_facts_and_content(
+            media_id,
+            &MediaFactsUpdate::default(),
+            Some(content),
+            changed_at_ms,
+        )
+    }
+
+    fn update_media_facts_and_content(
+        &self,
+        media_id: MediaId,
+        update: &MediaFactsUpdate,
+        content: Option<&crate::model::RepairedMediaContent>,
+        changed_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if update == &MediaFactsUpdate::default() && content.is_none() {
             return Err(LibraryError::InvalidInput(
                 "media facts update contains no changes".into(),
             ));
@@ -2009,6 +2033,28 @@ impl Library {
                 if let Some(value) = update.palette {
                     palette = value;
                 }
+                if let Some(content) = content {
+                    if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
+                    }
+                    let actual_hash: String = transaction.query_row(
+                        "SELECT content_hash FROM media_file WHERE file_id = ?1", [file_id], |row| row.get(0),
+                    )?;
+                    if actual_hash != content.expected_hash {
+                        return Err(LibraryError::InvalidState("Media changed during repair".into()));
+                    }
+                    // Remote bytes belong to the old hash. Never mark repaired bytes as uploaded.
+                    transaction.execute("DELETE FROM cloud_blob_state WHERE file_hash = ?1", [&actual_hash])?;
+                    transaction.execute(
+                        "UPDATE media_file SET content_hash = ?2, file_path = ?3, size_bytes = ?4 WHERE file_id = ?1",
+                        rusqlite::params![file_id, content.content_hash, content.file_path,
+                            i64::try_from(content.size_bytes).map_err(|_| LibraryError::InvalidInput("File size exceeds SQLite range".into()))?],
+                    )?;
+                    transaction.execute(
+                        "UPDATE work_item SET file_hash = ?2 WHERE file_id = ?1",
+                        rusqlite::params![file_id, content.content_hash],
+                    )?;
+                }
                 transaction.execute(
                     "UPDATE media_file
                      SET mime = ?2, width = ?3, height = ?4, duration_ms = ?5,
@@ -2048,6 +2094,17 @@ impl Library {
                     roots
                 };
                 for root_id in &affected {
+                    if content.is_some() {
+                        let members = next.collection_orders.get(&RootId(root_id))
+                            .map(|members| members.iter().map(|member| member.0).collect::<Vec<_>>())
+                            .unwrap_or_else(|| vec![root_id]);
+                        let total: i64 = transaction.query_row(
+                            "SELECT SUM(file.size_bytes) FROM media_item media JOIN media_file file ON file.file_id = media.file_id WHERE media.media_id IN (SELECT value FROM json_each(?1))",
+                            [serde_json::to_string(&members)?], |row| row.get(0),
+                        )?;
+                        transaction.execute("UPDATE library_root SET total_size_bytes = ?2 WHERE root_id = ?1", rusqlite::params![root_id, total])?;
+                        Arc::make_mut(&mut next.total_bytes).insert(root_id, total as u64);
+                    }
                     let has_image = next.collection_orders.get(&RootId(root_id)).map_or_else(
                         || next.image_media.contains(root_id),
                         |members| {
@@ -2076,7 +2133,8 @@ impl Library {
                     transaction,
                     &mut next,
                     &affected,
-                    crate::predicate::DependencyChange::CoverFacts,
+                    if content.is_some() { crate::predicate::DependencyChange::All }
+                    else { crate::predicate::DependencyChange::CoverFacts },
                 )?;
                 transaction.execute(
                     "INSERT INTO cloud_journal

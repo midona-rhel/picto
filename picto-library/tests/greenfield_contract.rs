@@ -54,6 +54,62 @@ fn imported_as(key: &str, mime: &str, color: LabColor) -> PreparedImport {
     value
 }
 
+#[test]
+fn video_content_repair_preserves_identity_and_collection_metadata_across_reopen() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let mut input = imported("repair", Lifecycle::Inbox, &["kept"]);
+    input.facts.mime = "video/webm".into();
+    let (first, _) = library.ingest(&input).unwrap();
+    let (second, _) = library
+        .ingest(&imported("other", Lifecycle::Inbox, &[]))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![first, second],
+            },
+            cover_root_id: first,
+            winning_collection_id: None,
+            name: Some("Preserve this collection".into()),
+            notes: Some("Keep notes".into()),
+            modified_at_ms: 20,
+        })
+        .unwrap();
+    let before = library.details(collection).unwrap();
+    let content = picto_library::RepairedMediaContent {
+        expected_hash: input.facts.content_hash.clone(),
+        content_hash: "a".repeat(64),
+        file_path: "/repaired.webm".into(),
+        size_bytes: 500,
+    };
+    let receipt = library
+        .repair_media_content(picto_library::MediaId(first.0), &content, 30)
+        .unwrap();
+    assert_eq!(receipt.revision, before.revision + 1);
+    assert_eq!(receipt.item_ids, vec![collection]);
+    let revision = library.database().revision().unwrap();
+    assert!(library
+        .repair_media_content(picto_library::MediaId(first.0), &content, 31)
+        .is_err());
+    assert_eq!(library.database().revision().unwrap(), revision);
+    drop(library);
+    let reopened = Library::open(path).unwrap();
+    let after = reopened.details(collection).unwrap();
+    assert_eq!(after.root.name, before.root.name);
+    assert_eq!(after.root.notes, before.root.notes);
+    assert_eq!(after.root.cover_media_id, before.root.cover_media_id);
+    assert_eq!(after.root.total_size_bytes, 1524);
+    assert_eq!(after.lifecycle, before.lifecycle);
+    assert_eq!(after.tag_ids, before.tag_ids);
+    assert_eq!(after.folder_ids, before.folder_ids);
+    assert_eq!(after.media[0].media_id, before.media[0].media_id);
+    assert_eq!(after.media[0].file_id, before.media[0].file_id);
+    assert_eq!(after.media[0].facts.content_hash, content.content_hash);
+    assert_eq!(after.media[1], before.media[1]);
+}
+
 fn query(scope: ItemScope) -> RootQuery {
     RootQuery {
         scope,

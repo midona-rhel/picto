@@ -259,6 +259,9 @@ export function registerIpcHandlers({
   };
 
   ipcMain.on('picto:window-control', runWindowControl);
+  ipcMain.on('picto:startup-theme', (event) => {
+    event.returnValue = windowManager.getStartupTheme();
+  });
 
   handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
@@ -362,12 +365,9 @@ export function registerIpcHandlers({
       throw new Error(error instanceof Error ? error.message : String(error));
     }
     if (command === 'settings.get') {
-      try {
-        const theme = JSON.parse(serialized)?.value?.colorScheme;
-        await windowManager.setThemePreference(theme);
-      } catch {}
+      windowManager.setThemePreference(JSON.parse(serialized).value.colorScheme);
     } else if ((command === 'settings.replace' || command === 'settings.patch') && typeof args?.value?.colorScheme === 'string') {
-      await windowManager.setThemePreference(args.value.colorScheme);
+      windowManager.setThemePreference(args.value.colorScheme);
     }
     return {
       __pictoCoreJson: serialized,

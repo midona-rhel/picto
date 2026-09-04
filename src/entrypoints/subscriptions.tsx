@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { PictoThemeProvider } from '../runtime/PictoThemeProvider';
+import '@mantine/core/styles.css';
 import '../app/globals.css';
 import { SubscriptionsScreen } from '../features/subscriptions/SubscriptionsScreen';
 import { startThemeRuntime } from '../runtime/themeRuntime';
@@ -23,7 +25,7 @@ const root = ReactDOM.createRoot(document.getElementById('root')!);
 startLocalizedRenderer(() => {
   root.render(
     <React.StrictMode>
-      <SubscriptionsScreen standalone />
+      <PictoThemeProvider><SubscriptionsScreen standalone /></PictoThemeProvider>
     </React.StrictMode>,
   );
 });

@@ -8,7 +8,7 @@ import { createUpdateService } from './updateService.mjs';
 const tempDirectories = [];
 
 function app(packaged = true, version = '0.6.0-alpha', userData = os.tmpdir()) {
-  return { isPackaged: packaged, getVersion: () => version, getPath: () => userData };
+  return { isPackaged: packaged, getVersion: () => version, getPath: () => userData, getAppPath: () => userData };
 }
 
 function releases(...entries) {
@@ -17,6 +17,7 @@ function releases(...entries) {
 
 describe('update service', () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(tempDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
   });
 
@@ -128,21 +129,18 @@ describe('update service', () => {
     });
   });
 
-  test('restores installed release notes once after an update restart', async () => {
+  test.each(['win32', 'darwin', 'linux'])('shows bundled notes offline on %s and remembers dismissal across restarts', async (platform) => {
     const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-update-'));
     tempDirectories.push(userData);
-    await fs.writeFile(path.join(userData, 'pending-update-release.json'), JSON.stringify({
-      version: '0.6.1-alpha',
-      releaseName: 'Picto 0.6.1 Alpha',
-      releaseNotes: '* Smoother grid scrolling',
-      releaseUrl: 'https://example.test/release',
-    }));
+    await fs.mkdir(path.join(userData, 'docs'));
+    await fs.writeFile(path.join(userData, 'docs', '0.6.1-alpha-release-notes.md'), '* Smoother grid scrolling');
+    const fetch = vi.fn().mockRejectedValue(new Error('offline'));
     const sendToAllWindows = vi.fn();
     const service = createUpdateService({
       app: app(true, '0.6.1-alpha', userData),
-      net: { fetch: vi.fn() },
+      net: { fetch },
       sendToAllWindows,
-      platform: 'win32',
+      platform,
     });
 
     await service.start();
@@ -161,43 +159,36 @@ describe('update service', () => {
     await service.acknowledgeInstalled();
 
     expect(service.getState()).toMatchObject({ status: 'current', version: null });
-    await expect(fs.stat(path.join(userData, 'pending-update-release.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await fs.readFile(path.join(userData, 'acknowledged-update-release.json'), 'utf8'))).toEqual({ version: '0.6.1-alpha' });
+    const restarted = createUpdateService({ app: app(true, '0.6.1-alpha', userData), net: { fetch }, sendToAllWindows: vi.fn(), platform });
+    await restarted.start();
+    expect(restarted.getState().status).not.toBe('installed');
+    expect(fetch).not.toHaveBeenCalled();
+    await fs.writeFile(path.join(userData, 'docs', '0.6.2-alpha-release-notes.md'), '* Better playback');
+    const upgraded = createUpdateService({ app: app(true, '0.6.2-alpha', userData), net: { fetch }, sendToAllWindows: vi.fn(), platform });
+    await upgraded.start();
+    expect(upgraded.getState()).toMatchObject({ status: 'installed', version: '0.6.2-alpha', releaseNotes: '* Better playback' });
   });
 
-  test('persists downloaded release notes for the next packaged launch', async () => {
+  test('does not lose notes if the app quits before acknowledgement', async () => {
     const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-update-'));
     tempDirectories.push(userData);
-    const autoUpdater = Object.assign(new EventEmitter(), {
-      checkForUpdates: vi.fn().mockImplementation(async () => {
-        autoUpdater.emit('update-downloaded', {
-          version: '0.6.1-alpha',
-          releaseName: 'Picto 0.6.1 Alpha',
-          releaseNotes: '* More reliable playback',
-          downloadedFile: 'Picto-Setup.exe',
-        });
-      }),
-      setFeedURL: vi.fn(),
-    });
-    const service = createUpdateService({
-      app: app(true, '0.6.0-alpha', userData),
-      net: { fetch: vi.fn().mockResolvedValue(releases({
-        draft: false,
-        tag_name: 'v0.6.1-alpha',
-        body: '* More reliable playback',
-      })) },
-      sendToAllWindows: vi.fn(),
-      platform: 'win32',
-      loadUpdaterModule: async () => ({ autoUpdater }),
-    });
+    await fs.mkdir(path.join(userData, 'docs'));
+    await fs.writeFile(path.join(userData, 'docs', '0.6.1-alpha-release-notes.md'), '* Better playback');
+    for (let launch = 0; launch < 2; launch++) {
+      const service = createUpdateService({ app: app(true, '0.6.1-alpha', userData), net: { fetch: vi.fn() }, sendToAllWindows: vi.fn() });
+      await service.start();
+      expect(service.getState()).toMatchObject({ status: 'installed', releaseNotes: '* Better playback' });
+    }
+  });
 
-    await service.check();
-
-    await vi.waitFor(async () => {
-      const pending = JSON.parse(await fs.readFile(path.join(userData, 'pending-update-release.json'), 'utf8'));
-      expect(pending).toMatchObject({
-        version: '0.6.1-alpha',
-        releaseNotes: '* More reliable playback',
-      });
-    });
+  test('reports missing packaged notes without an unhandled startup rejection', async () => {
+    const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-update-'));
+    tempDirectories.push(userData);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const service = createUpdateService({ app: app(true, '0.6.1-alpha', userData), net: { fetch: vi.fn() }, sendToAllWindows: vi.fn() });
+    await service.start();
+    expect(service.getState().status).toBe('error');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('installed release notes'), expect.any(Error));
   });
 });
