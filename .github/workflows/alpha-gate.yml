@@ -25,9 +25,7 @@ env:
 jobs:
   verify-renderer:
     name: verify:renderer
-    # Release branches are the gate. A tag points at that already-gated commit;
-    # rerunning the entire test suite before the three platform builds only
-    # duplicated the slowest work.
+    # Verify and package the release branch once. Tags only publish its artifacts.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -115,12 +113,9 @@ jobs:
 
   alpha-package:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})
-    needs:
-      - verify-renderer
-      - verify-rust
-    # Release branches are preflight-only. Packaging them as well as their tag
-    # doubled every platform build and encouraged tagging before CI was green.
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && (startsWith(github.ref, 'refs/tags/') || (needs.verify-renderer.result == 'success' && needs.verify-rust.result == 'success')) }}
+    # Independent jobs run together; publication still requires the entire run
+    # to succeed. Pull requests remain verification-only and receive no signing secrets.
+    if: ${{ github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -223,6 +218,8 @@ jobs:
           name: picto-${{ matrix.artifact }}
           path: ${{ matrix.package-artifacts }}
           if-no-files-found: error
+          compression-level: 0
+          overwrite: true
 
       - name: Upload alpha smoke report
         if: always() && (steps.smoke-linux.outcome != 'skipped' || steps.smoke-other.outcome != 'skipped')
@@ -231,26 +228,38 @@ jobs:
           name: alpha-smoke-${{ matrix.platform }}
           path: artifacts/alpha-smoke/${{ matrix.platform }}.json
           if-no-files-found: error
+          overwrite: true
 
   alpha-release-assets:
     name: Attach Release Assets
-    needs: alpha-package
-    # A tag intentionally skips alpha-verify. `always()` prevents that skipped
-    # ancestor from suppressing publication after every package job succeeds.
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.alpha-package.result == 'success' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Require the exact successful release gate
+        id: gate
+        run: node scripts/ci/find-release-gate.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: release-artifacts
-          pattern: picto-*
+          run-id: ${{ steps.gate.outputs.run-id }}
+          artifact-ids: ${{ steps.gate.outputs.artifact-ids }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           merge-multiple: true
+          digest-mismatch: error
 
       - name: Select versioned release notes
         shell: bash

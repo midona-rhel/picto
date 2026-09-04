@@ -1,4 +1,4 @@
-# Picto 0.6.10-alpha release readiness
+# Picto release readiness
 
 Picto ships for these platforms only:
 
@@ -42,9 +42,10 @@ native addons, and downloaded native tools must not imply otherwise.
 - Public Apple Developer ID signing and notarization are not part of the `0.6.10-alpha` gate. The
   macOS alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity.
-- The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
-  x64, and Linux x64. A normal push to `main` runs verification only. The Windows and Linux package
-  results are publication gates and necessarily run after the release candidate is uploaded.
+- Pull requests to release branches run verification. Release-branch pushes run verification and
+  all three platform package/smoke jobs in parallel. Manual runs can also exercise those gates.
+  Tags only publish the exact artifacts from a successful release-branch push for the same commit;
+  they never rebuild. A normal push to `main` does not trigger this release workflow.
 - Every subscription provider is implemented by the native Rust source crate. Release packages
   contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
 - TypeScript, the production build, the complete frontend and Rust test suites, command parity,
@@ -56,3 +57,22 @@ native addons, and downloaded native tools must not imply otherwise.
 - The public branch and tags have been rewritten to remove audited personal absolute paths,
   reference-product names, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.
+
+## Release procedure
+
+1. Commit and push the finished changes, synchronized package versions, and user-facing notes on
+   `main`. Keep issue references in commits, not release notes.
+2. Create `release/<version>` from that exact main commit and push it. The Alpha Gate runs renderer
+   tests, Rust lint/tests, and macOS/Windows/Linux packaging and smoke together. Every job must pass.
+3. Only then tag the same commit as `v<version>` and push the tag. Publication checks the matching
+   release branch, main ancestry, successful gate commit, and all three package/smoke artifact sets.
+   It downloads those package artifacts by ID with digest verification and attaches the bundled notes.
+
+No test, lint, audit, signing requirement, or packaged smoke check is skipped to shorten the gate.
+Parallel packaging can spend runner time on a candidate that fails verification, but avoids adding
+verification time to the packaging critical path. Installers are built once, before tagging.
+
+If a gate fails, fix it on main and advance the release branch to that main commit, then wait for
+the new gate. Rerun failed jobs for transient runner failures. If publication fails, rerun only the
+tagged publication job; do not move a published tag or rebuild different binaries under it. Expired
+gate artifacts require rerunning the release-branch gate at the same commit before retrying publication.
