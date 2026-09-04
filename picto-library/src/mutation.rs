@@ -44,6 +44,8 @@ pub struct Library {
     publication: Arc<PublicationCoordinator>,
     history: Arc<SessionHistory>,
     match_cache: Arc<crate::query::MatchCache>,
+    order_cache: Arc<crate::query::OrderCache>,
+    window_requests: crate::query_request::WindowRequests,
 }
 
 impl Library {
@@ -101,6 +103,8 @@ impl Library {
             publication: Arc::new(PublicationCoordinator::default()),
             history: Arc::new(SessionHistory::default()),
             match_cache: Arc::new(crate::query::MatchCache::default()),
+            order_cache: Arc::new(crate::query::OrderCache::default()),
+            window_requests: crate::query_request::WindowRequests::default(),
         })
     }
 
@@ -382,6 +386,62 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| crate::query::mime_facets(connection, &snapshot, query),
+        )
+    }
+
+    pub fn query_statistics(&self) -> crate::query::QueryStatistics {
+        self.match_cache.statistics()
+    }
+
+    pub fn query_window(
+        &self,
+        query: &RootQuery,
+        window: &crate::query::WindowRequest,
+    ) -> Result<crate::query::RootWindow> {
+        self.query_window_requested(query, window, None)
+    }
+
+    pub fn supersede_window(&self, request: &crate::query_request::QueryRequest) -> Result<()> {
+        self.window_requests.begin(request)?;
+        Ok(())
+    }
+
+    pub fn query_window_requested(
+        &self,
+        query: &RootQuery,
+        window: &crate::query::WindowRequest,
+        request: Option<&crate::query_request::QueryRequest>,
+    ) -> Result<crate::query::RootWindow> {
+        let cancellation = request
+            .map(|request| self.window_requests.begin(request))
+            .transpose()?;
+        if let Some(cancellation) = &cancellation {
+            cancellation.check()?;
+        }
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                if let Some(cancellation) = &cancellation {
+                    cancellation.check()?;
+                }
+                let _progress = cancellation
+                    .as_ref()
+                    .map(|cancellation| cancellation.install(connection))
+                    .transpose()?;
+                let result = crate::query::window_cached(
+                    connection,
+                    &snapshot,
+                    query,
+                    window,
+                    &self.match_cache,
+                    &self.order_cache,
+                );
+                if let Some(cancellation) = &cancellation {
+                    cancellation.check()?;
+                }
+                result
+            },
         )
     }
 
@@ -3923,14 +3983,27 @@ impl Library {
                     .get(&folder_id)
                     .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
                     .unwrap_or_default();
-                if before.iter().copied().collect::<BTreeSet<_>>()
-                    != values.iter().copied().collect::<BTreeSet<_>>()
-                    || before.len() != values.len()
+                let requested = values.iter().copied().collect::<BTreeSet<_>>();
+                if requested.len() != values.len()
+                    || !requested.is_subset(&before.iter().copied().collect())
                 {
                     return Err(LibraryError::InvalidInput(
-                        "folder item reorder must contain every member exactly once".into(),
+                        "folder item reorder must contain distinct existing members".into(),
                     ));
                 }
+                // A grid window sends only its loaded members. Permute their
+                // canonical slots, leaving unloaded/filtered members in place.
+                let mut replacements = values.iter();
+                let values = before
+                    .iter()
+                    .map(|id| {
+                        if requested.contains(id) {
+                            *replacements.next().expect("validated permutation")
+                        } else {
+                            *id
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 ordering::replace(
                     transaction,
                     revision,
@@ -6886,8 +6959,23 @@ fn set_projection_bitmap(snapshot: &mut ProjectionSnapshot, key: BitmapKey, bitm
 fn publish_delta(
     projections: &ProjectionStore,
     publication: &PublicationCoordinator,
-    delta: PublishedDelta,
+    mut delta: PublishedDelta,
 ) -> Option<HistoryEntry> {
+    // Only known auxiliary-only publications can preserve SQL-derived results.
+    // Unknown resources and item changes conservatively invalidate them.
+    if !delta.receipt.item_ids.is_empty()
+        || delta.receipt.resources.iter().any(|resource| {
+            !matches!(
+                resource.as_str(),
+                "settings" | "tasks" | "subscriptions" | "duplicates"
+            )
+        })
+    {
+        delta
+            .snapshot
+            .query_versions
+            .invalidate_sql(delta.snapshot.revision);
+    }
     projections.publish(delta.snapshot);
     publication.register(&delta.receipt);
     delta.history

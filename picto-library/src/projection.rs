@@ -339,6 +339,7 @@ impl NumericShard {
 #[derive(Debug, Clone)]
 pub struct ProjectionSnapshot {
     pub revision: u64,
+    pub(crate) query_versions: crate::query_dependencies::QueryVersions,
     pub lifecycle: Arc<HashMap<Lifecycle, SharedBitmap>>,
     pub ratings: Arc<HashMap<Rating, SharedBitmap>>,
     pub tags: Arc<HashMap<TagId, SharedBitmap>>,
@@ -519,7 +520,9 @@ impl ProjectionStore {
         self.snapshot.load_full()
     }
 
-    pub fn publish(&self, snapshot: ProjectionSnapshot) {
+    pub(crate) fn publish(&self, mut snapshot: ProjectionSnapshot) {
+        snapshot.query_versions =
+            crate::query_dependencies::QueryVersions::advance(&self.snapshot.load(), &snapshot);
         self.snapshot.store(Arc::new(snapshot));
     }
 }
@@ -820,6 +823,7 @@ fn load(
 
     let mut snapshot = ProjectionSnapshot {
         revision,
+        query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: Arc::new(lifecycle),
         ratings: Arc::new(ratings),
         tags: Arc::new(tags),

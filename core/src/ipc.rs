@@ -33,6 +33,25 @@ pub fn dispatch_library(
     args_json: &str,
 ) -> Result<Option<String>, String> {
     let output = match command {
+        "items.window" => {
+            #[derive(Deserialize)]
+            struct Input {
+                query: picto_library::query::RootQuery,
+                window: picto_library::query::WindowRequest,
+                request: Option<picto_library::query_request::QueryRequest>,
+            }
+            let input: Input = parse(args_json)?;
+            read(application.query_window(&input.query, &input.window, input.request.as_ref())?)
+        }
+        "items.supersede_window" => {
+            let input: picto_library::query_request::QueryRequest = parse(args_json)?;
+            read(
+                application
+                    .library()
+                    .supersede_window(&input)
+                    .map_err(|error| error.to_string())?,
+            )
+        }
         "items.query" => {
             let input: QueryItemsInput = parse(args_json)?;
             read(application.query(&input.query, input.page)?)

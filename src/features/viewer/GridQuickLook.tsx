@@ -10,31 +10,33 @@ interface GridQuickLookProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   totalCount?: number | null;
+  windowStart?: number;
   recordItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
-  onLoadMore?: () => void;
 }
 
 export function GridQuickLook(props: GridQuickLookProps) {
-  const [displayedIndex, setDisplayedIndex] = useState(props.currentIndex);
+  const [displayedItem, setDisplayedItem] = useState(props.items[props.currentIndex] ?? null);
+  const retainedIndex = props.items.findIndex(item => item.root_id === displayedItem?.root_id);
+  const displayedIndex = retainedIndex >= 0 ? retainedIndex : props.currentIndex;
   const [decodedThumbnailItemId, setDecodedThumbnailItemId] = useState<number | null>(null);
   const [decodedThumbnailUrl, setDecodedThumbnailUrl] = useState<string | null>(null);
-  const currentItem = props.items[displayedIndex] ?? null;
+  const currentItem = retainedIndex >= 0 ? props.items[retainedIndex] : displayedItem;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
 
   useEffect(() => {
-    if (props.currentIndex === displayedIndex) return;
     const requestedItem = props.items[props.currentIndex] ?? null;
     if (!requestedItem) return;
+    if (requestedItem.root_id === displayedItem?.root_id) return;
 
     const isRequestedImage = requestedItem.kind !== 'collection'
       && detailRendererKind(requestedItem.mime) === 'image';
     if (!isRequestedImage) {
       setDecodedThumbnailItemId(null);
       setDecodedThumbnailUrl(null);
-      setDisplayedIndex(props.currentIndex);
+      setDisplayedItem(requestedItem);
       return;
     }
 
@@ -44,7 +46,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
       if (cancelled) return;
       setDecodedThumbnailItemId(requestedItem.root_id);
       setDecodedThumbnailUrl(url);
-      setDisplayedIndex(props.currentIndex);
+      setDisplayedItem(requestedItem);
     };
     const thumbnailUrl = mediaThumbnailUrl(requestedItem.content_hash);
     image.onload = () => {
@@ -69,7 +71,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
     };
     image.src = thumbnailUrl;
     return () => { cancelled = true; };
-  }, [displayedIndex, props.currentIndex, props.items]);
+  }, [displayedItem?.root_id, props.currentIndex, props.items]);
 
   if (!currentItem) return null;
 
@@ -77,17 +79,17 @@ export function GridQuickLook(props: GridQuickLookProps) {
   return (
     <QuickLookHost
       contentReady={currentItem.kind === 'collection' || mediaReady}
-      currentIndex={displayedIndex}
+      currentIndex={(props.windowStart ?? 0) + displayedIndex}
       totalCount={totalCount}
-      canPrevious={displayedIndex > 0}
-      canNext={displayedIndex < props.items.length - 1}
+      canPrevious={(props.windowStart ?? 0) + displayedIndex > 0}
+      canNext={(props.windowStart ?? 0) + displayedIndex < totalCount - 1}
       onNavigate={props.onNavigate}
       onClose={() => props.onClose(currentItem.root_id)}
     >
       {currentItem.kind === 'collection' ? (
         <GroupQuickLookContent
           groupId={currentItem.root_id}
-          currentIndex={displayedIndex}
+          currentIndex={(props.windowStart ?? 0) + displayedIndex}
           totalCount={totalCount}
           onNavigate={props.onNavigate}
           onClose={() => props.onClose(currentItem.root_id)}

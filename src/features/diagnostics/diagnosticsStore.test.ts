@@ -50,4 +50,14 @@ describe('diagnosticsStore', () => {
     expect(before).toHaveLength(1);
     expect(getDiagnosticsSnapshot()).toEqual([]);
   });
+
+  test('distinguishes normal grid supersession from read failures', () => {
+    recordIpcCall('items.window', 5, new Error('query superseded'));
+    recordIpcCall('items.window', 120, new Error('query superseded'));
+    recordIpcCall('items.window', 20, new Error('database error'));
+    expect(getDiagnosticsSnapshot()).toMatchObject([
+      { level: 'DEBUG', message: 'Superseded by a newer grid request', durationMs: 120 },
+      { level: 'ERROR', message: 'database error' },
+    ]);
+  });
 });

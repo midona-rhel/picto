@@ -22,6 +22,8 @@ pub mod predicate;
 pub mod projection;
 pub mod publication;
 pub mod query;
+mod query_dependencies;
+pub mod query_request;
 pub mod schema;
 pub mod selection;
 pub mod smart;

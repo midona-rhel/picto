@@ -1,38 +1,32 @@
-import { act, render, screen } from '@testing-library/react';
-import { getDefaultStore } from 'jotai';
-import { describe, expect, it } from 'vitest';
-import type { MenuCustom } from '../../shared/ui/ContextMenu/ContextMenu';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { createStore, Provider } from 'jotai';
+import { describe, expect, it, vi } from 'vitest';
 import { gridSessionAtom } from '../../state/grid';
-import { buildViewMenuEntries } from './GridViewMenu';
+import { gridController } from '../../controllers/gridController';
+import { buildContextMenuViewEntries, buildViewMenuEntries } from './GridViewMenu';
 
-const store = getDefaultStore();
+vi.mock('../../controllers/gridController', () => ({
+  gridController: { setSort: vi.fn(), updateView: vi.fn(), saveViewPref: vi.fn() },
+}));
 
-function displayPanel(): MenuCustom {
-  const display = buildViewMenuEntries().find(
-    (entry): entry is MenuCustom => 'custom' in entry && entry.key === 'display-toggles',
-  );
-  if (!display) throw new Error('Display panel is missing');
-  return display;
-}
+describe.each([
+  ['toolbar', buildViewMenuEntries],
+  ['context menu', buildContextMenuViewEntries],
+] as const)('%s sorting controls', (_label, buildEntries) => {
+  it('hides direction buttons for Random and restores them for an ordered sort', () => {
+    const store = createStore();
+    store.set(gridSessionAtom, (s) => ({ ...s, sort: { field: 'random', direction: 'descending', randomSeed: 'fixed' } }));
+    const entry = buildEntries()[0];
+    if (!('custom' in entry)) throw new Error('Missing view panel');
+    render(<Provider store={store}>{entry.render()}</Provider>);
+    expect(screen.queryByRole('button', { name: 'Ascending' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Descending' })).not.toBeInTheDocument();
+    expect(screen.getByText('Sort by')).toBeInTheDocument();
+    expect(store.get(gridSessionAtom).sort.randomSeed).toBe('fixed');
 
-describe('GridViewMenu', () => {
-  it('keeps transient grayscale out of persistent display preferences', () => {
-    render(displayPanel().render());
-
-    expect(screen.queryByText('Grayscale Preview')).not.toBeInTheDocument();
-    expect(screen.getByText('Compact')).toBeInTheDocument();
-  });
-
-  it('offers descendant media only in ordinary folder views', () => {
-    const initial = store.get(gridSessionAtom);
-    act(() => store.set(gridSessionAtom, { ...initial, scope: { kind: 'folder', folder_id: 7 } }));
-    const folder = render(displayPanel().render());
-    expect(screen.getByText('Show Subfolder Content')).toBeInTheDocument();
-    folder.unmount();
-
-    act(() => store.set(gridSessionAtom, { ...initial, scope: { kind: 'smart_folder', smart_folder_id: 9 } }));
-    render(displayPanel().render());
-    expect(screen.queryByText('Show Subfolder Content')).not.toBeInTheDocument();
-    act(() => store.set(gridSessionAtom, initial));
+    act(() => store.set(gridSessionAtom, (s) => ({ ...s, sort: { field: 'name', direction: 'descending' } })));
+    expect(screen.getByRole('button', { name: 'Descending' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ascending' }));
+    expect(gridController.setSort).toHaveBeenLastCalledWith('name', 'ascending');
   });
 });

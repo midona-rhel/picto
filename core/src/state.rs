@@ -200,15 +200,16 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         "items.query" | "items.mime_facets" | "sidebar.counts"
     )
     .then(|| format!("{command}\0{args_json}"));
-    let revision_before = state
-        .application
-        .library()
-        .database()
-        .revision()
+    // Commands without a serialized-response cache already capture their own
+    // consistent snapshot. Cancellation must not wait for a database reader.
+    let revision_before = cache_key
+        .as_ref()
+        .map(|_| state.application.library().database().revision())
+        .transpose()
         .map_err(|error| error.to_string())?;
     if let Some(cache_key) = cache_key.as_ref() {
         if let Some((revision, result)) = state.read_cache.lock().get(cache_key) {
-            if *revision == revision_before {
+            if Some(*revision) == revision_before {
                 return Ok(result.clone());
             }
         }
@@ -224,7 +225,7 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
             .database()
             .revision()
             .map_err(|error| error.to_string())?;
-        if revision_before == revision_after {
+        if revision_before == Some(revision_after) {
             state
                 .read_cache
                 .lock()

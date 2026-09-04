@@ -36,6 +36,7 @@ export interface MediaViewProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   totalCount?: number | null;
+  windowStart?: number;
   backLabel?: string;
   /** Root recorded as recently viewed. Use null for no history write. */
   recordItemId?: number | null;
@@ -43,13 +44,12 @@ export interface MediaViewProps {
   ratingItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
-  onLoadMore?: () => void;
 }
 
 const NAV_SIZE = 120;
 
 export function MediaView({
-  items, currentIndex, totalCount, backLabel, recordItemId, ratingItemId, onNavigate, onClose, onLoadMore,
+  items, currentIndex, totalCount, windowStart = 0, backLabel, recordItemId, ratingItemId, onNavigate, onClose,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
@@ -152,28 +152,27 @@ export function MediaView({
   const boundaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const navigate = useCallback((delta: number) => {
-    const nextIdx = currentIndex + delta;
-    if (nextIdx < 0 || nextIdx >= items.length) {
+    const nextIdx = windowStart + currentIndex + delta;
+    if (nextIdx < 0 || nextIdx >= total) {
       setBoundaryFlash(nextIdx < 0 ? 'left' : 'right');
       if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current);
       boundaryTimerRef.current = setTimeout(() => setBoundaryFlash(null), 800);
-      if (nextIdx >= items.length && onLoadMore) onLoadMore();
       return;
     }
     setBoundaryFlash(null);
     onNavigate(delta);
-  }, [currentIndex, items.length, onNavigate, onLoadMore]);
+  }, [currentIndex, windowStart, total, onNavigate]);
 
   // ── Toolbar state ──
   const zoomPercent = Math.round(zoom.state.scale * 100);
 
   useEffect(() => {
     setDisplayState({
-      currentIndex,
+      currentIndex: windowStart + currentIndex,
       total,
       zoomPercent: usesRendererZoom ? pdfZoomPercent : isImage ? zoomPercent : undefined,
     });
-  }, [currentIndex, isImage, pdfZoomPercent, total, usesRendererZoom, zoomPercent, setDisplayState]);
+  }, [currentIndex, windowStart, isImage, pdfZoomPercent, total, usesRendererZoom, zoomPercent, setDisplayState]);
 
   // Zoom % updates only on committed state (after 96ms debounce).
   // Live per-frame updates removed — settle-only is sufficient.

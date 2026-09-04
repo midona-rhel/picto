@@ -31,6 +31,12 @@ function bitmap(width = 100, height = 100): ImageBitmap {
   return { width, height, close: vi.fn() } as unknown as ImageBitmap;
 }
 
+function activate(pipeline: ThumbnailPipeline, ...hashes: string[]): void {
+  pipeline.updatePlan(hashes.map(fileHash => ({
+    fileHash, mime: 'image/png', w: 200, h: 200, cy: 100, inViewport: true,
+  })), 100, 1, 0);
+}
+
 describe('ThumbnailPipeline viewport admission', () => {
   beforeEach(() => {
     deliverBitmap = null;
@@ -162,6 +168,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     );
     const first = bitmap(2000, 1500);
     const second = bitmap(1800, 2400);
+    activate(pipeline, 'first', 'second');
 
     deliverBitmap?.('first', first, 'full');
     deliverBitmap?.('second', second, 'full');
@@ -179,6 +186,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     frames.shift()?.(16);
     expect(pipeline.get('second')?.thumb).toBe(second);
     expect(onDirty).toHaveBeenCalledTimes(2);
+    pipeline.destroy();
   });
 
   it('preserves the browser receiver when scheduling full-resolution admission', () => {
@@ -199,6 +207,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
       expect(handle).toBe(17);
     });
     const pipeline = new ThumbnailPipeline();
+    activate(pipeline, 'receiver');
 
     expect(() => deliverBitmap?.('receiver', bitmap(1600, 1200), 'full')).not.toThrow();
     expect(frames).toHaveLength(1);
@@ -213,6 +222,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
   it('keeps a usable thumbnail when a full-resolution replacement fails', () => {
     const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn());
     const thumbnail = bitmap(512, 512);
+    activate(pipeline, 'item');
 
     deliverBitmap?.('item', thumbnail, 'thumbnail');
     expect(pipeline.get('item')?.thumb).toBe(thumbnail);
@@ -220,6 +230,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     deliverError?.('item', 'full');
     expect(pipeline.get('item')?.thumb).toBe(thumbnail);
     expect(pipeline.get('item')?.state).toBe('shown');
+    pipeline.destroy();
   });
 
   it('closes queued full-resolution bitmaps during teardown', () => {
@@ -232,6 +243,7 @@ describe('ThumbnailPipeline full-resolution admission', () => {
       cancelFrame,
     );
     const queued = bitmap(3000, 2000);
+    activate(pipeline, 'queued');
 
     deliverBitmap?.('queued', queued, 'full');
     pipeline.destroy();
@@ -254,5 +266,22 @@ describe('ThumbnailPipeline full-resolution admission', () => {
     pipeline.invalidate('visible');
     expect(invalidated).toEqual(['visible']);
     expect(onDirty).toHaveBeenCalledOnce();
+    pipeline.destroy();
+  });
+
+  it('removes evicted metadata and closes late bitmaps from old windows', () => {
+    const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    activate(pipeline, 'old');
+    const old = bitmap();
+    deliverBitmap?.('old', old, 'thumbnail');
+    activate(pipeline, 'new');
+    pipeline.evictOutsideActive(new Set(['new']));
+    expect(old.close).toHaveBeenCalledOnce();
+    expect(pipeline.get('old')).toBeNull();
+    const late = bitmap();
+    deliverBitmap?.('old', late, 'thumbnail');
+    expect(late.close).toHaveBeenCalledOnce();
+    expect(pipeline.get('old')).toBeNull();
+    pipeline.destroy();
   });
 });

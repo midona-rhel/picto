@@ -15,9 +15,11 @@ import {
 } from '../../state/navigation';
 import {
   gridItemsAtom,
+  gridQueryHeadItemsAtom,
   gridLoadingAtom,
   gridErrorAtom,
-  gridCursorAtom,
+  gridSessionAtom,
+  gridWindowStartAtom,
   gridViewModeAtom,
   gridTargetSizeAtom,
   gridShowNameAtom,
@@ -132,9 +134,10 @@ export function GridScreen({
   const controlPreferences = useAtomValue(controlPreferencesAtom);
   const displayedNodeId = nodeId ?? activeNodeId;
   const items = useAtomValue(gridItemsAtom);
+  const queryHeadItems = useAtomValue(gridQueryHeadItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
   const error = useAtomValue(gridErrorAtom);
-  const cursor = useAtomValue(gridCursorAtom);
+  const windowStart = useAtomValue(gridWindowStartAtom);
   const viewMode = useAtomValue(gridViewModeAtom);
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const showName = useAtomValue(gridShowNameAtom);
@@ -328,7 +331,7 @@ export function GridScreen({
       displayedNodeIdRef.current = displayedNodeId;
       setDisplayedGridSnapshot({
         nodeId: displayedNodeId,
-        previewItems: items.slice(0, 4),
+        previewItems: queryHeadItems,
         totalCount,
         totalSizeBytes,
         searchText: searchText.trim(),
@@ -358,6 +361,7 @@ export function GridScreen({
     displayedNodeId,
     filters,
     items,
+    queryHeadItems,
     liveTarget,
     searchText,
     setDisplayedGridSnapshot,
@@ -462,7 +466,7 @@ export function GridScreen({
   viewerSessionRef.current = viewerSession;
   const quickLookSessionRef = useRef(quickLookSession);
   quickLookSessionRef.current = quickLookSession;
-  const pendingDetailNavigationRef = useRef<number | null>(null);
+  const rootNavigationRequestRef = useRef(0);
   const gridScopeRef = useRef(gridScope);
   gridScopeRef.current = gridScope;
 
@@ -765,74 +769,60 @@ export function GridScreen({
     );
   }, []);
 
-  const navigateQuickLook = useCallback((delta: number) => {
+  const resolveRootNeighbor = useCallback(async (session: NonNullable<typeof viewerSession>, delta: number) => {
+    const current = store.get(gridSessionAtom);
+    const index = current.items.findIndex(item => item.root_id === session.currentItemId);
+    if (index < 0) return null;
+    const destination = current.windowStart + index + delta;
+    if (destination < 0 || destination >= (current.totalCount ?? 0)) return null;
+    if (index + delta < 0 || index + delta >= current.items.length) {
+      await gridController.requestWindowAt(destination);
+    }
+    const loaded = store.get(gridSessionAtom);
+    const next = navigateViewerSession(session, loaded.items, delta);
+    const item = next && loaded.items.find(item => item.root_id === next.currentItemId);
+    return next && item ? { next, item, items: loaded.items } : null;
+  }, []);
+
+  const navigateQuickLook = useCallback(async (delta: number) => {
     if (!quickLookSession) return;
-    const next = navigateViewerSession(quickLookSession, items, delta);
-    if (!next) return;
-    const nextItem = items.find((item) => item.root_id === next.currentItemId);
-    if (!nextItem) return;
+    const request = ++rootNavigationRequestRef.current;
+    const resolved = await resolveRootNeighbor(quickLookSession, delta);
+    if (!resolved || request !== rootNavigationRequestRef.current || quickLookSessionRef.current?.currentItemId !== quickLookSession.currentItemId) return;
+    const { next, item: nextItem, items: loadedItems } = resolved;
     afterViewerItemReady(nextItem, () => {
+      if (request !== rootNavigationRequestRef.current || !quickLookSessionRef.current) return;
       setQuickLookSession(next);
       dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
-      const index = items.findIndex((item) => item.root_id === next.currentItemId);
+      const index = loadedItems.findIndex((item) => item.root_id === next.currentItemId);
       if (index >= 0) scrollToItem(index, 'center');
     });
-  }, [afterViewerItemReady, dispatchSelection, items, quickLookSession, scrollToItem, setQuickLookSession]);
+  }, [afterViewerItemReady, dispatchSelection, quickLookSession, resolveRootNeighbor, scrollToItem, setQuickLookSession]);
 
   const closeQuickLook = useCallback((exitItemId?: number) => {
+    rootNavigationRequestRef.current++;
     setQuickLookSession(null);
     if (exitItemId == null) return;
     dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
     scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setQuickLookSession]);
 
-  const navigateRootDetail = useCallback((delta: number) => {
+  const navigateRootDetail = useCallback(async (delta: number) => {
     if (!viewerSession) return;
-    const next = navigateViewerSession(viewerSession, items, delta);
-    if (!next) {
-      if (delta > 0 && cursor && pendingDetailNavigationRef.current == null) {
-        const anchorItemId = viewerSession.currentItemId;
-        pendingDetailNavigationRef.current = anchorItemId;
-        void gridController.loadNextPage().catch(() => {
-          pendingDetailNavigationRef.current = null;
-        });
-      }
-      return;
-    }
-    const nextItem = items.find((item) => item.root_id === next.currentItemId);
-    if (!nextItem) return;
+    const request = ++rootNavigationRequestRef.current;
+    const resolved = await resolveRootNeighbor(viewerSession, delta);
+    if (!resolved || request !== rootNavigationRequestRef.current || viewerSessionRef.current?.currentItemId !== viewerSession.currentItemId) return;
+    const { next, item: nextItem } = resolved;
     afterViewerItemReady(nextItem, () => {
-      pendingDetailNavigationRef.current = null;
+      if (request !== rootNavigationRequestRef.current || !viewerSessionRef.current) return;
       setGroupInitialMode('reader');
       setViewerSession(next);
       dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
     });
-  }, [afterViewerItemReady, cursor, dispatchSelection, items, setViewerSession, viewerSession]);
-
-  useEffect(() => {
-    const anchorItemId = pendingDetailNavigationRef.current;
-    if (anchorItemId == null || !viewerSession || viewerSession.currentItemId !== anchorItemId) return;
-    const loadedNext = navigateViewerSession(viewerSession, items, 1);
-    if (!loadedNext) {
-      if (!cursor) pendingDetailNavigationRef.current = null;
-      return;
-    }
-    const nextItem = items.find((item) => item.root_id === loadedNext.currentItemId);
-    if (!nextItem) return;
-    afterViewerItemReady(nextItem, () => {
-      pendingDetailNavigationRef.current = null;
-      setGroupInitialMode('reader');
-      setViewerSession(loadedNext);
-      dispatchSelection({
-        type: 'replace_items',
-        itemIds: new Set([loadedNext.currentItemId]),
-        anchor: loadedNext.currentItemId,
-      });
-    });
-  }, [afterViewerItemReady, cursor, dispatchSelection, items, setViewerSession, viewerSession]);
+  }, [afterViewerItemReady, dispatchSelection, resolveRootNeighbor, setViewerSession, viewerSession]);
 
   const closeRootDetail = useCallback((exitItemId?: number) => {
-    pendingDetailNavigationRef.current = null;
+    rootNavigationRequestRef.current++;
     setViewerSession(null);
     setGroupInitialMode('reader');
     if (exitItemId == null) return;
@@ -1245,10 +1235,13 @@ export function GridScreen({
         fitThumbnails={fitThumbnails}
         grayscale={grayscale}
         totalCount={totalCount}
+        windowStart={windowStart}
+        onRequestWindow={(index) => { void gridController.requestWindowAt(index); }}
+        onScrollActivity={() => gridController.cancelWindowRequest()}
         interactive={!viewerSession && !quickLookSession}
         selectedItemIds={selectedItemIds}
         selectedFolderNodeIds={selectedSubfolderNodeIds}
-        initialScrollPosition={initialScrollPosition}
+        initialScrollPosition={loading ? null : initialScrollPosition}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
         renamingIndex={renamingIndex}
@@ -1597,7 +1590,6 @@ export function GridScreen({
           }
         }}
         onEmptyContextMenu={(pos) => { void openEmptyGridContextMenu(pos); }}
-        onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
       />
     );
   };
@@ -1614,7 +1606,7 @@ export function GridScreen({
           groupId={viewerItem.root_id}
           initialMode={groupInitialMode}
           breadcrumbParent={collectionBreadcrumbParent}
-          rootCurrentIndex={viewerIndex}
+          rootCurrentIndex={windowStart + viewerIndex}
           rootTotal={totalCount ?? items.length}
           onNavigateRoot={navigateRootDetail}
           onClose={() => closeRootDetail(viewerItem.root_id)}
@@ -1634,11 +1626,11 @@ export function GridScreen({
         <MediaView
           items={items}
           currentIndex={viewerIndex}
+          windowStart={windowStart}
           totalCount={totalCount}
           recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateRootDetail}
           onClose={closeRootDetail}
-          onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}
 
@@ -1646,11 +1638,11 @@ export function GridScreen({
         <GridQuickLook
           items={items}
           currentIndex={quickLookIndex}
+          windowStart={windowStart}
           totalCount={totalCount}
           recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateQuickLook}
           onClose={closeQuickLook}
-          onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       ) : null}
 

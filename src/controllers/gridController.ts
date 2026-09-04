@@ -1,7 +1,7 @@
 /** Single command owner for the canonical grid session. */
 
 import { getDefaultStore } from 'jotai';
-import { queryItems } from '../platform/entityApi';
+import { queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
@@ -30,6 +30,7 @@ import {
 
 const store = getDefaultStore();
 const PAGE_SIZE = 500;
+export const GRID_WINDOW_SIZE = 1500;
 const SEARCH_DEBOUNCE_MS = 250;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
 
@@ -168,6 +169,11 @@ class GridSessionController {
   private scopeKey = '';
   private navigationRequest = 0;
   private queryVersion = 0;
+  private windowRequest = 0;
+  private readonly windowChannel = crypto.randomUUID();
+  private windowLoad: Promise<void> | null = null;
+  private queuedWindow: { start: number; generation: number; request: number } | null = null;
+  private activeWindow: { start: number; generation: number; request: number } | null = null;
 
   async navigateTo(scope: BaseScope, options?: { filters?: QueryFilters; sort?: ItemSort }): Promise<void> {
     const request = ++this.navigationRequest;
@@ -181,6 +187,7 @@ class GridSessionController {
     scope: BaseScope,
     options?: { filters?: QueryFilters; sort?: ItemSort },
   ): Promise<PreparedGridNavigation> {
+    this.cancelWindowRequest();
     this.cancelSearch();
     const queryVersion = ++this.queryVersion;
     const current = store.get(gridSessionAtom);
@@ -202,7 +209,8 @@ class GridSessionController {
       } : preferred.sort,
       view: preferred.view,
       items: [],
-      cursor: null,
+      queryHeadItems: [],
+      windowStart: 0,
       totalCount: null,
       totalSizeBytes: null,
       revision: current.revision,
@@ -223,7 +231,8 @@ class GridSessionController {
         session: {
           ...session,
           items: result.items,
-          cursor: result.next_cursor,
+          queryHeadItems: result.items.slice(0, 4),
+          windowStart: result.start,
           totalCount: result.total,
           totalSizeBytes: result.total_size_bytes,
           revision: result.revision,
@@ -251,6 +260,7 @@ class GridSessionController {
   }
 
   deactivate(): void {
+    this.cancelWindowRequest();
     this.queryVersion += 1;
     this.cancelSearch();
     store.set(clearSelectionAtom);
@@ -324,6 +334,7 @@ class GridSessionController {
   }
 
   async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
+    this.cancelWindowRequest();
     const queryVersion = this.queryVersion;
     const generation = options?.generation ?? store.get(gridSessionAtom).generation + 1;
     updateSession((current) => ({
@@ -332,7 +343,8 @@ class GridSessionController {
       status: 'loading',
       error: null,
       items: options?.preserveItems ? current.items : [],
-      cursor: null,
+      queryHeadItems: [],
+      windowStart: options?.preserveItems ? current.windowStart : 0,
       totalCount: options?.preserveItems ? current.totalCount : null,
     }));
     try {
@@ -345,7 +357,8 @@ class GridSessionController {
       const current = store.get(gridSessionAtom);
       updateSession({
         items: reuseStablePageItems(current.items, result.items),
-        cursor: result.next_cursor,
+        queryHeadItems: result.items.slice(0, 4),
+        windowStart: result.start,
         totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
         revision: result.revision,
@@ -357,35 +370,68 @@ class GridSessionController {
     }
   }
 
-  async loadNextPage(): Promise<void> {
-    const before = store.get(gridSessionAtom);
-    if (before.cursor == null || before.status === 'appending' || before.status === 'loading') return;
-    const cursor = before.cursor;
-    const generation = before.generation;
-    updateSession({ status: 'appending', error: null });
-    try {
-      const result = await queryItems(store.get(currentGridQueryAtom), { cursor, limit: PAGE_SIZE });
-      const current = store.get(gridSessionAtom);
-      if (current.generation !== generation || current.cursor !== cursor) return;
-      if (result.revision !== current.revision
-        || result.revision < libraryInvalidation.latestRevision('library')) {
-        updateSession({ status: 'idle' });
-        await this.reconcile();
-        return;
+  /** Supersede an in-flight destination immediately when scrolling resumes. */
+  cancelWindowRequest(): void {
+    const needsCancellation = this.activeWindow?.request === this.windowRequest;
+    this.windowRequest++;
+    this.queuedWindow = null;
+    if (needsCancellation) this.supersedeNativeWindow();
+  }
+
+  private supersedeNativeWindow(): void {
+    void supersedeItemWindow({ channel: this.windowChannel, generation: this.windowRequest })
+      .catch(error => console.warn('Could not supersede grid query', error));
+  }
+
+  requestWindowAt(index: number): Promise<void> {
+    const current = store.get(gridSessionAtom);
+    if (!current.active || current.status === 'loading') return Promise.resolve();
+    const start = Math.max(0, Math.min(
+      Math.floor((index - PAGE_SIZE) / PAGE_SIZE) * PAGE_SIZE,
+      Math.max(0, (current.totalCount ?? 0) - GRID_WINDOW_SIZE),
+    ));
+    if (start === current.windowStart && current.items.length >= Math.min(GRID_WINDOW_SIZE, current.totalCount ?? 0)) {
+      this.cancelWindowRequest();
+      return Promise.resolve();
+    }
+    const pending = this.queuedWindow ?? this.activeWindow;
+    if (pending?.start === start && pending.generation === current.generation && pending.request === this.windowRequest) return this.windowLoad ?? Promise.resolve();
+    const needsCancellation = this.activeWindow?.request === this.windowRequest;
+    this.queuedWindow = { start, generation: current.generation, request: ++this.windowRequest };
+    if (needsCancellation) this.supersedeNativeWindow();
+    this.windowLoad ??= this.drainWindows().finally(() => { this.windowLoad = null; });
+    return this.windowLoad;
+  }
+
+  private async drainWindows(): Promise<void> {
+    while (this.queuedWindow) {
+      const destination = this.queuedWindow;
+      this.activeWindow = destination;
+      this.queuedWindow = null;
+      updateSession({ status: 'appending', error: null });
+      try {
+        const result = await queryItemWindow(store.get(currentGridQueryAtom), { start: destination.start, limit: GRID_WINDOW_SIZE }, {
+          channel: this.windowChannel, generation: destination.request,
+        });
+        const current = store.get(gridSessionAtom);
+        if (current.generation !== destination.generation || destination.request !== this.windowRequest || !current.active) continue;
+        if (result.revision < libraryInvalidation.latestRevision('library')) {
+          this.queuedWindow = { ...destination, request: ++this.windowRequest };
+          continue;
+        }
+        updateSession({
+          items: reuseStablePageItems(current.items, result.items), windowStart: result.start,
+          totalCount: result.total, totalSizeBytes: result.total_size_bytes,
+          revision: result.revision, status: 'idle', error: null,
+        });
+      } catch (error) {
+        if (store.get(gridSessionAtom).generation === destination.generation && destination.request === this.windowRequest) {
+          updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
+        }
+      } finally {
+        this.activeWindow = null;
+        if (store.get(gridSessionAtom).generation === destination.generation && store.get(gridSessionAtom).status === 'appending') updateSession({ status: 'idle' });
       }
-      const items = [...current.items, ...result.items];
-      const totalCount = current.totalCount ?? result.total;
-      updateSession({
-        items,
-        cursor: result.next_cursor,
-        totalCount,
-        totalSizeBytes: current.totalSizeBytes ?? result.total_size_bytes,
-        revision: result.revision,
-        status: 'idle',
-      });
-    } catch (error) {
-      if (store.get(gridSessionAtom).generation !== generation) return;
-      updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -397,13 +443,15 @@ class GridSessionController {
 
     try {
       const query = store.get(currentGridQueryAtom);
-      const result = await this.queryFirstPageUntilCurrent(
-        query,
-        () => queryVersion === this.queryVersion
-          && store.get(gridSessionAtom).generation === generation
-          && store.get(gridSessionAtom).active,
-      );
-      if (result == null) return false;
+      this.cancelWindowRequest();
+      const request = this.windowRequest;
+      const [result, head] = await Promise.all([
+        queryItemWindow(query, { start: before.windowStart, limit: Math.min(GRID_WINDOW_SIZE, Math.max(PAGE_SIZE, before.items.length)) }),
+        before.windowStart === 0 ? Promise.resolve(null) : queryItemWindow(query, { start: 0, limit: 4 }),
+      ]);
+      if (queryVersion !== this.queryVersion || request !== this.windowRequest) return false;
+      if (result.revision < libraryInvalidation.latestRevision('library')
+        || (head != null && head.revision < libraryInvalidation.latestRevision('library'))) return this.reconcile();
       const current = store.get(gridSessionAtom);
       if (current.generation !== generation || !current.active) return false;
       const previousById = new Map(current.items.map((item) => [item.root_id, item]));
@@ -411,40 +459,13 @@ class GridSessionController {
         const previous = previousById.get(item.root_id);
         return previous != null && itemSummaryEqual(previous, item) ? previous : item;
       });
-      const desiredLength = current.cursor == null
-        ? result.total
-        : Math.min(current.items.length, result.total);
-      let nextCursor = result.next_cursor;
-      let resultRevision = result.revision;
-      while (items.length < desiredLength && nextCursor != null) {
-        const remaining = desiredLength - items.length;
-        const append = await queryItems(query, {
-          cursor: nextCursor,
-          limit: Math.min(PAGE_SIZE, desiredLength - items.length),
-        });
-        if (store.get(gridSessionAtom).generation !== generation) return false;
-        if (append.revision !== resultRevision
-          || append.revision < libraryInvalidation.latestRevision('library')) {
-          return this.reconcile();
-        }
-        const knownIds = new Set(items.map((item) => item.root_id));
-        for (const item of append.items) {
-          if (knownIds.has(item.root_id)) continue;
-          const previous = previousById.get(item.root_id);
-          items.push(previous != null && itemSummaryEqual(previous, item) ? previous : item);
-          knownIds.add(item.root_id);
-        }
-        nextCursor = append.next_cursor;
-        resultRevision = Math.max(resultRevision, append.revision);
-        if (append.items.length === 0 || remaining === desiredLength - items.length) break;
-      }
-      items.length = Math.min(items.length, desiredLength);
       updateSession({
         items,
-        cursor: items.length < result.total ? nextCursor : null,
+        queryHeadItems: (head?.items ?? result.items).slice(0, 4),
+        windowStart: result.start,
         totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
-        revision: resultRevision,
+        revision: result.revision,
         error: null,
       });
       return true;
@@ -510,7 +531,7 @@ class GridSessionController {
     isCurrent: () => boolean,
   ) {
     while (isCurrent()) {
-      const result = await queryItems(query, { cursor: null, limit: PAGE_SIZE });
+      const result = await queryItemWindow(query, { start: 0, limit: PAGE_SIZE });
       if (!isCurrent()) return null;
       if (result.revision >= libraryInvalidation.latestRevision('library')) return result;
     }

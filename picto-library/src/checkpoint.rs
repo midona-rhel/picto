@@ -123,6 +123,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         .collect::<Result<_>>()?;
     Ok(ProjectionSnapshot {
         revision,
+        query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: std::sync::Arc::new(data.lifecycle),
         ratings: std::sync::Arc::new(data.ratings),
         tags: std::sync::Arc::new(data.tags),

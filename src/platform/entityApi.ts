@@ -20,6 +20,16 @@ export function queryItems(query: EntityViewQuery, page: QueryPage): Promise<Ent
   return invoke<EntityViewPage>('items.query', { query, page });
 }
 
+export interface QueryRequest { channel: string; generation: number }
+
+export function queryItemWindow(query: EntityViewQuery, window: { start: number; limit: number }, request?: QueryRequest): Promise<EntityViewPage & { start: number }> {
+  return invoke('items.window', { query, window, request });
+}
+
+export function supersedeItemWindow(request: QueryRequest): Promise<void> {
+  return invoke('items.supersede_window', { ...request });
+}
+
 export function queryMimeFacets(query: EntityViewQuery): Promise<MimeFacets> {
   return invoke<MimeFacets>('items.mime_facets', { query });
 }

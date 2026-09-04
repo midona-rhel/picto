@@ -187,6 +187,17 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn query_window(
+        &self,
+        query: &picto_library::query::RootQuery,
+        window: &picto_library::query::WindowRequest,
+        request: Option<&picto_library::query_request::QueryRequest>,
+    ) -> Result<picto_library::query::RootWindow, String> {
+        self.library
+            .query_window_requested(query, window, request)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn details(&self, root_id: RootId) -> Result<picto_library::RootDetails, String> {
         self.library
             .details(root_id)

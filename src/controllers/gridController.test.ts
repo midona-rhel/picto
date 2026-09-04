@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalEntityGridItem, EntityViewPage, EntityViewQuery } from '../shared/types/canonical';
 import {
   currentGridQueryAtom,
-  gridCursorAtom,
   gridErrorAtom,
   gridItemsAtom,
+  gridQueryHeadItemsAtom,
   gridLoadingAtom,
   gridShowSubfoldersAtom,
   gridSpacingAtom,
@@ -21,13 +21,14 @@ import {
   selectAllResultsAtom,
 } from '../state/selection';
 
-const { queryItemsMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
+const { queryItemsMock, supersedeWindowMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
   queryItemsMock: vi.fn(),
+  supersedeWindowMock: vi.fn().mockResolvedValue(undefined),
   getViewPrefsMock: vi.fn(),
   revisionState: { library: -Infinity },
 }));
 
-vi.mock('../platform/entityApi', () => ({ queryItems: queryItemsMock }));
+vi.mock('../platform/entityApi', () => ({ queryItemWindow: queryItemsMock, supersedeItemWindow: supersedeWindowMock }));
 vi.mock('../platform/settingsApi', () => ({
   GRID_DEFAULTS_SCOPE: 'grid:defaults',
   getViewPrefs: getViewPrefsMock,
@@ -72,25 +73,15 @@ function page(
   nextCursor: string | null = items.length < visibleCount
     ? `cursor-after-${items[items.length - 1]?.root_id ?? 0}`
     : null,
-): EntityViewPage {
+): EntityViewPage & { start: number } {
   return {
+    start: 0,
     items,
     next_cursor: nextCursor,
     revision: 1,
     total: visibleCount,
     media_count: visibleCount,
     total_size_bytes: visibleCount * 100,
-  };
-}
-
-function appendPage(items: CanonicalEntityGridItem[], nextCursor: string | null = null): EntityViewPage {
-  return {
-    items,
-    next_cursor: nextCursor,
-    revision: 1,
-    total: items.length,
-    media_count: items.length,
-    total_size_bytes: items.length * 100,
   };
 }
 
@@ -113,7 +104,8 @@ describe('gridController pagination', () => {
       scope: { kind: 'all' },
       sort: { field: 'imported_at', direction: 'descending' },
       items: [item(1)],
-      cursor: 'cursor-after-1',
+      queryHeadItems: [item(1)],
+      windowStart: 0,
       totalCount: 2,
       totalSizeBytes: 200,
       revision: 1,
@@ -319,63 +311,90 @@ describe('gridController pagination', () => {
     });
   });
 
-  it('queries the replacement page contract and appends by item_id', async () => {
-    queryItemsMock.mockResolvedValueOnce(appendPage([item(2)]));
+  it('replaces the loaded window with a bounded exact ordinal request', async () => {
+    queryItemsMock.mockResolvedValueOnce(page([item(1), item(2)], 2));
 
-    await gridController.loadNextPage();
+    await gridController.requestWindowAt(1);
 
     expect(queryItemsMock).toHaveBeenCalledTimes(1);
-    expect(queryItemsMock.mock.calls[0][1]).toEqual({ cursor: 'cursor-after-1', limit: 500 });
+    expect(queryItemsMock.mock.calls[0][1]).toEqual({ start: 0, limit: 1500 });
     expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2]);
-    expect(store.get(gridCursorAtom)).toBeNull();
     expect(store.get(gridTotalCountAtom)).toBe(2);
     expect(store.get(gridTotalSizeBytesAtom)).toBe(200);
     expect(store.get(gridLoadingAtom)).toBe(false);
   });
 
-  it('uses one guarded append path for sequential pages', async () => {
-    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 3 });
+  it('jumps directly to the last window and then back without retaining the prefix', async () => {
+    const queryHead = [item(1), item(2), item(3), item(4)];
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      queryHeadItems: queryHead,
+      totalCount: 1_000_000,
+    });
+    const tail = Array.from({ length: 1500 }, (_, i) => item(998501 + i));
+    const head = Array.from({ length: 1500 }, (_, i) => item(1 + i));
     queryItemsMock
-      .mockResolvedValueOnce(appendPage([item(2)], 'cursor-after-2'))
-      .mockResolvedValueOnce(appendPage([item(3)]));
+      .mockResolvedValueOnce({ ...page(tail, 1_000_000), start: 998500 })
+      .mockResolvedValueOnce(page(head, 1_000_000));
 
-    await gridController.loadNextPage();
-    await gridController.loadNextPage();
+    await gridController.requestWindowAt(999999);
+    expect(store.get(gridItemsAtom)).toHaveLength(1500);
+    expect(store.get(gridSessionAtom).windowStart).toBe(998500);
+    expect(store.get(gridItemsAtom)[1499].root_id).toBe(1_000_000);
+    expect(store.get(gridQueryHeadItemsAtom)).toBe(queryHead);
+    await gridController.requestWindowAt(0);
 
     expect(queryItemsMock).toHaveBeenCalledTimes(2);
-    expect(queryItemsMock.mock.calls.map((call) => call[1].cursor)).toEqual([
-      'cursor-after-1',
-      'cursor-after-2',
+    expect(queryItemsMock.mock.calls.map((call) => call[1])).toEqual([
+      { start: 998500, limit: 1500 },
+      { start: 0, limit: 1500 },
     ]);
-    expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2, 3]);
+    expect(store.get(gridItemsAtom)).toHaveLength(1500);
+    expect(store.get(gridItemsAtom)[0].root_id).toBe(1);
     expect(store.get(gridErrorAtom)).toBeNull();
     expect(store.get(gridLoadingAtom)).toBe(false);
   });
 
-  it('deduplicates concurrent requests for the same cursor', async () => {
+  it('deduplicates concurrent requests for the same window', async () => {
     let resolvePage: ((value: EntityViewPage) => void) | undefined;
     queryItemsMock.mockImplementationOnce(() => new Promise<EntityViewPage>((resolve) => { resolvePage = resolve; }));
 
-    const first = gridController.loadNextPage();
-    const second = gridController.loadNextPage();
-    resolvePage?.(page([item(2)], 2));
+    const first = gridController.requestWindowAt(1);
+    const second = gridController.requestWindowAt(1);
+    resolvePage?.(page([item(1), item(2)], 2));
     await Promise.all([first, second]);
 
     expect(queryItemsMock).toHaveBeenCalledTimes(1);
     expect(store.get(gridItemsAtom).map((entry) => entry.root_id)).toEqual([1, 2]);
   });
 
-  it('keeps the cursor after an append failure so pagination can retry', async () => {
+  it('drops an obsolete result and requests only the latest queued destination', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 1_000_000 });
+    let finish: ((value: EntityViewPage & { start: number }) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce({ ...page([item(100001)], 1_000_000), start: 100000 });
+    const pending = gridController.requestWindowAt(999999);
+    gridController.cancelWindowRequest();
+    void gridController.requestWindowAt(500000);
+    const latest = gridController.requestWindowAt(100500);
+    finish?.({ ...page([item(999999)], 1_000_000), start: 998500 });
+    await Promise.all([pending, latest]);
+    expect(queryItemsMock.mock.calls.map(call => call[1].start)).toEqual([998500, 100000]);
+    expect(store.get(gridItemsAtom).map(entry => entry.root_id)).toEqual([100001]);
+  });
+
+  it('keeps the previous window after a failure so the destination can retry', async () => {
     queryItemsMock.mockRejectedValueOnce(new Error('page failed'));
 
-    await gridController.loadNextPage();
+    await gridController.requestWindowAt(1);
 
-    expect(store.get(gridCursorAtom)).toBe('cursor-after-1');
+    expect(store.get(gridSessionAtom).windowStart).toBe(0);
+    expect(store.get(gridItemsAtom).map(entry => entry.root_id)).toEqual([1]);
     expect(store.get(gridErrorAtom)).toBe('page failed');
     expect(store.get(gridLoadingAtom)).toBe(false);
 
     queryItemsMock.mockResolvedValueOnce(page([item(2)], 2));
-    await gridController.loadNextPage();
+    await gridController.requestWindowAt(1);
     expect(queryItemsMock).toHaveBeenCalledTimes(2);
   });
 
@@ -471,7 +490,7 @@ describe('gridController pagination', () => {
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       items: [first, second],
-      cursor: null,
+      windowStart: 0,
       totalCount: 2,
       generation: 4,
       status: 'idle',
@@ -488,7 +507,7 @@ describe('gridController pagination', () => {
     resolvePage?.(page([{ ...first }, { ...second }, item(3)], 3));
     await expect(reconcile).resolves.toBe(true);
     const after = store.get(gridSessionAtom);
-    expect(queryItemsMock.mock.calls[0][1]).toEqual({ cursor: null, limit: 500 });
+    expect(queryItemsMock.mock.calls[0][1]).toEqual({ start: 0, limit: 500 });
     expect(after.items).toHaveLength(3);
     expect(after.items[0]).toBe(first);
     expect(after.items[1]).toBe(second);
@@ -496,34 +515,44 @@ describe('gridController pagination', () => {
     expect(after.status).toBe('idle');
   });
 
-  it('preserves every already-loaded page while refreshing only the bounded first page', async () => {
+  it('refreshes the current ordinal window and the canonical four-item query head', async () => {
     const loaded = Array.from({ length: 750 }, (_, index) => item(index + 1));
+    const head = [item(9001), item(9002), item(9003), item(9004)];
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       items: loaded,
-      cursor: 'cursor-after-750',
-      totalCount: 900,
+      windowStart: 500000,
+      totalCount: 1_000_000,
     });
     queryItemsMock
-      .mockResolvedValueOnce(page(
-        loaded.slice(0, 500).map((entry) => ({ ...entry })),
-        900,
-        'cursor-after-500',
-      ))
-      .mockResolvedValueOnce(appendPage(
-        loaded.slice(500).map((entry) => ({ ...entry })),
-        'cursor-after-750',
-      ));
+      .mockResolvedValueOnce({ ...page(loaded.map(entry => ({ ...entry })), 1_000_000), start: 500000 })
+      .mockResolvedValueOnce(page(head, 1_000_000));
 
     await gridController.reconcile();
 
     expect(queryItemsMock.mock.calls.map((call) => call[1])).toEqual([
-      { cursor: null, limit: 500 },
-      { cursor: 'cursor-after-500', limit: 250 },
+      { start: 500000, limit: 750 },
+      { start: 0, limit: 4 },
     ]);
     expect(store.get(gridSessionAtom).items).toHaveLength(750);
     expect(store.get(gridSessionAtom).items[749]).toBe(loaded[749]);
-    expect(store.get(gridCursorAtom)).toBe('cursor-after-750');
+    expect(store.get(gridSessionAtom).windowStart).toBe(500000);
+    expect(store.get(gridQueryHeadItemsAtom).map((entry) => entry.root_id)).toEqual([9001, 9002, 9003, 9004]);
+  });
+
+  it('cancels obsolete backend work without showing its cancellation as an error', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 1_000_000 });
+    let cancel: ((reason: Error) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { cancel = reject; }))
+      .mockResolvedValueOnce({ ...page([item(100001)], 1_000_000), start: 100000 });
+    supersedeWindowMock.mockImplementationOnce(async () => { cancel?.(new Error('query superseded')); });
+    const first = gridController.requestWindowAt(999999);
+    const latest = gridController.requestWindowAt(100500);
+    await Promise.all([first, latest]);
+    expect(supersedeWindowMock).toHaveBeenCalled();
+    expect(queryItemsMock.mock.calls[queryItemsMock.mock.calls.length - 1][2].generation).toBeGreaterThan(queryItemsMock.mock.calls[0][2].generation);
+    expect(store.get(gridItemsAtom).map(entry => entry.root_id)).toEqual([100001]);
+    expect(store.get(gridErrorAtom)).toBeNull();
   });
 
   it('removes affected stale rows and fills a complete loaded window from the tail', async () => {
@@ -531,18 +560,15 @@ describe('gridController pagination', () => {
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       items: loaded,
-      cursor: null,
+      windowStart: 0,
       totalCount: 501,
     });
-    queryItemsMock
-      .mockResolvedValueOnce(page(loaded.slice(1, 501), 501, 'cursor-after-501'))
-      .mockResolvedValueOnce(appendPage([item(502)]));
+    queryItemsMock.mockResolvedValueOnce(page([...loaded.slice(1), item(502)], 501));
 
     await gridController.reconcile([1]);
 
     expect(queryItemsMock.mock.calls.map((call) => call[1])).toEqual([
-      { cursor: null, limit: 500 },
-      { cursor: 'cursor-after-501', limit: 1 },
+      { start: 0, limit: 501 },
     ]);
     expect(store.get(gridSessionAtom).items.map((entry) => entry.root_id)).not.toContain(1);
     const reconciled = store.get(gridSessionAtom).items;

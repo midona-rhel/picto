@@ -6,6 +6,7 @@ import { gridDrilldownAtom, gridSessionAtom, gridTransitionPhaseAtom, pendingGri
 import { viewerExitTransitionAtom, viewerSessionAtom } from '../../state/viewer';
 import { gridController } from '../../controllers/gridController';
 import { WorkspaceSurface } from './WorkspaceSurface';
+import { resetNavigationHistory, saveScrollPosition } from '../../state/navigationHistory';
 
 vi.mock('../../controllers/gridController', () => ({
   gridController: {
@@ -281,5 +282,28 @@ describe('workspace surface coordinator', () => {
 
     expect(store.get(gridTransitionPhaseAtom)).toBe('idle');
     expect(gridController.applyIntent).toHaveBeenCalledWith({ type: 'filter', filters });
+  });
+
+  it('hands an in-place history filter its destination scroll position', async () => {
+    const store = getDefaultStore();
+    const filters = {
+      ...store.get(gridSessionAtom).filters,
+      color_hex: '#FF2727',
+    };
+    resetNavigationHistory('system:active');
+    saveScrollPosition('system:active', { scrollTop: 24_000, progress: 0.4 });
+    store.set(activeNodeIdAtom, 'system:active');
+    store.set(displayedSurfaceNodeIdAtom, 'system:active');
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true, status: 'idle' });
+
+    render(<Provider store={store}><WorkspaceSurface /></Provider>);
+    await act(async () => store.set(pendingGridIntentAtom, {
+      type: 'filter',
+      filters,
+      restoreScroll: true,
+    }));
+
+    expect(screen.getByTestId('grid-screen')).toHaveAttribute('data-scroll-top', '24000');
+    expect(store.get(gridTransitionPhaseAtom)).toBe('idle');
   });
 });

@@ -241,7 +241,7 @@ export class ThumbnailPipeline {
         entry.bytes = 0;
         entry.quality = null;
       }
-      entry.state = 'idle';
+      this.cache.delete(hash);
     }
   }
 
@@ -278,7 +278,7 @@ export class ThumbnailPipeline {
   // ── Worker callbacks ────────────────────────────────────────────
 
   private handleBitmap(hash: string, bitmap: ImageBitmap, quality: ThumbnailDecodeQuality): void {
-    if (this.destroyed) { bitmap.close(); return; }
+    if (this.destroyed || !this.activeHashes.has(hash)) { bitmap.close(); return; }
 
     if (quality === 'full') {
       this.discardPendingFullBitmap(hash);
@@ -325,7 +325,7 @@ export class ThumbnailPipeline {
       if (!next) return;
       const [hash, bitmap] = next;
       this.pendingFullBitmaps.delete(hash);
-      if (this.destroyed) bitmap.close();
+      if (this.destroyed || !this.activeHashes.has(hash)) bitmap.close();
       else this.installBitmap(hash, bitmap, 'full');
       this.scheduleFullAdmission();
     });
@@ -347,6 +347,7 @@ export class ThumbnailPipeline {
     quality: ThumbnailDecodeQuality,
     failure?: ThumbnailDecodeFailure,
   ): void {
+    if (this.destroyed || !this.activeHashes.has(hash)) return;
     if (failure?.terminal) {
       console.warn('[grid] thumbnail decode exhausted retries', {
         hash,

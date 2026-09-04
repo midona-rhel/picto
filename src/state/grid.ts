@@ -41,8 +41,10 @@ export interface GridSessionSnapshot {
   filters: QueryFilters;
   view: GridViewPreferences;
   items: CanonicalEntityGridItem[];
-  /** Opaque cursor for the next canonical page, or null at the end. */
-  cursor: string | null;
+  /** Canonical first four results for scope previews, independent of the resident grid window. */
+  queryHeadItems: CanonicalEntityGridItem[];
+  /** Ordinal of the first retained item in the exact filtered result order. */
+  windowStart: number;
   totalCount: number | null;
   totalSizeBytes: number | null;
   /** Canonical database/projection revision used to produce the loaded window. */
@@ -80,7 +82,8 @@ export const gridSessionAtom = atom<GridSessionSnapshot>({
   filters: initialGridFilters,
   view: initialGridView,
   items: [],
-  cursor: null,
+  queryHeadItems: [],
+  windowStart: 0,
   totalCount: null,
   totalSizeBytes: null,
   revision: 0,
@@ -106,6 +109,7 @@ export const gridDrilldownAtom = atom<{
 const pick = <T>(selector: (session: GridSessionSnapshot) => T) => selectAtom(gridSessionAtom, selector);
 
 export const gridScopeAtom = pick((s) => s.scope);
+export const gridQueryHeadItemsAtom = pick((s) => s.queryHeadItems);
 export const gridSortFieldAtom = pick((s) => s.sort.field);
 export const gridSortDirectionAtom = pick((s) => s.sort.direction);
 export const gridSearchTextAtom = pick((s) => s.searchText);
@@ -129,7 +133,7 @@ export const gridSpacingAtom = atom((get) => (
 ));
 export const gridShowSubfoldersAtom = pick((s) => s.view.showSubfolders);
 export const gridItemsAtom = pick((s) => s.items);
-export const gridCursorAtom = pick((s) => s.cursor);
+export const gridWindowStartAtom = pick((s) => s.windowStart);
 export const gridTotalCountAtom = pick((s) => s.totalCount);
 export const gridTotalSizeBytesAtom = pick((s) => s.totalSizeBytes);
 export const gridRevisionAtom = pick((s) => s.revision);

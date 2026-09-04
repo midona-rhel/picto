@@ -11,6 +11,7 @@ import { useAtomValue } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
+import { gridViewportMissesWindow, gridWindowDestination, placeGridWindow, SettledGridRequest } from './gridWindow';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 import {
   BADGE_FONT,
@@ -126,6 +127,16 @@ export function planFolderReorder(
   return reordered.every((itemId, index) => itemId === orderedItemIds[index]) ? [] : reordered;
 }
 
+export function beginsGridScrollRestore(
+  initial: GridScrollPosition | null,
+  previousInitial: GridScrollPosition | null,
+  previousItemCount: number,
+  itemCount: number,
+): boolean {
+  return initial != null && itemCount > 0
+    && (previousInitial == null || previousItemCount === 0);
+}
+
 export function isOverGridItems(layoutY: number): boolean {
   return layoutY >= 0;
 }
@@ -159,6 +170,9 @@ export interface CanvasGridProps {
   grayscale?: boolean;
   /** Complete query result count used to preserve full-library scroll range. */
   totalCount?: number | null;
+  windowStart?: number;
+  onRequestWindow?: (index: number) => void;
+  onScrollActivity?: () => void;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onTileMiddleClick?: (index: number, item: CanonicalEntityGridItem) => void;
@@ -208,6 +222,9 @@ export function CanvasGrid({
   fitThumbnails = false,
   grayscale = false,
   totalCount = null,
+  windowStart = 0,
+  onRequestWindow,
+  onScrollActivity,
   onTileClick,
   onTileDoubleClick,
   onTileMiddleClick,
@@ -358,7 +375,7 @@ export function CanvasGrid({
   const textHeight = (showName ? TEXT_NAME_ROW_H : 0) + (showResolution ? TEXT_NAME_ROW_H : 0);
 
   const layoutRuntimeRef = useRef(new GridLayoutRuntime());
-  const layoutModel = useMemo(() => layoutRuntimeRef.current.update(items, {
+  const localLayout = useMemo(() => layoutRuntimeRef.current.update(items, {
     width: layoutWidth.width,
     targetSize,
     gap,
@@ -366,17 +383,34 @@ export function CanvasGrid({
     textHeight,
     scrollbarWidth: layoutWidth.scrollbarWidth,
   }), [items, layoutWidth, targetSize, viewMode, textHeight, gap]);
+  const windowAnchorRef = useRef<{ index: number; top: number } | null>(null);
+  const densityRef = useRef<{ key: string; value: number } | null>(null);
+  const geometryKey = `${layoutWidth.width}/${targetSize}/${gap}/${viewMode}/${textHeight}`;
+  if (localLayout.scrollEstimateSampleCount > 0 && densityRef.current?.key !== geometryKey) {
+    densityRef.current = { key: geometryKey, value: localLayout.scrollEstimateSampleHeight / localLayout.scrollEstimateSampleCount };
+  }
+  const density = densityRef.current?.value ?? 1;
+  const windowed = onRequestWindow != null;
+  const layoutModel = useMemo(() => windowed
+    ? placeGridWindow(localLayout, windowStart, totalCount ?? items.length, density, windowAnchorRef.current)
+    : { ...localLayout, windowTop: 0, windowBottom: localLayout.totalHeight },
+  [localLayout, windowed, windowStart, totalCount, items.length, density]);
+  const settledWindowRef = useRef(new SettledGridRequest());
+  const requestWindowRef = useRef(onRequestWindow);
+  requestWindowRef.current = onRequestWindow;
+  const scrollActivityRef = useRef(onScrollActivity);
+  scrollActivityRef.current = onScrollActivity;
   const renderItemsRef = useRef(layoutModel.items);
   renderItemsRef.current = layoutModel.items;
   const estimatedScrollHeight = useMemo(
-    () => estimateGridScrollHeight(
+    () => windowed ? layoutModel.totalHeight : estimateGridScrollHeight(
       layoutModel.totalHeight,
       items.length,
       totalCount,
       layoutModel.scrollEstimateSampleHeight,
       layoutModel.scrollEstimateSampleCount,
     ),
-    [items.length, layoutModel, totalCount],
+    [items.length, layoutModel, totalCount, windowed],
   );
 
   const onLayoutChangeRef = useRef(onLayoutChange);
@@ -445,6 +479,7 @@ export function CanvasGrid({
       revealTrackerRef.current.clear();
       pipelineRef.current = null;
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
+      settledWindowRef.current.cancel();
     };
   }, []);
 
@@ -461,6 +496,7 @@ export function CanvasGrid({
   // Track previous items length separately for the scroll reset decision.
   // prevItemsRef is updated in useLayoutEffect (runs first), so we need our own tracker.
   const prevItemsLengthForScrollRef = useRef(0);
+  const previousInitialScrollPositionRef = useRef<GridScrollPosition | null>(null);
   // Restore while the workspace surface is still hidden and before the browser
   // can paint the replacement grid. A passive effect exposes the scroll jump
   // during the first frames of the incoming fade.
@@ -469,12 +505,14 @@ export function CanvasGrid({
     if (!container) return;
     const prevLen = prevItemsLengthForScrollRef.current;
     prevItemsLengthForScrollRef.current = items.length;
+    const previousInitial = previousInitialScrollPositionRef.current;
+    previousInitialScrollPositionRef.current = initialScrollPosition;
 
-    if (initialScrollPosition != null) {
+    if (beginsGridScrollRestore(initialScrollPosition, previousInitial, prevLen, items.length)) {
       // Restore relative progress against the current estimated full result.
       firstPaintRef.current = false;
       const next = restoreGridScrollTop(
-        initialScrollPosition,
+        initialScrollPosition!,
         headerHeight + estimatedScrollHeight,
         container.clientHeight,
       );
@@ -1041,6 +1079,31 @@ export function CanvasGrid({
   }, []); // stable — never re-runs, uses refs for all mutable data
 
 
+  const scheduleWindow = useCallback(() => {
+    if (!windowed || !interactive) return;
+    settledWindowRef.current.schedule(() => {
+      const container = containerRef.current;
+      if (!container) return;
+      const top = Math.max(0, container.scrollTop - headerHeightRef.current);
+      const index = gridWindowDestination(layoutModel, windowStart, totalCount ?? 0, top, container.clientHeight);
+      if (index == null) return;
+      windowAnchorRef.current = { index, top: top + container.clientHeight / 2 };
+      requestWindowRef.current?.(index);
+    });
+  }, [interactive, layoutModel, totalCount, windowStart, windowed]);
+
+  // A history restore can assign the same physical scrollTop the browser
+  // already had. Browsers do not emit a scroll event for that assignment, so
+  // explicitly request the single guessed window when no resident tile covers
+  // the restored viewport. Ordinary first paint at the head remains cheap.
+  useEffect(() => {
+    if (!windowed || !interactive) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const top = Math.max(0, container.scrollTop - headerHeightRef.current);
+    if (gridViewportMissesWindow(layoutModel, top, container.clientHeight)) scheduleWindow();
+  }, [interactive, layoutModel, scheduleWindow, windowed]);
+
   // ── Scroll handler ──
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
@@ -1059,6 +1122,11 @@ export function CanvasGrid({
       return;
     }
     const delta = scrollTop - lastScrollTopRef.current;
+    if (windowed) {
+      windowAnchorRef.current = null;
+      scrollActivityRef.current?.();
+      scheduleWindow();
+    }
     const elapsed = now - lastScrollTimeRef.current;
     const velocity = elapsed > 0 ? (Math.abs(delta) / elapsed) * 1000 : 0;
 
@@ -1135,20 +1203,24 @@ export function CanvasGrid({
     // Prefetch against real loaded content, not the estimated full extent.
     const distanceFromLoadedEnd = headerHeightRef.current + layoutModel.totalHeight
       - scrollTop - container.clientHeight;
-    if (distanceFromLoadedEnd < container.clientHeight * 3) {
+    if (!windowed && distanceFromLoadedEnd < container.clientHeight * 3) {
       onLoadMoreRef.current?.();
     }
-  }, [estimatedScrollHeight, interactive, layoutModel.totalHeight, markDirty, updateThumbnailViewport]);
+  }, [estimatedScrollHeight, interactive, layoutModel.totalHeight, markDirty, updateThumbnailViewport, windowed, scheduleWindow]);
 
-  // Continue filling the runway after each append, including when the user
-  // drags the scrollbar into an estimated-but-not-yet-loaded region.
+  // Cursor grids fill their runway after appends. Window grids wait for an
+  // actual scroll, so opening a million-item library never builds its complete
+  // order before the user moves away from the already-full initial viewport.
   useEffect(() => {
+    if (windowed) {
+      return () => settledWindowRef.current.cancel();
+    }
     const container = containerRef.current;
     if (!container || !onLoadMore) return;
     const distanceFromLoadedEnd = headerHeight + layoutModel.totalHeight
       - container.scrollTop - container.clientHeight;
     if (distanceFromLoadedEnd < container.clientHeight * 3) onLoadMore();
-  }, [headerHeight, layoutModel.totalHeight, onLoadMore]);
+  }, [headerHeight, layoutModel.totalHeight, onLoadMore, windowed]);
 
   // ── Click handler ──
   const isInHeader = useCallback((target: EventTarget) => {

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activeNodeIdAtom } from './navigation';
 import {
   goBack,
+  goForward,
+  getScrollPosition,
   navigateToNode,
   navigateWithGridFilters,
   resetNavigationHistory,
@@ -85,6 +87,25 @@ describe('navigateToNode', () => {
       filters: before,
       restoreScroll: true,
     });
+  });
+
+  it('keeps independent scroll positions for filtered visits in the same scope', () => {
+    const allPosition = { scrollTop: 7_900_000, progress: 0.99 };
+    const filteredPosition = { scrollTop: 360, progress: 0.2 };
+    const filters = {
+      ...createEmptyItemFilters(),
+      include_tags: [{ tag_id: 1, name: 'artist:alice' }],
+    };
+
+    saveScrollPosition('system:active', allPosition);
+    navigateWithGridFilters('system:active', filters);
+    saveScrollPosition('system:active', filteredPosition);
+
+    goBack();
+    expect(getScrollPosition('system:active')).toEqual(allPosition);
+
+    goForward();
+    expect(getScrollPosition('system:active')).toEqual(filteredPosition);
   });
 
   it('marks direct filtered navigation as a fresh top-level visit', () => {

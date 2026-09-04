@@ -36,6 +36,8 @@ function recordFolderNavigation(nodeId: string): void {
 }
 
 interface HistoryEntry {
+  /** Stable identity for scroll state; different filters in one scope are different visits. */
+  historyId: number;
   nodeId: string;
   /** Optional grid rendered as a drill-down within the manager identified by nodeId. */
   gridScopeNodeId?: string;
@@ -56,13 +58,21 @@ interface HistoryState {
   cursor: number;
 }
 
+type NewHistoryEntry = Omit<HistoryEntry, 'historyId'>;
+
+let nextHistoryId = 1;
+
+function createHistoryEntry(entry: NewHistoryEntry): HistoryEntry {
+  return { ...entry, historyId: nextHistoryId++ };
+}
+
 export interface NavigationSessionSnapshot {
   history: HistoryState;
-  scrollPositions: Array<[string, GridScrollPosition]>;
+  scrollPositions: Array<[number, GridScrollPosition]>;
 }
 
 const historyAtom = atom<HistoryState>({
-  stack: [{ nodeId: 'system:active' }],
+  stack: [createHistoryEntry({ nodeId: 'system:active' })],
   cursor: 0,
 });
 
@@ -100,7 +110,7 @@ function filtersKey(filters: QueryFilters | undefined): string {
   return JSON.stringify(filters ?? createEmptyItemFilters());
 }
 
-function pushEntry(entry: HistoryEntry): void {
+function pushEntry(entry: NewHistoryEntry): void {
   const h = store.get(historyAtom);
   const stack = h.stack.slice(0, h.cursor + 1);
   const last = stack[stack.length - 1];
@@ -110,8 +120,12 @@ function pushEntry(entry: HistoryEntry): void {
     && selectionKey(last.subsSelection) === selectionKey(entry.subsSelection)
     && filtersKey(last.filters) === filtersKey(entry.filters)
   ) return;
-  stack.push(entry);
+  stack.push(createHistoryEntry(entry));
   if (stack.length > 100) stack.shift();
+  const retainedIds = new Set(stack.map((candidate) => candidate.historyId));
+  for (const historyId of scrollPositions.keys()) {
+    if (!retainedIds.has(historyId)) scrollPositions.delete(historyId);
+  }
   store.set(historyAtom, { stack, cursor: stack.length - 1 });
 }
 
@@ -122,8 +136,8 @@ export function closeTransientViewers() {
   store.set(viewerDisplayControlsAtom, null);
 }
 
-// ── Scroll position per scope ────────────────────────────────────
-const scrollPositions = new Map<string, GridScrollPosition>();
+// ── Scroll position per history visit ────────────────────────────
+const scrollPositions = new Map<number, GridScrollPosition>();
 
 export function captureNavigationSession(): NavigationSessionSnapshot {
   const history = store.get(historyAtom);
@@ -137,13 +151,13 @@ export function captureNavigationSession(): NavigationSessionSnapshot {
         subsSelection: entry.subsSelection ? { ...entry.subsSelection } : undefined,
       })),
     },
-    scrollPositions: [...scrollPositions.entries()].map(([nodeId, position]) => [nodeId, { ...position }]),
+    scrollPositions: [...scrollPositions.entries()].map(([historyId, position]) => [historyId, { ...position }]),
   };
 }
 
 export function restoreNavigationSession(snapshot: NavigationSessionSnapshot): void {
   scrollPositions.clear();
-  snapshot.scrollPositions.forEach(([nodeId, position]) => scrollPositions.set(nodeId, { ...position }));
+  snapshot.scrollPositions.forEach(([historyId, position]) => scrollPositions.set(historyId, { ...position }));
   const history: HistoryState = {
     cursor: snapshot.history.cursor,
     stack: snapshot.history.stack.map((entry) => ({
@@ -153,6 +167,7 @@ export function restoreNavigationSession(snapshot: NavigationSessionSnapshot): v
       subsSelection: entry.subsSelection ? { ...entry.subsSelection } : undefined,
     })),
   };
+  nextHistoryId = Math.max(nextHistoryId, ...history.stack.map((entry) => entry.historyId + 1));
   store.set(historyAtom, history);
   applyHistoryEntry(history.stack[history.cursor]);
 }
@@ -162,23 +177,37 @@ export function resetNavigationHistory(nodeId = 'system:active'): void {
   store.set(gridDrilldownAtom, null);
   store.set(pendingGridIntentAtom, null);
   store.set(pendingGridNavigationAtom, null);
-  store.set(historyAtom, { stack: [{ nodeId }], cursor: 0 });
+  store.set(historyAtom, { stack: [createHistoryEntry({ nodeId })], cursor: 0 });
 }
 
 export function saveScrollPosition(nodeId: string, position: GridScrollPosition) {
-  scrollPositions.set(nodeId, position);
+  const history = store.get(historyAtom);
+  const current = history.stack[history.cursor];
+  const currentScopeNodeId = current?.gridScopeNodeId ?? current?.nodeId;
+  if (current && currentScopeNodeId === nodeId) {
+    scrollPositions.set(current.historyId, position);
+    return;
+  }
+  for (let index = Math.min(history.cursor - 1, history.stack.length - 1); index >= 0; index -= 1) {
+    const entry = history.stack[index];
+    if ((entry.gridScopeNodeId ?? entry.nodeId) === nodeId) {
+      scrollPositions.set(entry.historyId, position);
+      return;
+    }
+  }
 }
 
 export function getScrollPosition(nodeId: string): GridScrollPosition | null {
-  return scrollPositions.get(nodeId) ?? null;
+  const history = store.get(historyAtom);
+  const current = history.stack[history.cursor];
+  if (!current || (current.gridScopeNodeId ?? current.nodeId) !== nodeId) return null;
+  return scrollPositions.get(current.historyId) ?? null;
 }
 
 /** Remove scopes that no longer exist from history and their saved grid positions. */
 export function removeHistoryEntries(nodeIds: Iterable<string>) {
   const removed = new Set(nodeIds);
   if (removed.size === 0) return;
-
-  for (const nodeId of removed) scrollPositions.delete(nodeId);
 
   const h = store.get(historyAtom);
   const stack = h.stack.filter((entry) => !removed.has(entry.nodeId));
@@ -187,7 +216,11 @@ export function removeHistoryEntries(nodeIds: Iterable<string>) {
     .filter((entry) => !removed.has(entry.nodeId)).length;
   const nextStack = stack.length > 0
     ? stack
-    : [{ nodeId: 'system:active' }];
+    : [createHistoryEntry({ nodeId: 'system:active' })];
+  const retainedIds = new Set(nextStack.map((entry) => entry.historyId));
+  for (const historyId of scrollPositions.keys()) {
+    if (!retainedIds.has(historyId)) scrollPositions.delete(historyId);
+  }
   const cursor = Math.min(Math.max(retainedThroughCursor - 1, 0), nextStack.length - 1);
   store.set(historyAtom, { stack: nextStack, cursor });
 }
@@ -201,7 +234,6 @@ export function pushHistory(nodeId: string, sort?: ItemSort, filters?: QueryFilt
   pushEntry({ nodeId, sort, filters: filters ? cloneFilters(filters) : undefined });
   // Direct navigation = fresh start. Clear saved scroll so grid starts at top.
   // Back/forward never calls pushHistory, so their scroll positions are preserved.
-  scrollPositions.delete(nodeId);
 }
 
 /** Apply a discrete filter action and make the result traversable with Back/Forward. */
@@ -227,7 +259,6 @@ export function navigateWithGridFilters(
     gridScopeNodeId: ownerNodeId ? nodeId : undefined,
     filters: nextFilters,
   });
-  scrollPositions.delete(nodeId);
 
   if (ownerNodeId) {
     store.set(pendingGridNavigationAtom, { nodeId, filters: nextFilters });
@@ -288,10 +319,10 @@ export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {
   if (last?.nodeId === SUBSCRIPTIONS_NODE_ID && selectionKey(last.subsSelection) === selectionKey(selection ?? undefined)) {
     return;
   }
-  stack.push({
+  stack.push(createHistoryEntry({
     nodeId: SUBSCRIPTIONS_NODE_ID,
     subsSelection: selection ?? undefined,
-  });
+  }));
   if (stack.length > 100) stack.shift();
   store.set(historyAtom, { stack, cursor: stack.length - 1 });
 }

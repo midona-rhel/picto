@@ -1,6 +1,6 @@
 import { act, render } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { CanvasGrid } from './CanvasGrid';
+import { beginsGridScrollRestore, CanvasGrid } from './CanvasGrid';
 
 vi.mock('./useCanvasRedrawScheduler', () => ({
   useCanvasRedrawScheduler: () => ({ markDirty: vi.fn() }),
@@ -31,6 +31,13 @@ beforeAll(() => {
 });
 
 describe('CanvasGrid scroll freezing', () => {
+  it('starts a new first-paint cycle when the same top position is reused for another scope', () => {
+    const top = { scrollTop: 0, progress: 0 };
+    expect(beginsGridScrollRestore(top, null, 500, 500)).toBe(true);
+    expect(beginsGridScrollRestore(top, top, 500, 500)).toBe(false);
+    expect(beginsGridScrollRestore(null, top, 500, 500)).toBe(false);
+    expect(beginsGridScrollRestore(top, null, 500, 500)).toBe(true);
+  });
   it('keeps the current scroll offset when an overlay pauses grid interaction', () => {
     let scrollContainer: HTMLDivElement | null = null;
     const props = {

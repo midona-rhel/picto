@@ -38,6 +38,12 @@ export function WorkspaceSurface() {
   const setDisplayedNodeId = useSetAtom(displayedSurfaceNodeIdAtom);
   const setPendingIntent = useSetAtom(pendingGridIntentAtom);
   const [phase, setPhaseState] = useState<GridTransitionPhase>('idle');
+  const [inlineScrollRestore, setInlineScrollRestore] = useState<{
+    token: number;
+    nodeId: string;
+    position: GridScrollPosition;
+  } | null>(null);
+  const inlineRestoreTokenRef = useRef(0);
   const phaseRef = useRef<GridTransitionPhase>('idle');
   const initializedRef = useRef(false);
   const previousNodeRef = useRef(activeScopeNodeId);
@@ -235,14 +241,18 @@ export function WorkspaceSurface() {
 
   useEffect(() => {
     if (!pendingIntent) return;
-    restoreScrollPositionRef.current = pendingIntent.type === 'filter' && pendingIntent.restoreScroll
-      ? getScrollPosition(activeScopeNodeId) ?? TOP_SCROLL_POSITION
-      : TOP_SCROLL_POSITION;
     if (pendingIntent.type === 'filter') {
+      const position = pendingIntent.restoreScroll
+        ? getScrollPosition(activeScopeNodeId) ?? TOP_SCROLL_POSITION
+        : TOP_SCROLL_POSITION;
+      const token = ++inlineRestoreTokenRef.current;
+      restoreScrollPositionRef.current = position;
+      setInlineScrollRestore({ token, nodeId: activeScopeNodeId, position });
       setPendingIntent(null);
       gridController.applyIntent(pendingIntent);
       return;
     }
+    restoreScrollPositionRef.current = TOP_SCROLL_POSITION;
     if (phase !== 'idle') {
       gridController.applyIntent(pendingIntent);
       setPendingIntent(null);
@@ -272,6 +282,14 @@ export function WorkspaceSurface() {
   const destinationCommitted = phase === 'waiting'
     && displayedScopeNodeId === pendingNodeRef.current
     && displayedNodeId === pendingOwnerNodeRef.current;
+  const inlineRestoreCommitted = inlineScrollRestore?.nodeId === displayedScopeNodeId;
+  const initialScrollPosition = inlineRestoreCommitted
+    ? inlineScrollRestore.position
+    : destinationCommitted ? restoreScrollPositionRef.current : null;
+  const finishInlineRestore = inlineRestoreCommitted ? () => {
+    setInlineScrollRestore((current) => current?.token === inlineScrollRestore.token ? null : current);
+    restoreScrollPositionRef.current = null;
+  } : undefined;
 
   return (
     <div className={styles.root}>
@@ -280,9 +298,12 @@ export function WorkspaceSurface() {
           <GridScreen
             nodeId={displayedScopeNodeId}
             transitionPhase={phase}
-            initialScrollPosition={destinationCommitted ? restoreScrollPositionRef.current : null}
-            onFirstPaint={destinationCommitted ? revealCommittedGrid : undefined}
-            onScrollPositionChange={(position) => { scrollPositionRef.current = position; }}
+            initialScrollPosition={initialScrollPosition}
+            onFirstPaint={finishInlineRestore ?? (destinationCommitted ? revealCommittedGrid : undefined)}
+            onScrollPositionChange={(position) => {
+              scrollPositionRef.current = position;
+              saveScrollPosition(displayedScopeNodeId, position);
+            }}
           />
         ) : <ManagerSurface nodeId={displayedNodeId} />}
       </div>

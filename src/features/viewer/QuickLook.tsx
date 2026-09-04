@@ -32,9 +32,9 @@ export interface QuickLookProps {
   /** Root recorded as recently viewed. Use null to preserve history ordering. */
   recordItemId?: number | null;
   totalCount?: number | null;
+  windowStart?: number;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
-  onLoadMore?: () => void;
 }
 
 interface QuickLookContentProps extends QuickLookProps {
@@ -44,7 +44,7 @@ interface QuickLookContentProps extends QuickLookProps {
 }
 
 export function QuickLookContent({
-  items, currentIndex, metadataRootId, recordItemId, onNavigate, onClose, onLoadMore, onReady,
+  items, currentIndex, totalCount, windowStart = 0, metadataRootId, recordItemId, onNavigate, onClose, onReady,
   thumbnailReady = false, thumbnailUrlOverride,
 }: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
@@ -129,13 +129,12 @@ export function QuickLookContent({
   }, [pipeline.displayedHash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigate = useCallback((delta: number) => {
-    const nextIdx = currentIndex + delta;
-    if (nextIdx < 0 || nextIdx >= items.length) {
-      if (nextIdx >= items.length && onLoadMore) onLoadMore();
+    const nextIdx = windowStart + currentIndex + delta;
+    if (nextIdx < 0 || nextIdx >= (totalCount ?? items.length)) {
       return;
     }
     onNavigate(delta);
-  }, [currentIndex, items.length, onNavigate, onLoadMore]);
+  }, [currentIndex, windowStart, totalCount, items.length, onNavigate]);
 
   // Keyboard — registry defs for EU alternative keys
   useShortcutScope((e) => {

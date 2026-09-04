@@ -1,7 +1,7 @@
 use picto_library::predicate::{
     FilterClause, FilterExpr, ItemSort, SetMatchMode, SortDirection, SortField, ViewQuerySpec,
 };
-use picto_library::query::{ItemScope, PageRequest, RootQuery};
+use picto_library::query::{ItemScope, PageRequest, RootQuery, WindowRequest};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
     ContentSortField, GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle,
@@ -137,6 +137,360 @@ fn smart_input(
         notes: None,
         view,
     }
+}
+
+#[test]
+fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (folder, _) = library.create_folder("Window folder", None).unwrap();
+    let mut ids = Vec::new();
+    for i in 0..36 {
+        let mut input = imported(
+            &format!("window-{i}"),
+            if i % 7 == 0 {
+                Lifecycle::Inbox
+            } else {
+                Lifecycle::Active
+            },
+            &["sample"],
+        );
+        input.media_name = format!("{}-{}", if i % 2 == 0 { "Alpha" } else { "alpha" }, i % 4);
+        input.imported_at_ms += i % 5;
+        input.captured_at_ms = (i % 3 != 0).then_some(100 + i % 5);
+        input.facts.size_bytes += i as u64 % 4;
+        let (id, _) = library.ingest(&input).unwrap();
+        ids.push(id);
+    }
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: ids.clone(),
+            },
+            folder,
+        )
+        .unwrap();
+    let folder_query = RootQuery {
+        scope: ItemScope::Folder { folder_id: folder },
+        view: ViewQuerySpec {
+            sort: ItemSort {
+                field: SortField::FolderOrder,
+                direction: SortDirection::Ascending,
+                random_seed: None,
+            },
+            ..ViewQuerySpec::default()
+        },
+    };
+    let before_order = library
+        .query_window(
+            &folder_query,
+            &WindowRequest {
+                start: 0,
+                limit: 1500,
+            },
+        )
+        .unwrap();
+    let mut expected_order: Vec<_> = before_order
+        .page
+        .items
+        .iter()
+        .map(|item| item.root_id)
+        .collect();
+    let reordered = [expected_order[12], expected_order[11], expected_order[10]];
+    library.reorder_folder_items(folder, &reordered).unwrap();
+    expected_order[10..13].copy_from_slice(&reordered);
+    let after_order = library
+        .query_window(
+            &folder_query,
+            &WindowRequest {
+                start: 0,
+                limit: 1500,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        after_order
+            .page
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        expected_order
+    );
+    assert!(library
+        .reorder_folder_items(folder, &[ids[2], ids[2]])
+        .is_err());
+    for (i, id) in ids.iter().take(10).enumerate() {
+        library.record_recent_view(*id, 100 + i as i64 % 3).unwrap();
+    }
+    let (smart, _) = library
+        .create_smart_folder(smart_input(
+            "Images",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Mime {
+                    values: vec!["image/png".into()],
+                    families: vec![],
+                }),
+                ..ViewQuerySpec::default()
+            },
+        ))
+        .unwrap();
+    for scope in [
+        ItemScope::All,
+        ItemScope::Inbox,
+        ItemScope::Trash,
+        ItemScope::Untagged,
+        ItemScope::Uncategorized,
+        ItemScope::RecentlyViewed,
+        ItemScope::Folder { folder_id: folder },
+        ItemScope::FolderTree { folder_id: folder },
+        ItemScope::SmartFolder {
+            smart_folder_id: smart,
+        },
+    ] {
+        for field in [
+            SortField::ImportedAt,
+            SortField::Name,
+            SortField::CapturedAt,
+            SortField::TotalSize,
+            SortField::Rating,
+            SortField::Random,
+            SortField::FolderOrder,
+        ] {
+            if field == SortField::FolderOrder
+                && !matches!(
+                    scope,
+                    ItemScope::Folder { .. } | ItemScope::FolderTree { .. }
+                )
+            {
+                continue;
+            }
+            for direction in [SortDirection::Ascending, SortDirection::Descending] {
+                let mut query = query(scope.clone());
+                query.view.sort = ItemSort {
+                    field,
+                    direction,
+                    random_seed: Some("window-seed".into()),
+                };
+                let mut expected = Vec::new();
+                let mut cursor = None;
+                loop {
+                    let page = library
+                        .query(&query, &PageRequest { limit: 5, cursor })
+                        .unwrap();
+                    expected.extend(page.items.into_iter().map(|item| item.root_id));
+                    cursor = page.next_cursor;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                for start in [0, 17, usize::MAX, 3, 0] {
+                    let actual = library
+                        .query_window(&query, &WindowRequest { start, limit: 7 })
+                        .unwrap();
+                    let start = start.min(expected.len().saturating_sub(7));
+                    assert_eq!(actual.start, start);
+                    assert_eq!(actual.page.total as usize, expected.len());
+                    assert_eq!(
+                        actual
+                            .page
+                            .items
+                            .iter()
+                            .map(|item| item.root_id)
+                            .collect::<Vec<_>>(),
+                        expected[start..(start + 7).min(expected.len())],
+                        "{scope:?} {field:?} {direction:?}"
+                    );
+                }
+            }
+        }
+    }
+    let query = query(ItemScope::SmartFolder {
+        smart_folder_id: smart,
+    });
+    let before = library
+        .query_window(
+            &query,
+            &WindowRequest {
+                start: 20,
+                limit: 7,
+            },
+        )
+        .unwrap();
+    library
+        .set_lifecycle(
+            &SelectionTarget::Explicit { root_ids: ids },
+            Lifecycle::Trash,
+        )
+        .unwrap();
+    let after = library
+        .query_window(
+            &query,
+            &WindowRequest {
+                start: 20,
+                limit: 7,
+            },
+        )
+        .unwrap();
+    assert!(after.page.revision > before.page.revision);
+    assert_eq!(after.page.total, 0);
+    assert!(after.page.items.is_empty());
+}
+
+#[test]
+fn query_caches_survive_unrelated_writes_but_refresh_membership_order_and_summaries() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (first, _) = library
+        .ingest(&imported("alpha", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("beta", Lifecycle::Active, &[]))
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    let all = RootQuery {
+        scope: ItemScope::All,
+        view: ViewQuerySpec::default(),
+    };
+    let window = WindowRequest {
+        start: 0,
+        limit: 1500,
+    };
+    let before = library.query_window(&all, &window).unwrap();
+    let built = library.query_statistics();
+    let selected = SelectionTarget::Explicit {
+        root_ids: vec![first],
+    };
+    library.set_rating(&selected, Rating::Five).unwrap();
+    let rated = library.query_window(&all, &window).unwrap();
+    assert!(rated.page.revision > before.page.revision);
+    assert_eq!(
+        rated
+            .page
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>(),
+        before
+            .page
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        rated
+            .page
+            .items
+            .iter()
+            .find(|item| item.root_id == first)
+            .unwrap()
+            .rating,
+        Rating::Five
+    );
+    assert_eq!(library.query_statistics().order_builds, built.order_builds);
+    assert_eq!(library.query_statistics().match_builds, built.match_builds);
+    assert_eq!(
+        rated.page.items[0].palette,
+        imported("any", Lifecycle::Active, &[]).facts.palette
+    );
+
+    let mut named = all.clone();
+    named.view.sort.field = SortField::Name;
+    named.view.sort.direction = SortDirection::Ascending;
+    library.query_window(&named, &window).unwrap();
+    let built = library.query_statistics();
+    library
+        .auxiliary_write(
+            picto_library::database::WorkPriority::Maintenance,
+            vec!["settings".into()],
+            vec![],
+            |transaction, _| {
+                transaction.execute(
+                    "INSERT INTO setting(key,value_json) VALUES ('cache-test','true')",
+                    [],
+                )?;
+                Ok(())
+            },
+        )
+        .unwrap();
+    library.query_window(&named, &window).unwrap();
+    assert_eq!(library.query_statistics().order_builds, built.order_builds);
+    library.rename_root(first, "zeta", 100).unwrap();
+    assert_eq!(
+        library.query_window(&named, &window).unwrap().page.items[0].root_id,
+        second
+    );
+    assert!(library.query_statistics().order_builds > built.order_builds);
+
+    let mut filtered = all.clone();
+    filtered.view.filter = FilterExpr::Clause(FilterClause::Ratings {
+        ratings: vec![Rating::Five],
+    });
+    assert_eq!(
+        library.query_window(&filtered, &window).unwrap().page.total,
+        1
+    );
+    library
+        .set_rating(
+            &SelectionTarget::Explicit {
+                root_ids: vec![second],
+            },
+            Rating::Five,
+        )
+        .unwrap();
+    assert_eq!(
+        library.query_window(&filtered, &window).unwrap().page.total,
+        2
+    );
+    library.set_lifecycle(&selected, Lifecycle::Trash).unwrap();
+    assert_eq!(library.query_window(&all, &window).unwrap().page.total, 1);
+    assert_eq!(
+        library.query_window(&filtered, &window).unwrap().page.total,
+        1
+    );
+}
+
+#[test]
+fn structured_navigation_does_not_evict_expensive_text_matches() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    library
+        .ingest(&imported("alpha", Lifecycle::Active, &[]))
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    let text = RootQuery {
+        scope: ItemScope::All,
+        view: ViewQuerySpec {
+            filter: FilterExpr::Clause(FilterClause::Text {
+                field: picto_library::predicate::TextField::Global,
+                query: "alpha".into(),
+            }),
+            ..ViewQuerySpec::default()
+        },
+    };
+    let window = WindowRequest { start: 0, limit: 4 };
+    let first = library.query_window(&text, &window).unwrap();
+    for minimum in 0..20 {
+        let query = RootQuery {
+            scope: ItemScope::All,
+            view: ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Width {
+                    minimum: Some(minimum),
+                    maximum: None,
+                }),
+                ..ViewQuerySpec::default()
+            },
+        };
+        library.query_window(&query, &window).unwrap();
+    }
+    let before = library.query_statistics();
+    assert_eq!(
+        library.query_window(&text, &window).unwrap().page.items,
+        first.page.items
+    );
+    assert_eq!(library.query_statistics().match_builds, before.match_builds);
 }
 
 #[test]

@@ -87,14 +87,14 @@ function ViewPanel() {
               onChange={(v) => setSort(v as SortField, sortDir)}
               width={130}
             />
-            <div className={s.dirPill}>
-              <button className={`${s.dirBtn} ${sortDir === 'ascending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'ascending')} type="button">
+            {sortField !== 'random' && <div className={s.dirPill}>
+              <button aria-label={t("Ascending")} className={`${s.dirBtn} ${sortDir === 'ascending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'ascending')} type="button">
                 <IconSortAscending size={14} />
               </button>
-              <button className={`${s.dirBtn} ${sortDir === 'descending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'descending')} type="button">
+              <button aria-label={t("Descending")} className={`${s.dirBtn} ${sortDir === 'descending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'descending')} type="button">
                 <IconSortDescending size={14} />
               </button>
-            </div>
+            </div>}
           </div>
         </div>
       )}

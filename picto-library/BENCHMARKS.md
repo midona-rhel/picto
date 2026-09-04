@@ -37,6 +37,98 @@ The numbers are a development ledger, not a portable hardware guarantee. Release
 requires the complete mutation matrix, smart-folder rebuilds, FTS freshness, crash injection,
 projection memory measurement, one-million-root fixtures, and packaged platform smoke tests.
 
+## Million-Item Grid Search and Random Jump Probe
+
+The bounded grid-window implementation is exercised with a deterministic 64-operation workload
+that switches among All, MIME, tag, text, and random-sort queries, then jumps to a pseudorandom
+ordinal in each result. Every operation rechecks that the separate four-item query head remains
+canonical after the distant window load. Run the representative mixed-type fixture with:
+
+```sh
+cargo run --release -p picto_library --example grid_window_scale_probe
+```
+
+The September 2026 Windows development-host run used one million roots, 900,000 active results,
+and at most 1,500 hydrated summaries. These are local comparison numbers, not cross-platform
+budgets.
+
+| Measurement | Result |
+|---|---:|
+| Randomized query-head median / p95 / maximum | 1.137 / 16.631 / 18.274 ms |
+| Randomized arbitrary-jump median / p95 / maximum | 62.268 / 167.206 / 171.483 ms |
+| Warm full-traversal window median / p95 / maximum | 6.812 / 7.884 / 8.772 ms |
+| Complete 900-window traversal | 6,188.143 ms |
+| Compact exact-order IDs | 3.6 MB |
+| Query-head mismatches | 0 of 64 |
+
+Random ordering uses a seeded format-preserving permutation over Roaring result ordinals instead of
+hashing and sorting all matches. On this fixture its first page fell from 111.860 to 19.719 ms and
+its cold tail jump from 145.861 to 56.903 ms; warm random windows remained summary-I/O-bound at
+roughly 55 ms. Direct smart-folder windows remained aligned with equivalent filters: the common
+smart-folder and direct-tag cold jumps were 130.695 and 120.450 ms, while their warm p95 values
+were 11.976 and 11.503 ms.
+
+## Dependency-Aware Windows and Cancellation (Windows, September 2026)
+
+The same renderable one-million-item library was queried with the previous executable and the
+updated release executable on the same host. No library mutations were made to that manual-test
+library. The fixture reuses 4,096 JPEG assets; a separate mixed-type disposable million-root fixture
+exercises smart folders and interleaved mutations. These are backend timings, not image-paint times.
+
+| Measurement | Before | Updated |
+|---|---:|---:|
+| Randomized distant-jump median | 40.084 ms | 8.442 ms |
+| Randomized distant-jump p95 | 140.855 ms | 41.050 ms |
+| Four-item query-head median | 0.654 ms | 0.079 ms |
+| Random-sort warm-window median | 41.979 ms | 34.509 ms |
+| Warm complete-traversal window median | 6.005 ms | 3.550 ms |
+| Complete 1,000-window traversal | 6,183.826 ms | 3,604.347 ms |
+
+Cold order construction still scales with matching/order work; broad cold substring search also
+remains expensive. Individual cold timings fluctuate with OS cache state and host load, so this
+table does not claim a universal latency budget or cross-platform certification. A SQL UNION ALL
+experiment did not establish a benefit and was removed.
+
+Query cache keys now use session-local dependency generations captured with the consistent
+projection snapshot. Structured queries survive changes to unrelated projections; SQL-only
+dependencies (name sorting, text, recent views, and folder hierarchy) conservatively invalidate on
+potentially relevant publications. Known auxiliary-only publications preserve these results.
+Cached results include aggregate counts/bytes. Orders are limited to eight entries and three million
+IDs (12 MB, formerly at most 8 MB); media summaries are never retained in this cache.
+The match cache reserves eight slots for text queries and eight for structured queries. This prevents
+cheap scope changes from evicting expensive FTS results, a regression detected by the mixed fixture.
+
+Summary loading reuses prepared SQL and the existing palette/kind projections, eliminating palette
+JSON parsing and one table join. Stage counters report matching, aggregation, ordering, and summary
+loading separately. On the updated renderable fixture's random case, all 23 requests together spent
+26.354 ms selecting IDs and 736.632 ms loading 33,500 summaries; aggregates were already cached.
+
+Superseded grid reads are interrupted through a request-scoped SQLite progress handler. Cancellation
+is generation-based, handles late-arriving obsolete requests, and removes its handler before returning
+the connection to the read pool. The cancellation command itself does not acquire a database reader.
+Tests cover interruption during active SQL, subsequent connection reuse, updated summaries without
+unnecessary order rebuilds, and correct invalidation after relevant mutations.
+
+The disposable mixed fixture also interleaves 32 rating changes with arbitrary jumps, then eight
+imports with end-of-grid reads and smart-folder/direct-filter comparisons. The final mutation run
+recorded zero match/order rebuilds for the rating changes (4.819 ms median, 6.068 ms p95 window reads)
+and zero smart-folder mismatches after imports. Imports change the matching set and still require
+rebuilding affected exact orders; those end-of-grid reads were 86.850 ms median, 130.073 ms maximum.
+After correcting text-cache retention, the mixed fixture's randomized head median/p95/max were
+0.065/1.198/14.880 ms (the discarded shared-quota version had an 857 ms maximum). Randomized distant
+jumps were 9.551 ms median and 106.410 ms p95. Smart-folder warm windows stayed comparable to their
+direct predicates: common-tag p95 7.192 versus 7.184 ms, and one-percent-tag p95 24.882 versus 27.099 ms.
+
+With the visible debug app open on the renderable million-item fixture, run the bounded read-only
+application audit with `node scripts/ci/million-grid-smoke.mjs`. It checks arbitrary windows,
+smart-folder reads, cached-page/window agreement, stable query-head previews, request cancellation,
+subsequent reader reuse, and decoding of the four preview thumbnails. It does not synthesize input.
+The Windows debug smoke passed with all five smart folders, two mounted grid canvases, four decoded
+thumbnails, and stable query-head previews. An active SQL request was cancelled in 1.4 ms and the
+following request succeeded. Debug is unoptimized: its initial uncached million-item jump took
+1,082 ms end-to-end, while subsequent tested windows took 34–37 ms. These are distinct from the
+release benchmark numbers above; cold order construction remains unfinished performance work.
+
 ## 300k Settlement Scaling
 
 The same fixture at 300,000 roots verifies that canonical ingestion no longer rescans every

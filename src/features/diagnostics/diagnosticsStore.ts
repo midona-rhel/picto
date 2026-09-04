@@ -58,6 +58,16 @@ export function recordIpcCall(
   if (command === 'diagnostics.snapshot') return;
   const failed = error !== undefined;
   const errorMessage = error instanceof Error ? error.message : String(error);
+  // Supersession is expected while scrolling. Keep useful slow-work timing
+  // without reporting normal query cancellation as an application failure.
+  if (command === 'items.window' && failed && errorMessage === 'query superseded') {
+    if (durationMs >= 16) addDiagnostic({
+      level: 'DEBUG', source: 'ipc', target: command,
+      message: 'Superseded by a newer grid request',
+      timestamp: new Date().toISOString(), durationMs,
+    });
+    return;
+  }
   // Cloud status polling starts before the library gate has finished opening a
   // library. That unavailable state is expected and retried by the caller.
   if (command === 'cloud.status.get' && failed && /^No library is open\b/i.test(errorMessage)) return;
