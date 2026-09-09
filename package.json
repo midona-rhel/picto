@@ -55,6 +55,7 @@
       "dist/*.html",
       "docs/*-release-notes.md",
       "electron/**/*",
+      "!electron/**/*.test.mjs",
       "native/picto-node/index.node",
       "native/picto-node/*.so*",
       "native/picto-node/*.dylib",

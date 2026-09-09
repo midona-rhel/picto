@@ -448,16 +448,6 @@ export function createLibraryHostService({
     return { action: 'cancelled' };
   }
 
-  async function openLibraryAndShow(libraryPath) {
-    await applyPlatformLibraryIcon(libraryPath);
-    setCurrentLibraryRoot(libraryPath);
-    await openLibrary(libraryPath);
-
-    await addLibraryToHistory(libraryPath);
-    buildAppMenu();
-    createMainWindow();
-  }
-
   async function switchLibrary(newPath) {
     if (tutorialSession) throw new Error('Exit the guided tour before switching libraries');
     // The requested library is already opening (a double-click, a repeated
@@ -1138,7 +1128,6 @@ export function createLibraryHostService({
     libraryDisplayName,
     joinCloudLibrary,
     markShuttingDown,
-    openLibraryAndShow,
     openLibraryDialog,
     relocateLibrary,
     removeLibrary,

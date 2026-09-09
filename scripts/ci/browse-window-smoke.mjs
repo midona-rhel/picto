@@ -264,6 +264,50 @@ try {
   report.backend_initializations = initializations;
   report.pre_shutdown_no_library_errors = (log.match(/No library is open/g) ?? []).length;
   if (report.pre_shutdown_no_library_errors > 0) throw new Error('A live test view made a request without an open library');
+  if (process.argv.includes('--opening')) {
+    const secondLibrary = path.join(output, 'switch-target.library');
+    await cp(sourceLibrary, secondLibrary, {recursive:true, force:false, errorOnExist:true});
+    const openingChecks = await evaluate(`(async () => {
+      const first = ${JSON.stringify(library)};
+      const second = ${JSON.stringify(secondLibrary)};
+      const status = async () => {
+        const result = await window.picto.api.invoke('library.open_status', {});
+        return result && typeof result === 'object' && '__pictoCoreJson' in result
+          ? JSON.parse(result.__pictoCoreJson) : result;
+      };
+      const waitForOpen = async target => {
+        for (let i = 0; i < 500; i++) {
+          const value = await status();
+          if (value?.path === target) return value;
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        throw new Error('Did not observe the synthetic library opening');
+      };
+      const earlier = window.picto.library.switch(second).catch(error => String(error));
+      const observed = await waitForOpen(second);
+      await window.picto.library.switch(first);
+      await earlier;
+      const config = await window.picto.library.getConfig();
+      if (config.currentPath !== first || await status() !== null) {
+        throw new Error('Superseded open replaced the latest library');
+      }
+      return {observed, currentPath:config.currentPath};
+    })()`);
+    report.checks.push({name:'switch-cancels-in-flight-open', ...openingChecks});
+    await ready('system:active');
+    await evaluate(`(async () => {
+      window.picto.library.switch(${JSON.stringify(secondLibrary)}).catch(() => {});
+      for (let i = 0; i < 500; i++) {
+        const raw = await window.picto.api.invoke('library.open_status', {});
+        const value = raw && typeof raw === 'object' && '__pictoCoreJson' in raw
+          ? JSON.parse(raw.__pictoCoreJson) : raw;
+        if (value?.path === ${JSON.stringify(secondLibrary)}) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error('No in-flight open to exercise shutdown');
+    })()`);
+    report.checks.push({name:'quit-during-open', observed_in_flight:true});
+  }
   report.passed = true;
   try { await send('Browser.close'); } catch {}
   await Promise.race([exited, delay(3000)]);

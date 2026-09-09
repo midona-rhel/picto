@@ -863,15 +863,31 @@ mod tests {
         );
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("Racing.library");
-        let opening = tokio::spawn(super::open_library(root.clone()));
-        super::close_library().await.unwrap();
-        // Either the open finished first and the close closed it, or the
-        // close cancelled it; both leave the same observable state.
-        match opening.await.unwrap() {
-            Ok(_) => {}
-            Err(error) => assert_eq!(error, super::OPEN_CANCELLED_MESSAGE),
-        }
-        super::close_library().await.unwrap();
+        let opening = super::open_library(root.clone());
+        tokio::pin!(opening);
+        // Poll the real open until it yields with an in-flight record. Keeping
+        // the future here prevents it from publishing before close is polled.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            tokio::select! {
+                biased;
+                _ = &mut opening => panic!("open completed before the cancellation boundary"),
+                _ = async {
+                    while super::open_status().is_none() {
+                        tokio::task::yield_now().await;
+                    }
+                } => {}
+            }
+        })
+        .await
+        .expect("open did not reach its in-flight boundary");
+        let (closed, opened) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            tokio::join!(biased; super::close_library(), &mut opening)
+        })
+        .await
+        .expect("cancelled open did not settle");
+        closed.unwrap();
+        assert!(matches!(opened, Err(error) if error == super::OPEN_CANCELLED_MESSAGE));
+        // Assert before cleanup: a second close would hide a losing first close.
         assert!(super::get_state().is_err());
         assert_eq!(
             super::invoke("library.open_status", "{}").await.unwrap(),
