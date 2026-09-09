@@ -60,6 +60,54 @@ native addons, and downloaded native tools must not imply otherwise.
 
 ## Release procedure
 
+### Prepare locally, then review
+
+Preparation and publication are separate actions. When asked to prepare a release, make the local
+commits and notes, report the outstanding gates, and stop for review. Do not push a release branch
+or tag until authorized: the branch starts packaging, and the tag starts publication.
+
+Use the Git CLI to inspect `status`, `log`, and remote refs before choosing the next version.
+`git ls-remote --heads --tags origin` can verify refs even if GitHub CLI authentication is unavailable.
+Do not infer the remote state from local tags alone. Preserve unrelated work and never stage an
+entire worktree blindly; exclude synthetic libraries, benchmark output and local investigation files.
+
+Keep implementation and release preparation in separate, descriptive commits on `main`. If a work
+branch is needed, create it from current main, not another feature branch, and land it on main before
+creating the release branch. Never rewrite published history to prepare a release.
+
+Synchronize the application version in all of these files without updating unrelated dependencies:
+
+- `package.json` and both root-package version entries in `package-lock.json`;
+- `native/picto-node/package.json` and both root-package entries in its `package-lock.json`;
+- `core/Cargo.toml`, `native/picto-node/Cargo.toml`, and `picto-sources/Cargo.toml`;
+- the corresponding three application package entries in `Cargo.lock`.
+
+`picto-library` has its own crate version; do not bump it merely to match the desktop release.
+The pinned Electron runtime version is also independent of the Picto application version.
+
+Create `docs/<version>-release-notes.md` with a `# Picto <version>` heading and short `* ` bullets,
+matching previous releases. Describe user-visible changes, not implementation details, issue IDs,
+test counts or development history. Mention material upgrade/startup tradeoffs plainly. Preserve
+older version notes; replace a temporary next-release draft with the versioned file. This one file
+is bundled for offline What's New and used as the GitHub release body.
+
+Run the source release audit and `git diff --check` on the complete intended commit, including new
+source files. Record which implementation checks already passed and which remain unverified; do
+not claim a fresh full-suite pass from an earlier report. Local release-profile checks can diagnose
+a Windows debug-toolchain problem, but do not waive CI's configured checks.
+
+For changes to library opening or switching, finish the approved bounded packaged-app smoke on
+synthetic data: open, switch, cancel/quit during loading, and reopen. Record process ownership,
+deadlines and results. The standard alpha smoke is not a substitute for those interaction cases.
+Check normal startup separately from switching: the main window currently appears after the initial
+native open, so switching progress does not establish visible cold-start progress.
+
+At the review handoff, provide the local commit IDs, proposed version, notes, remaining checks and
+whether anything has been pushed. Test consolidation is not a reason to restart a performance
+campaign; preserve meaningful correctness and data-safety coverage.
+
+### Run the release gate and publish after approval
+
 1. Commit and push the finished changes, synchronized package versions, and user-facing notes on
    `main`. Keep issue references in commits, not release notes.
 2. Create `release/<version>` from that exact main commit and push it. The Alpha Gate runs renderer
@@ -76,3 +124,14 @@ If a gate fails, fix it on main and advance the release branch to that main comm
 the new gate. Rerun failed jobs for transient runner failures. If publication fails, rerun only the
 tagged publication job; do not move a published tag or rebuild different binaries under it. Expired
 gate artifacts require rerunning the release-branch gate at the same commit before retrying publication.
+
+Inspect the exact Alpha Gate run in GitHub Actions (or the GitHub CLI when authenticated). A manual
+workflow run is useful for diagnosis but is not the qualifying release-branch push run required by
+`scripts/ci/find-release-gate.mjs`. The tag must match the package version, the release branch must
+point to that same commit, and the commit must be on main. All three package artifacts and all three
+smoke reports must exist and be unexpired. Never create a separate manual release with unverified
+local installers or use automatic developer-oriented notes instead of the versioned notes file.
+
+After publication, verify the release body, versioned installers and updater manifests for every
+platform. Keep the successful run and smoke-report links with the release handoff. Do not advertise
+platform-specific performance unless it was measured on that platform.
