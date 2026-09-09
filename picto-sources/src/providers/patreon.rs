@@ -62,10 +62,38 @@ impl NativeSourceAdapter for PatreonSource {
                     posts_url(&campaign_id)
                 }
             };
-            let response = http.get_json::<Value>(url, &credentials, cancel).await?;
+            let response =
+                next_post_page(url, |url| http.get_json::<Value>(url, &credentials, cancel))
+                    .await?;
             normalize_response(request, &creator, response)
         })
     }
+}
+
+async fn next_post_page<F, Fut>(mut url: Url, mut fetch: F) -> Result<Value, SourceError>
+where
+    F: FnMut(Url) -> Fut,
+    Fut: std::future::Future<Output = Result<Value, SourceError>>,
+{
+    let mut visited = BTreeSet::new();
+    for _ in 0..100 {
+        if !visited.insert(url.to_string()) {
+            return Err(incomplete_page());
+        }
+        let response = fetch(url).await?;
+        if response
+            .get("data")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            if let Some(next) = next_page(&response)? {
+                url = next;
+                continue;
+            }
+        }
+        return Ok(response);
+    }
+    Err(incomplete_page())
 }
 
 fn api_credentials(credentials: &RequestCredentials) -> RequestCredentials {
@@ -177,17 +205,12 @@ fn normalize_response(
             "Patreon returned more than one post for a one-post request",
         ));
     }
-    let next = response
-        .pointer("/links/next")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| validate_cursor(value).map(|url| url.to_string()))
-        .transpose()?;
-    let exhausted = data.is_empty() || next.is_none();
+    let next = next_page(&response)?.map(|url| url.to_string());
+    let exhausted = next.is_none();
     let Some(post) = data.first() else {
         return Ok(DiscoveryBatch {
             posts: Vec::new(),
-            exhausted: true,
+            exhausted,
         });
     };
     let included = Included::new(response.get("included"));
@@ -195,6 +218,23 @@ fn normalize_response(
         posts: vec![normalize_post(request, creator, post, &included, next)?],
         exhausted,
     })
+}
+
+fn next_page(response: &Value) -> Result<Option<Url>, SourceError> {
+    response
+        .pointer("/links/next")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(validate_cursor)
+        .transpose()
+}
+
+fn incomplete_page() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidResponse,
+        "Patreon pagination did not advance; source history is not complete",
+        true,
+    )
 }
 
 fn normalize_post(
@@ -562,7 +602,10 @@ fn normalize_creator(raw: &str) -> Result<String, SourceError> {
             .filter(|segment| !segment.is_empty())
             .collect::<Vec<_>>();
         match segments.as_slice() {
-            ["c", creator] | [creator] | [creator, "posts"] => (*creator).to_string(),
+            ["c" | "cw", creator]
+            | ["c" | "cw", creator, "posts"]
+            | [creator]
+            | [creator, "posts"] => (*creator).to_string(),
             _ => return Err(invalid_query("Patreon requires a creator profile URL")),
         }
     } else {
@@ -667,6 +710,61 @@ mod tests {
             "creator-name"
         );
         assert!(normalize_creator("https://www.patreon.com/posts/123").is_err());
+        for path in [
+            "c/creator-name/posts",
+            "cw/creator-name",
+            "cw/creator-name/posts",
+        ] {
+            assert_eq!(
+                normalize_creator(&format!("https://www.patreon.com/{path}")).unwrap(),
+                "creator-name"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_page_continues_to_older_posts_and_repeated_links_fail_recoverably() {
+        let empty: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/patreon/empty-continuation.json"
+        ))
+        .unwrap();
+        let older: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/patreon/posts.json")).unwrap();
+        let mut calls = Vec::new();
+        let response = next_post_page(posts_url("987654"), |url| {
+            calls.push(url);
+            std::future::ready(Ok(if calls.len() == 1 {
+                empty.clone()
+            } else {
+                older.clone()
+            }))
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], next_page(&empty).unwrap().unwrap());
+        assert_eq!(
+            normalize_response(&request(), "creator-name", response)
+                .unwrap()
+                .posts
+                .len(),
+            1
+        );
+        let mut calls = 0;
+        let error = next_post_page(posts_url("987654"), |_| {
+            calls += 1;
+            std::future::ready(Ok(empty.clone()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 2);
+        assert!(error.retryable);
+        let terminal = serde_json::json!({"data": [], "links": {"next": null}});
+        assert!(
+            normalize_response(&request(), "creator-name", terminal)
+                .unwrap()
+                .exhausted
+        );
     }
 
     #[test]

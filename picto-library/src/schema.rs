@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
+const RESIDENT_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
 const ROWID_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-summary-page-rowids";
 const KEYS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-06-persisted-name-keys";
 const NODE_PREDECESSOR: &str = "picto-library-schema-1-2026-09-06-persisted-names";
@@ -101,7 +102,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            ROWID_PREDECESSOR
+            RESIDENT_PREDECESSOR
+                | ROWID_PREDECESSOR
                 | KEYS_PREDECESSOR
                 | NODE_PREDECESSOR
                 | NAME_PREDECESSOR
@@ -172,6 +174,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                RESIDENT_PREDECESSOR,
                 DRAWING_PREDECESSOR,
                 TEXT_PREDECESSOR,
                 NAME_PREDECESSOR,
@@ -215,8 +218,9 @@ pub fn migrate_for_open(
             // and repair lifecycle. The resident model rebuilds all of it from
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
-            connection.execute_batch(
-                "DROP TABLE IF EXISTS browsing_summary_page;
+            if fingerprint != RESIDENT_PREDECESSOR {
+                connection.execute_batch(
+                    "DROP TABLE IF EXISTS browsing_summary_page;
              DROP TABLE IF EXISTS browsing_page;
              DROP TABLE IF EXISTS browsing_chunk;
              DROP TABLE IF EXISTS browsing_domain;
@@ -233,12 +237,14 @@ pub fn migrate_for_open(
              DROP TRIGGER IF EXISTS browsing_root_update;
              DROP TRIGGER IF EXISTS browsing_media_file_update;
              DROP TRIGGER IF EXISTS browsing_cover_facts_update;",
-            )?;
-            connection.execute_batch(include_str!("browsing_schema.sql"))?;
-            connection.execute_batch("DELETE FROM browsing_dirty_root")?;
+                )?;
+                connection.execute_batch(include_str!("browsing_schema.sql"))?;
+                connection.execute_batch("DELETE FROM browsing_dirty_root")?;
+            }
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                RESIDENT_PREDECESSOR,
                 TEXT_PREDECESSOR,
                 NAME_PREDECESSOR,
                 NODE_PREDECESSOR,
@@ -284,6 +290,12 @@ pub fn migrate_for_open(
                 "source_attempt_root",
                 &["attempt_id", "root_id", "root_stable_key"],
             )?;
+            // Older attempts do not prove grid-root creation; never infer it
+            // from retained files or backfill speculative notification counts.
+            connection.execute_batch(
+                "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
+            )?;
+            require_columns(connection, "source_attempt_root", &["created_root"])?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -374,6 +386,9 @@ mod tests {
     const OBSOLETE_BROWSING_TABLES: &str = "'browsing_summary_page','browsing_page','browsing_chunk','browsing_domain','browsing_text_dirty','browsing_name_dirty','browsing_name_manifest','browsing_name_node','browsing_name_keys'";
 
     fn remove_browsing_schema(connection: &Connection) {
+        connection
+            .execute_batch("ALTER TABLE source_attempt_root DROP COLUMN created_root")
+            .unwrap();
         connection
             .execute_batch(
                 "DROP TRIGGER browsing_root_insert;
@@ -499,11 +514,51 @@ mod tests {
     }
 
     #[test]
+    fn resident_migration_adds_explicit_creation_provenance_without_guessing_old_counts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("ALTER TABLE source_attempt_root DROP COLUMN created_root")
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::RESIDENT_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        let default: String = connection.query_row(
+            "SELECT dflt_value FROM pragma_table_info('source_attempt_root') WHERE name='created_root'",
+            [], |row| row.get(0)).unwrap();
+        assert_eq!(default, "0");
+        let backups = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "backup"))
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert_eq!(
+            super::metadata(&backup).unwrap().1,
+            super::RESIDENT_PREDECESSOR
+        );
+        assert_eq!(count(&backup, "SELECT COUNT(*) FROM pragma_table_info('source_attempt_root') WHERE name='created_root'"), 0);
+    }
+
+    #[test]
     fn open_migrates_the_rowid_predecessor_and_drops_every_persisted_browsing_domain() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("library.sqlite");
         drop(LibraryDatabase::create(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("ALTER TABLE source_attempt_root DROP COLUMN created_root")
+            .unwrap();
         add_obsolete_browsing_schema(&connection);
         connection.execute_batch("INSERT INTO library_item VALUES (7,'migration-item',1);
             INSERT INTO media_file(file_id,content_hash,file_path,mime,size_bytes) VALUES(7,'hash','synthetic','image/png',123);

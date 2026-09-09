@@ -24,7 +24,7 @@ pub struct SourceSession {
     active: Option<SourcePost>,
     source_exhausted: bool,
     failed: bool,
-    added_count: u32,
+    settled_count: u32,
     post_limit: u32,
 }
 
@@ -38,7 +38,7 @@ pub struct PartitionedSourceSession {
     partitions: VecDeque<crate::SourcePartition>,
     cursors: BTreeMap<crate::SourcePartition, Option<String>>,
     current: Option<SourceSession>,
-    added_count: u32,
+    settled_count: u32,
     post_limit: u32,
 }
 
@@ -68,7 +68,7 @@ impl PartitionedSourceSession {
             page_size,
             cursors,
             current: None,
-            added_count: 0,
+            settled_count: 0,
             post_limit,
         })
     }
@@ -78,7 +78,7 @@ impl PartitionedSourceSession {
         http: &HttpRuntime,
         cancel: &CancellationToken,
     ) -> Result<NextPost, SourceError> {
-        if self.added_count >= self.post_limit {
+        if self.settled_count >= self.post_limit {
             return Ok(NextPost::PostBudgetReached);
         }
         loop {
@@ -96,7 +96,7 @@ impl PartitionedSourceSession {
                         cursor,
                         page_size: self.page_size,
                     },
-                    self.post_limit - self.added_count,
+                    self.post_limit - self.settled_count,
                 )?);
             }
             let current = self.current.as_mut().expect("partition session exists");
@@ -124,10 +124,10 @@ impl PartitionedSourceSession {
                 false,
             )
         })?;
-        let consumed = outcome.counts_as_added_post();
+        let consumed = outcome.counts_as_settled_post();
         current.settle(stable_post_id, outcome)?;
         if consumed {
-            self.added_count = self.added_count.saturating_add(1);
+            self.settled_count = self.settled_count.saturating_add(1);
         }
         self.cursors.insert(
             current.request.partition.clone(),
@@ -165,8 +165,8 @@ impl PartitionedSourceSession {
         &self.cursors
     }
 
-    pub fn added_count(&self) -> u32 {
-        self.added_count
+    pub fn settled_count(&self) -> u32 {
+        self.settled_count
     }
 }
 
@@ -192,7 +192,7 @@ impl SourceSession {
             active: None,
             source_exhausted: false,
             failed: false,
-            added_count: 0,
+            settled_count: 0,
             post_limit,
         })
     }
@@ -216,7 +216,7 @@ impl SourceSession {
                 false,
             ));
         }
-        if self.added_count >= self.post_limit {
+        if self.settled_count >= self.post_limit {
             return Ok(NextPost::PostBudgetReached);
         }
 
@@ -277,8 +277,8 @@ impl SourceSession {
             ));
         }
 
-        if outcome.counts_as_added_post() {
-            self.added_count = self.added_count.saturating_add(1);
+        if outcome.counts_as_settled_post() {
+            self.settled_count = self.settled_count.saturating_add(1);
         }
         if matches!(outcome, SourcePostOutcome::Failed { .. }) {
             self.failed = true;
@@ -292,8 +292,8 @@ impl SourceSession {
         Ok(())
     }
 
-    pub fn added_count(&self) -> u32 {
-        self.added_count
+    pub fn settled_count(&self) -> u32 {
+        self.settled_count
     }
 
     pub fn cursor(&self) -> Option<&str> {
@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skipped_posts_advance_the_cursor_without_consuming_the_added_budget() {
+    async fn skipped_posts_consume_the_budget_without_discovering_another_post() {
         let source = Arc::new(FixtureSource {
             discoveries: AtomicUsize::new(0),
             resolutions: AtomicUsize::new(0),
@@ -587,19 +587,17 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(session.added_count(), 0);
+        assert_eq!(session.settled_count(), 1);
         assert_eq!(session.cursor(), Some("1"));
-        let added = post(&mut session, &runtime).await;
-        assert_eq!(added.stable_id, "2");
-        session
-            .settle(
-                &added.stable_id,
-                SourcePostOutcome::Added { root_ids: vec![2] },
-            )
-            .unwrap();
-        assert_eq!(session.added_count(), 1);
-        assert_eq!(session.cursor(), Some("2"));
-        assert_eq!(source.resolutions.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            session
+                .next_post(&runtime, &CancellationToken::new())
+                .await
+                .unwrap(),
+            NextPost::PostBudgetReached
+        ));
+        assert_eq!(source.discoveries.load(Ordering::SeqCst), 1);
+        assert_eq!(source.resolutions.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -620,7 +618,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(session.added_count(), 1);
+        assert_eq!(session.settled_count(), 1);
         assert_eq!(session.cursor(), Some("1"));
         assert_eq!(
             session
@@ -633,7 +631,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mixed_outcomes_stop_after_twenty_added_posts() {
+    async fn failed_post_neither_consumes_budget_nor_advances_the_cursor() {
+        let source = Arc::new(FixtureSource {
+            discoveries: AtomicUsize::new(0),
+            resolutions: AtomicUsize::new(0),
+            exhausted: false,
+        });
+        let runtime = runtime();
+        let mut session = session(source.clone(), 1);
+        let current = post(&mut session, &runtime).await;
+        session
+            .settle(
+                &current.stable_id,
+                SourcePostOutcome::Failed {
+                    reason: "temporary failure".into(),
+                    retryable: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(session.settled_count(), 0);
+        assert_eq!(session.cursor(), None);
+        assert!(session
+            .next_post(&runtime, &CancellationToken::new())
+            .await
+            .is_err());
+        assert_eq!(source.discoveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn mixed_outcomes_stop_after_twenty_settled_posts() {
         let source = Arc::new(FixtureSource {
             discoveries: AtomicUsize::new(0),
             resolutions: AtomicUsize::new(0),
@@ -642,7 +668,7 @@ mod tests {
         let runtime = runtime();
         let mut session = session(source.clone(), 20);
 
-        for expected in 1..=25 {
+        for expected in 1..=20 {
             let current = post(&mut session, &runtime).await;
             assert_eq!(current.stable_id, expected.to_string());
             let outcome = if expected <= 5 {
@@ -658,7 +684,7 @@ mod tests {
             assert_eq!(session.cursor(), Some(expected.to_string().as_str()));
         }
 
-        assert_eq!(session.added_count(), 20);
+        assert_eq!(session.settled_count(), 20);
         assert_eq!(
             session
                 .next_post(&runtime, &CancellationToken::new())
@@ -666,9 +692,9 @@ mod tests {
                 .unwrap(),
             NextPost::PostBudgetReached,
         );
-        assert_eq!(source.discoveries.load(Ordering::SeqCst), 25);
-        assert_eq!(source.resolutions.load(Ordering::SeqCst), 25);
-        assert_eq!(session.cursor(), Some("25"));
+        assert_eq!(source.discoveries.load(Ordering::SeqCst), 20);
+        assert_eq!(source.resolutions.load(Ordering::SeqCst), 20);
+        assert_eq!(session.cursor(), Some("20"));
     }
 
     #[tokio::test]
@@ -689,7 +715,7 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::InvalidResponse);
-        assert_eq!(session.added_count(), 0);
+        assert_eq!(session.settled_count(), 0);
         assert_eq!(session.cursor(), None);
 
         let error = session
@@ -806,13 +832,13 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(session.added_count(), 2);
+        assert_eq!(session.settled_count(), 3);
         assert_eq!(
             session
                 .next_post(&runtime, &CancellationToken::new())
                 .await
                 .unwrap(),
-            NextPost::SourceExhausted,
+            NextPost::PostBudgetReached,
         );
         assert_eq!(
             session

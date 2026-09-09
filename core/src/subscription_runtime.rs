@@ -1708,6 +1708,21 @@ mod tests {
                 .unwrap();
             assert_eq!(status, "succeeded");
 
+            let first_history =
+                crate::subscription_activity::list_runs_library(&application, subscription_id, 1)
+                    .unwrap();
+            assert_eq!(
+                crate::subscription_activity::run_activity_library(
+                    &application,
+                    first_history.runs[0].run_id,
+                    1
+                )
+                .unwrap()
+                .unwrap()
+                .new_library_item_keys
+                .len(),
+                1
+            );
             std::fs::create_dir_all(&downloads).unwrap();
             image::RgbaImage::from_pixel(1, 1, image::Rgba([8, 16, 24, 255]))
                 .save(&source_path)
@@ -1870,6 +1885,18 @@ mod tests {
         assert_eq!(activity.runs[0].counts.posts_traversed, 1);
         assert_eq!(activity.runs[0].counts.posts_added, 1);
         assert_eq!(activity.runs[0].counts.downloaded, 2);
+        let added_activity = crate::subscription_activity::run_activity_library(
+            &application,
+            activity.runs[0].run_id,
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            added_activity.new_library_item_keys.len(),
+            1,
+            "two media in one collection are one new library item"
+        );
 
         application
             .request_subscription_run_library(subscription_id, "2026-08-30T00:01:00Z")
@@ -1894,12 +1921,102 @@ mod tests {
         assert_eq!(rerun.runs[0].counts.posts_skipped, 1);
         assert_eq!(rerun.runs[0].counts.downloaded, 0);
         assert_eq!(rerun.runs[0].counts.files_already_in_library, 2);
+        assert!(crate::subscription_activity::run_activity_library(
+            &application,
+            rerun.runs[0].run_id,
+            1
+        )
+        .unwrap()
+        .unwrap()
+        .new_library_item_keys
+        .is_empty());
+
+        // A later run adds one media member to the same collection: an added
+        // source post, but no newly created grid item to notify about.
+        std::fs::create_dir_all(&downloads).unwrap();
+        let third_path = downloads.join("page-3.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([64, 8, 4, 255]))
+            .save(&third_path)
+            .unwrap();
+        let bytes = std::fs::read(&third_path).unwrap();
+        let mut expanded_post = post.clone();
+        expanded_post
+            .items
+            .push(crate::subscriptions::NormalizedItem {
+                item_key: "page-3".into(),
+                position: 2,
+                media_url: None,
+                canonical_url: None,
+            });
+        let mut third = runner.items[0].clone();
+        third.post = expanded_post.clone();
+        third.input.stable_key = "source:ehentai:gallery-1:page-3".into();
+        third.input.media_name = "page-3".into();
+        third.input.file_path = third_path.to_string_lossy().into_owned();
+        third.input.facts.content_hash = hex::encode(Sha256::digest(&bytes));
+        third.input.facts.size_bytes = bytes.len() as u64;
+        third
+            .input
+            .source_identity
+            .as_mut()
+            .unwrap()
+            .source_item_key = "page-3".into();
+        let mut expanded_items = runner.items.clone();
+        for (item, color) in expanded_items.iter_mut().zip([32_u8, 16_u8]) {
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([color, 8, 4, 255]))
+                .save(&item.input.file_path)
+                .unwrap();
+            item.post = expanded_post.clone();
+        }
+        expanded_items.push(third);
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-30T00:01:30Z")
+            .unwrap();
+        tick(
+            &application,
+            &mut schedule,
+            &MultiItemRunner {
+                application: &application,
+                items: expanded_items,
+                cleanup_path: downloads.clone(),
+                expected_source_items: 3,
+            },
+            "2026-08-30T00:01:31Z",
+        )
+        .await
+        .unwrap();
+        let growth =
+            crate::subscription_activity::list_runs_library(&application, subscription_id, 1)
+                .unwrap();
+        assert_eq!(
+            growth.runs[0].status, "succeeded",
+            "{:?}",
+            growth.runs[0].error_message
+        );
+        assert_eq!(growth.runs[0].counts.posts_added, 1);
+        assert!(crate::subscription_activity::run_activity_library(
+            &application,
+            growth.runs[0].run_id,
+            1
+        )
+        .unwrap()
+        .unwrap()
+        .new_library_item_keys
+        .is_empty());
+        assert_eq!(
+            application
+                .details(picto_library::RootId(root_id))
+                .unwrap()
+                .root
+                .media_count,
+            3
+        );
 
         let (members, _) = application
             .library()
             .ungroup_collection(picto_library::RootId(root_id), 1_800_000_000_000)
             .unwrap();
-        assert_eq!(members.len(), 2);
+        assert_eq!(members.len(), 3);
         for regroup in [false, true] {
             if regroup {
                 application
@@ -1948,11 +2065,20 @@ mod tests {
             assert_eq!(history.runs[0].counts.posts_skipped, 1);
             assert_eq!(history.runs[0].counts.posts_added, 0);
             assert_eq!(history.runs[0].counts.downloaded, 0);
-            assert_eq!(history.runs[0].counts.files_already_in_library, 2);
+            assert_eq!(history.runs[0].counts.files_already_in_library, 3);
+            assert!(crate::subscription_activity::run_activity_library(
+                &application,
+                history.runs[0].run_id,
+                1
+            )
+            .unwrap()
+            .unwrap()
+            .new_library_item_keys
+            .is_empty());
             let catalog = crate::subscription_catalog::list_library(&application).unwrap();
             assert_eq!(
                 catalog.subscriptions[0].progress.files_already_in_library,
-                2
+                3
             );
         }
     }
@@ -1991,6 +2117,7 @@ mod tests {
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
             postprocess: None,
+            unavailable_reason: None,
         };
         let source_post = picto_sources::SourcePost {
             site_id: "fanbox".into(),

@@ -277,17 +277,17 @@ pub fn claim_next_query(
                 else {
                     return Ok(None);
                 };
-                let added_posts: u32 = transaction
+                let settled_posts: u32 = transaction
                     .query_row(
                         "SELECT COUNT(*) FROM source_post_attempt
-                         WHERE run_query_id = ?1 AND state = 'added'",
+                         WHERE run_query_id = ?1 AND state IN ('added', 'skipped')",
                         [candidate.run_query_id],
                         |row| row.get::<_, i64>(0),
                     )?
                     .try_into()
                     .unwrap_or(u32::MAX);
                 let configured_limit = candidate.source_post_batch_size();
-                let remaining = configured_limit.saturating_sub(added_posts);
+                let remaining = configured_limit.saturating_sub(settled_posts);
                 if remaining == 0 {
                     transaction.execute(
                         "UPDATE subscription_run_query
@@ -1052,10 +1052,10 @@ fn complete_query_with_policy(
     now: &str,
 ) -> Result<MutationReceipt, String> {
     write_transition(application, |transaction| {
-        let added_posts: u32 = transaction
+        let settled_posts: u32 = transaction
             .query_row(
                 "SELECT COUNT(*) FROM source_post_attempt
-                 WHERE run_query_id = ?1 AND state = 'added'",
+                 WHERE run_query_id = ?1 AND state IN ('added', 'skipped')",
                 [query.run_query_id],
                 |row| row.get::<_, i64>(0),
             )?
@@ -1063,7 +1063,7 @@ fn complete_query_with_policy(
             .unwrap_or(u32::MAX);
         let continue_run = continue_if_budget_remaining
             && resume_cursor != Some("")
-            && added_posts < query.configured_post_limit();
+            && settled_posts < query.configured_post_limit();
         if continue_run {
             transaction.execute(
                 "UPDATE subscription_run_query
@@ -1439,6 +1439,73 @@ mod tests {
     use super::*;
     use crate::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
     use crate::subscriptions::{NormalizedItem, NormalizedPost};
+
+    #[test]
+    fn skipped_budget_survives_recovery_without_another_worker_claim() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Skipped budget".into(),
+            schedule: "manual".into(),
+            initial_post_limit: Some(1),
+            periodic_post_limit: Some(1),
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        application
+            .request_subscription_run_library(id, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let query = claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        record_post(
+            &application,
+            query.run_query_id,
+            &NormalizedPost {
+                site_id: query.site_id.clone(),
+                post_key: "no-media".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: Vec::new(),
+            },
+            "2026-08-29T00:00:02Z",
+        )
+        .unwrap();
+        assert!(matches!(
+            settled_post_outcome(&application, &query, "no-media").unwrap(),
+            SourcePostOutcome::Skipped { .. }
+        ));
+        checkpoint_query_cursor(&application, &query, "after-skipped").unwrap();
+        recover(&application, "2026-08-29T00:01:00Z").unwrap();
+        assert!(claim_next_query(
+            &application,
+            &mut DomainSchedule::new(),
+            "2026-08-29T00:01:01Z"
+        )
+        .unwrap()
+        .is_none());
+        let (status, cursor): (String, Option<String>) = application.library().auxiliary_read(WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row("SELECT status, resume_cursor FROM subscription_run_query WHERE run_query_id = ?1", [query.run_query_id], |row| Ok((row.get(0)?, row.get(1)?)))?)
+        }).unwrap();
+        assert_eq!(status, "succeeded");
+        assert_eq!(cursor.as_deref(), Some("after-skipped"));
+    }
 
     #[test]
     fn posts_per_run_is_independent_for_each_subscription_query() {
@@ -1934,8 +2001,8 @@ mod tests {
             .expect("a released reservation makes budget claimable again");
         assert_eq!(
             second.source_post_batch_size(),
-            2,
-            "a skipped post does not consume the added-post budget"
+            1,
+            "a skipped post consumes one settled-post budget slot"
         );
     }
 

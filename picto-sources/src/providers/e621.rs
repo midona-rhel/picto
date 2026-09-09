@@ -10,7 +10,17 @@ use crate::{
 };
 
 const CURSOR: BeforeIdCursor = BeforeIdCursor::new("b");
-const QUERY: SearchQueryPolicy = SearchQueryPolicy::new("e621", &["page:", "limit:", "order:"]);
+const QUERY: SearchQueryPolicy = SearchQueryPolicy::new(
+    "e621",
+    &[
+        "page:",
+        "limit:",
+        "order:",
+        "ordfav:",
+        "ordfavgroup:",
+        "ordpool:",
+    ],
+);
 const NAMESPACES: NamespaceMap = NamespaceMap::new(&[
     ("artist", "creator"),
     ("character", "character"),
@@ -161,7 +171,6 @@ fn canonical_tags(
 
 #[derive(Debug, Deserialize)]
 struct PostsResponse {
-    #[serde(default)]
     posts: Vec<ApiPost>,
 }
 
@@ -197,6 +206,26 @@ mod tests {
 
     use super::*;
     use crate::SourcePartition;
+
+    #[test]
+    fn malformed_envelopes_cannot_exhaust_a_search() {
+        for response in [
+            json!({}),
+            json!({"error": "unavailable"}),
+            json!({"posts": null}),
+        ] {
+            assert!(serde_json::from_value::<PostsResponse>(response).is_err());
+        }
+        let response = serde_json::from_value(json!({"posts": []})).unwrap();
+        assert!(parse_posts(&request(), response).exhausted);
+    }
+
+    #[test]
+    fn ordered_collections_cannot_use_the_id_cursor() {
+        for query in ["ordpool:42", "ordfav:user", "ordfavgroup:42"] {
+            assert!(adapter().validate_query(query).is_err());
+        }
+    }
 
     fn request() -> DiscoveryRequest {
         DiscoveryRequest {

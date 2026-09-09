@@ -282,7 +282,7 @@ export function registerIpcHandlers({
       return null;
     }
     if (command === 'auth_session_start') {
-      return windowManager.startAuthSession(args?.site_category);
+      return windowManager.startAuthSession(args?.site_category, args?.service_host);
     }
     if (command === 'auth_session_cancel') {
       return windowManager.cancelAuthSession();
@@ -365,7 +365,13 @@ export function registerIpcHandlers({
     try {
       serialized = await invokeSerialized(command, args || {});
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // Cancellation is an expected grid outcome. Rejecting ipcMain.handle
+      // makes Electron itself log it as an application error.
+      if (command === 'items.window' && message === 'query superseded') {
+        return { __pictoQuerySuperseded: true };
+      }
+      throw new Error(message);
     }
     if (command === 'settings.get') {
       windowManager.setThemePreference(JSON.parse(serialized).value.colorScheme);

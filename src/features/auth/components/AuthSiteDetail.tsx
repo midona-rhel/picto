@@ -16,6 +16,8 @@ export function AuthSiteDetail({
   onSaveManualOnlyFans,
   onCancelLogin,
   onRemoveCredential,
+  subscribeStarHost = 'www.subscribestar.com',
+  onSubscribeStarHostChange,
 }: {
   entry: AuthSiteSnapshot | null;
   session: AuthSessionState;
@@ -25,6 +27,8 @@ export function AuthSiteDetail({
   onSaveManualOnlyFans: (input: OnlyFansManualAuthInput) => Promise<void>;
   onCancelLogin: () => Promise<void>;
   onRemoveCredential: () => Promise<void>;
+  subscribeStarHost?: string;
+  onSubscribeStarHostChange?: (host: string) => void;
 }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [cookie, setCookie] = useState('');
@@ -100,6 +104,20 @@ export function AuthSiteDetail({
             <dt>{t("Last checked")}</dt><dd>{entry.health?.last_checked_at ? formatRelativeTime(entry.health.last_checked_at) : t("Never")}</dd>
           </dl>
 
+          {entry.site.id === 'subscribestar' && (
+            <div className={styles.manualForm}>
+              <label>
+                <span>{t('Service')}</span>
+                <select className={styles.buttonSecondary} value={subscribeStarHost}
+                  disabled={busy || sessionActive} onChange={(event) => onSubscribeStarHostChange?.(event.target.value)}>
+                  {['www.subscribestar.com', 'subscribestar.adult', 'subscribestar.art'].map((host) => (
+                    <option key={host} value={host}>{host}</option>
+                  ))}
+                </select>
+              </label>
+              <p>{t('One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.')}</p>
+            </div>
+          )}
         <div className={styles.inlineActions}>
           <button type="button" className={styles.buttonPrimary} disabled={busy || sessionActive} onClick={() => { void onStartLogin(); }}>
             {sessionActive ? t("Logging in…") : entry.credential ? t("Refresh Login") : t("Log In")}

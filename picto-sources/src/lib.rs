@@ -13,6 +13,7 @@ mod http;
 mod json;
 mod media;
 mod model;
+pub(crate) mod page_cache;
 pub mod providers;
 mod query;
 mod segmented;

@@ -1244,7 +1244,6 @@ export function GridScreen({
         totalCount={totalCount}
         windowStart={windowStart}
         onRequestWindow={(index) => { void gridController.requestWindowAt(index); }}
-        onScrollActivity={() => gridController.handleScrollActivity()}
         interactive={!viewerSession && !quickLookSession}
         selectedItemIds={selectedItemIds}
         selectedFolderNodeIds={selectedSubfolderNodeIds}

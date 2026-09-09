@@ -12,7 +12,7 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import { finishGridCommit } from '../gridBenchmarkTiming';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
-import { gridViewportMissesWindow, gridWindowDestination, placeGridWindow, SettledGridRequest } from './gridWindow';
+import { gridViewportMissesWindow, gridWindowDestination, placeGridWindow, CoalescedGridRequest } from './gridWindow';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 import {
   BADGE_FONT,
@@ -174,7 +174,6 @@ export interface CanvasGridProps {
   totalCount?: number | null;
   windowStart?: number;
   onRequestWindow?: (index: number) => void;
-  onScrollActivity?: () => void;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onTileMiddleClick?: (index: number, item: CanonicalEntityGridItem) => void;
@@ -228,7 +227,6 @@ export function CanvasGrid({
   totalCount = null,
   windowStart = 0,
   onRequestWindow,
-  onScrollActivity,
   onTileClick,
   onTileDoubleClick,
   onTileMiddleClick,
@@ -406,11 +404,9 @@ export function CanvasGrid({
     ? placeGridWindow(localLayout, windowStart, totalCount ?? items.length, density, windowAnchorRef.current)
     : { ...localLayout, windowTop: 0, windowBottom: localLayout.totalHeight },
   [localLayout, windowed, windowStart, totalCount, items.length, density]);
-  const settledWindowRef = useRef(new SettledGridRequest());
+  const windowRequestRef = useRef(new CoalescedGridRequest());
   const requestWindowRef = useRef(onRequestWindow);
   requestWindowRef.current = onRequestWindow;
-  const scrollActivityRef = useRef(onScrollActivity);
-  scrollActivityRef.current = onScrollActivity;
   const renderItemsRef = useRef(layoutModel.items);
   renderItemsRef.current = layoutModel.items;
   const estimatedScrollHeight = useMemo(
@@ -476,6 +472,15 @@ export function CanvasGrid({
 
   // ── Thumbnail pipeline lifecycle ──
   useEffect(() => {
+    // Fast Refresh preserves refs but replays effects. Recreate imperative
+    // helpers together so no previous module's methods survive a code update.
+    const revealTracker = new ThumbnailRevealTracker(() => markDirty('base'));
+    revealTrackerRef.current = revealTracker;
+    const windowRequest = new CoalescedGridRequest();
+    windowRequestRef.current = windowRequest;
+    // A failed paint may have left saved transforms/clips in this context.
+    // The retained pixels belong to the same lifecycle as the decoder.
+    baseBufferCanvasRef.current = null;
     const pipeline = new ThumbnailPipeline(() => {
       markDirty('base');
     }, (fileHash) => {
@@ -485,12 +490,13 @@ export function CanvasGrid({
       }
     });
     pipelineRef.current = pipeline;
+    markDirty('base');
     return () => {
       pipeline.destroy();
-      revealTrackerRef.current.clear();
+      revealTracker.clear();
       pipelineRef.current = null;
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
-      settledWindowRef.current.cancel();
+      windowRequest.cancel();
     };
   }, []);
 
@@ -565,11 +571,11 @@ export function CanvasGrid({
     const now = performance.now();
 
     ctx.save();
-    ctx.scale(vp.dpr, vp.dpr);
+    ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
     ctx.clearRect(0, 0, vp.containerWidth, renderHeight);
 
-    // The activation zone controls decode residency. The actual viewport
-    // independently controls entity reveal identity.
+    // Decode residency, the 500px reveal region, and actual-viewport HQ dwell
+    // are distinct. Both paint and scroll scans use the same activation helper.
     const ACTIVATION_MARGIN = 100;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
     const zoneBottom = scrollTop + renderHeight + ACTIVATION_MARGIN;
@@ -604,12 +610,12 @@ export function CanvasGrid({
     pipeline.updatePlan(surfaceVisible ? planTiles : [], visibleScrollTop + vp.viewportHeight / 2, vp.dpr, now);
     revealTrackerRef.current.updateViewport(
       surfaceVisible ? viewportHashes : EMPTY_FOLDER_NODE_SET,
-      now,
       (itemId) => {
         const itemIndex = layoutModel.itemIdToIndex.get(Number(itemId));
         const item = itemIndex == null ? null : layoutModel.items[itemIndex];
         return item != null && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
       },
+      now,
     );
 
     const drawCtx: DrawContext = {
@@ -957,14 +963,17 @@ export function CanvasGrid({
     const candidates = viewportCandidateBufRef.current;
     candidates.length = 0;
     const viewportBottom = visibleScrollTop + viewportHeight;
-    model.spatialIndex.queryYRange(visibleScrollTop, viewportBottom, candidates);
+    const margin = CANVAS_SCROLL_BUFFER_MARGIN_PX + 100;
+    const activeTop = visibleScrollTop - margin;
+    const activeBottom = viewportBottom + margin;
+    model.spatialIndex.queryYRange(activeTop, activeBottom, candidates);
     const buffers = viewportActivationBuffersRef.current;
     collectThumbnailActivation(
       candidates,
       model.positions,
       model.items,
-      visibleScrollTop,
-      viewportBottom,
+      activeTop,
+      activeBottom,
       visibleScrollTop,
       viewportBottom,
       textHeightRef.current,
@@ -980,13 +989,13 @@ export function CanvasGrid({
     );
     revealTrackerRef.current.updateViewport(
       buffers.viewportHashes,
-      now,
       (itemIdentity) => {
         const itemIndex = model.itemIdToIndex.get(Number(itemIdentity));
         const item = itemIndex == null ? null : model.items[itemIndex];
         return item != null
           && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
       },
+      now,
     );
   }, [fitThumbnails, viewMode, surfaceVisible]);
 
@@ -1099,7 +1108,7 @@ export function CanvasGrid({
 
   const scheduleWindow = useCallback(() => {
     if (!windowed || !interactive) return;
-    settledWindowRef.current.schedule(() => {
+    windowRequestRef.current.schedule(() => {
       const container = containerRef.current;
       if (!container) return;
       const top = Math.max(0, container.scrollTop - headerHeightRef.current);
@@ -1142,7 +1151,6 @@ export function CanvasGrid({
     const delta = scrollTop - lastScrollTopRef.current;
     if (windowed) {
       windowAnchorRef.current = null;
-      scrollActivityRef.current?.();
       scheduleWindow();
     }
     const elapsed = now - lastScrollTimeRef.current;
@@ -1231,7 +1239,7 @@ export function CanvasGrid({
   // order before the user moves away from the already-full initial viewport.
   useEffect(() => {
     if (windowed) {
-      return () => settledWindowRef.current.cancel();
+      return () => windowRequestRef.current.cancel();
     }
     const container = containerRef.current;
     if (!container || !onLoadMore) return;

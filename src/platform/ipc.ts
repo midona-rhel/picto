@@ -17,6 +17,10 @@ interface CoreJsonEnvelope {
 }
 
 function decodeInvokeResult<T>(result: unknown): { value: T; nativeDurationMs?: number } {
+  if (result && typeof result === 'object' && '__pictoQuerySuperseded' in result
+    && result.__pictoQuerySuperseded === true) {
+    throw new Error('query superseded');
+  }
   if (result && typeof result === 'object' && '__pictoCoreJson' in result) {
     const envelope = result as CoreJsonEnvelope;
     return {

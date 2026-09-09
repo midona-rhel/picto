@@ -11,14 +11,17 @@ use crate::{
     ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost,
 };
 
-const CURSOR: OpaqueCursor = OpaqueCursor::new(21);
+const CURSOR: OpaqueCursor = OpaqueCursor::new(32);
 const MAX_GALLERY_PAGES: u32 = 40_000;
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    HentaiFoundrySource
+    HentaiFoundrySource::default()
 }
 
-struct HentaiFoundrySource;
+#[derive(Default)]
+struct HentaiFoundrySource {
+    page: crate::page_cache::PageCache<String>,
+}
 
 impl NativeSourceAdapter for HentaiFoundrySource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -45,10 +48,21 @@ impl NativeSourceAdapter for HentaiFoundrySource {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
             let anchor = decode_cursor(request.cursor.as_deref())?;
-            let mut page = 1;
+            let mut page = cursor_page(request.cursor.as_deref())?;
             for _ in 0..MAX_GALLERY_PAGES {
-                let html =
-                    visible_text(gallery_url(&username, page)?, credentials, http, cancel).await?;
+                let url = gallery_url(&username, page)?;
+                let html = self
+                    .page
+                    .get_or_fetch(
+                        url.as_str(),
+                        credentials,
+                        request
+                            .cursor
+                            .as_deref()
+                            .is_some_and(|cursor| !cursor.is_empty()),
+                        visible_text(url.clone(), credentials, http, cancel),
+                    )
+                    .await?;
                 match normalize_gallery_page(request, &username, anchor, page, &html)? {
                     GalleryScan::Post(post, exhausted) => {
                         return Ok(DiscoveryBatch {
@@ -241,7 +255,7 @@ fn normalize_gallery_page(
         if anchor.is_none_or(|anchor| post_id < anchor) {
             let exhausted = index + 1 == paths.len() && next.is_none();
             return Ok(GalleryScan::Post(
-                Box::new(discovered_post(request, username, path.clone())?),
+                Box::new(discovered_post(request, username, path.clone(), page)?),
                 exhausted,
             ));
         }
@@ -253,6 +267,7 @@ fn discovered_post(
     request: &DiscoveryRequest,
     username: &str,
     path: String,
+    page: u32,
 ) -> Result<SourcePost, SourceError> {
     let stable_id = post_id_from_path(&path)
         .ok_or_else(|| invalid_response("invalid Hentai Foundry post path"))?;
@@ -261,7 +276,7 @@ fn discovered_post(
         .join(&path)
         .map_err(|error| invalid_response(error.to_string()))?
         .to_string();
-    let resume_cursor_after = Some(encode_cursor(&stable_id)?);
+    let resume_cursor_after = Some(format!("{}@{page}", encode_cursor(&stable_id)?));
     Ok(SourcePost {
         site_id: "hentaifoundry".to_string(),
         partition: request.partition.clone(),
@@ -443,6 +458,8 @@ fn decode_cursor(raw: Option<&str>) -> Result<Option<u64>, SourceError> {
         return Ok(None);
     };
     let raw = CURSOR.validate(raw)?;
+    cursor_page(Some(raw))?;
+    let raw = raw.split('@').next().unwrap_or(raw);
     let post_id = raw.strip_prefix('b').ok_or_else(invalid_cursor)?;
     if post_id.is_empty() || !post_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid_cursor());
@@ -451,6 +468,17 @@ fn decode_cursor(raw: Option<&str>) -> Result<Option<u64>, SourceError> {
         .parse::<u64>()
         .map(Some)
         .map_err(|_| invalid_cursor())
+}
+
+fn cursor_page(raw: Option<&str>) -> Result<u32, SourceError> {
+    let Some(raw) = raw else { return Ok(1) };
+    let Some((_, page)) = raw.split_once('@') else {
+        return Ok(1);
+    };
+    page.parse::<u32>()
+        .ok()
+        .filter(|page| (1..=MAX_GALLERY_PAGES).contains(page))
+        .ok_or_else(invalid_cursor)
 }
 
 fn post_id_from_path(path: &str) -> Option<String> {
@@ -568,6 +596,14 @@ fn authentication_required() -> SourceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_retains_the_current_gallery_page_without_rescanning_history() {
+        assert_eq!(decode_cursor(Some("b1200002@27")).unwrap(), Some(1200002));
+        assert_eq!(cursor_page(Some("b1200002@27")).unwrap(), 27);
+        assert!(decode_cursor(Some("b1200002@0")).is_err());
+        assert!(decode_cursor(Some("b1200002@40001")).is_err());
+    }
     use crate::{CanonicalTag, SourcePartition};
 
     const GALLERY: &str = include_str!("../../tests/fixtures/hentaifoundry/gallery.html");
@@ -613,7 +649,7 @@ mod tests {
             normalize_gallery_page(&request(None, 50), "Example-Artist", None, 1, GALLERY).unwrap(),
         );
         assert_eq!(first.stable_id, "1200002");
-        assert_eq!(first.resume_cursor_after.as_deref(), Some("b1200002"));
+        assert_eq!(first.resume_cursor_after.as_deref(), Some("b1200002@1"));
         assert!(!first_exhausted);
 
         let anchor = decode_cursor(first.resume_cursor_after.as_deref()).unwrap();
@@ -622,7 +658,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(second.stable_id, "1200001");
-        assert_eq!(second.resume_cursor_after.as_deref(), Some("b1200001"));
+        assert_eq!(second.resume_cursor_after.as_deref(), Some("b1200001@1"));
         assert!(!second_exhausted);
         assert_eq!(
             gallery_url("Example-Artist", 2).unwrap().path(),

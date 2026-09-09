@@ -67,6 +67,7 @@ describe('subscription completion', () => {
   });
 
   it('rejects incomplete, failed, and paused queries', () => {
+    expect(isQueryCompleted(query({ source_history_complete: false, resume_cursor: 'next' }))).toBe(false);
     expect(isQueryCompleted(query({ completed_initial_run: false }))).toBe(false);
     expect(isQueryCompleted(query({ last_failure_kind: 'network' }))).toBe(false);
     expect(isQueryCompleted(query({ paused: true }))).toBe(false);

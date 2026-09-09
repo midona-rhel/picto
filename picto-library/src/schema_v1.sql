@@ -282,6 +282,7 @@ CREATE TABLE source_attempt_root (
     attempt_id INTEGER NOT NULL REFERENCES source_post_attempt(attempt_id) ON DELETE CASCADE,
     root_id INTEGER REFERENCES library_root(root_id) ON DELETE SET NULL,
     root_stable_key TEXT NOT NULL,
+    created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1)),
     PRIMARY KEY(attempt_id, root_stable_key)
 ) WITHOUT ROWID, STRICT;
 

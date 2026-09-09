@@ -10,6 +10,7 @@ import {
   type ThumbnailActivationBuffers,
 } from './gridLayoutModel';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
+import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
 
 function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height = 100): CanonicalEntityGridItem {
   return {
@@ -135,6 +136,51 @@ describe('grid scroll restoration', () => {
 });
 
 describe('collectThumbnailActivation', () => {
+  it('starts reveal eligibility at exactly 500px on either side without changing HQ visibility', () => {
+    const model = new GridLayoutRuntime().update(Array.from({ length: 5 }, (_, i) => item(i + 1)), {
+      width: 500, targetSize: 180, gap: 16, viewMode: 'grid', textHeight: 0, scrollbarWidth: 8,
+    });
+    const positions = [399, 400, 1500, 2500, 2501].map(y => ({ x: 0, y, w: 100, h: 100 }));
+    const buffers: ThumbnailActivationBuffers = {
+      activeTiles: [], activeHashes: new Set(), viewportHashes: new Set(), planTiles: [],
+    };
+    collectThumbnailActivation([0, 1, 2, 3, 4], positions, model.items,
+      300, 2700, 1000, 2000, 0, 'grid', false, buffers);
+    expect([...buffers.viewportHashes]).toEqual(['2', '3', '4']);
+    expect(buffers.planTiles.map(tile => tile.inViewport)).toEqual([false, false, true, false, false]);
+  });
+
+  it('keeps the same reveal lifetime when a nearby tile moves onto the actual screen', () => {
+    const model = new GridLayoutRuntime().update([item(1)], {
+      width: 500, targetSize: 180, gap: 16, viewMode: 'grid', textHeight: 0, scrollbarWidth: 8,
+    });
+    const positions = [{ x: 0, y: 2500, w: 100, h: 100 }];
+    const buffers: ThumbnailActivationBuffers = {
+      activeTiles: [], activeHashes: new Set(), viewportHashes: new Set(), planTiles: [],
+    };
+    const tracker = new ThumbnailRevealTracker();
+    const move = (top: number, now: number) => {
+      collectThumbnailActivation([0], positions, model.items,
+        top - 600, top + 1600, top, top + 1000, 0, 'grid', false, buffers);
+      tracker.updateViewport(buffers.viewportHashes, () => true, now);
+    };
+    try {
+      move(999, 0); // 501px away: not yet eligible.
+      expect(buffers.viewportHashes.size).toBe(0);
+      move(1000, 10); // Exactly 500px: lifetime begins.
+      expect(tracker.getProgress('1', 109)).toBe(0);
+      move(1600, 260); // Now visible, but the clock must not restart.
+      expect(tracker.getProgress('1', 260)).toBe(0.3);
+      expect(tracker.getProgress('1', 610)).toBe(1);
+      move(0, 700); // Leave the entire reveal region.
+      move(1000, 800);
+      expect(tracker.getProgress('1', 899)).toBe(0);
+      expect(tracker.getProgress('1', 1150)).toBe(0.5);
+    } finally {
+      tracker.clear();
+    }
+  });
+
   it('keeps fonts visible without scheduling a raster thumbnail decode', () => {
     const source = [item(10), { ...item(11), mime: 'font/ttf' }];
     const model = new GridLayoutRuntime().update(source, {

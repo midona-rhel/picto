@@ -19,10 +19,7 @@ import {
 } from './thumbnailDecodeClient';
 import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
-import {
-  FULL_QUALITY_VIEWPORT_DWELL_MS,
-  THUMBNAIL_VIEWPORT_DWELL_MS,
-} from './thumbnailTiming';
+import { FULL_QUALITY_VIEWPORT_DWELL_MS } from './thumbnailTiming';
 import {
   computePlanFingerprint,
   fullQualityDecodeSize,
@@ -37,7 +34,7 @@ export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 
 /** Prepared thumbnails fit inside a 512px square. Promote before the grid upscales them. */
 const THUMBNAIL_LONG_EDGE_PX = 512;
-export { FULL_QUALITY_VIEWPORT_DWELL_MS, THUMBNAIL_VIEWPORT_DWELL_MS } from './thumbnailTiming';
+export { FULL_QUALITY_VIEWPORT_DWELL_MS } from './thumbnailTiming';
 
 function mediaThumbnailUrl(hash: string): string {
   return `media://localhost/thumb/${hash}.jpg`;
@@ -90,7 +87,7 @@ export class ThumbnailPipeline {
     this.onDirty = onDirty;
   }
 
-  /** Build decode work only after a tile remains in the actual viewport. */
+  /** Load nearby thumbnails immediately; promote only settled visible tiles. */
   updatePlan(
     tiles: PlanTile[],
     viewportCenterY: number,
@@ -110,7 +107,14 @@ export class ThumbnailPipeline {
     loadTiles.length = 0;
     let nextWakeMs = Number.POSITIVE_INFINITY;
     for (const tile of tiles) {
-      if (tile.inViewport === false) continue;
+      const entry = this.cache.get(tile.fileHash);
+      if (tile.inViewport === false) {
+        if (!entry?.thumb) {
+          tile.fullQualityEligible = false;
+          loadTiles.push(tile);
+        }
+        continue;
+      }
       viewportHashes.add(tile.fileHash);
       let visibleAt = this.visibleSince.get(tile.fileHash);
       if (visibleAt == null) {
@@ -119,27 +123,19 @@ export class ThumbnailPipeline {
       }
 
       const dwellMs = Math.max(0, now - visibleAt);
-      const entry = this.cache.get(tile.fileHash);
       const hasBitmap = Boolean(entry?.thumb);
       tile.fullQualityEligible = true;
       const needsFull = shouldLoadFullQualityOriginal(tile, THUMBNAIL_LONG_EDGE_PX, devicePixelRatio);
 
       if (!hasBitmap) {
-        if (dwellMs >= THUMBNAIL_VIEWPORT_DWELL_MS) {
-          tile.fullQualityEligible = false;
-          loadTiles.push(tile);
-        } else {
-          nextWakeMs = Math.min(nextWakeMs, THUMBNAIL_VIEWPORT_DWELL_MS - dwellMs);
-        }
+        tile.fullQualityEligible = false;
+        loadTiles.push(tile);
         if (needsFull && dwellMs < FULL_QUALITY_VIEWPORT_DWELL_MS) {
           nextWakeMs = Math.min(nextWakeMs, FULL_QUALITY_VIEWPORT_DWELL_MS - dwellMs);
         }
         continue;
       }
 
-      if (dwellMs < THUMBNAIL_VIEWPORT_DWELL_MS) {
-        nextWakeMs = Math.min(nextWakeMs, THUMBNAIL_VIEWPORT_DWELL_MS - dwellMs);
-      }
       if (!needsFull) continue;
       if (dwellMs < FULL_QUALITY_VIEWPORT_DWELL_MS) {
         nextWakeMs = Math.min(nextWakeMs, FULL_QUALITY_VIEWPORT_DWELL_MS - dwellMs);

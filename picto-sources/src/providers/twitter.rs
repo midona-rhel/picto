@@ -30,6 +30,7 @@ pub(crate) fn adapter() -> impl NativeSourceAdapter {
 #[derive(Default)]
 struct TwitterSource {
     transaction: Mutex<Option<CachedClientTransaction>>,
+    page: crate::page_cache::PageCache<Value>,
 }
 
 struct CachedClientTransaction {
@@ -166,8 +167,17 @@ impl NativeSourceAdapter for TwitterSource {
                 let api_credentials = self
                     .graphql_credentials(credentials, http, &url, cancel)
                     .await?;
-                let response = http
-                    .get_browser_json::<Value>(url, &api_credentials, cancel)
+                let response = self
+                    .page
+                    .get_or_fetch(
+                        url.as_str(),
+                        credentials,
+                        request
+                            .cursor
+                            .as_deref()
+                            .is_some_and(|cursor| !cursor.is_empty()),
+                        http.get_browser_json::<Value>(url.clone(), &api_credentials, cancel),
+                    )
                     .await?;
                 let page = parse_timeline(&response)?;
                 if page.tweets.is_empty() && page.continue_on_empty {
@@ -619,8 +629,12 @@ fn normalize_tweet(
     let canonical_url = format!("https://x.com/{creator}/status/{stable_id}");
     let mut tags = CanonicalTagSet::default();
     tags.insert("creator", &creator);
-    if let Some(hashtags) = legacy
-        .pointer("/entities/hashtags")
+    let note = tweet.pointer("/note_tweet/note_tweet_results/result");
+    let entities = note
+        .and_then(|note| note.get("entity_set"))
+        .or_else(|| legacy.get("entities"));
+    if let Some(hashtags) = entities
+        .and_then(|entities| entities.get("hashtags"))
         .and_then(Value::as_array)
     {
         for hashtag in hashtags {
@@ -652,8 +666,9 @@ fn normalize_tweet(
         canonical_url: Some(canonical_url),
         creator: Some(creator),
         name: None,
-        notes: legacy
-            .get("full_text")
+        notes: note
+            .and_then(|note| note.get("text"))
+            .or_else(|| legacy.get("full_text"))
             .and_then(Value::as_str)
             .and_then(normalize_source_text),
         created_at: legacy
@@ -1037,6 +1052,27 @@ fn invalid_cursor() -> SourceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_form_notes_keep_full_text_and_note_hashtags() {
+        let raw = serde_json::json!({"rest_id":"123", "legacy":{
+            "full_text":"truncated", "entities":{"hashtags":[{"text":"old"}]}
+        }, "note_tweet":{"note_tweet_results":{"result":{
+            "text":"The complete long-form text", "entity_set":{"hashtags":[{"text":"complete"}]}
+        }}}});
+        let req = DiscoveryRequest {
+            query: "artist".into(),
+            partition: crate::SourcePartition::new("media"),
+            cursor: None,
+            page_size: 1,
+        };
+        let post = normalize_tweet(&req, "artist", raw, "cursor".into()).unwrap();
+        assert_eq!(post.notes.as_deref(), Some("The complete long-form text"));
+        assert!(post
+            .tags
+            .contains(&crate::CanonicalTag::new("", "complete")));
+        assert!(!post.tags.contains(&crate::CanonicalTag::new("", "old")));
+    }
     use crate::{CanonicalTag, SourcePartition};
 
     const USER: &str = include_str!("../../tests/fixtures/twitter/user.json");

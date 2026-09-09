@@ -276,9 +276,7 @@ export function createWindowManager({
                       backgroundColor: themeBg,
                     }),
               }),
-      // In development, show the main window immediately so a debugger run is
-      // directly usable even while renderer starts.
-      show: isDev && isMain,
+      show: false,
       ...(isMac && { roundedCorners: true }),
       // macOS vibrancy — applied at creation time (zero-frame)
       ...(useVibrancy && !isLibraryManager && {

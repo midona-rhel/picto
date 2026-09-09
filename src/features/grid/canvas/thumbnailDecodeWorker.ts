@@ -1,5 +1,7 @@
 /// <reference lib="webworker" />
 
+export {};
+
 /**
  * Thumbnail decode worker — owns loading, cancellation, and decoding.
  *
@@ -123,15 +125,14 @@ function startLoad(entry: PlanEntry): void {
           })
         : await createImageBitmap(blob);
 
-      if (controller.signal.aborted) { bitmap.close(); return; }
-      inFlight.delete(fileHash);
+      if (controller.signal.aborted || inFlight.get(fileHash) !== controller) { bitmap.close(); return; }
 
       if (requestKey(currentPlan.get(fileHash)) !== key) { bitmap.close(); return; }
 
       delivered.set(fileHash, key);
       ctx.postMessage({ type: 'bitmap', fileHash, quality, bitmap }, [bitmap]);
     } catch (error) {
-      inFlight.delete(fileHash);
+      if (controller.signal.aborted || inFlight.get(fileHash) !== controller) return;
       if ((error as Error)?.name === 'AbortError') return;
       const attempt = (failCounts.get(fileHash) ?? 0) + 1;
       failCounts.set(fileHash, attempt);
@@ -151,6 +152,7 @@ function startLoad(entry: PlanEntry): void {
         },
       });
     } finally {
+      if (inFlight.get(fileHash) === controller) inFlight.delete(fileHash);
       pumpLoads();
     }
   })();

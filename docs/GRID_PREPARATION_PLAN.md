@@ -19,8 +19,25 @@ from cold OS/storage caches explicitly.
 - Preserve navigation fade-out and fade-in: currently 170 ms each, with their existing easing.
 - Preserve primary-color-to-thumbnail reveal and size-dependent HQ promotion. The current thumbnail
   reveal envelope is 500 ms; it is separate from navigation timing.
-- Keep deterministic visibility eligibility: thumbnails at 100 ms, HQ at 250 ms, including cached
-  content. Preparing a hidden destination must not count as time visibly on screen.
+- Consistent reveal contract (reaffirmed 2026-09-09): every image, cached or newly decoded,
+  starts its lifetime when its tile first intersects the viewport expanded by 500 CSS pixels
+  above and below. It waits 100 ms from that entry, then follows the existing 500 ms
+  color-to-image reveal. The 500 ms is the reveal duration, not a second waiting period.
+  Cached/prefetched images follow the same clock. They may already be partly or fully revealed
+  on reaching the actual screen; crossing the screen edge must not restart the clock. If bytes
+  arrive after the 100 ms eligibility point, start the full 500 ms reveal at arrival. Leaving
+  and re-entering the expanded region repeats the timing; reflow, reorder, and HQ replacement
+  while remaining in that region do not restart it.
+- Loading is separate from revealing: nearby thumbnails may load early within the bounded
+  canvas buffer. HQ upgrades still require 250 ms of actual viewport dwell. Hidden preparation
+  never earns reveal time; offscreen tiles earn it only within the 500px reveal region.
+- Keep work bounded: draw only the viewport plus its fixed canvas buffer, never the full
+  resident result window/library. Do not issue image draw calls at zero reveal progress.
+  Decode at most six thumbnails/originals concurrently, admit at most one full-resolution
+  bitmap per animation frame, and use one shared reveal-delay timer per grid rather than
+  per-image timers or continuous redraws during the delay. Do not add staggered timing or
+  instant-display exceptions as a performance workaround; optimize work without changing
+  the 100 ms / 500 ms visual contract.
 - No new spinner, progress bar, debug overlay, skeleton design, setting, or interim result set.
 - Preserve current inline filter behavior; do not introduce a new transition for filters in this work.
 - No blank first frame for a nonempty result, wrong-page flash, late label/count pop-in caused by
@@ -43,7 +60,7 @@ not an excuse to extend the fade or show guessed results.
 | Native query | Reuses matches and ordered IDs; random windows use a seeded permutation | Measure remaining hydration/serialization and cold order construction, not add another order cache |
 | Layout | Resident items become objects, positions, an ID map, and a spatial index on the renderer thread | Keep this bounded; do not feed it a million records |
 | Layout math | Shared grid/waterfall/justified algorithms already have continuation support | Reuse one algorithm; account for unfinished justified rows and waterfall column state |
-| Scrolling | 40 ms settle delay; estimated extent; physical height capped at 8,000,000 px | Preserve arbitrary access and the cap; improve restoration without visible correction |
+| Scrolling | Latest destination coalesced every 40 ms; estimated extent; physical height capped at 8,000,000 px | Preserve arbitrary access and the cap; do not starve continuous scrolling |
 | Drawing | Retained canvas buffers, separate base/overlay, coalesced animation frames | Preserve reuse; background metadata completion must not trigger unrelated repaints |
 
 Source owners: `src/controllers/gridController.ts`, `src/features/workspace/WorkspaceSurface.tsx`,

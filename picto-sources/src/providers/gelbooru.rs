@@ -6,8 +6,8 @@ use url::Url;
 
 use crate::{
     AdapterFuture, BeforeIdCursor, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest, HttpRuntime,
-    MediaDescriptorBuilder, NativeSourceAdapter, ProviderDescriptor, RatingMap, RequestCredentials,
-    SearchQueryPolicy, SourceError, SourceErrorKind, SourcePost,
+    MediaDescriptorBuilder, MediaFallback, NativeSourceAdapter, ProviderDescriptor, RatingMap,
+    RequestCredentials, SearchQueryPolicy, SourceError, SourceErrorKind, SourcePost,
 };
 
 const CURSOR: BeforeIdCursor = BeforeIdCursor::new("b");
@@ -116,7 +116,10 @@ pub(super) fn request_url(
     request: &DiscoveryRequest,
     credentials: &RequestCredentials,
 ) -> Result<Url, SourceError> {
-    let mut tags = request.query.trim().to_string();
+    let mut tags = match request.query.trim() {
+        "all" => String::new(),
+        query => query.to_string(),
+    };
     if let Some(cursor) = request
         .cursor
         .as_deref()
@@ -271,7 +274,12 @@ fn media_descriptor(
     }
     if let Some(image_host) = config.rule34_image_host {
         let path = url.path().to_ascii_lowercase();
-        if !path.ends_with(".webm") && !path.ends_with(".mp4") {
+        if ![
+            "mp4", "m4v", "mov", "webm", "mkv", "ogv", "flv", "avi", "wmv",
+        ]
+        .iter()
+        .any(|extension| path.ends_with(&format!(".{extension}")))
+        {
             url.set_host(Some(image_host)).map_err(|_| {
                 SourceError::new(
                     SourceErrorKind::InvalidResponse,
@@ -304,13 +312,24 @@ fn media_descriptor(
     let headers = [("Referer".to_string(), canonical_url.to_string())]
         .into_iter()
         .collect();
-    Ok(
+    let mut media =
         MediaDescriptorBuilder::new(format!("{}:{post_id}:0", config.id), 0, url.to_string())
             .canonical_url(canonical_url)
             .file_name(file_name)
-            .headers(headers)
-            .build(),
-    )
+            .headers(headers);
+    if url.as_str() != raw_url {
+        let fallback_name = Url::parse(raw_url)
+            .ok()
+            .and_then(|url| url.path_segments()?.next_back().map(str::to_owned));
+        media = media.fallback(MediaFallback {
+            url: raw_url.to_owned(),
+            file_name: fallback_name,
+            mime_hint: None,
+            expected_size: None,
+            html_marker: None,
+        });
+    }
+    Ok(media.build())
 }
 
 fn is_authentication_error(message: &str) -> bool {
@@ -539,6 +558,21 @@ mod tests {
     }
 
     #[test]
+    fn all_alias_still_preserves_the_settled_id_boundary() {
+        let mut request = request();
+        request.query = "all".into();
+        let url = request_url(CONFIG, &request, &RequestCredentials::default()).unwrap();
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "tags" && value.is_empty()));
+        request.cursor = Some("b42".into());
+        let url = request_url(CONFIG, &request, &RequestCredentials::default()).unwrap();
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "tags" && value.trim() == "id:<42"));
+    }
+
+    #[test]
     fn maps_fixture_to_canonical_post_and_per_post_cursor() {
         let batch = normalize_fixture(
             CONFIG,
@@ -616,7 +650,8 @@ mod tests {
             media.url,
             "https://img3.gelbooru.com/images/aa/bb/aabbccddeeff00112233445566778899.webm"
         );
-        assert!(media.fallbacks.is_empty());
+        assert_eq!(media.fallbacks.len(), 1);
+        assert_eq!(media.fallbacks[0].url, post.file_url.unwrap());
     }
 
     #[test]

@@ -134,13 +134,25 @@ impl HttpRuntime {
             .redirect(reqwest::redirect::Policy::limited(10))
             .cookie_provider(Arc::clone(&cookies))
             .build()
-            .map_err(|error| SourceError::new(SourceErrorKind::Network, error.to_string(), true))?;
+            .map_err(|error| {
+                SourceError::new(
+                    SourceErrorKind::Network,
+                    error.without_url().to_string(),
+                    true,
+                )
+            })?;
         let browser_cookies = Arc::new(wreq::cookie::Jar::default());
         let browser_client = wreq::Client::builder()
             .emulation(Emulation::Firefox139)
             .cookie_provider(Arc::clone(&browser_cookies))
             .build()
-            .map_err(|error| SourceError::new(SourceErrorKind::Network, error.to_string(), true))?;
+            .map_err(|error| {
+                SourceError::new(
+                    SourceErrorKind::Network,
+                    error.without_url().to_string(),
+                    true,
+                )
+            })?;
         Ok(Self {
             client,
             browser_client,
@@ -169,8 +181,12 @@ impl HttpRuntime {
                 cancel,
             )
             .await?;
-        response.response.json::<T>().await.map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        response.response.json::<T>().await.map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })
     }
 
@@ -186,14 +202,13 @@ impl HttpRuntime {
         if is_inaccessible(response.response.status()) {
             return Ok(None);
         }
-        response
-            .response
-            .json::<T>()
-            .await
-            .map(Some)
-            .map_err(|error| {
-                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
-            })
+        response.response.json::<T>().await.map(Some).map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
+        })
     }
 
     /// Fetch JSON with Firefox TLS emulation while retaining shared pacing,
@@ -205,8 +220,12 @@ impl HttpRuntime {
         cancel: &CancellationToken,
     ) -> Result<T, SourceError> {
         let response = self.browser_get(url, credentials, false, cancel).await?;
-        response.response.json::<T>().await.map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        response.response.json::<T>().await.map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })
     }
 
@@ -220,14 +239,13 @@ impl HttpRuntime {
         if is_inaccessible(response.response.status()) {
             return Ok(None);
         }
-        response
-            .response
-            .json::<T>()
-            .await
-            .map(Some)
-            .map_err(|error| {
-                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
-            })
+        response.response.json::<T>().await.map(Some).map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
+        })
     }
 
     pub async fn get_browser_text(
@@ -237,8 +255,12 @@ impl HttpRuntime {
         cancel: &CancellationToken,
     ) -> Result<String, SourceError> {
         let response = self.browser_get(url, credentials, false, cancel).await?;
-        response.response.text().await.map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        response.response.text().await.map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })
     }
 
@@ -259,8 +281,8 @@ impl HttpRuntime {
         let retries = retry_count(RequestPurpose::Metadata, policy);
         let mut last_error = None;
         for attempt in 0..=retries {
-            let wait = self
-                .wait_for_domain(
+            let (permit, wait) = self
+                .acquire_request_slot(
                     &domain,
                     policy.minimum_interval,
                     policy.maximum_interval,
@@ -279,14 +301,6 @@ impl HttpRuntime {
                 browser = "firefox",
                 "HTTP request started"
             );
-            let permit = tokio::select! {
-                _ = cancel.cancelled() => {
-                    return Err(SourceError::new(SourceErrorKind::Cancelled, "request cancelled", true));
-                }
-                permit = Arc::clone(&self.permits).acquire_owned() => {
-                    permit.map_err(|_| SourceError::new(SourceErrorKind::Cancelled, "native HTTP runtime stopped", true))?
-                }
-            };
             let mut request = self
                 .browser_client
                 .get(url.as_str())
@@ -357,9 +371,7 @@ impl HttpRuntime {
                         true,
                     ));
                     drop(permit);
-                    if attempt < retries {
-                        wait_or_cancel(delay, cancel).await?;
-                    }
+                    self.defer_domain(&domain, delay).await;
                 }
                 Ok(response) if response.status().is_server_error() => {
                     last_error = Some(SourceError::new(
@@ -374,26 +386,14 @@ impl HttpRuntime {
                 }
                 Ok(response) if matches!(response.status().as_u16(), 401 | 403) => {
                     let status = response.status();
-                    let provider_message = response
-                        .text()
-                        .await
-                        .ok()
-                        .as_deref()
-                        .and_then(provider_error_message);
                     #[cfg(debug_assertions)]
                     tracing::debug!(
                         target: "picto_sources::http",
                         host = %domain,
                         status = status.as_u16(),
-                        provider_message = provider_message.as_deref().unwrap_or("unavailable"),
                         "Authenticated browser request was rejected"
                     );
-                    return Err(access_error_with_provider_message(
-                        RequestPurpose::Metadata,
-                        &domain,
-                        status,
-                        provider_message.as_deref(),
-                    ));
+                    return Err(access_error(RequestPurpose::Metadata, &domain, status));
                 }
                 Ok(response) => {
                     return Err(SourceError::new(
@@ -405,7 +405,7 @@ impl HttpRuntime {
                 Err(error) => {
                     last_error = Some(SourceError::new(
                         SourceErrorKind::Network,
-                        error.to_string(),
+                        error.without_url().to_string(),
                         true,
                     ));
                     drop(permit);
@@ -451,8 +451,12 @@ impl HttpRuntime {
             .text()
             .await
             .map(|body| (final_url, body))
-            .map_err(|error| {
-                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+            .map_err(|_| {
+                SourceError::new(
+                    SourceErrorKind::InvalidResponse,
+                    "HTTP response could not be decoded",
+                    false,
+                )
             })
     }
 
@@ -468,8 +472,12 @@ impl HttpRuntime {
         if is_inaccessible(response.response.status()) {
             return Ok(None);
         }
-        response.response.text().await.map(Some).map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        response.response.text().await.map(Some).map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })
     }
 
@@ -512,8 +520,12 @@ impl HttpRuntime {
                 cancel,
             )
             .await?;
-        response.response.text().await.map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        response.response.text().await.map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })
     }
 
@@ -535,8 +547,12 @@ impl HttpRuntime {
         destination: &Path,
         cancel: &CancellationToken,
     ) -> Result<DownloadedMedia, SourceError> {
-        let url = Url::parse(&descriptor.url).map_err(|error| {
-            SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+        let url = Url::parse(&descriptor.url).map_err(|_| {
+            SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "HTTP response could not be decoded",
+                false,
+            )
         })?;
         let headers = parse_headers(&descriptor.headers)?;
         let accepts_unavailable = descriptor
@@ -624,8 +640,12 @@ impl HttpRuntime {
             .next()
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/html"))
         {
-            let body = response.text().await.map_err(|error| {
-                SourceError::new(SourceErrorKind::InvalidResponse, error.to_string(), false)
+            let body = response.text().await.map_err(|_| {
+                SourceError::new(
+                    SourceErrorKind::InvalidResponse,
+                    "HTTP response could not be decoded",
+                    false,
+                )
             })?;
             drop(permit);
             let body_lower = body.to_ascii_lowercase();
@@ -671,7 +691,7 @@ impl HttpRuntime {
                     let _ = tokio::fs::remove_file(&temporary).await;
                     return Err(SourceError::new(
                         SourceErrorKind::Download,
-                        error.to_string(),
+                        error.without_url().to_string(),
                         true,
                     ));
                 }
@@ -787,8 +807,8 @@ impl HttpRuntime {
             let (minimum_interval, maximum_interval) = self
                 .adaptive_request_interval(&domain, purpose, minimum_interval, maximum_interval)
                 .await;
-            let wait = self
-                .wait_for_domain(&domain, minimum_interval, maximum_interval, cancel)
+            let (permit, wait) = self
+                .acquire_request_slot(&domain, minimum_interval, maximum_interval, cancel)
                 .await?;
             #[cfg(not(debug_assertions))]
             let _ = wait;
@@ -803,14 +823,6 @@ impl HttpRuntime {
                 maximum_interval_ms = maximum_interval.as_millis() as u64,
                 "HTTP request started"
             );
-            let permit = tokio::select! {
-                _ = cancel.cancelled() => {
-                    return Err(SourceError::new(SourceErrorKind::Cancelled, "request cancelled", true));
-                }
-                permit = self.permits.clone().acquire_owned() => permit.map_err(|_| {
-                    SourceError::new(SourceErrorKind::Cancelled, "native HTTP runtime stopped", true)
-                })?
-            };
             let headers = credential_headers(credentials, &domain, request_headers)?;
             trace_request(&domain, method.as_str(), attempt, minimum_interval);
             let response = tokio::select! {
@@ -893,29 +905,24 @@ impl HttpRuntime {
                     return Err(access_error(purpose, &domain, response.status()));
                 }
                 Ok(response) if response.status().as_u16() == 429 => {
+                    let requested_delay = retry_after(response.headers())
+                        .or_else(|| rate_limit_reset(response.headers()));
                     let delay = if is_deviantart_domain(&domain)
                         && matches!(purpose, RequestPurpose::Metadata)
                     {
-                        self.increase_adaptive_delay(&domain).await
+                        self.increase_adaptive_delay(&domain)
+                            .await
+                            .max(requested_delay.unwrap_or_default())
                     } else {
-                        retry_after(response.headers())
-                            .or_else(|| rate_limit_reset(response.headers()))
-                            .unwrap_or(DEFAULT_RATE_LIMIT_DELAY)
+                        requested_delay.unwrap_or(DEFAULT_RATE_LIMIT_DELAY)
                     };
                     last_error = Some(SourceError::new(
                         SourceErrorKind::RateLimited,
                         format!("{} rate limited the request", domain),
                         true,
                     ));
-                    if attempt < attempt_limit {
-                        if is_deviantart_domain(&domain)
-                            && matches!(purpose, RequestPurpose::Metadata)
-                        {
-                            self.defer_domain(&domain, delay).await;
-                        } else {
-                            wait_or_cancel(delay, cancel).await?;
-                        }
-                    }
+                    drop(permit);
+                    self.defer_domain(&domain, delay).await;
                 }
                 Ok(response) if response.status().is_server_error() => {
                     last_error = Some(SourceError::new(
@@ -939,7 +946,7 @@ impl HttpRuntime {
                 Err(error) => {
                     last_error = Some(SourceError::new(
                         SourceErrorKind::Network,
-                        error.to_string(),
+                        error.without_url().to_string(),
                         true,
                     ));
                     if attempt < retries {
@@ -954,24 +961,45 @@ impl HttpRuntime {
             .unwrap_or_else(|| SourceError::new(SourceErrorKind::Network, "request failed", true)))
     }
 
-    async fn wait_for_domain(
+    async fn acquire_request_slot(
         &self,
         domain: &str,
         minimum_interval: Duration,
         maximum_interval: Duration,
         cancel: &CancellationToken,
-    ) -> Result<Duration, SourceError> {
-        let delay = random_duration(minimum_interval, maximum_interval);
-        let wait = {
+    ) -> Result<(OwnedSemaphorePermit, Duration), SourceError> {
+        let started = Instant::now();
+        loop {
+            let deadline = self
+                .next_request_by_domain
+                .lock()
+                .await
+                .get(domain)
+                .copied();
+            if let Some(deadline) = deadline {
+                wait_or_cancel(deadline.saturating_duration_since(Instant::now()), cancel).await?;
+            }
+            let permit = tokio::select! {
+                _ = cancel.cancelled() => return Err(SourceError::new(
+                    SourceErrorKind::Cancelled, "request cancelled", true)),
+                permit = Arc::clone(&self.permits).acquire_owned() => permit.map_err(|_| {
+                    SourceError::new(SourceErrorKind::Cancelled, "native HTTP runtime stopped", true)
+                })?,
+            };
             let mut schedule = self.next_request_by_domain.lock().await;
             let now = Instant::now();
-            let allowed = schedule.get(domain).copied().unwrap_or(now);
-            let start = allowed.max(now);
-            schedule.insert(domain.to_string(), start + delay);
-            start.saturating_duration_since(now)
-        };
-        wait_or_cancel(wait, cancel).await?;
-        Ok(wait)
+            if schedule.get(domain).is_none_or(|deadline| *deadline <= now) {
+                schedule.insert(
+                    domain.to_string(),
+                    now + random_duration(minimum_interval, maximum_interval),
+                );
+                return Ok((permit, started.elapsed()));
+            }
+            // Recheck after acquiring a permit: another dispatch or a 429 may
+            // have moved the deadline while this request was waiting.
+            drop(schedule);
+            drop(permit);
+        }
     }
 
     async fn defer_domain(&self, domain: &str, delay: Duration) {
@@ -1135,18 +1163,7 @@ fn is_deviantart_request_block(body: &str) -> bool {
 }
 
 fn access_error(purpose: RequestPurpose, domain: &str, status: reqwest::StatusCode) -> SourceError {
-    access_error_with_provider_message(purpose, domain, status, None)
-}
-
-fn access_error_with_provider_message(
-    purpose: RequestPurpose,
-    domain: &str,
-    status: reqwest::StatusCode,
-    provider_message: Option<&str>,
-) -> SourceError {
-    let message = provider_message
-        .map(|message| format!("{domain} returned {status}: {message}"))
-        .unwrap_or_else(|| format!("{domain} returned {status}"));
+    let message = format!("{domain} returned {status}");
     match purpose {
         RequestPurpose::Metadata => {
             SourceError::new(SourceErrorKind::Authentication, message, false)
@@ -1157,17 +1174,6 @@ fn access_error_with_provider_message(
             false,
         ),
     }
-}
-
-fn provider_error_message(body: &str) -> Option<String> {
-    let payload: serde_json::Value = serde_json::from_str(body).ok()?;
-    let message = payload
-        .get("errors")?
-        .as_array()?
-        .iter()
-        .find_map(|error| error.get("message")?.as_str())?;
-    let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!message.is_empty()).then(|| message.chars().take(240).collect())
 }
 
 fn credential_headers(
@@ -1391,19 +1397,166 @@ mod tests {
     }
 
     #[test]
-    fn provider_error_messages_extract_only_bounded_structured_text() {
-        assert_eq!(
-            provider_error_message(
-                r#"{"errors":[{"code":32,"message":"Could not  authenticate\n you"}]}"#
-            )
-            .as_deref(),
-            Some("Could not authenticate you")
+    fn authentication_errors_only_report_host_and_status() {
+        let error = access_error(
+            RequestPurpose::Metadata,
+            "example.test",
+            reqwest::StatusCode::UNAUTHORIZED,
         );
-        assert_eq!(provider_error_message("<html>denied</html>"), None);
-        assert_eq!(
-            provider_error_message(r#"{"token":"secret","errors":[]}"#),
-            None
+        assert_eq!(error.message, "example.test returned 401 Unauthorized");
+    }
+
+    #[tokio::test]
+    async fn network_errors_never_return_request_secrets() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let runtime = HttpRuntime::new(HttpPolicy {
+            retries: 0,
+            minimum_interval: Duration::ZERO,
+            maximum_interval: Duration::ZERO,
+            ..HttpPolicy::default()
+        })
+        .unwrap();
+        let url = Url::parse(&format!("http://{address}/fixture?api_key=fixture-secret")).unwrap();
+        let credentials = RequestCredentials::default();
+        let cancel = CancellationToken::new();
+        let ordinary = runtime
+            .get_json::<serde_json::Value>(url.clone(), &credentials, &cancel)
+            .await
+            .unwrap_err();
+        let browser = runtime
+            .get_browser_json::<serde_json::Value>(url, &credentials, &cancel)
+            .await
+            .unwrap_err();
+        for error in [ordinary, browser] {
+            assert!(!error.message.contains("fixture-secret"));
+            assert!(!error.message.contains("api_key"));
+            assert_eq!(error.kind, SourceErrorKind::Network);
+        }
+    }
+
+    #[tokio::test]
+    async fn final_rate_limit_attempt_defers_other_requests_in_both_clients() {
+        for browser in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let mut arrivals = Vec::new();
+                for index in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut bytes = [0; 2048];
+                    assert!(stream.read(&mut bytes).unwrap() > 0);
+                    arrivals.push(Instant::now());
+                    let status = if index == 0 {
+                        "429 Too Many Requests\r\nRetry-After: 1"
+                    } else {
+                        "200 OK"
+                    };
+                    write!(
+                        stream,
+                        "HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                    )
+                    .unwrap();
+                }
+                arrivals
+            });
+            let runtime = HttpRuntime::new(HttpPolicy {
+                retries: 0,
+                minimum_interval: Duration::ZERO,
+                maximum_interval: Duration::ZERO,
+                ..HttpPolicy::default()
+            })
+            .unwrap();
+            let url = Url::parse(&format!("http://{address}/fixture")).unwrap();
+            let credentials = RequestCredentials::default();
+            let cancel = CancellationToken::new();
+            let first = if browser {
+                runtime
+                    .get_browser_json::<serde_json::Value>(url.clone(), &credentials, &cancel)
+                    .await
+            } else {
+                runtime
+                    .get_json::<serde_json::Value>(url.clone(), &credentials, &cancel)
+                    .await
+            };
+            assert_eq!(first.unwrap_err().kind, SourceErrorKind::RateLimited);
+            // The cooldown is shared across both HTTP implementations.
+            runtime
+                .get_json::<serde_json::Value>(url, &credentials, &cancel)
+                .await
+                .unwrap();
+            let arrivals = server.join().unwrap();
+            assert!(arrivals[1].duration_since(arrivals[0]) >= Duration::from_millis(950));
+        }
+    }
+
+    #[tokio::test]
+    async fn contended_permits_do_not_bunch_actual_dispatches() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut arrivals = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = [0; 2048];
+                assert!(stream.read(&mut bytes).unwrap() > 0);
+                arrivals.push(Instant::now());
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                )
+                .unwrap();
+            }
+            arrivals
+        });
+        let runtime = HttpRuntime::new(HttpPolicy {
+            maximum_concurrency: 1,
+            retries: 0,
+            minimum_interval: Duration::from_millis(60),
+            maximum_interval: Duration::from_millis(60),
+            ..HttpPolicy::default()
+        })
+        .unwrap();
+        let held = runtime.permits.clone().acquire_owned().await.unwrap();
+        let url = Url::parse(&format!("http://{address}/fixture")).unwrap();
+        let credentials = RequestCredentials::default();
+        let cancel = CancellationToken::new();
+        let release = async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            drop(held);
+        };
+        let (a, b, _) = tokio::join!(
+            runtime.get_json::<serde_json::Value>(url.clone(), &credentials, &cancel),
+            runtime.get_json::<serde_json::Value>(url, &credentials, &cancel),
+            release
         );
+        a.unwrap();
+        b.unwrap();
+        let arrivals = server.join().unwrap();
+        assert!(arrivals[1].duration_since(arrivals[0]) >= Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn waiting_request_observes_a_new_cooldown() {
+        let runtime = HttpRuntime::new(HttpPolicy::default()).unwrap();
+        runtime
+            .defer_domain("example.test", Duration::from_millis(60))
+            .await;
+        let cancel = CancellationToken::new();
+        let started = Instant::now();
+        let postpone = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            runtime
+                .defer_domain("example.test", Duration::from_millis(150))
+                .await;
+        };
+        let (slot, _) = tokio::join!(
+            runtime.acquire_request_slot("example.test", Duration::ZERO, Duration::ZERO, &cancel),
+            postpone
+        );
+        drop(slot.unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(160));
     }
 
     #[test]
@@ -1746,6 +1899,7 @@ mod tests {
             ],
             rejected_final_paths: Vec::new(),
             postprocess: None,
+            unavailable_reason: None,
         };
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("media.jpg");

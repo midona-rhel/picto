@@ -1,4 +1,5 @@
 {
+  "One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.": "One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.",
   " · {value0} unavailable": " · {value0} unavailable",
   "{value0} · {value1}": "{value0} · {value1}",
   "{value0} · Click to filter · Right-click for actions": "{value0} · Click to filter · Right-click for actions",

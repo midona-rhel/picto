@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::OnceLock};
 
-use serde::Deserialize;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -88,7 +89,27 @@ impl NativeSourceAdapter for SankakuAdapter {
             self.validate_query(&request.query)?;
             let credentials = api_credentials(self.config, credentials);
             let mut page_request = request.clone();
+            page_request.query = normalize_search(&request.query);
+            let parent_query = parent_search(&page_request.query);
+            let mut phase = ParentCursor::decode(request, parent_query.is_some())?;
+            if phase.as_ref().is_some_and(|phase| phase.finished) {
+                return Ok(DiscoveryBatch {
+                    posts: Vec::new(),
+                    exhausted: true,
+                });
+            }
+            page_request.cursor = match &phase {
+                Some(phase) => phase.next.clone(),
+                None => request.cursor.clone(),
+            };
             for empty_pages in 0..=MAX_EMPTY_KEYSET_PAGES {
+                page_request.query = if phase.as_ref().is_some_and(|phase| phase.parent) {
+                    parent_query
+                        .clone()
+                        .expect("parent phase has a parent search")
+                } else {
+                    normalize_search(&request.query)
+                };
                 let response = http
                     .get_json::<ApiPage>(
                         request_url(self.config, &page_request)?,
@@ -96,8 +117,18 @@ impl NativeSourceAdapter for SankakuAdapter {
                         cancel,
                     )
                     .await?;
+                if response.success == Some(false) {
+                    return Err(api_error(
+                        self.config,
+                        response.code.as_deref(),
+                        "rejected the search",
+                    ));
+                }
                 let next = next_cursor(&response)?;
-                let batch = normalize_page(self.config, &page_request, response)?;
+                let mut batch = normalize_page(self.config, &page_request, response)?;
+                if let Some(phase) = phase.as_mut() {
+                    phase.settle_page(&mut batch, next.clone())?;
+                }
                 if !batch.posts.is_empty() || batch.exhausted {
                     return Ok(batch);
                 }
@@ -111,7 +142,10 @@ impl NativeSourceAdapter for SankakuAdapter {
                         true,
                     ));
                 }
-                page_request.cursor = next;
+                page_request.cursor = phase
+                    .as_ref()
+                    .map(|phase| phase.next.clone())
+                    .unwrap_or(next);
             }
             unreachable!("bounded Sankaku keyset loop always returns")
         })
@@ -139,6 +173,101 @@ impl NativeSourceAdapter for SankakuAdapter {
             Ok(post)
         })
     }
+}
+
+fn normalize_search(query: &str) -> String {
+    static DATES: OnceLock<(Regex, Regex)> = OnceLock::new();
+    let (day_first, year_first) = DATES.get_or_init(|| {
+        (
+            Regex::new(r"date:(\d{2})[.-](\d{2})[.-](\d{4})(\b)").unwrap(),
+            Regex::new(r"date:(\d{4})[.-](\d{2})[.-](\d{2})(\b)").unwrap(),
+        )
+    });
+    let query = day_first.replace_all(query.trim(), "date:${3}-${2}-${1}T00:00");
+    year_first
+        .replace_all(&query, "date:${1}-${2}-${3}T00:00")
+        .into_owned()
+}
+
+fn parent_search(query: &str) -> Option<String> {
+    static PARENT: OnceLock<Regex> = OnceLock::new();
+    let pattern = PARENT.get_or_init(|| Regex::new(r"\bparent:(\w+)").unwrap());
+    pattern
+        .is_match(query)
+        .then(|| pattern.replace_all(query, "id_range:$1").into_owned())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParentCursor {
+    version: u8,
+    parent: bool,
+    finished: bool,
+    next: Option<String>,
+}
+
+impl ParentCursor {
+    fn settle_page(
+        &mut self,
+        batch: &mut DiscoveryBatch,
+        next: Option<String>,
+    ) -> Result<(), SourceError> {
+        self.next = next;
+        if self.parent && batch.exhausted {
+            self.parent = false;
+            self.next = None;
+            batch.exhausted = false;
+        } else if batch.exhausted {
+            self.finished = true;
+        }
+        for post in &mut batch.posts {
+            post.resume_cursor_after = Some(self.encode()?);
+        }
+        Ok(())
+    }
+
+    fn decode(request: &DiscoveryRequest, has_parent: bool) -> Result<Option<Self>, SourceError> {
+        if !has_parent {
+            return Ok(None);
+        }
+        let phase = match request
+            .cursor
+            .as_deref()
+            .filter(|cursor| !cursor.is_empty())
+        {
+            None => Self {
+                version: 1,
+                parent: true,
+                finished: false,
+                next: None,
+            },
+            Some(cursor) => {
+                if cursor.len() > 4096 {
+                    return Err(invalid_parent_cursor());
+                }
+                serde_json::from_str(cursor).map_err(|_| invalid_parent_cursor())?
+            }
+        };
+        if phase.version != 1 || (phase.finished && (phase.parent || phase.next.is_some())) {
+            return Err(invalid_parent_cursor());
+        }
+        if let Some(next) = phase.next.as_deref() {
+            CURSOR.validate(next)?;
+        }
+        Ok(Some(phase))
+    }
+
+    fn encode(&self) -> Result<String, SourceError> {
+        serde_json::to_string(self).map_err(|_| invalid_parent_cursor())
+    }
+}
+
+fn invalid_parent_cursor() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidQuery,
+        "Invalid Sankaku parent-search cursor; reset this query's progress",
+        false,
+    )
 }
 
 fn api_credentials(config: SankakuConfig, credentials: &RequestCredentials) -> RequestCredentials {
@@ -209,7 +338,11 @@ pub(super) fn normalize_page(
             "rejected the search",
         ));
     }
-    if response.data.len() > 1 {
+    let next = next_cursor(&response)?;
+    let data = response
+        .data
+        .ok_or_else(|| invalid_page("Missing Sankaku post list"))?;
+    if data.len() > 1 {
         return Err(SourceError::new(
             SourceErrorKind::InvalidResponse,
             format!(
@@ -220,12 +353,10 @@ pub(super) fn normalize_page(
         ));
     }
 
-    let next = next_cursor(&response)?;
     let exhausted = next.is_none();
     let current = request.cursor.clone();
-    let last = response.data.len().saturating_sub(1);
-    let posts = response
-        .data
+    let last = data.len().saturating_sub(1);
+    let posts = data
         .into_iter()
         .enumerate()
         .map(|(index, post)| {
@@ -242,13 +373,26 @@ pub(super) fn normalize_page(
 }
 
 fn next_cursor(response: &ApiPage) -> Result<Option<String>, SourceError> {
-    response
+    if response.data.is_none() {
+        return Err(invalid_page("Missing Sankaku post list"));
+    }
+    let value = response
         .meta
         .as_ref()
-        .and_then(|meta| meta.next.as_deref())
-        .filter(|cursor| !cursor.is_empty())
+        .map(|meta| &meta.next)
+        .ok_or_else(|| invalid_page("Missing Sankaku page metadata"))?;
+    let next = match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => Some(value.as_str()),
+        _ => return Err(invalid_page("Invalid Sankaku continuation")),
+    };
+    next.filter(|cursor| !cursor.is_empty())
         .map(|cursor| CURSOR.validate(cursor).map(ToOwned::to_owned))
         .transpose()
+}
+
+fn invalid_page(message: &str) -> SourceError {
+    SourceError::new(SourceErrorKind::InvalidResponse, message, true)
 }
 
 fn normalize_post(
@@ -279,14 +423,8 @@ fn normalize_post(
             .as_deref()
             .is_some_and(|status| status.eq_ignore_ascii_case("active"))
     {
-        return Err(SourceError::new(
-            SourceErrorKind::AccessDenied,
-            format!(
-                "{} requires a connected account with access to post {post_id}",
-                config.display_name
-            ),
-            false,
-        ));
+        tracing::warn!(site_id = config.id, post_id = %post_id,
+            "Skipping restricted source post: connected account access is required");
     }
     let media = media_url
         .map(|url| {
@@ -480,15 +618,21 @@ pub(super) struct ApiPage {
     #[serde(default)]
     code: Option<String>,
     #[serde(default)]
-    data: Vec<ApiPost>,
+    data: Option<Vec<ApiPost>>,
     #[serde(default)]
     meta: Option<ApiMeta>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ApiMeta {
-    #[serde(default)]
-    next: Option<String>,
+    #[serde(deserialize_with = "required_next")]
+    next: serde_json::Value,
+}
+
+fn required_next<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<serde_json::Value, D::Error> {
+    serde_json::Value::deserialize(deserializer)
 }
 
 #[derive(Debug, Deserialize)]
@@ -632,6 +776,133 @@ mod tests {
     }
 
     #[test]
+    fn parent_search_reopens_at_children_after_parent_settles() {
+        let mut request = request();
+        request.query = "parent:parent42 rating:safe".into();
+        request.cursor = None;
+        assert_eq!(
+            parent_search(&request.query).as_deref(),
+            Some("id_range:parent42 rating:safe")
+        );
+        let mut phase = ParentCursor::decode(&request, true).unwrap().unwrap();
+        assert!(phase.parent);
+        let response =
+            serde_json::from_str(include_str!("../../tests/fixtures/sankaku/parent-end.json"))
+                .unwrap();
+        let mut batch = normalize_page(config(), &request, response).unwrap();
+        assert!(batch.exhausted);
+        phase.settle_page(&mut batch, None).unwrap();
+        assert!(!batch.exhausted);
+        assert_eq!(batch.posts[0].stable_id, "parent42");
+        request.cursor = batch.posts[0].resume_cursor_after.clone();
+        let mut reopened = ParentCursor::decode(&request, true).unwrap().unwrap();
+        assert!(!reopened.parent);
+        assert!(reopened.next.is_none());
+        let response = serde_json::from_value(
+            json!({"data": [{"id":"child41"}],"meta":{"next":"child-next"}}),
+        )
+        .unwrap();
+        let mut children = normalize_page(config(), &request, response).unwrap();
+        reopened
+            .settle_page(&mut children, Some("child-next".into()))
+            .unwrap();
+        request.cursor = children.posts[0].resume_cursor_after.clone();
+        let continued = ParentCursor::decode(&request, true).unwrap().unwrap();
+        assert!(!continued.parent);
+        assert_eq!(continued.next.as_deref(), Some("child-next"));
+        let mut end = DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: true,
+        };
+        reopened.settle_page(&mut end, None).unwrap();
+        assert!(end.exhausted);
+        request.cursor = Some(reopened.encode().unwrap());
+        assert!(
+            ParentCursor::decode(&request, true)
+                .unwrap()
+                .unwrap()
+                .finished
+        );
+    }
+
+    #[test]
+    fn missing_parent_still_continues_with_child_search() {
+        let mut phase = ParentCursor {
+            version: 1,
+            parent: true,
+            finished: false,
+            next: None,
+        };
+        let mut batch = DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: true,
+        };
+        phase.settle_page(&mut batch, None).unwrap();
+        assert!(!phase.parent);
+        assert!(!batch.exhausted);
+    }
+
+    #[test]
+    fn parent_cursor_rejects_unknown_or_legacy_search_progress() {
+        let mut request = request();
+        for cursor in [
+            "old-opaque",
+            r#"{"version":2,"parent":true,"finished":false,"next":null}"#,
+            r#"{"version":1,"parent":true,"finished":false,"next":"bad\ncursor"}"#,
+        ] {
+            request.cursor = Some(cursor.into());
+            assert!(ParentCursor::decode(&request, true).is_err());
+        }
+        assert!(ParentCursor::decode(&request, false).unwrap().is_none());
+    }
+
+    #[test]
+    fn date_queries_match_reference_timestamp_forms() {
+        assert_eq!(
+            normalize_search("solo date:20-03-2026"),
+            "solo date:2026-03-20T00:00"
+        );
+        assert_eq!(normalize_search("date:2026.03.20"), "date:2026-03-20T00:00");
+        assert_eq!(
+            normalize_search("date:2026-03-20T12:30"),
+            "date:2026-03-20T12:30"
+        );
+        assert_eq!(
+            normalize_search("date:20.03.2026..2026-04-20"),
+            "date:2026-03-20T00:00..2026-04-20"
+        );
+    }
+
+    #[test]
+    fn invalid_envelopes_never_report_exhaustion() {
+        for value in [
+            json!({}),
+            json!({"data":[]}),
+            json!({"data":[],"meta":{}}),
+            json!({"data":[],"meta":{"next":false}}),
+            json!({"meta":{"next":null}}),
+        ] {
+            if let Ok(response) = serde_json::from_value::<ApiPage>(value) {
+                assert!(normalize_page(config(), &request(), response).is_err());
+            }
+        }
+        let response = serde_json::from_value(json!({"data":[],"meta":{"next":null}})).unwrap();
+        assert!(
+            normalize_page(config(), &request(), response)
+                .unwrap()
+                .exhausted
+        );
+        let response =
+            serde_json::from_value(json!({"success":false,"code":"unauthorized"})).unwrap();
+        assert_eq!(
+            normalize_page(config(), &request(), response)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Authentication
+        );
+    }
+
+    #[test]
     fn maps_one_post_and_advances_the_cursor_after_settlement() {
         let response: ApiPage = serde_json::from_value(json!({
             "success": true,
@@ -696,14 +967,19 @@ mod tests {
     }
 
     #[test]
-    fn active_inaccessible_post_is_not_misreported_as_no_media() {
+    fn active_inaccessible_post_is_skipped_without_stopping_the_search() {
         let response: ApiPage = serde_json::from_value(json!({
             "data": [{"id": 40001233, "status": "active", "file_url": null}],
             "meta": {"next": "next-page"}
         }))
         .unwrap();
-        let error = normalize_page(config(), &request(), response).unwrap_err();
-        assert_eq!(error.kind, SourceErrorKind::AccessDenied);
+        let batch = normalize_page(config(), &request(), response).unwrap();
+        assert!(!batch.exhausted);
+        assert!(batch.posts[0].media.is_empty());
+        assert_eq!(
+            batch.posts[0].resume_cursor_after.as_deref(),
+            Some("next-page")
+        );
     }
 
     #[test]
@@ -724,14 +1000,13 @@ mod tests {
 
     #[test]
     fn empty_keyset_pages_preserve_the_provider_continuation() {
-        let response: ApiPage = serde_json::from_value(json!({
-            "data": [],
-            "meta": {"next": "next-visible-window"}
-        }))
+        let response: ApiPage = serde_json::from_str(include_str!(
+            "../../tests/fixtures/sankaku/empty-continuation.json"
+        ))
         .unwrap();
         assert_eq!(
             next_cursor(&response).unwrap().as_deref(),
-            Some("next-visible-window")
+            Some("next-window")
         );
         let batch = normalize_page(config(), &request(), response).unwrap();
         assert!(batch.posts.is_empty());

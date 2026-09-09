@@ -121,8 +121,8 @@ export const authController = {
     return { sites: sitesWithState };
   },
 
-  startSession(siteCategory: string): Promise<AuthSessionState> {
-    return startAuthSession(siteCategory);
+  startSession(siteCategory: string, serviceHost?: string): Promise<AuthSessionState> {
+    return startAuthSession(siteCategory, serviceHost);
   },
 
   cancelSession(): Promise<void> {

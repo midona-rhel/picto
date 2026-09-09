@@ -6,6 +6,7 @@ import type { PlanTile } from './thumbnailPlan';
 import type { GridViewMode, LayoutItem } from '../layout/types';
 import type { GridScrollPosition } from '../../../shared/types/gridScroll';
 import { beginGridPreparation, endGridPreparation } from '../gridBenchmarkTiming';
+import { THUMBNAIL_REVEAL_MARGIN_PX } from './thumbnailTiming';
 
 export interface GridLayoutModel {
   items: CanvasRenderItem[];
@@ -22,6 +23,7 @@ export const GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT = 500;
 export interface ThumbnailActivationBuffers {
   activeTiles: number[];
   activeHashes: Set<string>;
+  /** Reveal identities in the viewport plus its 500px margin, not HQ eligibility. */
   viewportHashes: Set<string>;
   planTiles: PlanTile[];
 }
@@ -49,7 +51,8 @@ export function collectThumbnailActivation(
     if (!position || !item || position.y + position.h < activeTop || position.y > activeBottom) continue;
     buffers.activeTiles.push(index);
     buffers.activeHashes.add(item.thumbnailHash);
-    if (position.y + position.h >= viewportTop && position.y <= viewportBottom) {
+    if (position.y + position.h >= viewportTop - THUMBNAIL_REVEAL_MARGIN_PX
+      && position.y <= viewportBottom + THUMBNAIL_REVEAL_MARGIN_PX) {
       buffers.viewportHashes.add(item.hash);
     }
     if (!item.mime.startsWith('font/')) {

@@ -11,7 +11,17 @@ use crate::{
 
 const CURSOR: BeforeIdCursor = BeforeIdCursor::new("b");
 const ONLY_FIELDS: &str = "id,created_at,rating,file_url,large_file_url,file_ext,file_size,md5,tag_string_artist,tag_string_character,tag_string_copyright,tag_string_general,tag_string_meta,artist_commentary";
-const QUERY: SearchQueryPolicy = SearchQueryPolicy::new("Danbooru", &["page:", "limit:", "order:"]);
+const QUERY: SearchQueryPolicy = SearchQueryPolicy::new(
+    "Danbooru",
+    &[
+        "page:",
+        "limit:",
+        "order:",
+        "ordfav:",
+        "ordfavgroup:",
+        "ordpool:",
+    ],
+);
 const RATINGS: RatingMap = RatingMap::new(&[
     ("g", "general"),
     ("general", "general"),
@@ -230,6 +240,14 @@ mod tests {
 
     use super::*;
     use crate::{CanonicalTag, SourcePartition};
+
+    #[test]
+    fn ordered_collections_cannot_use_the_id_cursor() {
+        for query in ["ordpool:42", "ordfav:user", "ordfavgroup:42"] {
+            assert!(adapter().validate_query(query).is_err());
+        }
+        assert!(adapter().validate_query("pool:42").is_ok());
+    }
 
     #[test]
     fn maps_danbooru_fields_through_shared_canonical_types() {

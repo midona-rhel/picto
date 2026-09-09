@@ -23,10 +23,13 @@ const RATINGS: RatingMap = RatingMap::new(&[
 ]);
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    FurAffinitySource
+    FurAffinitySource::default()
 }
 
-struct FurAffinitySource;
+#[derive(Default)]
+struct FurAffinitySource {
+    page: crate::page_cache::PageCache<String>,
+}
 
 impl NativeSourceAdapter for FurAffinitySource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -53,8 +56,18 @@ impl NativeSourceAdapter for FurAffinitySource {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
             let cursor = current_cursor(request)?;
-            let html = http
-                .get_text(gallery_url(&username, cursor.page)?, credentials, cancel)
+            let url = gallery_url(&username, cursor.page)?;
+            let html = self
+                .page
+                .get_or_fetch(
+                    url.as_str(),
+                    credentials,
+                    request
+                        .cursor
+                        .as_deref()
+                        .is_some_and(|cursor| !cursor.is_empty()),
+                    http.get_text(url.clone(), credentials, cancel),
+                )
                 .await?;
             if is_login_page(&html) {
                 return Err(authentication_required());

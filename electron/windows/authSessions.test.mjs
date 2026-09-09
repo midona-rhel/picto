@@ -93,13 +93,72 @@ describe('direct-site authentication', () => {
     });
   });
 
-  it('captures SubscribeStar cookies from the same host used by its downloader', () => {
+  it('opens the current SubscribeStar login service', () => {
     expect(resolveAuthSite('subscribestar')).toMatchObject({
-      loginUrl: 'https://subscribestar.art/login',
-      cookieUrl: 'https://subscribestar.art',
+      loginUrl: 'https://www.subscribestar.com/login',
+      cookieUrl: 'https://www.subscribestar.com',
       cookieNames: ['_personalization_id', '18_plus_agreement_generic'],
       authenticatedCookieNames: ['_personalization_id'],
     });
+  });
+
+  it.each(['www.subscribestar.com', 'subscribestar.adult', 'subscribestar.art'])(
+    'captures only the selected SubscribeStar host: %s', async (host) => {
+      const browser = createBrowserWindowMock({ cookies: [{ name: '_personalization_id', value: 'fixture-session' }] });
+      const { sessions, persistCredential } = createHarness(browser);
+      await sessions.startAuthSession('subscribestar', host);
+      const popup = browser.instances[0];
+      expect(popup.loadedUrl).toBe(`https://${host}/login`);
+      popup.loadedUrl = `https://${host}/account`;
+      popup.webContents.session.cookies.get.mockClear();
+      await popup.webContents.listeners.get('did-finish-load')();
+      await settle();
+      expect(popup.webContents.session.cookies.get).toHaveBeenCalledWith({ url: `https://${host}` });
+      expect(popup.webContents.session.cookies.get.mock.calls.every(([arg]) => arg.url === `https://${host}`)).toBe(true);
+      expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+        site_id: 'subscribestar',
+        headers: { Origin: `https://${host}` },
+        cookies: { _personalization_id: 'fixture-session' },
+      }));
+      await sessions.cancelAuthSession();
+    },
+  );
+
+  it('does not capture a SubscribeStar session from a different origin', async () => {
+    const browser = createBrowserWindowMock({ cookies: [{ name: '_personalization_id', value: 'fixture-session' }] });
+    const { sessions, persistCredential } = createHarness(browser);
+    await sessions.startAuthSession('subscribestar');
+    const popup = browser.instances[0];
+    popup.loadedUrl = 'https://subscribestar.com.evil.test/account';
+    popup.webContents.session.cookies.get.mockClear();
+    await popup.webContents.listeners.get('did-finish-load')();
+    await settle();
+    expect(popup.webContents.session.cookies.get).not.toHaveBeenCalled();
+    expect(persistCredential).not.toHaveBeenCalled();
+    await sessions.cancelAuthSession();
+  });
+
+  it.each(['evil.test', 'https://subscribestar.com', 'subscribestar.com.evil.test'])(
+    'rejects an unsupported SubscribeStar login host: %s', async (host) => {
+      const browser = createBrowserWindowMock();
+      const { sessions } = createHarness(browser);
+      await expect(sessions.startAuthSession('subscribestar', host)).rejects.toThrow('supported SubscribeStar service');
+      expect(browser.instances).toHaveLength(0);
+    },
+  );
+
+  it('does not capture a different SubscribeStar service after a redirect', async () => {
+    const browser = createBrowserWindowMock({ cookies: [{ name: '_personalization_id', value: 'fixture-session' }] });
+    const { sessions, persistCredential } = createHarness(browser);
+    await sessions.startAuthSession('subscribestar', 'subscribestar.adult');
+    const popup = browser.instances[0];
+    popup.loadedUrl = 'https://www.subscribestar.com/account';
+    popup.webContents.session.cookies.get.mockClear();
+    await popup.webContents.listeners.get('did-finish-load')();
+    await settle();
+    expect(popup.webContents.session.cookies.get).not.toHaveBeenCalled();
+    expect(persistCredential).not.toHaveBeenCalled();
+    await sessions.cancelAuthSession();
   });
 
   it('captures the Newgrounds session used by gallery-dl', () => {

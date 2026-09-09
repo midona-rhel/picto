@@ -5,7 +5,7 @@ use crate::subscriptions::sites::{
     build_url, normalize_archive_creator_url, normalize_baraag_username,
     normalize_ehentai_gallery_url, normalize_fanbox_creator, normalize_furaffinity_username,
     normalize_newgrounds_username, normalize_onlyfans_creator, normalize_patreon_creator,
-    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username, site_by_id,
+    normalize_subscribestar_query, normalize_tumblr_blog, normalize_twitter_username, site_by_id,
     SiteEntry,
 };
 
@@ -81,7 +81,7 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
         return normalize_fanbox_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "subscribestar" && query_kind == "user" {
-        return normalize_subscribestar_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+        return normalize_subscribestar_query(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "onlyfans" && query_kind == "user" {
         return normalize_onlyfans_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
@@ -165,7 +165,7 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
         normalize_fanbox_creator(query_text)?;
     }
     if site_id == "subscribestar" {
-        normalize_subscribestar_creator(query_text)?;
+        normalize_subscribestar_query(query_text)?;
     }
     if site_id == "onlyfans" {
         normalize_onlyfans_creator(query_text)?;
@@ -191,6 +191,9 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
                 || token.starts_with("id_range:")
                 || token.starts_with("order:")
                 || token.starts_with("sort:")
+                || token.starts_with("ordfav:")
+                || token.starts_with("ordfavgroup:")
+                || token.starts_with("ordpool:")
         }) {
             return Err(format!(
                 "Subscription query cannot control pagination or ordering: {token}"
@@ -330,7 +333,7 @@ mod tests {
                 "user",
                 "https://subscribestar.art/creator-name"
             ),
-            "creator-name"
+            "https://subscribestar.art/creator-name"
         );
     }
 
@@ -479,6 +482,97 @@ mod tests {
             assert!(validate_query_text(site_id, "artist id:<123").is_err());
             assert!(validate_query_text(site_id, "artist order:id_asc").is_err());
             assert!(validate_query_text(site_id, "artist sort:id:asc").is_err());
+        }
+    }
+    #[test]
+    fn creator_url_normalization_survives_subscription_persistence() {
+        use super::normalize_query_text;
+        use crate::library_application::LibraryApplication;
+        use crate::subscription_catalog::{NewSubscription, NewSubscriptionQuery};
+        use picto_library::database::WorkPriority;
+
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        for (site, input, expected) in [
+            (
+                "subscribestar",
+                "https://www.subscribestar.com/creator-name",
+                "https://www.subscribestar.com/creator-name",
+            ),
+            (
+                "subscribestar",
+                "https://www.subscribestar.adult/creator-name",
+                "https://subscribestar.adult/creator-name",
+            ),
+            (
+                "subscribestar",
+                "https://subscribestar.art/creator-name",
+                "https://subscribestar.art/creator-name",
+            ),
+            (
+                "subscribestar",
+                "creator-name",
+                "https://subscribestar.art/creator-name",
+            ),
+            (
+                "patreon",
+                "https://www.patreon.com/c/creator-name/posts",
+                "creator-name",
+            ),
+            (
+                "patreon",
+                "https://www.patreon.com/cw/creator-name/posts",
+                "creator-name",
+            ),
+            (
+                "fanbox",
+                "https://creator-name.fanbox.cc/posts",
+                "creator-name",
+            ),
+            (
+                "fanbox",
+                "https://www.fanbox.cc/@creator-name/posts",
+                "creator-name",
+            ),
+        ] {
+            assert!(validate_query_text(site, input).is_ok());
+            assert_eq!(normalize_query_text(site, "user", input), expected);
+            let definition = NewSubscription {
+                name: input.into(),
+                schedule: "manual".into(),
+                initial_post_limit: Some(1),
+                periodic_post_limit: Some(1),
+                queries: vec![NewSubscriptionQuery {
+                    site_id: site.into(),
+                    query_text: input.into(),
+                    display_name: None,
+                    notes: None,
+                    group_posts: true,
+                }],
+            };
+            let (id, _) = application
+                .create_subscription_definition_library(&definition, "2026-09-09T00:00:00Z")
+                .unwrap();
+            let stored: String = application
+                .library()
+                .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                    connection
+                        .query_row(
+                            "SELECT query_text FROM subscription_query WHERE subscription_id = ?1",
+                            [id],
+                            |row| row.get(0),
+                        )
+                        .map_err(Into::into)
+                })
+                .unwrap();
+            assert_eq!(stored, expected);
+            assert!(validate_query_text(site, &stored).is_ok());
+            if site == "subscribestar" {
+                assert_eq!(
+                    crate::subscriptions::sites::build_url(site, &stored).as_deref(),
+                    Some(expected)
+                );
+            }
         }
     }
 }

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -53,9 +53,10 @@ impl NativeSourceAdapter for SafebooruSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             self.validate_query(&request.query)?;
+            let mut page_request = request.clone();
             for attempt in 0..EMPTY_PAGE_ATTEMPTS {
                 let posts = match http
-                    .get_json::<Vec<ApiPost>>(request_url(request)?, credentials, cancel)
+                    .get_json::<Vec<ApiPost>>(request_url(&page_request)?, credentials, cancel)
                     .await
                 {
                     Ok(posts) => posts,
@@ -63,11 +64,14 @@ impl NativeSourceAdapter for SafebooruSource {
                         if error.kind == SourceErrorKind::InvalidResponse
                             && attempt + 1 < EMPTY_PAGE_ATTEMPTS =>
                     {
+                        if let Some(cursor) = recovery_cursor(&page_request)? {
+                            page_request.cursor = Some(cursor);
+                        }
                         continue;
                     }
                     Err(error) => return Err(error),
                 };
-                let batch = normalize(request, posts)?;
+                let batch = normalize(&page_request, posts)?;
                 if !batch.posts.is_empty() || attempt + 1 == EMPTY_PAGE_ATTEMPTS {
                     return Ok(batch);
                 }
@@ -119,7 +123,7 @@ impl NativeSourceAdapter for SafebooruSource {
 }
 
 fn request_url(request: &DiscoveryRequest) -> Result<Url, SourceError> {
-    let page = current_page(request)?;
+    let cursor = current_cursor(request)?;
     let mut url = Url::parse("https://safebooru.org/index.php").expect("static Safebooru API URL");
     {
         let mut query = url.query_pairs_mut();
@@ -127,10 +131,17 @@ fn request_url(request: &DiscoveryRequest) -> Result<Url, SourceError> {
         query.append_pair("s", "post");
         query.append_pair("q", "index");
         query.append_pair("json", "1");
-        query.append_pair("tags", request.query.trim());
+        let mut tags = match request.query.trim() {
+            "all" => String::new(),
+            query => query.to_string(),
+        };
+        if let Some(before) = cursor.before {
+            tags.push_str(&format!(" id:<{before}"));
+        }
+        query.append_pair("tags", tags.trim());
         // One source post per request keeps detail resolution and settlement serial.
         query.append_pair("limit", "1");
-        query.append_pair("pid", &page.to_string());
+        query.append_pair("pid", &cursor.page.to_string());
     }
     Ok(url)
 }
@@ -139,7 +150,7 @@ fn normalize(
     request: &DiscoveryRequest,
     response: Vec<ApiPost>,
 ) -> Result<DiscoveryBatch, SourceError> {
-    let page = current_page(request)?;
+    let cursor = current_cursor(request)?;
     if response.len() > 1 {
         return Err(SourceError::new(
             SourceErrorKind::InvalidResponse,
@@ -148,11 +159,22 @@ fn normalize(
         ));
     }
     let exhausted = response.is_empty();
-    let next_cursor = CURSOR.encode(page.saturating_add(1))?;
     let posts = response
         .into_iter()
-        .map(|post| normalize_post(request, post, next_cursor.clone()))
-        .collect();
+        .map(|post| {
+            let next = SavedCursor {
+                version: 1,
+                page: if cursor.before.is_some() {
+                    0
+                } else {
+                    cursor.page.saturating_add(1)
+                },
+                last_id: Some(post.id),
+                before: cursor.before.map(|_| post.id),
+            };
+            Ok(normalize_post(request, post, encode_cursor(&next)?))
+        })
+        .collect::<Result<Vec<_>, SourceError>>()?;
     Ok(DiscoveryBatch { posts, exhausted })
 }
 
@@ -275,13 +297,67 @@ fn invalid_tag_response() -> SourceError {
     )
 }
 
-fn current_page(request: &DiscoveryRequest) -> Result<u32, SourceError> {
-    request
-        .cursor
-        .as_deref()
-        .filter(|cursor| !cursor.is_empty())
-        .map(|cursor| CURSOR.validate(cursor))
-        .unwrap_or(Ok(0))
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedCursor {
+    version: u8,
+    page: u32,
+    last_id: Option<u64>,
+    before: Option<u64>,
+}
+
+fn current_cursor(request: &DiscoveryRequest) -> Result<SavedCursor, SourceError> {
+    let value = request.cursor.as_deref().unwrap_or("");
+    // The existing decimal page format has no settled ID to recover from yet.
+    let cursor = if value.starts_with('{') {
+        if value.len() > 256 {
+            return Err(invalid_cursor());
+        }
+        serde_json::from_str(value).map_err(|_| invalid_cursor())?
+    } else {
+        SavedCursor {
+            version: 1,
+            page: if value.is_empty() {
+                0
+            } else {
+                CURSOR.validate(value)?
+            },
+            last_id: None,
+            before: None,
+        }
+    };
+    CURSOR.encode(cursor.page)?;
+    if cursor.version != 1 || (cursor.before.is_some() && cursor.page != 0) {
+        return Err(invalid_cursor());
+    }
+    Ok(cursor)
+}
+
+fn encode_cursor(cursor: &SavedCursor) -> Result<String, SourceError> {
+    CURSOR.encode(cursor.page)?;
+    serde_json::to_string(cursor).map_err(|_| invalid_cursor())
+}
+
+fn recovery_cursor(request: &DiscoveryRequest) -> Result<Option<String>, SourceError> {
+    let cursor = current_cursor(request)?;
+    match (cursor.before, cursor.last_id) {
+        (None, Some(id)) => encode_cursor(&SavedCursor {
+            version: 1,
+            page: 0,
+            before: Some(id),
+            last_id: Some(id),
+        })
+        .map(Some),
+        _ => Ok(None),
+    }
+}
+
+fn invalid_cursor() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidQuery,
+        "Invalid Safebooru cursor",
+        false,
+    )
 }
 
 fn file_name_from_url(url: &str) -> Option<String> {
@@ -356,7 +432,9 @@ mod tests {
         assert_eq!(batch.posts.len(), 1);
         let post = &batch.posts[0];
         assert_eq!(post.stable_id, "7099551");
-        assert_eq!(post.resume_cursor_after.as_deref(), Some("8"));
+        let resumed = current_cursor(&request(post.resume_cursor_after.as_deref())).unwrap();
+        assert_eq!(resumed.page, 8);
+        assert_eq!(resumed.last_id, Some(7099551));
         assert_eq!(post.media[0].file_name.as_deref(), Some("hash.jpg"));
         assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/jpeg"));
         assert!(post.tags.contains(&CanonicalTag::new("rating", "general")));
@@ -411,5 +489,49 @@ mod tests {
     #[test]
     fn empty_page_retry_is_bounded() {
         assert_eq!(EMPTY_PAGE_ATTEMPTS, 2);
+    }
+
+    #[test]
+    fn deep_page_failure_resumes_after_last_settled_id() {
+        let response = serde_json::from_value(json!([{"id": 42}])).unwrap();
+        let batch = normalize(&request(Some("9000")), response).unwrap();
+        let settled = request(batch.posts[0].resume_cursor_after.as_deref());
+        let recovery = recovery_cursor(&settled).unwrap().unwrap();
+        let resumed = request(Some(&recovery));
+        let url = request_url(&resumed).unwrap();
+        let pairs = url.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(pairs["pid"], "0");
+        assert_eq!(pairs["tags"], "1girl solo id:<42");
+        let next = normalize(
+            &resumed,
+            serde_json::from_value(json!([{"id": 41}])).unwrap(),
+        )
+        .unwrap();
+        let next_url = request_url(&request(next.posts[0].resume_cursor_after.as_deref())).unwrap();
+        assert!(next_url
+            .query_pairs()
+            .any(|(key, value)| key == "tags" && value == "1girl solo id:<41"));
+        assert!(recovery_cursor(&resumed).unwrap().is_none());
+    }
+
+    #[test]
+    fn recovery_requires_a_known_settled_post() {
+        assert!(recovery_cursor(&request(Some("7"))).unwrap().is_none());
+        for cursor in [
+            r#"{"version":2,"page":1,"last_id":42,"before":null}"#,
+            r#"{"version":1,"page":1,"last_id":42,"before":42}"#,
+        ] {
+            assert!(request_url(&request(Some(cursor))).is_err());
+        }
+    }
+
+    #[test]
+    fn all_alias_requests_an_unfiltered_search() {
+        let mut request = request(None);
+        request.query = "all".into();
+        assert!(request_url(&request)
+            .unwrap()
+            .query_pairs()
+            .any(|(key, value)| key == "tags" && value.is_empty()));
     }
 }

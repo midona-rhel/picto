@@ -644,11 +644,13 @@ fn normalize_creator(raw: &str) -> Result<String, SourceError> {
             .collect::<Vec<_>>();
         if matches!(host, "fanbox.cc" | "www.fanbox.cc") {
             match segments.as_slice() {
-                [creator] if creator.starts_with('@') => creator[1..].to_string(),
+                [creator] | [creator, "posts"] if creator.starts_with('@') => {
+                    creator[1..].to_string()
+                }
                 _ => return Err(invalid_query("pixivFANBOX requires a creator profile URL")),
             }
         } else if let Some(creator) = host.strip_suffix(".fanbox.cc") {
-            if !segments.is_empty() {
+            if !segments.is_empty() && segments.as_slice() != ["posts"] {
                 return Err(invalid_query("pixivFANBOX requires a creator profile URL"));
             }
             creator.to_string()
@@ -747,6 +749,17 @@ fn invalid_response(message: impl Into<String>) -> SourceError {
 mod tests {
     use super::*;
     use crate::{CanonicalTag, SourcePartition};
+
+    #[test]
+    fn creator_post_list_urls_keep_the_same_scope() {
+        for url in [
+            "https://creator-name.fanbox.cc/posts",
+            "https://www.fanbox.cc/@creator-name/posts",
+        ] {
+            assert_eq!(normalize_creator(url).unwrap(), "creator-name");
+        }
+        assert!(normalize_creator("https://creator-name.fanbox.cc/posts/123").is_err());
+    }
 
     #[test]
     fn supports_anonymous_access_and_preserves_the_fanbox_browser_request_context() {

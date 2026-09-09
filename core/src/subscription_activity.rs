@@ -130,6 +130,8 @@ pub struct SubscriptionQueryActivity {
 pub struct SubscriptionRunActivity {
     pub summary: SubscriptionRunSummary,
     pub queries: Vec<SubscriptionQueryActivity>,
+    /// Durable identities of roots created by this run, not retained media attempts.
+    pub new_library_item_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -275,7 +277,22 @@ fn run_activity_from_connection(
             query_activity_from_connection(connection, run_query_id, source_item_limit)
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(Some(SubscriptionRunActivity { summary, queries }))
+    let mut roots = connection.prepare(
+        "SELECT DISTINCT result.root_stable_key
+         FROM subscription_run_query query
+         JOIN source_post_attempt attempt USING(run_query_id)
+         JOIN source_attempt_root result USING(attempt_id)
+         WHERE query.run_id = ?1 AND result.created_root = 1 AND result.root_id IS NOT NULL
+         ORDER BY result.root_stable_key",
+    )?;
+    let new_library_item_keys = roots
+        .query_map([run_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(SubscriptionRunActivity {
+        summary,
+        queries,
+        new_library_item_keys,
+    }))
 }
 
 pub fn current_progress_library(

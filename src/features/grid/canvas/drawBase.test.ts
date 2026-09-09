@@ -7,7 +7,7 @@ vi.mock('../../../shared/ui/ThumbnailImage/drawBrokenThumbnail', () => ({
 }));
 
 describe('drawCanvasBaseLayer', () => {
-  it('contains video thumbnails even when image thumbnails are configured to fill', () => {
+  it.each([0, 0.5, 1])('skips zero-progress image work and contains video thumbnails at progress %s', (progress) => {
     const drawImage = vi.fn();
     const ctx = {
       beginPath: vi.fn(),
@@ -44,7 +44,8 @@ describe('drawCanvasBaseLayer', () => {
         mediaCount: 1,
       }],
       atlasGet: () => ({ thumb: bitmap, state: 'shown', lastAccessed: 0, bytes: 1 }),
-      revealProgress: () => 1,
+      revealProgress: () => progress,
+      revealAnimating: () => progress > 0 && progress < 1,
       activeTiles: [0],
       draw: { scrollTop: 0, viewportHeight: 100, textHeight: 0, borderRadius: 4 },
       theme: {
@@ -65,7 +66,8 @@ describe('drawCanvasBaseLayer', () => {
       showItemCount: false,
     });
 
-    expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 200, 100, 0, 25, 100, 50);
+    if (progress === 0) expect(drawImage).not.toHaveBeenCalled();
+    else expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 200, 100, 0, 25, 100, 50);
   });
 
   it('uses a neutral surface behind broken media instead of its dominant color', () => {

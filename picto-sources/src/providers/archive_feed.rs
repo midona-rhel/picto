@@ -29,11 +29,19 @@ pub(super) struct ArchiveProvider {
     pub file_first: bool,
 }
 
-pub(super) const fn archive_adapter(provider: ArchiveProvider) -> ArchiveSource {
-    ArchiveSource(provider)
+pub(super) fn archive_adapter(provider: ArchiveProvider) -> ArchiveSource {
+    ArchiveSource(
+        provider,
+        crate::page_cache::PageCache::default(),
+        crate::page_cache::PageCache::default(),
+    )
 }
 
-pub(super) struct ArchiveSource(ArchiveProvider);
+pub(super) struct ArchiveSource(
+    ArchiveProvider,
+    crate::page_cache::PageCache<Value>,
+    crate::page_cache::PageCache<Option<Value>>,
+);
 
 impl NativeSourceAdapter for ArchiveSource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -61,11 +69,20 @@ impl NativeSourceAdapter for ArchiveSource {
             let creator = normalize_creator_query(self.0, &request.query)?;
             let cursor = decode_cursor(self.0, &creator, request.cursor.as_deref())?;
             let credentials = api_credentials(self.0, credentials);
-            let response = http
-                .get_json::<Value>(
-                    listing_url(self.0, &creator, cursor.offset)?,
+            if request.cursor.as_deref().is_none_or(str::is_empty) {
+                self.2.clear().await;
+            }
+            let url = listing_url(self.0, &creator, cursor.offset)?;
+            let response = self
+                .1
+                .get_or_fetch(
+                    url.as_str(),
                     &credentials,
-                    cancel,
+                    request
+                        .cursor
+                        .as_deref()
+                        .is_some_and(|cursor| !cursor.is_empty()),
+                    http.get_json::<Value>(url.clone(), &credentials, cancel),
                 )
                 .await?;
             normalize_page(self.0, request, &creator, cursor, response)
@@ -90,8 +107,14 @@ impl NativeSourceAdapter for ArchiveSource {
                 return Ok(post_without_detail(post));
             };
             let profile_url = profile_url(self.0, &locator)?;
-            let profile = http
-                .get_optional_json::<Value>(profile_url, &credentials, cancel)
+            let profile = self
+                .2
+                .get_or_fetch(
+                    profile_url.as_str(),
+                    &credentials,
+                    true,
+                    http.get_optional_json::<Value>(profile_url.clone(), &credentials, cancel),
+                )
                 .await?;
             normalize_detail(self.0, post, &locator, detail, profile)
         })

@@ -1,7 +1,30 @@
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { closeDesktopWindow, runReverseImageSearch } from './registerHandlers.mjs';
+import { closeDesktopWindow, registerIpcHandlers, runReverseImageSearch } from './registerHandlers.mjs';
+
+describe('native grid cancellation transport', () => {
+  function handler(invokeSerialized) {
+    const handlers = new Map();
+    registerIpcHandlers({
+      ipcMain: { handle: (name, callback) => handlers.set(name, callback), on: vi.fn() },
+      windowManager: { ownsWebContents: () => true },
+      invokeSerialized,
+    });
+    return (command) => handlers.get('picto:invoke')({ sender: {} }, { command, args: {} });
+  }
+
+  it('resolves expected supersession instead of making Electron log a handler failure', async () => {
+    const invoke = handler(vi.fn().mockRejectedValue(new Error('query superseded')));
+    await expect(invoke('items.window')).resolves.toEqual({ __pictoQuerySuperseded: true });
+    await expect(invoke('items.delete')).rejects.toThrow('query superseded');
+  });
+
+  it('does not suppress a genuine window read failure', async () => {
+    await expect(handler(vi.fn().mockRejectedValue(new Error('database unavailable')))('items.window'))
+      .rejects.toThrow('database unavailable');
+  });
+});
 
 describe('closeDesktopWindow', () => {
   it.each(['win32', 'linux'])('quits when closing the main window on %s', (platform) => {

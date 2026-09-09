@@ -226,7 +226,19 @@ function createCookieAdapter(site) {
       if (site.unauthenticatedUrlPattern?.test(currentUrl)) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
       }
-      const cookieUrls = site.cookieUrls ?? [site.cookieUrl];
+      let subscribeStarOrigin = null;
+      if (site.id === 'subscribestar') {
+        let url;
+        try { url = new URL(currentUrl); } catch {}
+        if (!url || url.protocol !== 'https:' || url.port || url.username || url.password
+          || !/^(?:www\.)?subscribestar\.(?:com|adult|art)$/.test(url.hostname)
+          || url.hostname.replace(/^www\./, '') !== new URL(site.cookieUrl).hostname.replace(/^www\./, '')) {
+          return { status: 'active', message: 'Sign in on your SubscribeStar service to continue.' };
+        }
+        subscribeStarOrigin = url.origin;
+      }
+      // These services have separate accounts; never combine their cookies.
+      const cookieUrls = subscribeStarOrigin ? [subscribeStarOrigin] : (site.cookieUrls ?? [site.cookieUrl]);
       const stored = (await Promise.all(
         cookieUrls.map((url) => contents.session.cookies.get({ url })),
       )).flat();
@@ -297,6 +309,7 @@ function createCookieAdapter(site) {
           credential_type: 'cookies',
           cookies,
           ...(site.id === 'fanbox' && fanboxHeaders ? { headers: fanboxHeaders } : {}),
+          ...(subscribeStarOrigin ? { headers: { Origin: subscribeStarOrigin } } : {}),
         },
         message: `${site.label} session captured.`,
       };
@@ -752,10 +765,17 @@ export function createAuthSessions({
     contents.on('will-navigate', intercept);
   }
 
-  async function startAuthSession(siteCategory) {
-    await cancelAuthSession();
-    const site = resolveAuthSite(siteCategory);
+  async function startAuthSession(siteCategory, serviceHost) {
+    let site = resolveAuthSite(siteCategory);
     if (!site) throw new Error(`Unsupported auth site: ${String(siteCategory || '').trim().toLowerCase()}`);
+    if (serviceHost !== undefined) {
+      if (site.id !== 'subscribestar'
+        || !['www.subscribestar.com', 'subscribestar.adult', 'subscribestar.art'].includes(serviceHost)) {
+        throw new Error('Choose a supported SubscribeStar service.');
+      }
+      site = { ...site, loginUrl: `https://${serviceHost}/login`, cookieUrl: `https://${serviceHost}` };
+    }
+    await cancelAuthSession();
     completed = false;
     finishing = false;
     inspecting = false;

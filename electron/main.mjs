@@ -44,9 +44,6 @@ if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
 }
 
 const isDev = !app.isPackaged;
-if (isDev && process.platform === 'darwin') {
-  app.setActivationPolicy('accessory');
-}
 
 // Single instance guard — prevent multiple Picto processes from running.
 const gotLock = isAutomation || app.requestSingleInstanceLock();

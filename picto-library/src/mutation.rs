@@ -1459,7 +1459,12 @@ impl Library {
                             .as_ref()
                             .and_then(|source| source.source_attempt_id)
                         {
-                            record_source_attempt_root(transaction, attempt_id, output.root_id)?;
+                            record_source_attempt_root(
+                                transaction,
+                                attempt_id,
+                                output.root_id,
+                                true,
+                            )?;
                             resources.insert("subscriptions".to_owned());
                         }
                     }
@@ -1705,7 +1710,12 @@ impl Library {
                         .filter_map(|source| source.source_attempt_id)
                         .collect::<BTreeSet<_>>()
                     {
-                        record_source_attempt_root(transaction, attempt_id, published_root)?;
+                        record_source_attempt_root(
+                            transaction,
+                            attempt_id,
+                            published_root,
+                            creates_collection || created_root_ids.contains(&published_root),
+                        )?;
                         resources.insert("subscriptions".to_owned());
                     }
                 }
@@ -8192,14 +8202,15 @@ fn record_source_attempt_root(
     transaction: &rusqlite::Transaction<'_>,
     attempt_id: i64,
     root_id: RootId,
+    created_root: bool,
 ) -> Result<()> {
     transaction.execute(
-        "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key)
-         SELECT ?1, item.local_id, item.stable_key
+        "INSERT INTO source_attempt_root(attempt_id, root_id, root_stable_key, created_root)
+         SELECT ?1, item.local_id, item.stable_key, ?3
          FROM library_item item
          WHERE item.local_id = ?2
-         ON CONFLICT DO NOTHING",
-        rusqlite::params![attempt_id, root_id.0],
+         ON CONFLICT(attempt_id, root_stable_key) DO UPDATE SET created_root = MAX(source_attempt_root.created_root, excluded.created_root)",
+        rusqlite::params![attempt_id, root_id.0, created_root],
     )?;
     Ok(())
 }

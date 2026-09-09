@@ -212,7 +212,7 @@ pub static SITES: &[SiteEntry] = &[
         domain: "subscribestar.art",
         credential_owner_site_id: "subscribestar",
         name: "SubscribeStar",
-        example_query: "creator-slug",
+        example_query: "https://www.subscribestar.com/creator-slug",
         supports_query: false,
         supports_account: true,
         auth_required_for_full_access: true,
@@ -379,9 +379,7 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "fanbox" => normalize_fanbox_creator(query)
             .ok()
             .and_then(|creator| build_fanbox_creator_url(&creator)),
-        "subscribestar" => normalize_subscribestar_creator(query)
-            .ok()
-            .and_then(|creator| build_subscribestar_creator_url(&creator)),
+        "subscribestar" => normalize_subscribestar_query(query).ok(),
         "onlyfans" => normalize_onlyfans_creator(query)
             .ok()
             .and_then(|creator| build_onlyfans_creator_url(&creator)),
@@ -919,7 +917,10 @@ pub fn normalize_patreon_creator(raw: &str) -> Result<String, String> {
             .filter(|segment| !segment.is_empty())
             .collect();
         match segments.as_slice() {
-            ["c", creator] | [creator] | [creator, "posts"] => (*creator).to_string(),
+            ["c" | "cw", creator]
+            | ["c" | "cw", creator, "posts"]
+            | [creator]
+            | [creator, "posts"] => (*creator).to_string(),
             _ => return Err("Patreon subscriptions require a creator profile URL".to_string()),
         }
     } else {
@@ -965,7 +966,7 @@ pub fn normalize_fanbox_creator(raw: &str) -> Result<String, String> {
             .collect();
         if matches!(host, "fanbox.cc" | "www.fanbox.cc") {
             match segments.as_slice() {
-                [creator] if creator.starts_with('@') && creator.len() > 1 => {
+                [creator] | [creator, "posts"] if creator.starts_with('@') && creator.len() > 1 => {
                     creator[1..].to_string()
                 }
                 _ => {
@@ -973,7 +974,7 @@ pub fn normalize_fanbox_creator(raw: &str) -> Result<String, String> {
                 }
             }
         } else if let Some(creator) = host.strip_suffix(".fanbox.cc") {
-            if !segments.is_empty() {
+            if !matches!(segments.as_slice(), [] | ["posts"]) {
                 return Err("pixivFANBOX subscriptions require a public creator URL".to_string());
             }
             creator.to_string()
@@ -997,18 +998,25 @@ fn build_fanbox_creator_url(creator: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
+pub fn normalize_subscribestar_query(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("SubscribeStar subscriptions require a creator slug".to_string());
     }
 
+    let mut host = "subscribestar.art";
     let creator = if let Ok(url) = Url::parse(trimmed) {
+        host = match url.host_str() {
+            Some("subscribestar.com" | "www.subscribestar.com") => "www.subscribestar.com",
+            Some("subscribestar.adult" | "www.subscribestar.adult") => "subscribestar.adult",
+            Some("subscribestar.art" | "www.subscribestar.art") => "subscribestar.art",
+            _ => {
+                return Err(
+                    "SubscribeStar subscriptions require a canonical creator URL".to_string(),
+                )
+            }
+        };
         if !matches!(url.scheme(), "http" | "https")
-            || !matches!(
-                url.host_str(),
-                Some("subscribestar.art" | "subscribestar.com" | "www.subscribestar.com")
-            )
             || url.username() != ""
             || url.password().is_some()
             || url.port().is_some()
@@ -1025,7 +1033,7 @@ pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
             .filter(|segment| !segment.is_empty())
             .collect();
         match segments.as_slice() {
-            [creator] => (*creator).to_string(),
+            [creator] if *creator != "posts" => (*creator).to_string(),
             _ => {
                 return Err("SubscribeStar subscriptions require a creator profile URL".to_string())
             }
@@ -1034,11 +1042,12 @@ pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
         trimmed.to_string()
     };
 
-    validate_simple_creator_slug(
+    let creator = validate_simple_creator_slug(
         &creator,
         128,
         "SubscribeStar subscriptions require a safe creator slug",
-    )
+    )?;
+    Ok(format!("https://{host}/{creator}"))
 }
 
 pub fn normalize_onlyfans_creator(raw: &str) -> Result<String, String> {
@@ -1079,14 +1088,6 @@ pub fn normalize_onlyfans_creator(raw: &str) -> Result<String, String> {
 
 fn build_onlyfans_creator_url(creator: &str) -> Option<String> {
     let mut url = Url::parse("https://onlyfans.com").ok()?;
-    url.path_segments_mut().ok()?.push(creator);
-    Some(url.to_string())
-}
-
-fn build_subscribestar_creator_url(creator: &str) -> Option<String> {
-    // Start on the canonical public host and let the site's redirect retain
-    // the creator slug.
-    let mut url = Url::parse("https://www.subscribestar.com").ok()?;
     url.path_segments_mut().ok()?.push(creator);
     Some(url.to_string())
 }
@@ -1319,7 +1320,7 @@ mod tests {
         );
         assert_eq!(
             build_url("subscribestar", "https://subscribestar.art/creator-name").as_deref(),
-            Some("https://www.subscribestar.com/creator-name")
+            Some("https://subscribestar.art/creator-name")
         );
         assert_eq!(
             build_url("idolcomplex", "solo rating:safe").as_deref(),
@@ -1436,6 +1437,9 @@ mod tests {
         for value in [
             "creator-name",
             "https://www.patreon.com/c/creator-name",
+            "https://www.patreon.com/c/creator-name/posts",
+            "https://www.patreon.com/cw/creator-name",
+            "https://www.patreon.com/cw/creator-name/posts",
             "https://www.patreon.com/creator-name",
             "https://www.patreon.com/creator-name/posts",
         ] {
@@ -1461,7 +1465,9 @@ mod tests {
             "creator-name",
             "@creator-name",
             "https://creator-name.fanbox.cc/",
+            "https://creator-name.fanbox.cc/posts",
             "https://www.fanbox.cc/@creator-name",
+            "https://www.fanbox.cc/@creator-name/posts",
         ] {
             assert_eq!(
                 normalize_fanbox_creator(value).as_deref(),
@@ -1479,16 +1485,39 @@ mod tests {
             assert!(normalize_fanbox_creator(value).is_err(), "accepted {value}");
         }
 
-        for value in [
-            "creator-name",
-            "https://subscribestar.art/creator-name",
-            "https://www.subscribestar.com/creator-name",
+        for (value, expected) in [
+            ("creator-name", "https://subscribestar.art/creator-name"),
+            (
+                "https://subscribestar.art/creator-name",
+                "https://subscribestar.art/creator-name",
+            ),
+            (
+                "https://www.subscribestar.art/creator-name",
+                "https://subscribestar.art/creator-name",
+            ),
+            (
+                "https://www.subscribestar.com/creator-name",
+                "https://www.subscribestar.com/creator-name",
+            ),
+            (
+                "https://subscribestar.com/creator-name",
+                "https://www.subscribestar.com/creator-name",
+            ),
+            (
+                "https://subscribestar.adult/creator-name",
+                "https://subscribestar.adult/creator-name",
+            ),
+            (
+                "https://www.subscribestar.adult/creator-name/",
+                "https://subscribestar.adult/creator-name",
+            ),
         ] {
             assert_eq!(
-                normalize_subscribestar_creator(value).as_deref(),
-                Ok("creator-name"),
+                normalize_subscribestar_query(value).as_deref(),
+                Ok(expected),
                 "{value}"
             );
+            assert_eq!(build_url("subscribestar", value).as_deref(), Some(expected));
         }
         for value in [
             "creator/name",
@@ -1497,7 +1526,7 @@ mod tests {
             "https://subscribestar.art/posts/12345",
         ] {
             assert!(
-                normalize_subscribestar_creator(value).is_err(),
+                normalize_subscribestar_query(value).is_err(),
                 "accepted {value}"
             );
         }

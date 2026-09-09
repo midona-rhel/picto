@@ -1,10 +1,17 @@
 import { invoke, normalizeInvokeError } from './ipc';
+import { clearDiagnostics, getDiagnosticsSnapshot } from '../features/diagnostics/diagnosticsStore';
 
 afterEach(() => {
   delete (window as any).picto;
 });
 
 describe('normalizeInvokeError', () => {
+  it('delivers expected cancellation to the grid without recording an application error', async () => {
+    clearDiagnostics();
+    (window as any).picto = { api: { invoke: vi.fn().mockResolvedValue({ __pictoQuerySuperseded: true }) } };
+    await expect(invoke('items.window')).rejects.toThrow('query superseded');
+    expect(getDiagnosticsSnapshot().filter(entry => entry.level === 'ERROR')).toEqual([]);
+  });
   it('removes Electron transport wrappers from backend messages', () => {
     const error = new Error(
       "Error invoking remote method 'picto:invoke': Error: This subscription is already running.",

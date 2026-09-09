@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Days, Utc};
 use md5::{Digest, Md5};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -11,8 +13,8 @@ use url::Url;
 use crate::{
     normalize_source_text, AdapterFuture, CanonicalTagSet, DiscoveryBatch, DiscoveryRequest,
     HttpRuntime, MediaDescriptor, MediaDescriptorBuilder, MediaFallback, MediaFuture,
-    MediaPostprocess, NativeSourceAdapter, OpaqueCursor, PageCursor, ProviderDescriptor,
-    RequestCredentials, SourceError, SourceErrorKind, SourcePost, UgoiraFrame,
+    MediaPostprocess, NativeSourceAdapter, OpaqueCursor, PageCursor, PostFuture,
+    ProviderDescriptor, RequestCredentials, SourceError, SourceErrorKind, SourcePost, UgoiraFrame,
 };
 
 const API_ROOT: &str = "https://app-api.pixiv.net";
@@ -63,6 +65,16 @@ impl NativeSourceAdapter for PixivSearchSource {
         })
     }
 
+    fn resolve_post<'a>(
+        &'a self,
+        post: SourcePost,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> PostFuture<'a> {
+        Box::pin(async move { self.api.recover_post(post, credentials, http, cancel).await })
+    }
+
     fn resolve_media<'a>(
         &'a self,
         media: MediaDescriptor,
@@ -80,12 +92,16 @@ impl NativeSourceAdapter for PixivSearchSource {
 
 pub(super) struct PixivApi {
     access_token: Mutex<Option<CachedToken>>,
+    page: crate::page_cache::PageCache<Value>,
+    user_ids: crate::page_cache::PageCache<Option<Arc<Vec<u64>>>>,
 }
 
 impl Default for PixivApi {
     fn default() -> Self {
         Self {
             access_token: Mutex::new(None),
+            page: crate::page_cache::PageCache::default(),
+            user_ids: crate::page_cache::PageCache::default(),
         }
     }
 }
@@ -103,6 +119,139 @@ impl CachedToken {
 }
 
 impl PixivApi {
+    pub(super) async fn discover_user(
+        &self,
+        request: &DiscoveryRequest,
+        user_id: &str,
+        credentials: &RequestCredentials,
+        http: &HttpRuntime,
+        cancel: &CancellationToken,
+    ) -> Result<DiscoveryBatch, SourceError> {
+        let url = pixiv_web_url(&format!("/ajax/user/{user_id}/profile/all"));
+        let web_credentials = pixiv_web_credentials(credentials);
+        let ids = self
+            .user_ids
+            .get_or_fetch(
+                url.as_str(),
+                credentials,
+                request
+                    .cursor
+                    .as_deref()
+                    .is_some_and(|cursor| !cursor.is_empty()),
+                async {
+                    let response = http
+                        .get_optional_json::<Value>(url.clone(), &web_credentials, cancel)
+                        .await?;
+                    response
+                        .as_ref()
+                        .map(profile_artwork_ids)
+                        .transpose()
+                        .map(Option::flatten)
+                        .map(|ids| ids.map(Arc::new))
+                },
+            )
+            .await?;
+        let mut state = user_cursor(request.cursor.as_deref())?;
+        if state.web && ids.is_none() {
+            return Err(SourceError::new(
+                SourceErrorKind::InvalidResponse,
+                "Pixiv website history is temporarily unavailable; preserving its checkpoint",
+                true,
+            ));
+        }
+        state.web = ids.is_some();
+        let ids = ids.unwrap_or_default();
+        let api_credentials = self.api_credentials(credentials, http, cancel).await?;
+        for _ in 0..128 {
+            let response = if state.app_complete {
+                None
+            } else {
+                let mut url = api_url("/v1/user/illusts");
+                url.query_pairs_mut()
+                    .append_pair("user_id", user_id)
+                    .append_pair("offset", &state.offset.to_string());
+                Some(
+                    self.page
+                        .get_or_fetch(
+                            url.as_str(),
+                            credentials,
+                            request
+                                .cursor
+                                .as_deref()
+                                .is_some_and(|cursor| !cursor.is_empty()),
+                            http.get_json::<Value>(url.clone(), &api_credentials, cancel),
+                        )
+                        .await?,
+                )
+            };
+            match merged_user_page(request, user_id, state, &ids, response.as_ref())? {
+                UserPage::Post(batch) => return Ok(batch),
+                UserPage::Continue(next) => state = next,
+            }
+        }
+        Err(invalid_response(
+            "Pixiv user pagination exceeded its safety bound",
+        ))
+    }
+
+    pub(super) async fn recover_post(
+        &self,
+        post: SourcePost,
+        credentials: &RequestCredentials,
+        http: &HttpRuntime,
+        cancel: &CancellationToken,
+    ) -> Result<SourcePost, SourceError> {
+        if !post.media.is_empty() {
+            return Ok(post);
+        }
+        let id = &post.stable_id;
+        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid_response("Pixiv artwork has an invalid identity"));
+        }
+        let web_credentials = pixiv_web_credentials(credentials);
+        let response = http
+            .get_optional_json::<Value>(
+                pixiv_web_url(&format!("/ajax/illust/{id}")),
+                &web_credentials,
+                cancel,
+            )
+            .await?;
+        let Some(body) = response.as_ref().map(ajax_body).transpose()?.flatten() else {
+            tracing::warn!(post_id = %id, "Pixiv artwork remains unavailable through the website");
+            return Ok(post);
+        };
+        let mut body = body.clone();
+        if body
+            .pointer("/urls/original")
+            .and_then(Value::as_str)
+            .is_none()
+            && body.get("illustType").and_then(Value::as_u64) != Some(2)
+        {
+            for url in ajax_original_candidates(&body) {
+                match http
+                    .head(
+                        Url::parse(&url).expect("validated Pixiv URL"),
+                        &pixiv_media_probe_credentials(),
+                        cancel,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        body["urls"] = serde_json::json!({"original":url});
+                        break;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind,
+                            SourceErrorKind::InvalidResponse | SourceErrorKind::AccessDenied
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        apply_ajax_artwork(post, &body)
+    }
+
     async fn discover_search(
         &self,
         request: &DiscoveryRequest,
@@ -113,8 +262,17 @@ impl PixivApi {
         let api_credentials = self.api_credentials(credentials, http, cancel).await?;
         let mut cursor = search_cursor(request)?;
         for _ in 0..MAX_SEARCH_PAGES_PER_DISCOVERY {
-            let response = http
-                .get_json::<Value>(cursor.url.clone(), &api_credentials, cancel)
+            let response = self
+                .page
+                .get_or_fetch(
+                    cursor.url.as_str(),
+                    credentials,
+                    request
+                        .cursor
+                        .as_deref()
+                        .is_some_and(|cursor| !cursor.is_empty()),
+                    http.get_json::<Value>(cursor.url.clone(), &api_credentials, cancel),
+                )
                 .await?;
             match normalize_search_response(request, &cursor, response)? {
                 SearchPageResult::Post(batch) => return Ok(batch),
@@ -130,24 +288,6 @@ impl PixivApi {
         Err(invalid_response(
             "Pixiv search pagination exceeded its safety bound",
         ))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn discover_one(
-        &self,
-        site_id: &str,
-        request: &DiscoveryRequest,
-        offset: u32,
-        url: Url,
-        credentials: &RequestCredentials,
-        http: &HttpRuntime,
-        cancel: &CancellationToken,
-    ) -> Result<DiscoveryBatch, SourceError> {
-        let api_credentials = self.api_credentials(credentials, http, cancel).await?;
-        let response = http
-            .get_json::<Value>(url, &api_credentials, cancel)
-            .await?;
-        normalize_response(site_id, request, offset, response)
     }
 
     async fn api_credentials(
@@ -237,17 +377,349 @@ impl PixivApi {
             return Ok(media);
         }
         let metadata_url = validate_ugoira_metadata_url(&media)?;
+        if metadata_url.host_str() == Some("www.pixiv.net") {
+            let response = http
+                .get_json::<Value>(metadata_url, &pixiv_web_credentials(credentials), cancel)
+                .await?;
+            let body = ajax_body(&response)?
+                .ok_or_else(|| invalid_response("Pixiv website omitted ugoira metadata"))?;
+            let normalized = serde_json::json!({"ugoira_metadata":{
+                "zip_urls":{"original":body.get("originalSrc").or_else(|| body.get("src"))},
+                "frames":body.get("frames")
+            }});
+            return apply_ugoira_metadata(media, &normalized);
+        }
         let api_credentials = self.api_credentials(credentials, http, cancel).await?;
         let response = http
             .get_json::<Value>(metadata_url, &api_credentials, cancel)
             .await?;
-        if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
-            return Err(invalid_response(format!(
-                "Pixiv rejected ugoira metadata: {error}"
-            )));
+        if response.get("error").is_some_and(|error| !error.is_null()) {
+            return Err(invalid_response("Pixiv rejected ugoira metadata"));
         }
         apply_ugoira_metadata(media, &response)
     }
+}
+
+fn pixiv_web_url(path: &str) -> Url {
+    Url::parse("https://www.pixiv.net")
+        .expect("static Pixiv website URL")
+        .join(path)
+        .expect("numeric Pixiv website path")
+}
+
+fn pixiv_web_credentials(credentials: &RequestCredentials) -> RequestCredentials {
+    let mut credentials = credentials.clone();
+    credentials.allowed_domains.insert("pixiv.net".into());
+    credentials
+        .headers
+        .insert("Referer".into(), "https://www.pixiv.net/".into());
+    credentials
+}
+
+fn pixiv_media_probe_credentials() -> RequestCredentials {
+    RequestCredentials {
+        headers: BTreeMap::from([("Referer".into(), "https://www.pixiv.net/".into())]),
+        allowed_domains: ["pximg.net".into()].into_iter().collect(),
+        ..RequestCredentials::default()
+    }
+}
+
+fn ajax_body(response: &Value) -> Result<Option<&Value>, SourceError> {
+    match response.get("error").and_then(Value::as_bool) {
+        Some(true) => Ok(None),
+        Some(false) => response
+            .get("body")
+            .filter(|body| body.is_object())
+            .map(Some)
+            .ok_or_else(|| invalid_response("Pixiv website omitted its response body")),
+        None => Err(invalid_response(
+            "Pixiv website returned an invalid response envelope",
+        )),
+    }
+}
+
+fn profile_artwork_ids(response: &Value) -> Result<Option<Vec<u64>>, SourceError> {
+    let Some(body) = ajax_body(response)? else {
+        return Ok(None);
+    };
+    let mut ids = Vec::new();
+    for key in ["illusts", "manga"] {
+        let works = body
+            .get(key)
+            .ok_or_else(|| invalid_response("Pixiv website omitted its artwork IDs"))?;
+        if works.is_null() {
+            continue;
+        }
+        let works = works
+            .as_object()
+            .ok_or_else(|| invalid_response("Pixiv website returned invalid artwork IDs"))?;
+        for id in works.keys() {
+            ids.push(
+                id.parse::<u64>().ok().filter(|id| *id > 0).ok_or_else(|| {
+                    invalid_response("Pixiv website returned an invalid artwork ID")
+                })?,
+            );
+        }
+        if ids.len() > 1_000_000 {
+            return Err(invalid_response(
+                "Pixiv artwork listing exceeded its safety bound",
+            ));
+        }
+    }
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    ids.dedup();
+    Ok(Some(ids))
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct UserCursor {
+    offset: u32,
+    item: usize,
+    after: Option<u64>,
+    app_complete: bool,
+    web: bool,
+}
+
+fn user_cursor(raw: Option<&str>) -> Result<UserCursor, SourceError> {
+    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+        return Ok(UserCursor::default());
+    };
+    if let Some(json) = raw.strip_prefix("u1:") {
+        OpaqueCursor::new(512).validate(raw)?;
+        let cursor: UserCursor =
+            serde_json::from_str(json).map_err(|_| invalid_query("invalid Pixiv user cursor"))?;
+        if cursor.offset > 10_000_000 || cursor.item > 100 || cursor.after == Some(0) {
+            return Err(invalid_query("invalid Pixiv user cursor"));
+        }
+        return Ok(cursor);
+    }
+    Ok(UserCursor {
+        offset: PAGE_CURSOR.validate(raw)?,
+        ..UserCursor::default()
+    })
+}
+
+enum UserPage {
+    Post(DiscoveryBatch),
+    Continue(UserCursor),
+}
+
+fn merged_user_page(
+    request: &DiscoveryRequest,
+    user_id: &str,
+    mut state: UserCursor,
+    web_ids: &[u64],
+    response: Option<&Value>,
+) -> Result<UserPage, SourceError> {
+    let mut works = &[][..];
+    let mut next_offset = None;
+    if let Some(response) = response {
+        if response.get("error").is_some_and(|value| !value.is_null()) {
+            return Err(invalid_response("Pixiv rejected the user gallery request"));
+        }
+        works = response
+            .get("illusts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid_response("Pixiv response omitted its illustrations"))?;
+        if state.after.is_some() {
+            state.item = 0;
+        }
+        if works.len() > 100 || state.item > works.len() {
+            return Err(invalid_response("Pixiv user cursor is outside its page"));
+        }
+        let continuation = match response.get("next_url") {
+            Some(Value::Null) => None,
+            Some(Value::String(raw)) => (!raw.is_empty()).then_some(raw),
+            _ => {
+                return Err(invalid_response(
+                    "Pixiv returned an invalid continuation envelope",
+                ))
+            }
+        };
+        if let Some(raw) = continuation {
+            let url = Url::parse(raw)
+                .map_err(|_| invalid_response("Pixiv returned an invalid next URL"))?;
+            if url.scheme() != "https"
+                || url.host_str() != Some("app-api.pixiv.net")
+                || url.path() != "/v1/user/illusts"
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.port().is_some()
+                || url.fragment().is_some()
+                || !url
+                    .query_pairs()
+                    .any(|(key, value)| key == "user_id" && value == user_id)
+            {
+                return Err(invalid_response(
+                    "Pixiv returned an unsafe user continuation URL",
+                ));
+            }
+            next_offset = Some(
+                url.query_pairs()
+                    .find(|(key, _)| key == "offset")
+                    .and_then(|(_, value)| value.parse::<u32>().ok())
+                    .filter(|offset| *offset > state.offset && *offset <= 10_000_000)
+                    .ok_or_else(|| invalid_response("Pixiv user page did not advance"))?,
+            );
+        }
+        // A refreshed page may contain already settled IDs. Do not emit them twice.
+        while let Some(work) = works.get(state.item) {
+            let id = artwork_id(work)?;
+            if state.after.is_none_or(|after| id < after) {
+                break;
+            }
+            state.item += 1;
+        }
+        if state.item == works.len() {
+            if let Some(offset) = next_offset {
+                state.offset = offset;
+                state.item = 0;
+                return Ok(UserPage::Continue(state));
+            }
+            state.app_complete = true;
+        }
+    }
+    let app = works.get(state.item);
+    let app_id = app.map(artwork_id).transpose()?;
+    let web_index = state
+        .after
+        .map_or(0, |after| web_ids.partition_point(|id| *id >= after));
+    let web_id = web_ids.get(web_index).copied();
+    let Some(id) = app_id.into_iter().chain(web_id).max() else {
+        return Ok(UserPage::Post(DiscoveryBatch {
+            posts: Vec::new(),
+            exhausted: true,
+        }));
+    };
+    let placeholder = serde_json::json!({"id":id,"user":{"id":user_id},"type":"illust"});
+    let illustration = if app_id == Some(id) {
+        state.item += 1;
+        if state.item == works.len() && next_offset.is_none() {
+            state.app_complete = true;
+        }
+        app.expect("matching app artwork")
+    } else {
+        &placeholder
+    };
+    state.after = Some(id);
+    let exhausted = state.app_complete && web_ids.last().is_none_or(|web_id| *web_id >= id);
+    let cursor = format!(
+        "u1:{}",
+        serde_json::to_string(&state)
+            .map_err(|_| invalid_response("Pixiv cursor encoding failed"))?
+    );
+    let post = normalize_illustration("pixivuser", request, illustration, cursor)?;
+    Ok(UserPage::Post(DiscoveryBatch {
+        posts: vec![post],
+        exhausted,
+    }))
+}
+
+fn artwork_id(work: &Value) -> Result<u64, SourceError> {
+    scalar_text(work.get("id"))
+        .and_then(|id| id.parse::<u64>().ok())
+        .filter(|id| *id > 0)
+        .ok_or_else(|| invalid_response("Pixiv returned an invalid artwork ID"))
+}
+
+fn ajax_original_candidates(body: &Value) -> Vec<String> {
+    let Some(id) = scalar_text(body.get("id")) else {
+        return Vec::new();
+    };
+    let Some(raw) = body
+        .get("userIllusts")
+        .and_then(|works| works.get(&id))
+        .and_then(|work| work.get("url"))
+        .and_then(Value::as_str)
+    else {
+        return Vec::new();
+    };
+    let Some(raw) = safe_pixiv_media_url(raw) else {
+        return Vec::new();
+    };
+    let Some((base, _)) = raw.rsplit_once("_p0") else {
+        return Vec::new();
+    };
+    let mut parts: Vec<_> = base.split('/').collect();
+    if parts.len() < 7 || parts[3] != "c" {
+        return Vec::new();
+    }
+    parts.drain(3..5);
+    parts[3] = "img-original";
+    ["jpg", "png", "gif"]
+        .into_iter()
+        .filter_map(|ext| safe_pixiv_media_url(&format!("{}_p0.{ext}", parts.join("/"))))
+        .collect()
+}
+
+fn apply_ajax_artwork(post: SourcePost, body: &Value) -> Result<SourcePost, SourceError> {
+    if scalar_text(body.get("id")).as_deref() != Some(post.stable_id.as_str()) {
+        return Err(invalid_response(
+            "Pixiv website returned a different artwork",
+        ));
+    }
+    let is_ugoira = body.get("illustType").and_then(Value::as_u64) == Some(2);
+    let original = body
+        .pointer("/urls/original")
+        .and_then(Value::as_str)
+        .and_then(safe_pixiv_media_url);
+    if !is_ugoira && original.is_none() {
+        tracing::warn!(post_id = %post.stable_id, "Pixiv website artwork has no accessible original");
+        return Ok(post);
+    }
+    let mut work = serde_json::json!({
+        "id":post.stable_id, "type":if is_ugoira { "ugoira" } else { "illust" },
+        "user":{"id":body.get("userId"), "name":body.get("userName")},
+        "title":body.get("illustTitle").or_else(|| body.get("title")),
+        "caption":body.get("illustComment"), "create_date":body.get("createDate"),
+        "x_restrict":body.get("xRestrict"),
+        "tags":body.pointer("/tags/tags").and_then(Value::as_array).map(|tags| tags.iter()
+            .filter_map(|tag| tag.get("tag")).map(|name| serde_json::json!({"name":name})).collect::<Vec<_>>())
+    });
+    if let Some(original) = original {
+        let count = body
+            .get("pageCount")
+            .and_then(Value::as_u64)
+            .filter(|count| (1..=10_000).contains(count))
+            .ok_or_else(|| invalid_response("Pixiv website returned an invalid page count"))?;
+        if count == 1 {
+            work["meta_single_page"] = serde_json::json!({"original_image_url":original});
+        } else {
+            let (base, ext) = original.rsplit_once("_p0.").ok_or_else(|| {
+                invalid_response("Pixiv website returned an invalid manga original")
+            })?;
+            work["meta_pages"] = Value::Array(
+                (0..count)
+                    .map(|page| {
+                        serde_json::json!({
+                            "image_urls":{"original":format!("{base}_p{page}.{ext}")}
+                        })
+                    })
+                    .collect(),
+            );
+        }
+    }
+    let request = DiscoveryRequest {
+        query: String::new(),
+        partition: post.partition.clone(),
+        cursor: None,
+        page_size: 1,
+    };
+    let mut recovered = normalize_illustration(
+        &post.site_id,
+        &request,
+        &work,
+        post.resume_cursor_after.clone().unwrap_or_default(),
+    )?;
+    recovered.resume_cursor_after = post.resume_cursor_after;
+    if is_ugoira {
+        if let Some(media) = recovered.media.first_mut() {
+            media.url = pixiv_web_url(&format!("/ajax/illust/{}/ugoira_meta", recovered.stable_id))
+                .to_string();
+        }
+    }
+    Ok(recovered)
 }
 
 fn apply_ugoira_metadata(
@@ -268,11 +740,8 @@ fn apply_ugoira_metadata(
         .cloned()
         .ok_or_else(|| invalid_response("Pixiv ugoira metadata omitted its frame timings"))
         .and_then(|frames| {
-            serde_json::from_value::<Vec<UgoiraFrame>>(frames).map_err(|error| {
-                invalid_response(format!(
-                    "Pixiv returned invalid ugoira frame timings: {error}"
-                ))
-            })
+            serde_json::from_value::<Vec<UgoiraFrame>>(frames)
+                .map_err(|_| invalid_response("Pixiv returned invalid ugoira frame timings"))
         })?;
     if frames.is_empty() {
         return Err(invalid_response(
@@ -290,15 +759,6 @@ fn apply_ugoira_metadata(
     media.expected_size = None;
     media.postprocess = Some(MediaPostprocess::UgoiraToWebm { frames });
     Ok(media)
-}
-
-pub(super) fn current_offset(request: &DiscoveryRequest) -> Result<u32, SourceError> {
-    request
-        .cursor
-        .as_deref()
-        .map(|cursor| PAGE_CURSOR.validate(cursor))
-        .transpose()
-        .map(|offset| offset.unwrap_or(0))
 }
 
 pub(super) fn api_url(path: &str) -> Url {
@@ -432,10 +892,10 @@ fn normalize_search_response(
     cursor: &SearchCursor,
     response: Value,
 ) -> Result<SearchPageResult, SourceError> {
-    if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
+    if response.get("error").is_some_and(|error| !error.is_null()) {
         return Err(SourceError::new(
             SourceErrorKind::InvalidResponse,
-            format!("Pixiv API rejected the request: {error}"),
+            "Pixiv API rejected the request",
             false,
         ));
     }
@@ -560,41 +1020,6 @@ fn rollover_end_date(date_last: &str) -> Result<String, SourceError> {
     Ok(date.format("%Y-%m-%d").to_string())
 }
 
-pub(super) fn normalize_response(
-    site_id: &str,
-    request: &DiscoveryRequest,
-    offset: u32,
-    response: Value,
-) -> Result<DiscoveryBatch, SourceError> {
-    if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
-        return Err(SourceError::new(
-            SourceErrorKind::InvalidResponse,
-            format!("Pixiv API rejected the request: {error}"),
-            false,
-        ));
-    }
-    let illustrations = response
-        .get("illusts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_response("Pixiv response omitted its illustrations"))?;
-    let Some(illustration) = illustrations.first() else {
-        return Ok(DiscoveryBatch {
-            posts: Vec::new(),
-            exhausted: true,
-        });
-    };
-    let next_offset = offset
-        .checked_add(1)
-        .ok_or_else(|| invalid_query("Pixiv source cursor is exhausted"))?;
-    let resume_cursor_after = PAGE_CURSOR.encode(next_offset)?;
-    let post = normalize_illustration(site_id, request, illustration, resume_cursor_after)?;
-    let exhausted = response.get("next_url").is_none_or(Value::is_null) && illustrations.len() <= 1;
-    Ok(DiscoveryBatch {
-        posts: vec![post],
-        exhausted,
-    })
-}
-
 fn normalize_illustration(
     site_id: &str,
     request: &DiscoveryRequest,
@@ -647,7 +1072,11 @@ fn normalize_illustration(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("illust");
-    let media = if creator_id.is_none() {
+    let placeholder = illustration
+        .pointer("/meta_single_page/original_image_url")
+        .and_then(Value::as_str)
+        .is_some_and(|url| url.contains("/common/images/limit_"));
+    let media = if creator_id.is_none() || placeholder {
         Vec::new()
     } else if kind == "ugoira" {
         vec![ugoira_descriptor(&id, &canonical_url)]
@@ -709,15 +1138,19 @@ fn validate_ugoira_metadata_url(media: &MediaDescriptor) -> Result<Url, SourceEr
         .filter(|(key, _)| key == "illust_id")
         .map(|(_, value)| value.into_owned())
         .collect::<Vec<_>>();
+    let app = url.host_str() == Some("app-api.pixiv.net")
+        && url.path() == "/v1/ugoira/metadata"
+        && ids.len() == 1
+        && ids[0] == expected_id;
+    let web = url.host_str() == Some("www.pixiv.net")
+        && url.path() == format!("/ajax/illust/{expected_id}/ugoira_meta")
+        && url.query().is_none();
     if url.scheme() != "https"
-        || url.host_str() != Some("app-api.pixiv.net")
-        || url.path() != "/v1/ugoira/metadata"
+        || !(app || web)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
         || url.fragment().is_some()
-        || ids.len() != 1
-        || ids[0] != expected_id
     {
         return Err(invalid_response(
             "Pixiv returned an unsafe ugoira metadata URL",
@@ -929,6 +1362,231 @@ fn invalid_response(message: impl Into<String>) -> SourceError {
 mod tests {
     use super::*;
     use crate::SourcePartition;
+
+    #[test]
+    fn remote_errors_do_not_reflect_private_payloads_and_media_probes_are_anonymous() {
+        let req = request(None);
+        let response = serde_json::json!({"error":{"message":"secret-session-value"}});
+        let error = match normalize_search_response(&req, &search_cursor(&req).unwrap(), response) {
+            Err(error) => error,
+            _ => panic!("expected rejection"),
+        };
+        assert!(!error.message.contains("secret-session-value"));
+        let probe = pixiv_media_probe_credentials();
+        assert!(probe.cookies.is_empty());
+        assert!(probe.oauth_token.is_none());
+        assert!(probe.permits("i.pximg.net"));
+        assert_eq!(
+            probe.headers.get("Referer").map(String::as_str),
+            Some("https://www.pixiv.net/")
+        );
+    }
+
+    #[test]
+    fn website_listing_includes_illustrations_and_manga_with_stable_resume() {
+        let response: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pixiv/web-profile.json"))
+                .unwrap();
+        let ids = profile_artwork_ids(&response).unwrap().unwrap();
+        assert_eq!(ids, vec![12345679, 12345678, 12345677]);
+        assert_eq!(user_cursor(Some("1")).unwrap().offset, 1);
+        assert!(profile_artwork_ids(&serde_json::json!({"error":false,"body":{}})).is_err());
+        assert!(profile_artwork_ids(&serde_json::json!({"error":true}))
+            .unwrap()
+            .is_none());
+        assert!(profile_artwork_ids(&serde_json::json!({})).is_err());
+        assert!(ajax_body(&serde_json::json!({"error":false,"body":[]})).is_err());
+    }
+
+    #[tokio::test]
+    async fn merged_user_history_keeps_app_only_and_web_only_works_without_refetching_pages() {
+        let app_work = |id| serde_json::json!({"id":id,"user":{"id":173530,"name":"Artist"}});
+        let first = serde_json::json!({"illusts":[app_work(400),app_work(300)],
+            "next_url":"https://app-api.pixiv.net/v1/user/illusts?user_id=173530&offset=30"});
+        let second = serde_json::json!({"illusts":[app_work(200)],"next_url":null});
+        let cache = crate::page_cache::PageCache::default();
+        let credentials = RequestCredentials::default();
+        let mut calls = 0;
+        let mut cursor = None;
+        let mut seen = Vec::new();
+        let mut saved = None;
+        for expected in [400, 350, 300, 250, 200] {
+            let mut state = user_cursor(cursor.as_deref()).unwrap();
+            let batch = loop {
+                let offset = state.offset;
+                let response = cache
+                    .get_or_fetch(&offset.to_string(), &credentials, cursor.is_some(), async {
+                        calls += 1;
+                        Ok(if offset == 0 {
+                            first.clone()
+                        } else {
+                            second.clone()
+                        })
+                    })
+                    .await
+                    .unwrap();
+                let req = request(cursor.as_deref());
+                match merged_user_page(&req, "173530", state, &[350, 300, 250], Some(&response))
+                    .unwrap()
+                {
+                    UserPage::Post(batch) => break batch,
+                    UserPage::Continue(next) => state = next,
+                }
+            };
+            assert_eq!(batch.posts.len(), 1);
+            assert_eq!(batch.posts[0].stable_id, expected.to_string());
+            seen.push(batch.posts[0].stable_id.clone());
+            cursor = batch.posts[0].resume_cursor_after.clone();
+            assert_eq!(batch.exhausted, expected == 200);
+            if expected == 300 {
+                saved = cursor.clone();
+            }
+        }
+        assert_eq!(calls, 2);
+        let resumed = user_cursor(saved.as_deref()).unwrap();
+        assert_eq!(resumed.offset, 0);
+        let UserPage::Continue(resumed) = merged_user_page(
+            &request(saved.as_deref()),
+            "173530",
+            resumed,
+            &[350, 300, 250],
+            Some(&first),
+        )
+        .unwrap() else {
+            panic!("expected next page")
+        };
+        assert_eq!(resumed.offset, 30);
+        let UserPage::Post(batch) = merged_user_page(
+            &request(saved.as_deref()),
+            "173530",
+            resumed,
+            &[350, 300, 250],
+            Some(&second),
+        )
+        .unwrap() else {
+            panic!("expected resumed work")
+        };
+        assert_eq!(batch.posts[0].stable_id, "250");
+        assert_eq!(seen.len(), 5);
+    }
+
+    #[test]
+    fn user_fixture_keeps_original_manga_pages_and_server_continuation() {
+        let response: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pixivuser/user.json")).unwrap();
+        let UserPage::Post(batch) = merged_user_page(
+            &request(None),
+            "173530",
+            UserCursor::default(),
+            &[],
+            Some(&response),
+        )
+        .unwrap() else {
+            panic!("expected work")
+        };
+        let post = &batch.posts[0];
+        assert_eq!(post.media.len(), 2);
+        assert_eq!(post.creator.as_deref(), Some("Aoi Artist"));
+        assert_eq!(
+            user_cursor(post.resume_cursor_after.as_deref())
+                .unwrap()
+                .offset,
+            0
+        );
+        assert!(user_cursor(Some("u1:{}")).is_err());
+        assert!(user_cursor(Some("10000001")).is_err());
+    }
+
+    #[test]
+    fn user_resume_anchors_survive_deletions_within_a_page_and_reject_invalid_terminal_flags() {
+        let state = UserCursor {
+            after: Some(100),
+            item: 1,
+            ..UserCursor::default()
+        };
+        let response = serde_json::json!({"illusts":[
+            {"id":90,"user":{"id":173530}}, {"id":80,"user":{"id":173530}}
+        ],"next_url":null});
+        let UserPage::Post(batch) =
+            merged_user_page(&request(None), "173530", state, &[], Some(&response)).unwrap()
+        else {
+            panic!("expected work")
+        };
+        assert_eq!(batch.posts[0].stable_id, "90");
+        let mut malformed = response;
+        malformed["next_url"] = Value::Bool(true);
+        assert!(merged_user_page(
+            &request(None),
+            "173530",
+            UserCursor::default(),
+            &[],
+            Some(&malformed)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn website_recovery_keeps_all_original_pages_and_the_settled_cursor() {
+        let response: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pixiv/web-artwork.json"))
+                .unwrap();
+        let placeholder = serde_json::json!({"id":"12345678", "user":{"id":0}});
+        let post = normalize_illustration(
+            "pixivuser",
+            &request(None),
+            &placeholder,
+            "b12345678".into(),
+        )
+        .unwrap();
+        let recovered =
+            apply_ajax_artwork(post.clone(), ajax_body(&response).unwrap().unwrap()).unwrap();
+        assert_eq!(recovered.media.len(), 3);
+        assert!(recovered.media[2].url.ends_with("12345678_p2.jpg"));
+        assert_eq!(recovered.media[2].position, 2);
+        assert_eq!(recovered.resume_cursor_after, post.resume_cursor_after);
+        assert_eq!(recovered.notes.as_deref(), Some("Full website caption"));
+        let mut wrong = response["body"].clone();
+        wrong["id"] = Value::String("999".into());
+        assert!(apply_ajax_artwork(post, &wrong).is_err());
+    }
+
+    #[test]
+    fn website_ugoira_uses_only_same_work_metadata_and_preserves_animation() {
+        let response: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/pixiv/web-artwork.json"))
+                .unwrap();
+        let mut body = response["body"].clone();
+        body["illustType"] = Value::from(2);
+        body["urls"] = Value::Null;
+        let post = normalize_illustration(
+            "pixiv",
+            &request(None),
+            &serde_json::json!({"id":"12345678","user":{"id":0}}),
+            "next".into(),
+        )
+        .unwrap();
+        let recovered = apply_ajax_artwork(post, &body).unwrap();
+        assert_eq!(
+            recovered.media[0].mime_hint.as_deref(),
+            Some("application/x-ugoira")
+        );
+        assert!(validate_ugoira_metadata_url(&recovered.media[0]).is_ok());
+        let mut wrong = recovered.media[0].clone();
+        wrong.url = "https://www.pixiv.net/ajax/illust/999/ugoira_meta".into();
+        assert!(validate_ugoira_metadata_url(&wrong).is_err());
+    }
+
+    #[test]
+    fn website_original_candidates_are_ordered_and_first_party() {
+        let body = serde_json::json!({"id":"123", "userIllusts":{"123":{"url":
+            "https://i.pximg.net/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/123_p0_square1200.jpg"}}});
+        let candidates = ajax_original_candidates(&body);
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates[0].ends_with("/123_p0.jpg"));
+        assert!(candidates[1].ends_with("/123_p0.png"));
+        assert!(candidates[2].ends_with("/123_p0.gif"));
+        assert!(candidates[0].contains("/img-original/img/"));
+    }
 
     fn request(cursor: Option<&str>) -> DiscoveryRequest {
         DiscoveryRequest {

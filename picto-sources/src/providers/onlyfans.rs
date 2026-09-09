@@ -23,6 +23,7 @@ const MAX_CURSOR_BYTES: usize = 32 * 1024;
 const MAX_CURSOR_IDS: usize = 512;
 const MAX_CURSOR_OFFSET: u32 = 10_000_000;
 const MAX_ACTIVE_CREATORS: usize = 32;
+const MAX_EMPTY_FEED_PAGES: usize = 100;
 const FEED_AREAS: [FeedArea; 4] = [
     FeedArea::Timeline,
     FeedArea::Archived,
@@ -93,6 +94,7 @@ enum FeedArea {
 struct ApiPage {
     posts: Vec<Value>,
     has_more: bool,
+    tail_marker: Option<String>,
 }
 
 impl NativeSourceAdapter for OnlyFansAdapter {
@@ -132,7 +134,7 @@ impl NativeSourceAdapter for OnlyFansAdapter {
                 offset: 0,
                 seen: Vec::new(),
             };
-            let page = signed_page(
+            signed_page(
                 http,
                 feed_url(&profile.id, FeedArea::Timeline, &cursor)?,
                 credentials,
@@ -140,13 +142,8 @@ impl NativeSourceAdapter for OnlyFansAdapter {
                 cancel,
             )
             .await?;
-            if page.posts.first().is_some_and(main_post_is_locked) {
-                return Err(SourceError::new(
-                    SourceErrorKind::AccessDenied,
-                    format!("The connected OnlyFans account does not have access to {username}"),
-                    false,
-                ));
-            }
+            // A locked PPV post does not establish creator-wide access. Discover
+            // it normally so accessible older posts and purchases still settle.
             Ok(())
         })
     }
@@ -281,9 +278,16 @@ impl OnlyFansAdapter {
         cancel: &CancellationToken,
     ) -> Result<DiscoveryBatch, SourceError> {
         let mut cursor = decode_cursor(request, None)?;
+        #[cfg(debug_assertions)]
+        log_page_request(&cursor);
         let url = purchased_url(&profile.username, cursor.offset)?;
         let page = signed_page(http, url, credentials, rules, cancel).await?;
         let Some(raw) = page.posts.into_iter().next() else {
+            if page.has_more {
+                return Err(incomplete_page(
+                    "purchased page is empty but has more posts",
+                ));
+            }
             return Ok(empty_terminal());
         };
         cursor.offset = cursor.offset.checked_add(1).ok_or_else(invalid_cursor)?;
@@ -305,9 +309,16 @@ impl OnlyFansAdapter {
     ) -> Result<DiscoveryBatch, SourceError> {
         let mut cursor = decode_cursor(request, None)?;
         loop {
+            #[cfg(debug_assertions)]
+            log_page_request(&cursor);
             let url = messages_url(&profile.id, cursor.anchor.as_deref())?;
             let page = signed_page(http, url, credentials, rules, cancel).await?;
             let Some(raw) = page.posts.into_iter().next() else {
+                if page.has_more {
+                    return Err(incomplete_page(
+                        "message page is empty but has more messages",
+                    ));
+                }
                 return Ok(empty_terminal());
             };
             let id = post_id(&raw)?;
@@ -336,12 +347,41 @@ impl OnlyFansAdapter {
         cancel: &CancellationToken,
     ) -> Result<DiscoveryBatch, SourceError> {
         let mut cursor = decode_cursor(request, Some(FeedArea::Timeline))?;
+        let mut empty_pages = 0;
         loop {
             let area = cursor.area.unwrap_or(FeedArea::Timeline);
+            #[cfg(debug_assertions)]
+            log_page_request(&cursor);
             let url = feed_url(&profile.id, area, &cursor)?;
             let page = signed_page(http, url, credentials, rules, cancel).await?;
+            if page.posts.is_empty() && page.has_more {
+                empty_pages += 1;
+                if empty_pages > MAX_EMPTY_FEED_PAGES {
+                    return Err(incomplete_page(
+                        "too many empty feed pages with more history",
+                    ));
+                }
+                continue_empty_feed_page(&mut cursor, &page)?;
+                #[cfg(debug_assertions)]
+                tracing::debug!(
+                    area = ?area,
+                    next_anchor = diagnostic_number(cursor.anchor.as_deref()),
+                    empty_pages,
+                    "OnlyFans pagination following empty-page tail marker"
+                );
+                continue;
+            }
             let Some(raw) = page.posts.into_iter().next() else {
-                if !advance_feed_area(&mut cursor) {
+                let advanced = advance_feed_area(&mut cursor);
+                #[cfg(debug_assertions)]
+                tracing::debug!(
+                    area = ?area,
+                    has_more = page.has_more,
+                    next_area = ?cursor.area,
+                    exhausted = !advanced,
+                    "OnlyFans pagination empty page; advancing feed area"
+                );
+                if !advanced {
                     return Ok(empty_terminal());
                 }
                 continue;
@@ -357,6 +397,17 @@ impl OnlyFansAdapter {
             let exhausted_area = !page.has_more;
             let mut after = cursor.clone();
             let exhausted = exhausted_area && !advance_feed_area(&mut after);
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                area = ?area,
+                post_id = diagnostic_number(Some(&id)),
+                next_anchor = diagnostic_number(after.anchor.as_deref()),
+                seen_in_feed,
+                has_more = page.has_more,
+                next_area = ?after.area,
+                exhausted,
+                "OnlyFans pagination post decision"
+            );
             if seen_in_feed {
                 cursor = after;
                 if exhausted {
@@ -380,22 +431,144 @@ async fn signed_page(
     cancel: &CancellationToken,
 ) -> Result<ApiPage, SourceError> {
     let value: Value = signed_get(http, url, credentials, rules, cancel).await?;
+    parse_page(value)
+}
+
+fn parse_page(value: Value) -> Result<ApiPage, SourceError> {
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        response_type = json_kind(Some(&value)),
+        list_type = json_kind(value.get("list")),
+        has_more_type = json_kind(value.get("hasMore")),
+        has_more = value.get("hasMore").and_then(|v| v.as_bool()),
+        has_error = value.get("error").is_some(),
+        "OnlyFans pagination response shape"
+    );
     let object = value
         .as_object()
         .ok_or_else(|| invalid_response("OnlyFans API page is not an object"))?;
     let posts = object
         .get("list")
         .and_then(Value::as_array)
-        .or_else(|| object.values().find_map(Value::as_array))
         .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| incomplete_page("API page has no valid post list"))?;
+    let has_more = object
+        .get("hasMore")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| incomplete_page("API page has no valid hasMore flag"))?;
+    let tail_marker = object.get("tailMarker").and_then(scalar);
+    #[cfg(debug_assertions)]
+    tracing::debug!(
+        posts = posts.len(),
+        tail_marker = diagnostic_number(tail_marker.as_deref()),
+        first_post_id = diagnostic_number(
+            posts
+                .first()
+                .and_then(|p| p.get("id"))
+                .and_then(scalar)
+                .as_deref()
+        ),
+        last_post_id = diagnostic_number(
+            posts
+                .last()
+                .and_then(|p| p.get("id"))
+                .and_then(scalar)
+                .as_deref()
+        ),
+        "OnlyFans pagination parsed page"
+    );
     Ok(ApiPage {
         posts,
-        has_more: object
-            .get("hasMore")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        has_more,
+        tail_marker,
     })
+}
+
+fn incomplete_page(reason: &str) -> SourceError {
+    SourceError::new(
+        SourceErrorKind::InvalidResponse,
+        format!("OnlyFans pagination could not continue: {reason}; source history is not complete"),
+        true,
+    )
+}
+
+fn continue_empty_feed_page(cursor: &mut Cursor, page: &ApiPage) -> Result<(), SourceError> {
+    // OnlyFans can filter every post from a page while still returning a valid
+    // continuation. Descending feeds must follow tailMarker, not abandon the area.
+    if cursor.area == Some(FeedArea::Pinned) {
+        return Err(incomplete_page("pinned page is empty but has more posts"));
+    }
+    let marker = page
+        .tail_marker
+        .as_deref()
+        .ok_or_else(|| incomplete_page("empty feed page has no tail marker"))?;
+    let timestamp = |value: &str| {
+        value
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite() && *number >= 0.0)
+    };
+    let next = timestamp(marker)
+        .ok_or_else(|| incomplete_page("empty feed page has an invalid tail marker"))?;
+    if let Some(anchor) = cursor.anchor.as_deref() {
+        let previous = timestamp(anchor)
+            .ok_or_else(|| incomplete_page("feed cursor has an invalid timestamp"))?;
+        if next >= previous {
+            return Err(incomplete_page(
+                "empty feed page tail marker did not advance",
+            ));
+        }
+    }
+    if !valid_cursor_value(marker) {
+        return Err(incomplete_page(
+            "empty feed page tail marker exceeds cursor bounds",
+        ));
+    }
+    cursor.anchor = Some(marker.to_owned());
+    Ok(())
+}
+
+// Diagnostics deliberately omit response bodies, URLs, names and credentials.
+#[cfg(debug_assertions)]
+fn log_page_request(cursor: &Cursor) {
+    tracing::debug!(
+        partition = %cursor.partition,
+        area = ?cursor.area,
+        anchor = diagnostic_number(cursor.anchor.as_deref()),
+        offset = cursor.offset,
+        seen_posts = cursor.seen.len(),
+        "OnlyFans pagination request"
+    );
+}
+
+#[cfg(debug_assertions)]
+fn diagnostic_number(value: Option<&str>) -> &str {
+    match value {
+        None => "none",
+        Some(value)
+            if !value.is_empty()
+                && value.len() <= 32
+                && value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || c == b'.' || c == b'-') =>
+        {
+            value
+        }
+        Some(_) => "redacted",
+    }
+}
+
+#[cfg(debug_assertions)]
+fn json_kind(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+    }
 }
 
 async fn signed_get<T: serde::de::DeserializeOwned>(
@@ -639,13 +812,18 @@ fn downloadable_media(raw: &Value, credentials: &RequestCredentials) -> Vec<Medi
             if media.get("canView").and_then(Value::as_bool) != Some(true) {
                 return None;
             }
-            // Keep protected manifests visible to the shared downloader so it
-            // reports the exact CDM boundary instead of silently skipping media.
-            let url = primary_media_url(media).or_else(|| protected_manifest_url(media))?;
+            let direct = primary_media_url(media);
+            let protected = direct.is_none();
+            let url = direct.or_else(|| protected_manifest_url(media))?;
             let stable_id = scalar(media.get("id")?)?;
             let mut builder =
                 MediaDescriptorBuilder::new(stable_id.clone(), position as u32, url.as_str())
                     .canonical_url(url.as_str());
+            if protected {
+                builder = builder.unavailable(
+                    "OnlyFans DRM-protected media is unsupported: a provisioned CDM/device and content key are required",
+                );
+            }
             if is_manifest_url(&url) {
                 builder = builder.file_name(format!("{stable_id}.mp4"));
             } else if let Some(file_name) = url
@@ -672,16 +850,6 @@ fn downloadable_media(raw: &Value, credentials: &RequestCredentials) -> Vec<Medi
             )
         })
         .collect()
-}
-
-fn main_post_is_locked(raw: &Value) -> bool {
-    let Some(media) = raw.get("media").and_then(Value::as_array) else {
-        return false;
-    };
-    !media.is_empty()
-        && media
-            .iter()
-            .all(|item| item.get("canView").and_then(Value::as_bool) == Some(false))
 }
 
 fn protected_manifest_url(media: &Value) -> Option<Url> {
@@ -714,6 +882,11 @@ fn primary_media_url(media: &Value) -> Option<Url> {
         if is_direct_file_url(&url) || is_manifest_url(&url) {
             return Some(url);
         }
+    }
+    // A rendition alongside a DRM-only original must not become a silent
+    // substitute for that original. Full/source URLs above remain preferred.
+    if protected_manifest_url(media).is_some() {
+        return None;
     }
     media
         .get("videoSources")
@@ -993,6 +1166,104 @@ mod tests {
     use super::*;
     use crate::SourcePartition;
 
+    #[test]
+    fn malformed_pages_cannot_report_history_exhaustion() {
+        let page = parse_page(serde_json::json!({"list": [{"id": 1}], "hasMore": true})).unwrap();
+        assert_eq!(page.posts.len(), 1);
+        assert!(page.has_more);
+        for value in [
+            serde_json::json!({"list": [], "hasMore": null}),
+            serde_json::json!({"list": [], "hasMore": "true"}),
+            serde_json::json!({"list": []}),
+            serde_json::json!({"unexpected": [], "hasMore": false}),
+            serde_json::json!({"error": {"message": "fixture"}}),
+        ] {
+            let error = parse_page(value).unwrap_err();
+            assert!(error.retryable);
+            assert_eq!(error.kind, SourceErrorKind::InvalidResponse);
+        }
+        let page = parse_page(serde_json::json!({"list": [], "hasMore": false})).unwrap();
+        assert!(page.posts.is_empty());
+        assert!(!page.has_more);
+        assert!(parse_page(serde_json::json!([])).is_err());
+    }
+
+    #[test]
+    fn empty_timeline_page_continues_at_server_marker_and_round_trips() {
+        let page = parse_page(
+            serde_json::from_str(include_str!(
+                "../../tests/fixtures/onlyfans/empty-timeline-continuation.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(page.posts.is_empty());
+        assert!(page.has_more);
+        let mut cursor = decode_cursor(&request("feed", None), Some(FeedArea::Timeline)).unwrap();
+        cursor.anchor = Some("1774040408.000000".into());
+        cursor.seen = vec!["9101".into()];
+        continue_empty_feed_page(&mut cursor, &page).unwrap();
+        assert_eq!(cursor.area, Some(FeedArea::Timeline));
+        assert_eq!(cursor.seen, ["9101"]);
+        assert_eq!(cursor.anchor.as_deref(), Some("1773864009.000000"));
+        let resumed = decode_cursor(
+            &request("feed", Some(encode_cursor(&cursor).unwrap())),
+            Some(FeedArea::Timeline),
+        )
+        .unwrap();
+        assert_eq!(resumed, cursor);
+        assert!(feed_url("42", FeedArea::Timeline, &resumed)
+            .unwrap()
+            .query_pairs()
+            .any(|(key, value)| key == "beforePublishTime" && value == "1773864009.000000"));
+    }
+
+    #[test]
+    fn unusable_empty_page_markers_preserve_the_resume_cursor() {
+        for marker in [
+            Value::Null,
+            serde_json::json!("NaN"),
+            serde_json::json!("inf"),
+            serde_json::json!(-1),
+            serde_json::json!(1774040408.0),
+            serde_json::json!(1774040409.0),
+        ] {
+            let page =
+                parse_page(serde_json::json!({"list": [], "hasMore": true, "tailMarker": marker}))
+                    .unwrap();
+            let mut cursor =
+                decode_cursor(&request("feed", None), Some(FeedArea::Timeline)).unwrap();
+            cursor.anchor = Some("1774040408.000000".into());
+            let before = cursor.clone();
+            assert!(
+                continue_empty_feed_page(&mut cursor, &page)
+                    .unwrap_err()
+                    .retryable
+            );
+            assert_eq!(cursor, before);
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn pagination_diagnostics_only_expose_numeric_cursor_values() {
+        assert_eq!(
+            diagnostic_number(Some("1774040408.000000")),
+            "1774040408.000000"
+        );
+        assert_eq!(diagnostic_number(None), "none");
+        for value in [
+            "sess=secret",
+            "https://example.test/?token=secret",
+            "123\nsecret",
+            "",
+        ] {
+            assert_eq!(diagnostic_number(Some(value)), "redacted");
+        }
+        assert_eq!(json_kind(None), "missing");
+        assert_eq!(json_kind(Some(&serde_json::json!("secret"))), "string");
+    }
+
     fn request(partition: &str, cursor: Option<String>) -> DiscoveryRequest {
         DiscoveryRequest {
             query: "FixtureCreator".into(),
@@ -1106,18 +1377,31 @@ mod tests {
     }
 
     #[test]
-    fn access_probe_only_rejects_explicitly_locked_main_media() {
+    fn locked_post_is_individually_traversable_before_accessible_history() {
         let mut locked = fixture("timeline")["list"][0].clone();
         locked["media"][0]["canView"] = Value::Bool(false);
-        assert!(main_post_is_locked(&locked));
-        assert!(!main_post_is_locked(&fixture("timeline")["list"][0]));
-        assert!(!main_post_is_locked(&serde_json::json!({ "media": [] })));
-        assert!(!main_post_is_locked(
-            &serde_json::json!({ "text": "hello" })
-        ));
-        assert!(!main_post_is_locked(
-            &serde_json::json!({ "media": [{ "url": "https://example.test/file" }] })
-        ));
+        let page =
+            parse_page(serde_json::json!({ "list": [locked.clone()], "hasMore": true })).unwrap();
+        assert!(page.has_more);
+        let post = normalize_post(
+            &request("feed", None),
+            &profile(),
+            &RequestCredentials::default(),
+            locked,
+            "older".into(),
+        )
+        .unwrap();
+        assert!(post.media.is_empty());
+        assert_eq!(post.resume_cursor_after.as_deref(), Some("older"));
+        let older = normalize_post(
+            &request("feed", None),
+            &profile(),
+            &RequestCredentials::default(),
+            fixture("timeline")["list"][0].clone(),
+            "next".into(),
+        )
+        .unwrap();
+        assert!(!older.media.is_empty());
     }
 
     #[test]
@@ -1197,8 +1481,27 @@ mod tests {
         let protected = media.iter().find(|media| media.stable_id == "503").unwrap();
         assert_eq!(protected.file_name.as_deref(), Some("503.mp4"));
         assert_eq!(protected.delivery(), crate::MediaDelivery::Dash);
+        assert!(protected
+            .unavailable_reason
+            .as_deref()
+            .unwrap()
+            .contains("CDM/device"));
+        assert!(hls.unavailable_reason.is_none());
         let full_manifest = media.iter().find(|media| media.stable_id == "508").unwrap();
         assert_eq!(full_manifest.url, "https://cdn.example.test/media/508.m3u8");
         assert_eq!(full_manifest.delivery(), crate::MediaDelivery::Hls);
+    }
+
+    #[test]
+    fn drm_original_does_not_silently_become_a_video_rendition() {
+        let raw = serde_json::json!({"media": [{
+            "id": 700, "canView": true,
+            "files": {"drm": {"manifest": {"dash": "https://cdn.example.test/protected.mpd"}}},
+            "videoSources": {"720": "https://cdn.example.test/rendition.mp4"}
+        }]});
+        let media = downloadable_media(&raw, &RequestCredentials::default());
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].url, "https://cdn.example.test/protected.mpd");
+        assert!(media[0].unavailable_reason.is_some());
     }
 }

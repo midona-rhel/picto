@@ -134,6 +134,9 @@ impl PostDownloader {
             stream::iter(post.media.iter().cloned().map(move |descriptor| {
                 let destination = destination_path(staging_directory, &descriptor);
                 async move {
+                    if let Some(error) = unavailable_media(&descriptor) {
+                        return (descriptor, Err(error));
+                    }
                     let result = self
                         .segmented
                         .download(&descriptor, credentials, &destination, http, cancel)
@@ -167,6 +170,9 @@ impl PostDownloader {
             stream::iter(post.media.iter().cloned().map(move |descriptor| {
                 let adapter = Arc::clone(&adapter);
                 async move {
+                    if let Some(error) = unavailable_media(&descriptor) {
+                        return (descriptor, Err(error));
+                    }
                     let unresolved = descriptor.clone();
                     let descriptor = match adapter
                         .resolve_media(descriptor, credentials, http, cancel)
@@ -175,6 +181,9 @@ impl PostDownloader {
                         Ok(descriptor) => descriptor,
                         Err(error) => return (unresolved, Err(error)),
                     };
+                    if let Some(error) = unavailable_media(&descriptor) {
+                        return (descriptor, Err(error));
+                    }
                     let destination = destination_path(staging_directory, &descriptor);
                     let result = self
                         .segmented
@@ -190,6 +199,13 @@ impl PostDownloader {
 
 pub type DownloadStream<'a> =
     BoxStream<'a, (MediaDescriptor, Result<DownloadedMedia, SourceError>)>;
+
+fn unavailable_media(descriptor: &MediaDescriptor) -> Option<SourceError> {
+    descriptor
+        .unavailable_reason
+        .as_ref()
+        .map(|reason| SourceError::new(SourceErrorKind::Download, reason.clone(), false))
+}
 
 fn destination_path(directory: &Path, descriptor: &MediaDescriptor) -> PathBuf {
     let extension = descriptor
@@ -214,6 +230,89 @@ fn destination_path(directory: &Path, descriptor: &MediaDescriptor) -> PathBuf {
 mod tests {
     use super::*;
 
+    struct NoNetworkAdapter;
+
+    impl NativeSourceAdapter for NoNetworkAdapter {
+        fn descriptor(&self) -> crate::ProviderDescriptor {
+            panic!("not needed")
+        }
+        fn validate_query(&self, _: &str) -> Result<(), SourceError> {
+            Ok(())
+        }
+        fn discover<'a>(
+            &'a self,
+            _: &'a crate::DiscoveryRequest,
+            _: &'a RequestCredentials,
+            _: &'a HttpRuntime,
+            _: &'a CancellationToken,
+        ) -> crate::AdapterFuture<'a> {
+            panic!("must not discover")
+        }
+        fn resolve_media<'a>(
+            &'a self,
+            _: MediaDescriptor,
+            _: &'a RequestCredentials,
+            _: &'a HttpRuntime,
+            _: &'a CancellationToken,
+        ) -> crate::MediaFuture<'a> {
+            panic!("unavailable media must not resolve")
+        }
+    }
+
+    #[tokio::test]
+    async fn known_unavailable_media_fails_before_resolution_or_network() {
+        let descriptor = crate::MediaDescriptorBuilder::new("drm", 0, "not-a-network-url")
+            .unavailable("DRM requires a provisioned CDM/device")
+            .build();
+        let post = SourcePost {
+            site_id: "onlyfans".into(),
+            partition: crate::SourcePartition::new("feed"),
+            stable_id: "post".into(),
+            canonical_url: None,
+            creator: None,
+            name: None,
+            notes: None,
+            created_at: None,
+            tags: Vec::new(),
+            media: vec![descriptor],
+            resume_cursor_after: None,
+        };
+        let staging = tempfile::tempdir().unwrap();
+        let downloader = PostDownloader::new(1).unwrap();
+        let http = HttpRuntime::new(crate::HttpPolicy::default()).unwrap();
+        let cancel = CancellationToken::new();
+        let credentials = RequestCredentials::default();
+        let result = downloader
+            .download(&post, &credentials, staging.path(), &http, &cancel, None)
+            .await
+            .unwrap();
+        assert!(result.downloaded.is_empty());
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(
+            result.failures[0].message,
+            "DRM requires a provisioned CDM/device"
+        );
+        assert!(!result.failures[0].retryable);
+        let mut stream = downloader
+            .stream_resolving(
+                &post,
+                &credentials,
+                staging.path(),
+                &http,
+                &cancel,
+                Arc::new(NoNetworkAdapter),
+            )
+            .await
+            .unwrap();
+        let (_, result) = stream.next().await.unwrap();
+        assert_eq!(
+            result.unwrap_err().message,
+            "DRM requires a provisioned CDM/device"
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(std::fs::read_dir(staging.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn staging_paths_ignore_untrusted_source_names() {
         let directory = Path::new("/tmp/attempt");
@@ -229,6 +328,7 @@ mod tests {
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
             postprocess: None,
+            unavailable_reason: None,
         };
         assert_eq!(
             destination_path(directory, &descriptor),

@@ -108,6 +108,8 @@ pub struct MediaDescriptor {
     pub rejected_final_paths: Vec<String>,
     #[serde(default)]
     pub postprocess: Option<MediaPostprocess>,
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,7 +230,7 @@ pub enum SourcePostOutcome {
 }
 
 impl SourcePostOutcome {
-    pub fn counts_as_added_post(&self) -> bool {
-        matches!(self, Self::Added { .. })
+    pub fn counts_as_settled_post(&self) -> bool {
+        matches!(self, Self::Added { .. } | Self::Skipped { .. })
     }
 }

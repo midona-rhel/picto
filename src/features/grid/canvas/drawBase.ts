@@ -212,9 +212,9 @@ export function drawCanvasBaseLayer({
         fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, placeholderAlpha);
       }
 
-      if (imageProgress < 1) {
+      if (imageProgress > 0 && imageProgress < 1) {
         drawLoadedThumb(imageProgress);
-      } else {
+      } else if (imageProgress >= 1) {
         drawLoadedThumb();
       }
     } else {

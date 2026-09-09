@@ -1,4 +1,5 @@
 {
+  "One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.": "一次仅保存一个服务的登录信息。请在订阅中使用创作者的完整网址；现有的不含网址的创作者名称使用 .art。",
   " · {value0} unavailable": " · {value0} 不可用",
   "{value0} · {value1}": "{value0} · {value1}",
   "{value0} · Click to filter · Right-click for actions": "{value0} · Click to 筛选 · Right-click for actions",

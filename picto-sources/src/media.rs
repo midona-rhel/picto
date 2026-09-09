@@ -33,6 +33,7 @@ impl MediaDescriptorBuilder {
                 fallbacks: Vec::new(),
                 rejected_final_paths: Vec::new(),
                 postprocess: None,
+                unavailable_reason: None,
             },
         }
     }
@@ -53,6 +54,11 @@ impl MediaDescriptorBuilder {
 
     pub fn expected_size(mut self, value: Option<u64>) -> Self {
         self.descriptor.expected_size = value;
+        self
+    }
+
+    pub fn unavailable(mut self, reason: impl Into<String>) -> Self {
+        self.descriptor.unavailable_reason = Some(reason.into());
         self
     }
 

@@ -32,6 +32,7 @@ export function AuthWorkspace({
   const [session, setSession] = useState<AuthSessionState>(IDLE_SESSION);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [subscribeStarHost, setSubscribeStarHost] = useState('www.subscribestar.com');
 
   // Sync external selection when provided
   useEffect(() => {
@@ -112,7 +113,8 @@ export function AuthWorkspace({
     setBusy(true);
     setMessage(null);
     try {
-      const next = await authController.startSession(selectedEntry.site.id);
+      const next = await authController.startSession(selectedEntry.site.id,
+        selectedEntry.site.id === 'subscribestar' ? subscribeStarHost : undefined);
       setSession(next);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -182,6 +184,8 @@ export function AuthWorkspace({
         onSaveManualOnlyFans={saveManualOnlyFans}
         onCancelLogin={cancelLogin}
         onRemoveCredential={removeCredential}
+        subscribeStarHost={subscribeStarHost}
+        onSubscribeStarHostChange={setSubscribeStarHost}
       />
     </div>
   );

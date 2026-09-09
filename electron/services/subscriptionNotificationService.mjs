@@ -11,8 +11,8 @@ export function showSubscriptionSettlementNotification({ Notification, app, plat
   }
   if (!Notification.isSupported()) return;
   const body = count === 0
-    ? 'All subscriptions finished. No new images were added.'
-    : `${count.toLocaleString('en-US')} new image${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready to review.`;
+    ? 'All subscriptions finished. No new library items were added.'
+    : `${count.toLocaleString('en-US')} new library item${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready to review.`;
   new Notification({ title: 'Subscriptions finished', body }).show();
 }
 
@@ -45,6 +45,7 @@ export function createSubscriptionNotificationService({
     }
 
     const list = await read('subscriptions.list');
+    if (stopped || getCurrentLibraryRoot() !== libraryRoot) return;
     const activeRuns = (list.subscriptions ?? []).flatMap((subscription) => (
       subscription.active_run_id != null && ['pending', 'running'].includes(subscription.status)
         ? [subscription.active_run_id]
@@ -58,16 +59,22 @@ export function createSubscriptionNotificationService({
     if (!batchActive || batchRunIds.size === 0) return;
 
     const completedRunIds = [...batchRunIds];
-    batchRunIds.clear();
-    batchActive = false;
     const activities = await Promise.allSettled(completedRunIds.map((runId) => (
       read('subscriptions.runs.get', { run_id: runId, source_item_limit: 1 })
     )));
-    const newItems = activities.reduce((total, result) => (
-      result.status === 'fulfilled'
-        ? total + Math.max(0, Number(result.value?.summary?.counts?.ingested) || 0)
-        : total
-    ), 0);
+    if (stopped || getCurrentLibraryRoot() !== libraryRoot) return;
+    if (activities.some((result) => result.status !== 'fulfilled'
+      || !Array.isArray(result.value?.new_library_item_keys)
+      || result.value.new_library_item_keys.some((key) => typeof key !== 'string'))) {
+      // Keep the completed batch for a later scheduled refresh. An unavailable
+      // activity is not evidence that the run added zero library items.
+      throw new Error('Subscription completion details are unavailable; notification is pending.');
+    }
+    const newItems = new Set(activities.flatMap((result) => (
+      result.value.new_library_item_keys
+    ))).size;
+    batchRunIds.clear();
+    batchActive = false;
     showSubscriptionSettlementNotification({ Notification, app, platform, newItems });
   }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GridLayoutRuntime } from './gridLayoutModel';
-import { gridViewportMissesWindow, gridWindowDestination, MAX_GRID_SCROLL_HEIGHT, placeGridWindow, SettledGridRequest } from './gridWindow';
+import { gridViewportMissesWindow, gridWindowDestination, MAX_GRID_SCROLL_HEIGHT, placeGridWindow, CoalescedGridRequest } from './gridWindow';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 function layout(count: number) {
@@ -16,26 +16,31 @@ function layout(count: number) {
   });
 }
 
-describe('settled destination loading', () => {
+describe('continuous-scroll destination loading', () => {
   afterEach(() => { vi.useRealTimers(); });
-  it('waits the full 40 ms since the latest scroll, not the first scroll', () => {
+  it('requests the latest destination within 40 ms even while scrolling continues', () => {
     vi.useFakeTimers();
-    const requests = new SettledGridRequest();
+    const requests = new CoalescedGridRequest();
     const old = vi.fn();
     const latest = vi.fn();
     requests.schedule(old);
     vi.advanceTimersByTime(39);
     expect(old).not.toHaveBeenCalled();
     requests.schedule(latest);
-    vi.advanceTimersByTime(39);
-    expect(latest).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(latest).toHaveBeenCalledOnce();
     expect(old).not.toHaveBeenCalled();
+    requests.schedule(latest);
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersByTime(10);
+      requests.schedule(latest);
+    }
+    expect(latest).toHaveBeenCalledTimes(2);
+    requests.cancel();
   });
   it('does not request an abandoned destination after cancellation', () => {
     vi.useFakeTimers();
-    const requests = new SettledGridRequest();
+    const requests = new CoalescedGridRequest();
     const fetch = vi.fn();
     requests.schedule(fetch);
     requests.cancel();

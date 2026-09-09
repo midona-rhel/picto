@@ -144,6 +144,7 @@ pub fn init_tracing() {
             "picto_core::native_source=debug",
             "picto_sources::http=debug",
             "picto_sources::providers::ehentai=debug",
+            "picto_sources::providers::onlyfans=debug",
         ]
         .into_iter()
         .fold(env_filter, |filter, directive| {

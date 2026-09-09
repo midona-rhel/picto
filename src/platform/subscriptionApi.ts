@@ -538,9 +538,10 @@ export function deleteCredential(siteCategory: string): Promise<void> {
   return invoke<MutationReceipt>('auth.credentials.delete', { site_id: siteCategory }).then(() => undefined);
 }
 
-export function startAuthSession(siteCategory: string): Promise<AuthSessionState> {
+export function startAuthSession(siteCategory: string, serviceHost?: string): Promise<AuthSessionState> {
   return invoke<AuthSessionState>('auth_session_start', {
     site_category: siteCategory,
+    ...(serviceHost ? { service_host: serviceHost } : {}),
   });
 }
 

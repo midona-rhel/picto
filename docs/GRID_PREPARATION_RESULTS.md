@@ -6,6 +6,35 @@ Tracking: https://github.com/midona-rhel/picto/issues/45. Not committed or relea
 Follow-up: the cold-tail ordering bottleneck measured here is addressed in
 `COLD_TAIL_RESULTS.md`. This document retains the original preparation-only measurements.
 
+2026-09-09 fast-scroll follow-up: continuous scrolling now coalesces the latest window request
+every 40 ms instead of waiting indefinitely for inactivity. Scroll events no longer cancel a
+still-useful query before its next destination is known. Nearby thumbnails load immediately in
+the bounded canvas buffer; all images, including cached/prefetched ones, start their lifetime
+within 500 CSS pixels above or below the viewport, wait 100 ms, then use the existing 500 ms
+color reveal. Crossing onto the screen does not restart that clock. HQ retains 250 ms of actual visibility
+dwell. Loading early does not bypass or advance the reveal timeline. The temporary instant-cache
+behavior was reverted to honor this consistent visual contract.
+Cancelled decoder work cannot clear or mark a newer request failed. Expected `query superseded`
+results cross Electron IPC as cancellation rather than triggering Electron's handler-error log.
+The earlier 100 ms thumbnail admission results below describe the previous behavior.
+
+Reveal-delay work uses one timer per grid, with no animation-frame loop during the delay and no
+image draw call at zero progress. Drawing stays restricted to the viewport plus fixed buffer;
+the existing six-decode concurrency limit and one-HQ-bitmap-per-frame admission remain unchanged.
+Consistency restoration verification: all 1,209 frontend/Electron tests passed (one skipped),
+including cached/prefetched/late-arrival timing, re-entry, single-timer wake-up, zero-progress
+draw suppression, and six-request admission. Read-only inspection of the running grid confirmed
+100 ms eligibility, half reveal at 250 ms into the animation, completion at 500 ms, and painted
+canvas pixels after hot reload. No library restart was needed.
+
+Follow-up verification: TypeScript and all 1,204 frontend/Electron tests passed (one skipped),
+including sustained-scroll coalescing, same-window in-flight retention, stale decoder completion,
+and cancellation transport regressions. An isolated Electron instance opened its temporary
+library, served native subscription reads, and verified normal macOS Dock visibility. The
+development-only accessory activation and premature window-show overrides were removed.
+No user-library writes or synthetic host input were used; subjective fast-scroll verification
+on the user's current library remains an attended check, not a claimed benchmark result.
+
 ## Implemented scope
 
 Navigation and sort preparation share the controller's bounded destination query path. History

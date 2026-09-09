@@ -2,4 +2,8 @@
 import type { SubscriptionQueryActivity } from "./SubscriptionQueryActivity";
 import type { SubscriptionRunSummary } from "./SubscriptionRunSummary";
 
-export type SubscriptionRunActivity = { summary: SubscriptionRunSummary, queries: Array<SubscriptionQueryActivity>, };
+export type SubscriptionRunActivity = { summary: SubscriptionRunSummary, queries: Array<SubscriptionQueryActivity>,
+/**
+ * Durable identities of roots created by this run, not retained media attempts.
+ */
+new_library_item_keys: Array<string>, };

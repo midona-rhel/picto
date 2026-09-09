@@ -33,6 +33,27 @@ const entry = {
 } satisfies AuthSiteSnapshot;
 
 describe('AuthSiteDetail', () => {
+  it('offers an explicit SubscribeStar service before starting login', () => {
+    const onSubscribeStarHostChange = vi.fn();
+    const props = {
+      entry: { ...entry, site: { ...entry.site, id: 'subscribestar', credential_owner_site_id: 'subscribestar', name: 'SubscribeStar' } },
+      session: idleSession, busy: false, message: null,
+      onStartLogin: vi.fn(async () => undefined),
+      onSaveManualOnlyFans: vi.fn(async () => undefined),
+      onCancelLogin: vi.fn(async () => undefined),
+      onRemoveCredential: vi.fn(async () => undefined),
+      subscribeStarHost: 'subscribestar.adult', onSubscribeStarHostChange,
+    };
+    const { rerender } = render(<AuthSiteDetail {...props} />);
+    expect(screen.getByRole('combobox', { name: 'Service' })).toHaveValue('subscribestar.adult');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'subscribestar.art' } });
+    expect(onSubscribeStarHostChange).toHaveBeenCalledWith('subscribestar.art');
+    expect(screen.getByText(/One service login is stored/)).toBeInTheDocument();
+    rerender(<AuthSiteDetail {...props} session={{ ...idleSession, site_category: 'subscribestar', status: 'active' }} />);
+    expect(screen.getByRole('combobox')).toBeDisabled();
+  });
+
   it('keeps one stable account structure and starts the external login flow', () => {
     const onStartLogin = vi.fn(async () => undefined);
     render(

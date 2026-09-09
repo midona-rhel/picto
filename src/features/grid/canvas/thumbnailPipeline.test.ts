@@ -23,7 +23,6 @@ vi.mock('./thumbnailDecodeClient', () => ({
 
 import {
   FULL_QUALITY_VIEWPORT_DWELL_MS,
-  THUMBNAIL_VIEWPORT_DWELL_MS,
   ThumbnailPipeline,
 } from './thumbnailPipeline';
 
@@ -44,7 +43,7 @@ describe('ThumbnailPipeline viewport admission', () => {
     plans.length = 0;
   });
 
-  it('waits 100ms for a thumbnail and 250ms total for a display-sized original', () => {
+  it('loads a thumbnail immediately and waits 250ms before promoting to an original', () => {
     const scheduledDelays: number[] = [];
     const pipeline = new ThumbnailPipeline(
       vi.fn(),
@@ -67,12 +66,6 @@ describe('ThumbnailPipeline viewport admission', () => {
     } as const;
 
     pipeline.updatePlan([cannon], 400, 1, 0);
-    expect(plans).toEqual([[]]);
-
-    pipeline.updatePlan([cannon], 400, 1, THUMBNAIL_VIEWPORT_DWELL_MS - 1);
-    expect(plans).toEqual([[]]);
-
-    pipeline.updatePlan([cannon], 400, 1, THUMBNAIL_VIEWPORT_DWELL_MS);
     expect(plans[plans.length - 1]).toEqual([{
       fileHash: 'cannon',
       url: 'media://localhost/thumb/cannon.jpg?v=0',
@@ -94,16 +87,16 @@ describe('ThumbnailPipeline viewport admission', () => {
       resizeWidth: 475,
       resizeHeight: 723,
     }]);
-    expect(scheduledDelays).toContain(THUMBNAIL_VIEWPORT_DWELL_MS);
+    expect(scheduledDelays).toContain(FULL_QUALITY_VIEWPORT_DWELL_MS);
   });
 
-  it('resets dwell time when a tile leaves the viewport during a fast scroll', () => {
+  it('prefetches nearby thumbnails without admitting offscreen originals', () => {
     const pipeline = new ThumbnailPipeline(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
     const tile = {
       fileHash: 'passing-item',
       mime: 'image/jpeg',
-      w: 200,
-      h: 200,
+      w: 900,
+      h: 900,
       cy: 100,
       inViewport: true,
     };
@@ -114,16 +107,14 @@ describe('ThumbnailPipeline viewport admission', () => {
     tile.inViewport = true;
     pipeline.updatePlan([tile], 100, 1, 60);
     pipeline.updatePlan([tile], 100, 1, 159);
-    expect(plans).toEqual([[]]);
-
-    pipeline.updatePlan([tile], 100, 1, 160);
+    expect(plans).toHaveLength(1);
     expect(plans[plans.length - 1]?.[0]).toMatchObject({
       fileHash: 'passing-item',
       quality: 'thumbnail',
     });
   });
 
-  it('wakes the grid when the next visible tile reaches its dwell threshold', () => {
+  it('wakes the grid when a visible tile becomes eligible for an original', () => {
     const scheduledCallbacks: Array<() => void> = [];
     const onDirty = vi.fn();
     const pipeline = new ThumbnailPipeline(
@@ -138,8 +129,8 @@ describe('ThumbnailPipeline viewport admission', () => {
     pipeline.updatePlan([{
       fileHash: 'waiting-item',
       mime: 'image/jpeg',
-      w: 200,
-      h: 200,
+      w: 900,
+      h: 900,
       cy: 100,
       inViewport: true,
     }], 100, 1, 0);

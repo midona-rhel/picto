@@ -230,7 +230,8 @@ fn resident_browsing_migration_reuses_the_checkpoint_and_rebuilds_resident_state
     // Recreate the supported predecessor: identical canonical tables, the
     // persisted browsing domains it kept, and its checkpoint stamp.
     let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute_batch(&format!("CREATE TABLE browsing_domain(domain TEXT PRIMARY KEY, format_version INTEGER, generation INTEGER, chunk_count INTEGER);
+    connection.execute_batch(&format!("ALTER TABLE source_attempt_root DROP COLUMN created_root;
+        CREATE TABLE browsing_domain(domain TEXT PRIMARY KEY, format_version INTEGER, generation INTEGER, chunk_count INTEGER);
         CREATE TABLE browsing_chunk(domain TEXT, chunk_id INTEGER, format_version INTEGER, generation INTEGER, checksum BLOB, page_directory BLOB, PRIMARY KEY(domain, chunk_id));
         CREATE TABLE browsing_page(domain TEXT, chunk_id INTEGER, page_id INTEGER, format_version INTEGER, checksum BLOB, payload BLOB, PRIMARY KEY(domain, page_id));
         CREATE TABLE browsing_summary_page(page_id INTEGER PRIMARY KEY, format_version INTEGER, checksum BLOB, payload BLOB);

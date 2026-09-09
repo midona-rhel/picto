@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -13,14 +14,17 @@ use crate::{
 };
 
 const DOMAIN: &str = "subscribestar.art";
-const CURSOR: OpaqueCursor = OpaqueCursor::new(64);
+const CURSOR: OpaqueCursor = OpaqueCursor::new(4_096);
 const MAX_PAGES_PER_DISCOVERY: usize = 4_096;
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    SubscribeStarSource
+    SubscribeStarSource::default()
 }
 
-struct SubscribeStarSource;
+#[derive(Default)]
+struct SubscribeStarSource {
+    page: crate::page_cache::PageCache<(Url, String)>,
+}
 
 impl NativeSourceAdapter for SubscribeStarSource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -44,39 +48,105 @@ impl NativeSourceAdapter for SubscribeStarSource {
         http: &'a HttpRuntime,
         cancel: &'a CancellationToken,
     ) -> AdapterFuture<'a> {
-        Box::pin(async move {
-            let creator = normalize_creator(&request.query)?;
-            let cursor = decode_cursor(request.cursor.as_deref())?;
-            let credentials = site_credentials(credentials);
-            let mut page_url = profile_url(&creator);
-            for _ in 0..MAX_PAGES_PER_DISCOVERY {
-                let (final_url, response) = http
-                    .get_text_with_final_url(page_url.clone(), &credentials, cancel)
-                    .await?;
-                detect_access_url(&final_url)?;
-                validate_page_url(&final_url)?;
-                let html = unwrap_html_response(&response)?;
-                match normalize_page(request, &creator, &cursor, &final_url, &html)? {
-                    PageResult::Post(batch) => return Ok(batch),
-                    PageResult::Continue(Some(next)) => page_url = next,
-                    PageResult::Continue(None) => {
-                        return Ok(DiscoveryBatch {
-                            posts: Vec::new(),
-                            exhausted: true,
-                        });
-                    }
-                }
-            }
-            Err(invalid_response(
-                "SubscribeStar pagination exceeded its safety bound",
-            ))
-        })
+        Box::pin(
+            self.discover_with(request, credentials, move |url, credentials| async move {
+                http.get_text_with_final_url(url, &credentials, cancel)
+                    .await
+            }),
+        )
     }
 }
 
-fn site_credentials(credentials: &RequestCredentials) -> RequestCredentials {
+impl SubscribeStarSource {
+    async fn discover_with<F, Fut>(
+        &self,
+        request: &DiscoveryRequest,
+        credentials: &RequestCredentials,
+        mut fetch: F,
+    ) -> Result<DiscoveryBatch, SourceError>
+    where
+        F: FnMut(Url, RequestCredentials) -> Fut,
+        Fut: std::future::Future<Output = Result<(Url, String), SourceError>>,
+    {
+        let creator = normalize_creator(&request.query)?;
+        let cursor = decode_cursor(request.cursor.as_deref())?;
+        let first_page = creator_url(&request.query)?;
+        let domain = first_page.host_str().expect("validated creator host");
+        let credentials = site_credentials(credentials, domain)?;
+        let mut page_url = match cursor.page.as_deref() {
+            Some(raw) => {
+                let url = Url::parse(raw).map_err(|_| invalid_cursor())?;
+                validate_page_url(&url, domain)?;
+                url
+            }
+            None => first_page.clone(),
+        };
+        let mut visited = BTreeSet::new();
+        for _ in 0..MAX_PAGES_PER_DISCOVERY {
+            if !visited.insert(page_url.to_string()) {
+                return Err(invalid_response("SubscribeStar pagination did not advance"));
+            }
+            let scope = format!("{creator}\n{page_url}");
+            let (final_url, response) = self
+                .page
+                .get_or_fetch(
+                    &scope,
+                    &credentials,
+                    request
+                        .cursor
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty()),
+                    fetch(page_url.clone(), credentials.clone()),
+                )
+                .await?;
+            detect_access_url(&final_url)?;
+            validate_page_url(&final_url, domain)?;
+            let html = unwrap_html_response(&response)?;
+            match normalize_page(request, &creator, &cursor, &final_url, &html)? {
+                PageResult::Post(batch) => return Ok(batch),
+                PageResult::Continue(Some(next)) => page_url = next,
+                PageResult::Continue(None) => {
+                    return Ok(DiscoveryBatch {
+                        posts: Vec::new(),
+                        exhausted: true,
+                    });
+                }
+            }
+        }
+        Err(invalid_response(
+            "SubscribeStar pagination exceeded its safety bound",
+        ))
+    }
+}
+
+fn site_credentials(
+    credentials: &RequestCredentials,
+    domain: &str,
+) -> Result<RequestCredentials, SourceError> {
+    if !credentials.is_empty() {
+        let origin = credentials
+            .headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("origin"));
+        let captured = match origin {
+            Some((_, value)) => Url::parse(value)
+                .ok()
+                .filter(|url| {
+                    url.scheme() == "https"
+                        && url.port().is_none()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                })
+                .and_then(|url| service_domain(url.host_str().unwrap_or_default())),
+            None => Some(DOMAIN),
+        };
+        if captured != service_domain(domain) || !credentials.permits(domain) {
+            return Err(SourceError::new(SourceErrorKind::Authentication,
+                format!("Connect a SubscribeStar session for {domain}; the saved session belongs to another service"), false));
+        }
+    }
     let mut credentials = credentials.clone();
-    credentials.allowed_domains.insert(DOMAIN.to_string());
+    credentials.allowed_domains.insert(domain.to_string());
     credentials
         .cookies
         .entry("18_plus_agreement_generic".to_string())
@@ -87,7 +157,7 @@ fn site_credentials(credentials: &RequestCredentials) -> RequestCredentials {
         .or_insert_with(|| {
             "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8".to_string()
         });
-    credentials
+    Ok(credentials)
 }
 
 fn profile_url(creator: &str) -> Url {
@@ -96,6 +166,33 @@ fn profile_url(creator: &str) -> Url {
         .expect("SubscribeStar URL supports path segments")
         .push(creator);
     url
+}
+
+fn service_domain(host: &str) -> Option<&'static str> {
+    match host {
+        "subscribestar.com" | "www.subscribestar.com" => Some("subscribestar.com"),
+        "subscribestar.adult" | "www.subscribestar.adult" => Some("subscribestar.adult"),
+        "subscribestar.art" | "www.subscribestar.art" => Some(DOMAIN),
+        _ => None,
+    }
+}
+
+fn creator_url(query: &str) -> Result<Url, SourceError> {
+    let creator = normalize_creator(query)?;
+    let domain = Url::parse(query.trim())
+        .ok()
+        .and_then(|url| service_domain(url.host_str().unwrap_or_default()))
+        .unwrap_or(DOMAIN);
+    let host = if domain == "subscribestar.com" {
+        "www.subscribestar.com"
+    } else {
+        domain
+    };
+    if host == DOMAIN {
+        return Ok(profile_url(&creator));
+    }
+    Url::parse(&format!("https://{host}/{creator}"))
+        .map_err(|_| invalid_query("Invalid SubscribeStar creator URL"))
 }
 
 fn unwrap_html_response(response: &str) -> Result<String, SourceError> {
@@ -175,7 +272,8 @@ fn normalize_page(
         request,
         creator,
         posts[index],
-        Some(encode_cursor(post_id)?),
+        Some(encode_cursor(post_id, page_url)?),
+        page_url,
     )?;
     Ok(PageResult::Post(DiscoveryBatch {
         posts: vec![post],
@@ -218,6 +316,7 @@ fn normalize_post(
     creator: &str,
     html: &str,
     resume_cursor_after: Option<String>,
+    page_url: &Url,
 ) -> Result<SourcePost, SourceError> {
     let post_id = fragment_post_id(html)?;
     let author = capture(html, author_regex(), 1)
@@ -229,7 +328,17 @@ fn normalize_post(
             "SubscribeStar returned a post for a different creator",
         ));
     }
-    let canonical_url = format!("https://subscribestar.art/posts/{post_id}");
+    let canonical_url = page_url
+        .join(&format!("/posts/{post_id}"))
+        .map_err(|_| invalid_response("Invalid SubscribeStar post URL"))?
+        .to_string();
+    let domain =
+        service_domain(page_url.host_str().unwrap_or_default()).ok_or_else(invalid_cursor)?;
+    let stable_id = if domain == DOMAIN {
+        post_id.to_string()
+    } else {
+        format!("{domain}:{post_id}")
+    };
     let content = capture(html, content_regex(), 1).unwrap_or_default();
     let mut tags = CanonicalTagSet::default();
     tags.insert("creator", creator);
@@ -246,14 +355,14 @@ fn normalize_post(
     Ok(SourcePost {
         site_id: "subscribestar".to_string(),
         partition: request.partition.clone(),
-        stable_id: post_id.to_string(),
+        stable_id: stable_id.clone(),
         canonical_url: Some(canonical_url.clone()),
         creator: Some(creator.to_string()),
         name: capture(content, title_regex(), 1).and_then(normalize_source_text),
         notes: normalize_source_text(content),
         created_at: capture(html, date_regex(), 1).and_then(normalize_source_text),
         tags: tags.into_vec(),
-        media: post_media(html, post_id, &canonical_url)?,
+        media: post_media(html, post_id, &stable_id, &canonical_url)?,
         resume_cursor_after,
     })
 }
@@ -261,6 +370,7 @@ fn normalize_post(
 fn post_media(
     html: &str,
     post_id: &str,
+    stable_post_id: &str,
     canonical_url: &str,
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
     let mut candidates = Vec::new();
@@ -311,7 +421,7 @@ fn post_media(
     let mut media = Vec::new();
     let headers = BTreeMap::from([("Referer".to_string(), canonical_url.to_string())]);
     for (source_id, raw_url, name) in candidates {
-        let Some(url) = canonical_media_url(&raw_url) else {
+        let Some(url) = canonical_media_url(&raw_url, canonical_url) else {
             continue;
         };
         if !seen.insert(url.clone()) {
@@ -328,8 +438,8 @@ fn post_media(
         }
         let stable_id = source_id
             .filter(|id| !id.trim().is_empty())
-            .map(|id| format!("subscribestar:{post_id}:{id}"))
-            .unwrap_or_else(|| format!("subscribestar:{post_id}:{}", media.len()));
+            .map(|id| format!("subscribestar:{stable_post_id}:{id}"))
+            .unwrap_or_else(|| format!("subscribestar:{stable_post_id}:{}", media.len()));
         media.push(
             MediaDescriptorBuilder::new(stable_id, media.len() as u32, url)
                 .canonical_url(canonical_url)
@@ -353,20 +463,26 @@ fn next_page_url(html: &str, current: &Url) -> Result<Option<Url>, SourceError> 
     let url = current
         .join(&raw)
         .map_err(|_| invalid_response("SubscribeStar returned an invalid next page"))?;
-    validate_page_url(&url)?;
+    validate_page_url(&url, current.host_str().unwrap_or_default())?;
     Ok(Some(url))
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct CursorState {
     anchor: Option<String>,
+    #[serde(default)]
+    page: Option<String>,
 }
 
-fn encode_cursor(post_id: &str) -> Result<String, SourceError> {
+fn encode_cursor(post_id: &str, page: &Url) -> Result<String, SourceError> {
     if !valid_numeric_id(post_id) {
         return Err(invalid_cursor());
     }
-    let cursor = format!("p{post_id}");
+    let cursor = serde_json::to_string(&CursorState {
+        anchor: Some(post_id.to_owned()),
+        page: Some(page.to_string()),
+    })
+    .map_err(|_| invalid_cursor())?;
     CURSOR.validate(&cursor)?;
     Ok(cursor)
 }
@@ -376,6 +492,13 @@ fn decode_cursor(raw: Option<&str>) -> Result<CursorState, SourceError> {
         return Ok(CursorState::default());
     };
     CURSOR.validate(raw)?;
+    if raw.starts_with('{') {
+        let cursor: CursorState = serde_json::from_str(raw).map_err(|_| invalid_cursor())?;
+        if !cursor.anchor.as_deref().is_some_and(valid_numeric_id) || cursor.page.is_none() {
+            return Err(invalid_cursor());
+        }
+        return Ok(cursor);
+    }
     let anchor = raw
         .strip_prefix('p')
         .filter(|value| valid_numeric_id(value))
@@ -383,12 +506,14 @@ fn decode_cursor(raw: Option<&str>) -> Result<CursorState, SourceError> {
         .ok_or_else(invalid_cursor)?;
     Ok(CursorState {
         anchor: Some(anchor),
+        page: None,
     })
 }
 
-fn validate_page_url(url: &Url) -> Result<(), SourceError> {
+fn validate_page_url(url: &Url, domain: &str) -> Result<(), SourceError> {
     if url.scheme() != "https"
-        || url.host_str() != Some(DOMAIN)
+        || service_domain(url.host_str().unwrap_or_default()).is_none()
+        || service_domain(url.host_str().unwrap_or_default()) != service_domain(domain)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
@@ -407,10 +532,7 @@ fn normalize_creator(raw: &str) -> Result<String, SourceError> {
     }
     let creator = if let Ok(url) = Url::parse(raw) {
         if !matches!(url.scheme(), "http" | "https")
-            || !matches!(
-                url.host_str(),
-                Some("subscribestar.art" | "subscribestar.com" | "www.subscribestar.com")
-            )
+            || service_domain(url.host_str().unwrap_or_default()).is_none()
             || !url.username().is_empty()
             || url.password().is_some()
             || url.port().is_some()
@@ -449,16 +571,13 @@ fn normalize_creator(raw: &str) -> Result<String, SourceError> {
     Ok(creator)
 }
 
-fn canonical_media_url(raw: &str) -> Option<String> {
+fn canonical_media_url(raw: &str, canonical_url: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
     let url = if raw.starts_with('/') {
-        Url::parse("https://subscribestar.art")
-            .ok()?
-            .join(raw)
-            .ok()?
+        Url::parse(canonical_url).ok()?.join(raw).ok()?
     } else if raw.starts_with("//") {
         Url::parse(&format!("https:{raw}")).ok()?
     } else {
@@ -568,6 +687,128 @@ mod tests {
     }
 
     #[test]
+    fn preserves_service_identity_for_queries_posts_and_relative_media() {
+        let mut post_ids = BTreeSet::new();
+        let mut media_ids = BTreeSet::new();
+        for host in [
+            "www.subscribestar.com",
+            "subscribestar.adult",
+            "subscribestar.art",
+        ] {
+            let query = format!("https://{host}/creator-name");
+            let url = creator_url(&query).unwrap();
+            assert_eq!(url.as_str(), query);
+            let mut request = request();
+            request.query = query;
+            let html = include_str!("../../tests/fixtures/subscribestar/profile.html");
+            let PageResult::Post(batch) = normalize_page(
+                &request,
+                "creator-name",
+                &CursorState::default(),
+                &url,
+                html,
+            )
+            .unwrap() else {
+                panic!("post expected")
+            };
+            post_ids.insert(batch.posts[0].stable_id.clone());
+            media_ids.insert(batch.posts[0].media[0].stable_id.clone());
+            assert_eq!(
+                batch.posts[0].canonical_url.as_deref(),
+                Some(format!("https://{host}/posts/778899").as_str())
+            );
+            assert_eq!(
+                canonical_media_url("/file.jpg", url.as_ref()).unwrap(),
+                format!("https://{host}/file.jpg")
+            );
+            assert!(
+                validate_page_url(&Url::parse("https://evil.test/page").unwrap(), host).is_err()
+            );
+        }
+        assert_eq!(post_ids.len(), 3);
+        assert_eq!(media_ids.len(), 3);
+        assert!(post_ids.contains("778899"));
+        assert!(post_ids.contains("subscribestar.com:778899"));
+        assert!(post_ids.contains("subscribestar.adult:778899"));
+        assert_eq!(
+            creator_url("creator-name").unwrap().host_str(),
+            Some(DOMAIN)
+        );
+    }
+
+    #[test]
+    fn credentials_never_cross_subscribestar_services() {
+        let mut credentials = RequestCredentials::default();
+        credentials
+            .cookies
+            .insert("_personalization_id".into(), "fixture-session".into());
+        credentials.allowed_domains.insert(DOMAIN.into());
+        assert!(site_credentials(&credentials, DOMAIN).is_ok());
+        assert!(site_credentials(&credentials, "www.subscribestar.com").is_err());
+        credentials
+            .headers
+            .insert("Origin".into(), "https://subscribestar.adult".into());
+        credentials.allowed_domains = BTreeSet::from(["subscribestar.adult".into()]);
+        assert!(site_credentials(&credentials, "subscribestar.adult").is_ok());
+        assert!(site_credentials(&credentials, DOMAIN).is_err());
+        credentials
+            .headers
+            .insert("Origin".into(), "https://subscribestar.com".into());
+        credentials.allowed_domains = BTreeSet::from(["subscribestar.com".into()]);
+        assert!(site_credentials(&credentials, "www.subscribestar.com").is_ok());
+        credentials
+            .headers
+            .insert("Origin".into(), "https://www.subscribestar.com".into());
+        assert!(site_credentials(&credentials, "subscribestar.com").is_ok());
+        credentials
+            .headers
+            .insert("Origin".into(), "https://evil.test".into());
+        assert!(site_credentials(&credentials, "subscribestar.adult").is_err());
+    }
+
+    #[tokio::test]
+    async fn fetches_each_page_once_and_resumes_on_its_saved_page() {
+        let source = SubscribeStarSource::default();
+        let credentials = RequestCredentials::default();
+        let mut request = request();
+        let calls = std::sync::Mutex::new(Vec::new());
+        let fetch = |url: Url, _: RequestCredentials| async {
+            calls.lock().unwrap().push(url.to_string());
+            let html = if url.query().is_none() {
+                format!("{}<a data-role=\"infinite_scroll-next_page\" href=\"/creator-name?page=2\"></a>", simple_page(&["300", "299"]))
+            } else {
+                simple_page(&["200", "199"])
+            };
+            Ok((url, html))
+        };
+        for id in ["300", "299", "200"] {
+            let batch = source
+                .discover_with(&request, &credentials, fetch)
+                .await
+                .unwrap();
+            assert_eq!(batch.posts[0].stable_id, id);
+            request.cursor = batch.posts[0].resume_cursor_after.clone();
+        }
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        let resumed = SubscribeStarSource::default();
+        let batch = resumed
+            .discover_with(&request, &credentials, fetch)
+            .await
+            .unwrap();
+        assert_eq!(batch.posts[0].stable_id, "199");
+        assert!(batch.exhausted);
+        assert_eq!(calls.lock().unwrap().len(), 3);
+        assert!(calls.lock().unwrap().last().unwrap().ends_with("?page=2"));
+        request.cursor = None;
+        let batch = source
+            .discover_with(&request, &credentials, fetch)
+            .await
+            .unwrap();
+        assert_eq!(batch.posts[0].stable_id, "300");
+        assert_eq!(calls.lock().unwrap().len(), 4);
+    }
+
+    #[test]
     fn page_exposes_exactly_one_post_and_advances_within_the_same_page() {
         let html = include_str!("../../tests/fixtures/subscribestar/profile.html");
         let page_url = profile_url("creator-name");
@@ -611,7 +852,12 @@ mod tests {
 
     #[test]
     fn cursor_accepts_only_bounded_post_id_anchors() {
-        assert_eq!(encode_cursor("778899").unwrap(), "p778899");
+        let encoded = encode_cursor("778899", &profile_url("creator-name")).unwrap();
+        assert_eq!(
+            decode_cursor(Some(&encoded)).unwrap().anchor.as_deref(),
+            Some("778899")
+        );
+        assert_eq!(decode_cursor(Some("p778899")).unwrap().page, None);
         assert!(decode_cursor(Some("https://subscribestar.art/page#picto=1")).is_err());
         assert!(decode_cursor(Some("pnot-a-post")).is_err());
         assert!(decode_cursor(Some("p123456789012345678901234567890123")).is_err());
@@ -653,7 +899,7 @@ mod tests {
 
     #[test]
     fn provider_credentials_include_the_adult_age_cookie() {
-        let credentials = site_credentials(&RequestCredentials::default());
+        let credentials = site_credentials(&RequestCredentials::default(), DOMAIN).unwrap();
         assert_eq!(
             credentials
                 .cookies
@@ -666,7 +912,7 @@ mod tests {
     #[test]
     fn anchored_cursor_survives_insertions_and_anchor_deletion() {
         let page_url = profile_url("creator-name");
-        let persisted = encode_cursor("200").unwrap();
+        let persisted = encode_cursor("200", &page_url).unwrap();
         let cursor = decode_cursor(Some(&persisted)).unwrap();
         for html in [
             simple_page(&["300", "200", "199"]),
@@ -690,6 +936,7 @@ mod tests {
         );
         let cursor = CursorState {
             anchor: Some("200".to_string()),
+            page: None,
         };
         let PageResult::Continue(Some(next)) = normalize_page(
             &request(),

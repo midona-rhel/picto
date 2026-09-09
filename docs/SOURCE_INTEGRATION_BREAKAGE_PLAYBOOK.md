@@ -120,6 +120,60 @@ OnlyFans request signing changes frequently. Port the reference's current rule p
 flow into the existing adapter and add a sanitized dynamic-rules fixture. Do not hard-code a freshly
 observed signature or store a user's signed request.
 
+### Empty OnlyFans feed pages (verified 2026-09-09)
+
+Latest upstream `main` inspected: OF-Scraper
+[`d10ce94935fd2a6cd02a662e624b0081e976a0a6`](https://github.com/datawhores/OF-Scraper/commit/d10ce94935fd2a6cd02a662e624b0081e976a0a6).
+Its `ofscraper/data/api/timeline.py` and `ofscraper/utils/of_env/values/url/url.py`
+use 100-post ascending pages and `afterPublishTime`. Fetch current upstream again for future repairs;
+this SHA records the reference used for this fix, not a permanent protocol pin.
+
+Picto retains descending, one-post requests to preserve its serial settlement and newest-first
+refresh contract. A live comparison confirmed that OnlyFans can return `list: []`, `hasMore: true`,
+and a valid `tailMarker` for a filtered page; a larger page spans the same gap and returns older
+posts. For descending timestamp feeds, continue with `beforePublishTime=tailMarker`. An empty
+page ends that feed area only when `hasMore: false`. Missing/invalid flags, missing or non-advancing
+markers, and excessive empty-page chains fail recoverably without marking history complete.
+The sanitized regression fixture is `empty-timeline-continuation.json`.
+
+An attended temporary-library worker run crossed the saved gap and imported a 40-media post.
+Reopening that library and continuing imported the next 35-media post, preserving the first
+collection and its cursor checkpoint. Both collections' stored blob sizes were verified. The
+existing user library was read-only during these checks.
+
+## 2026-09-09 compatibility audit repair
+
+The repair was checked against freshly pulled gallery-dl
+[`2adf2a8e0041ec55afdcc2211fd5c7ca239a9352`](https://github.com/mikf/gallery-dl/commit/2adf2a8e0041ec55afdcc2211fd5c7ca239a9352)
+and the OF-Scraper revision above. Refresh both references again for the next audit.
+
+Implemented findings cover strict completion envelopes and continuation guards, original-media
+fallbacks, creator URL normalization, service-scoped SubscribeStar authentication and identity,
+Pixiv app/website coverage, DeviantArt cursors, booru deep-page and parent-query behavior, relative
+Newgrounds links, and full Twitter note metadata. A single credential-scoped, expiring metadata
+page cache avoids redundant listing fetches; it does not fetch later-post media. Shared HTTP
+admission now spaces actual dispatches and honors domain cooldowns even after the last retry.
+Request errors omit URLs and private response bodies.
+
+Settled-post limits count added plus skipped posts. UI completion requires source-history
+exhaustion. Notifications use transactionally recorded new root identities: a new collection is
+one library item, an existing collection gaining media is zero new items, and duplicate attempts
+do not inflate totals. The supported schema migration backs up before adding this provenance;
+older attempts are not retroactively assigned speculative creation counts.
+
+Verification: 602 Rust tests passed across sources, core, and library (four explicit live/scale
+tests skipped); 1,194 frontend/Electron tests passed before the final four notification race/retry
+regressions, and all six focused notification tests then passed. TypeScript, targeted all-target
+Clippy, release audit, command parity, and an isolated Electron shell/native subscription-read
+smoke passed. No live accounts were accessed for this broad repair pass.
+
+This is not certification of every gallery-dl mode. Ordered booru queries remain explicitly
+unsupported under Picto's serial newest-first contract; known OnlyFans DRM media fail explicitly
+before download rather than silently substituting a rendition. Additional upstream modes such as
+premium folders and Twitter article-media expansion remain outside the current adapter contract.
+Cross-source live certification still requires attended fresh-library runs. Do not claim that
+every request interval is stricter than every upstream configuration from these fixture tests.
+
 ## Safe Fix Workflow
 
 1. Reproduce with one known query and note the exact phase, status, and first wrong post. Prefer a

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ use crate::{
 };
 
 const DOMAIN: &str = "deviantart.com";
-const CURSOR: OpaqueCursor = OpaqueCursor::new(64);
+const CURSOR: OpaqueCursor = OpaqueCursor::new(4096);
 const GALLERY_PAGE_SIZE: u32 = 24;
 const CLIENT_AUTHORIZATION: &str = "Basic NTM4ODo3NmIwOGM2OWNmYjI3ZjI2ZDYxNjFmOWFiNmQwNjFhMQ==";
 
@@ -26,19 +26,14 @@ pub(crate) fn adapter() -> impl NativeSourceAdapter {
 
 #[derive(Default)]
 struct DeviantArtSource {
-    gallery_pages: Mutex<HashMap<GalleryPageKey, GalleryResponse>>,
+    gallery_pages: crate::page_cache::PageCache<GalleryResponse>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct GalleryPageKey {
-    username: String,
-    offset: u32,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct GalleryCursor {
     offset: u32,
     item: usize,
+    token: Option<String>,
 }
 
 struct CachedAccessToken {
@@ -78,54 +73,48 @@ impl NativeSourceAdapter for DeviantArtSource {
             let username = normalize_username(&request.query)?;
             let mut cursor = decode_cursor(request.cursor.as_deref())?;
             let access_token = self.access_token(credentials, http, cancel).await?;
-            loop {
-                let key = GalleryPageKey {
-                    username: username.clone(),
-                    offset: cursor.offset,
-                };
-                let cached = self.gallery_pages.lock().await.get(&key).cloned();
-                let response = match cached {
-                    Some(response) => response,
-                    None => {
-                        let mut response = http
-                            .get_json::<GalleryResponse>(
-                                gallery_url(&username, cursor.offset),
-                                &api_credentials(credentials, &access_token),
-                                cancel,
-                            )
-                            .await?;
-                        let mut seen = BTreeSet::new();
-                        response
-                            .results
-                            .retain(|item| seen.insert(item.deviationid.clone()));
-                        self.gallery_pages
-                            .lock()
-                            .await
-                            .insert(key.clone(), response.clone());
-                        response
-                    }
-                };
-                if let Some(index) = next_accessible_index(&response.results, cursor.item) {
-                    let finishes_page =
-                        next_accessible_index(&response.results, index.saturating_add(1)).is_none();
+            for _ in 0..128 {
+                let url = gallery_cursor_url(&username, &cursor);
+                let response = self
+                    .gallery_pages
+                    .get_or_fetch(
+                        url.as_str(),
+                        credentials,
+                        request
+                            .cursor
+                            .as_deref()
+                            .is_some_and(|cursor| !cursor.is_empty()),
+                        async {
+                            let mut response = http
+                                .get_json::<GalleryResponse>(
+                                    url.clone(),
+                                    &api_credentials(credentials, &access_token),
+                                    cancel,
+                                )
+                                .await?;
+                            let mut seen = BTreeSet::new();
+                            response
+                                .results
+                                .retain(|item| seen.insert(item.deviationid.clone()));
+                            Ok(response)
+                        },
+                    )
+                    .await?;
+                if next_accessible_index(&response.results, cursor.item).is_some() {
                     let batch = normalize_gallery(request, cursor, response)?;
-                    if finishes_page {
-                        self.gallery_pages.lock().await.remove(&key);
-                    }
                     return Ok(batch);
                 }
-                self.gallery_pages.lock().await.remove(&key);
                 if !response.has_more {
                     return Ok(DiscoveryBatch {
                         posts: Vec::new(),
                         exhausted: true,
                     });
                 }
-                cursor = GalleryCursor {
-                    offset: next_page_offset(cursor.offset, &response),
-                    item: 0,
-                };
+                cursor = next_gallery_cursor(&cursor, &response)?;
             }
+            Err(invalid_response(
+                "DeviantArt returned too many empty continuation pages",
+            ))
         })
     }
 
@@ -254,8 +243,21 @@ fn decode_cursor(raw: Option<&str>) -> Result<GalleryCursor, SourceError> {
         return Ok(GalleryCursor::default());
     };
     let raw = CURSOR.validate(raw)?;
+    if let Some((item, token)) = raw.strip_prefix('c').and_then(|raw| raw.split_once(':')) {
+        return validate_cursor(GalleryCursor {
+            offset: 0,
+            item: item
+                .parse()
+                .map_err(|_| invalid_query("invalid DeviantArt source cursor"))?,
+            token: Some(token.to_string()),
+        });
+    }
     if let Ok(offset) = raw.parse::<u32>() {
-        return Ok(GalleryCursor { offset, item: 0 });
+        return Ok(GalleryCursor {
+            offset,
+            item: 0,
+            token: None,
+        });
     }
     let Some((offset, item)) = raw.strip_prefix('o').and_then(|raw| raw.split_once('i')) else {
         return Err(invalid_query("invalid DeviantArt source cursor"));
@@ -267,19 +269,28 @@ fn decode_cursor(raw: Option<&str>) -> Result<GalleryCursor, SourceError> {
         item: item
             .parse()
             .map_err(|_| invalid_query("invalid DeviantArt source cursor"))?,
+        token: None,
     };
     validate_cursor(cursor)
 }
 
 fn encode_cursor(cursor: GalleryCursor) -> Result<String, SourceError> {
     let cursor = validate_cursor(cursor)?;
-    let encoded = format!("o{}i{}", cursor.offset, cursor.item);
+    let encoded = match cursor.token {
+        Some(token) => format!("c{}:{token}", cursor.item),
+        None => format!("o{}i{}", cursor.offset, cursor.item),
+    };
     CURSOR.validate(&encoded)?;
     Ok(encoded)
 }
 
 fn validate_cursor(cursor: GalleryCursor) -> Result<GalleryCursor, SourceError> {
-    if cursor.offset > 1_000_000_000 || cursor.item >= GALLERY_PAGE_SIZE as usize {
+    if cursor.offset > 1_000_000_000
+        || cursor.item >= GALLERY_PAGE_SIZE as usize
+        || cursor.token.as_ref().is_some_and(|token| {
+            token.is_empty() || token.len() > 4000 || token.chars().any(char::is_control)
+        })
+    {
         return Err(invalid_query("invalid DeviantArt source cursor"));
     }
     Ok(cursor)
@@ -297,6 +308,22 @@ fn gallery_url(username: &str, offset: u32) -> Url {
         .append_pair("offset", &offset.to_string())
         .append_pair("limit", &GALLERY_PAGE_SIZE.to_string())
         .append_pair("mature_content", "true");
+    url
+}
+
+fn gallery_cursor_url(username: &str, cursor: &GalleryCursor) -> Url {
+    let mut url = gallery_url(username, cursor.offset);
+    if let Some(token) = &cursor.token {
+        let pairs: Vec<_> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "offset")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut()
+            .extend_pairs(pairs)
+            .append_pair("cursor", token);
+    }
     url
 }
 
@@ -340,12 +367,12 @@ fn normalize_gallery(
         GalleryCursor {
             offset: cursor.offset,
             item,
+            token: cursor.token.clone(),
         }
+    } else if exhausted {
+        cursor.clone()
     } else {
-        GalleryCursor {
-            offset: next_page_offset(cursor.offset, &response),
-            item: 0,
-        }
+        next_gallery_cursor(&cursor, &response)?
     };
     let deviation = response
         .results
@@ -379,10 +406,39 @@ fn deviation_is_accessible(deviation: &ApiDeviation) -> bool {
         && deviation.premium_folder_data.is_none()
 }
 
-fn next_page_offset(offset: u32, response: &GalleryResponse) -> u32 {
-    response
-        .next_offset
-        .unwrap_or_else(|| offset.saturating_add(response.results.len().max(1) as u32))
+fn next_gallery_cursor(
+    cursor: &GalleryCursor,
+    response: &GalleryResponse,
+) -> Result<GalleryCursor, SourceError> {
+    let next = if let Some(token) = &response.next_cursor {
+        GalleryCursor {
+            token: Some(token.clone()),
+            ..GalleryCursor::default()
+        }
+    } else if let Some(offset) = response.next_offset {
+        GalleryCursor {
+            offset,
+            ..GalleryCursor::default()
+        }
+    } else if cursor.token.is_none() {
+        GalleryCursor {
+            offset: cursor
+                .offset
+                .checked_add(response.results.len().max(1) as u32)
+                .ok_or_else(|| invalid_response("DeviantArt offset overflow"))?,
+            ..GalleryCursor::default()
+        }
+    } else {
+        return Err(invalid_response(
+            "DeviantArt omitted its continuation cursor",
+        ));
+    };
+    if response.has_more && (next.token == cursor.token && next.offset <= cursor.offset) {
+        return Err(invalid_response(
+            "DeviantArt returned a non-advancing continuation cursor",
+        ));
+    }
+    validate_cursor(next)
 }
 
 fn normalize_deviation(
@@ -412,7 +468,8 @@ fn normalize_deviation(
             "content"
         };
         let fallback = content.clone();
-        let (url, transformed) = transformed_content_url(&content.src, &stable_id);
+        let index = canonical_url.rsplit('-').next().unwrap_or_default();
+        let (url, transformed) = transformed_content_url(&content.src, index);
         content.src = url;
         push_media(
             &mut media,
@@ -748,12 +805,12 @@ struct AccessTokenResponse {
 
 #[derive(Clone, Deserialize)]
 struct GalleryResponse {
-    #[serde(default)]
     results: Vec<ApiDeviation>,
-    #[serde(default)]
     has_more: bool,
     #[serde(default)]
     next_offset: Option<u32>,
+    #[serde(default)]
+    next_cursor: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -851,6 +908,43 @@ impl ApiTag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_pages_follow_the_server_token_and_reject_stalled_or_malformed_pages() {
+        let response: GalleryResponse = serde_json::from_value(serde_json::json!({
+            "results":[], "has_more":true, "next_cursor":"opaque-next", "next_offset":null
+        }))
+        .unwrap();
+        let next = next_gallery_cursor(&GalleryCursor::default(), &response).unwrap();
+        let encoded = encode_cursor(next.clone()).unwrap();
+        assert_eq!(decode_cursor(Some(&encoded)).unwrap(), next);
+        let url = gallery_cursor_url("artist", &next);
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "cursor" && value == "opaque-next"));
+        assert!(!url.query_pairs().any(|(key, _)| key == "offset"));
+        assert!(next_gallery_cursor(&next, &response).is_err());
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!({"results":[]}),
+            serde_json::json!({"has_more":false}),
+        ] {
+            assert!(serde_json::from_value::<GalleryResponse>(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn uuid_identity_uses_the_artwork_url_index_for_intermediary_selection() {
+        let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
+            "deviationid":"8C8D6B28-766A-DE21-7F7D-CE055C3BD50A",
+            "url":"https://www.deviantart.com/artist/art/work-790677560",
+            "author":{"username":"artist"},
+            "content":{"src":"https://images-wixmp-example.test/f/uuid/file.png/v1/fill/w_800/file.png"}
+        })).unwrap();
+        let post = normalize_deviation(&request(None), "cursor".into(), deviation).unwrap();
+        assert!(post.media[0].url.contains("/intermediary/f/"));
+        assert_eq!(post.stable_id, "8C8D6B28-766A-DE21-7F7D-CE055C3BD50A");
+    }
     use crate::{CanonicalTag, SourcePartition};
 
     const GALLERY: &str = include_str!("../../tests/fixtures/deviantart/gallery.json");
@@ -1044,6 +1138,7 @@ mod tests {
         let original = "https://images-wixmp-ed30.example/f/uuid/file.png/v1/fill/w_800,h_600,q_70/file.png?token=x";
         let deviation: ApiDeviation = serde_json::from_value(serde_json::json!({
             "deviationid": "790677560",
+            "url": "https://www.deviantart.com/artist/art/work-790677560",
             "author": { "username": "artist" },
             "content": { "src": original, "filesize": 4000 }
         }))
@@ -1087,14 +1182,16 @@ mod tests {
             decode_cursor(Some("42")).unwrap(),
             GalleryCursor {
                 offset: 42,
-                item: 0
+                item: 0,
+                token: None,
             }
         );
         assert_eq!(
             decode_cursor(Some("o42i7")).unwrap(),
             GalleryCursor {
                 offset: 42,
-                item: 7
+                item: 7,
+                token: None,
             }
         );
         assert!(decode_cursor(Some("o1000000001i0")).is_err());

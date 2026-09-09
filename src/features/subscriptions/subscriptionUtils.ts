@@ -113,6 +113,7 @@ export function describeSubscriptionState(input: {
 export function isQueryCompleted(query: SubscriptionQueryInfo): boolean {
   return !query.paused
     && query.completed_initial_run
+    && query.source_history_complete
     && query.successful_run_count >= 1
     && query.last_success_at != null
     && query.last_failure_kind == null;

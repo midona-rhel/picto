@@ -1,4 +1,5 @@
 {
+  "One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.": "Solo se guarda el inicio de sesión de un servicio a la vez. Usa la URL completa del creador en las suscripciones; los nombres de creador existentes sin URL usan .art.",
   " · {value0} unavailable": " · {value0} sin disponible",
   "{value0} · {value1}": "{value0} · {value1}",
   "{value0} · Click to filter · Right-click for actions": "{value0} · Click to filtro · Right-click for actions",

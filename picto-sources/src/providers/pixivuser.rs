@@ -2,10 +2,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AdapterFuture, DiscoveryRequest, HttpRuntime, MediaDescriptor, MediaFuture,
-    NativeSourceAdapter, ProviderDescriptor, RequestCredentials, SourceError,
+    NativeSourceAdapter, PostFuture, ProviderDescriptor, RequestCredentials, SourceError,
+    SourcePost,
 };
 
-use super::pixiv::{api_url, current_offset, validate_numeric_user, PixivApi};
+use super::pixiv::{validate_numeric_user, PixivApi};
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     PixivUserSource::default()
@@ -40,15 +41,20 @@ impl NativeSourceAdapter for PixivUserSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let user_id = validate_numeric_user(&request.query)?;
-            let offset = current_offset(request)?;
-            let mut url = api_url("/v1/user/illusts");
-            url.query_pairs_mut()
-                .append_pair("user_id", &user_id)
-                .append_pair("offset", &offset.to_string());
             self.api
-                .discover_one("pixivuser", request, offset, url, credentials, http, cancel)
+                .discover_user(request, &user_id, credentials, http, cancel)
                 .await
         })
+    }
+
+    fn resolve_post<'a>(
+        &'a self,
+        post: SourcePost,
+        credentials: &'a RequestCredentials,
+        http: &'a HttpRuntime,
+        cancel: &'a CancellationToken,
+    ) -> PostFuture<'a> {
+        Box::pin(async move { self.api.recover_post(post, credentials, http, cancel).await })
     }
 
     fn resolve_media<'a>(
@@ -68,46 +74,12 @@ impl NativeSourceAdapter for PixivUserSource {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
     use super::*;
-    use crate::SourcePartition;
-
-    fn request(cursor: Option<&str>) -> DiscoveryRequest {
-        DiscoveryRequest {
-            query: "173530".into(),
-            partition: SourcePartition::new("illustrations"),
-            cursor: cursor.map(ToOwned::to_owned),
-            page_size: 10,
-        }
-    }
-
     #[test]
     fn preserves_numeric_user_query_semantics() {
         assert_eq!(validate_numeric_user(" 173530 ").unwrap(), "173530");
         assert!(validate_numeric_user("@artist").is_err());
         assert!(validate_numeric_user("https://www.pixiv.net/users/173530").is_err());
         assert!(validate_numeric_user("0").is_err());
-    }
-
-    #[test]
-    fn user_fixture_matches_the_direct_api_envelope() {
-        let response: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/pixivuser/user.json")).unwrap();
-        let batch =
-            super::super::pixiv::normalize_response("pixivuser", &request(None), 0, response)
-                .unwrap();
-        let post = &batch.posts[0];
-        assert_eq!(post.site_id, "pixivuser");
-        assert_eq!(post.stable_id, "22334455");
-        assert_eq!(post.creator.as_deref(), Some("Aoi Artist"));
-        assert_eq!(post.media.len(), 2);
-        assert_eq!(post.resume_cursor_after.as_deref(), Some("1"));
-    }
-
-    #[test]
-    fn user_cursor_is_bounded() {
-        assert_eq!(current_offset(&request(Some("9"))).unwrap(), 9);
-        assert!(current_offset(&request(Some("next-page"))).is_err());
     }
 }

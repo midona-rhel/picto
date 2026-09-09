@@ -23,10 +23,13 @@ const RATINGS: RatingMap = RatingMap::new(&[
 ]);
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
-    NewgroundsSource
+    NewgroundsSource::default()
 }
 
-struct NewgroundsSource;
+#[derive(Default)]
+struct NewgroundsSource {
+    page: crate::page_cache::PageCache<ProfilePage>,
+}
 
 impl NativeSourceAdapter for NewgroundsSource {
     fn descriptor(&self) -> ProviderDescriptor {
@@ -56,11 +59,17 @@ impl NativeSourceAdapter for NewgroundsSource {
             let credentials = profile_credentials(credentials);
 
             for _ in 0..MAX_EMPTY_PAGES {
-                let response = http
-                    .get_json::<ProfilePage>(
-                        profile_url(&username, cursor.page)?,
+                let url = profile_url(&username, cursor.page)?;
+                let response = self
+                    .page
+                    .get_or_fetch(
+                        url.as_str(),
                         &credentials,
-                        cancel,
+                        request
+                            .cursor
+                            .as_deref()
+                            .is_some_and(|cursor| !cursor.is_empty()),
+                        http.get_json::<ProfilePage>(url.clone(), &credentials, cancel),
                     )
                     .await?;
                 let page = normalize_profile_page(&username, cursor, response)?;
@@ -174,6 +183,13 @@ fn profile_url(username: &str, page: u32) -> Result<Url, SourceError> {
 }
 
 fn validate_post_url(raw: &str) -> Result<Url, SourceError> {
+    let absolute;
+    let raw = if raw.starts_with('/') && !raw.starts_with("//") {
+        absolute = format!("https://www.newgrounds.com{raw}");
+        absolute.as_str()
+    } else {
+        raw
+    };
     let mut url =
         Url::parse(raw).map_err(|_| invalid_response("Newgrounds returned an invalid post URL"))?;
     let host = url.host_str().unwrap_or_default();
@@ -234,7 +250,7 @@ fn validate_cursor(cursor: Cursor) -> Result<Cursor, SourceError> {
     Ok(cursor)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ProfilePage {
     #[serde(default)]
     items: BTreeMap<String, Vec<String>>,
@@ -662,6 +678,15 @@ static CREATOR_LINK: OnceLock<Regex> = OnceLock::new();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_gallery_links_resolve_on_the_first_party_site() {
+        assert_eq!(
+            validate_post_url("/art/view/artist/work").unwrap().as_str(),
+            "https://www.newgrounds.com/art/view/artist/work"
+        );
+        assert!(validate_post_url("//other.test/art/view/artist/work").is_err());
+    }
     use crate::CanonicalTag;
 
     fn profile_fixture() -> ProfilePage {

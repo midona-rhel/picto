@@ -303,6 +303,7 @@ async fn download_track(
             fallbacks: Vec::new(),
             rejected_final_paths: descriptor.rejected_final_paths.clone(),
             postprocess: None,
+            unavailable_reason: None,
         };
         if let Some(range) = &segment.range {
             segment_descriptor
@@ -356,6 +357,7 @@ async fn fetch_manifest(
         fallbacks: Vec::new(),
         rejected_final_paths: descriptor.rejected_final_paths.clone(),
         postprocess: None,
+        unavailable_reason: None,
     };
     let downloaded = http.download(&request, credentials, path, cancel).await?;
     if downloaded.size_bytes > MAX_MANIFEST_BYTES {
@@ -1055,6 +1057,7 @@ mod tests {
             fallbacks: Vec::new(),
             rejected_final_paths: Vec::new(),
             postprocess: None,
+            unavailable_reason: None,
         };
         let runtime = HttpRuntime::new(HttpPolicy {
             maximum_concurrency: 1,

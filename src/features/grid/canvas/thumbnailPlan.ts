@@ -112,5 +112,6 @@ export function computePlanFingerprint(
  * the viewport spans the grid's full width, so X distance adds nothing.
  */
 export function sortPlanTilesByViewportDistance(tiles: PlanTile[], viewportCenterY: number): void {
-  tiles.sort((a, b) => Math.abs(a.cy - viewportCenterY) - Math.abs(b.cy - viewportCenterY));
+  tiles.sort((a, b) => Number(a.inViewport === false) - Number(b.inViewport === false)
+    || Math.abs(a.cy - viewportCenterY) - Math.abs(b.cy - viewportCenterY));
 }

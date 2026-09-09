@@ -1,4 +1,5 @@
 {
+  "One service login is stored at a time. Use a full creator URL in subscriptions; existing bare creator names use .art.": "一度に保存できるのは1つのサービスのログイン情報です。サブスクリプションにはクリエイターの完全なURLを使用してください。既存のURLを含まないクリエイター名には .art が使用されます。",
   " · {value0} unavailable": " ・{value0} 利用不可",
   "{value0} · {value1}": "{value0} ・ {value1}",
   "{value0} · Click to filter · Right-click for actions": "{value0} ・クリックしてフィルタ・右クリックしてアクション",

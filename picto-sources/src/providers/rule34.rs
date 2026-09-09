@@ -83,6 +83,8 @@ mod tests {
             image.media[0].url,
             "https://wimg.rule34.xxx/images/ab/cd/hash.jpg"
         );
+        assert_eq!(image.media[0].fallbacks.len(), 1);
+        assert_ne!(image.media[0].fallbacks[0].url, image.media[0].url);
         assert_eq!(image.resume_cursor_after.as_deref(), Some("b987654"));
 
         let video = &batch.posts[1];
@@ -91,5 +93,19 @@ mod tests {
             "https://api-cdn.rule34.xxx/images/ef/video.mp4"
         );
         assert_eq!(video.resume_cursor_after.as_deref(), Some("b987653"));
+        assert!(video.media[0].fallbacks.is_empty());
+    }
+
+    #[test]
+    fn every_video_extension_keeps_its_media_host() {
+        for extension in [
+            "mp4", "m4v", "mov", "webm", "mkv", "ogv", "flv", "avi", "wmv",
+        ] {
+            let url = format!("https://api-cdn.rule34.xxx/images/video.{extension}");
+            let fixture = serde_json::json!([{"id": 42, "file_url": url}]).to_string();
+            let batch = normalize_fixture(CONFIG, &request(), 1, &fixture).unwrap();
+            assert_eq!(batch.posts[0].media[0].url, url);
+            assert!(batch.posts[0].media[0].fallbacks.is_empty());
+        }
     }
 }

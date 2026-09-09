@@ -1,6 +1,15 @@
 import { act, render } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { beginsGridScrollRestore, CanvasGrid } from './CanvasGrid';
+const lifecycle = vi.hoisted(() => ({ latestReveal: null as unknown, revealInstancesAtPipelineStart: [] as unknown[] }));
+
+vi.mock('./thumbnailRevealTracker', () => ({
+  ThumbnailRevealTracker: class {
+    constructor() { lifecycle.latestReveal = this; }
+    clear() {}
+  },
+}));
 
 vi.mock('./useCanvasRedrawScheduler', () => ({
   useCanvasRedrawScheduler: () => ({ markDirty: vi.fn() }),
@@ -8,6 +17,7 @@ vi.mock('./useCanvasRedrawScheduler', () => ({
 
 vi.mock('./thumbnailPipeline', () => ({
   ThumbnailPipeline: class {
+    constructor() { lifecycle.revealInstancesAtPipelineStart.push(lifecycle.latestReveal); }
     clear() {}
     destroy() {}
     invalidate() {}
@@ -31,6 +41,15 @@ beforeAll(() => {
 });
 
 describe('CanvasGrid scroll freezing', () => {
+  it('recreates imperative reveal state when the canvas lifecycle is replayed', () => {
+    lifecycle.revealInstancesAtPipelineStart.length = 0;
+    const view = render(<StrictMode><CanvasGrid items={[]} viewMode="grid" targetSize={180}
+      showName showExtension={false} /></StrictMode>);
+    const instances = lifecycle.revealInstancesAtPipelineStart;
+    expect(instances).toHaveLength(2);
+    expect(instances[0]).not.toBe(instances[1]);
+    view.unmount();
+  });
   it('starts a new first-paint cycle when the same top position is reused for another scope', () => {
     const top = { scrollTop: 0, progress: 0 };
     expect(beginsGridScrollRestore(top, null, 500, 500)).toBe(true);

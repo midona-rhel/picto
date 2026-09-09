@@ -1,7 +1,7 @@
 import type { GridLayoutModel } from './gridLayoutModel';
 import { buildTileSpatialIndex } from '../layout/spatialIndex';
 
-export const GRID_SCROLL_SETTLE_MS = 40;
+export const GRID_SCROLL_REQUEST_INTERVAL_MS = 40;
 // Keep the physical scrollbar below browser layout-coordinate limits. Loaded
 // tiles keep their real pixel sizes; the unloaded span is only an estimate.
 export const MAX_GRID_SCROLL_HEIGHT = 8_000_000;
@@ -67,15 +67,23 @@ export function gridViewportMissesWindow(
   return center < model.windowTop || center >= model.windowBottom;
 }
 
-/** No fetch until the latest scroll has been quiet for the full 40 ms. */
-export class SettledGridRequest {
+/** Coalesce to the latest destination without starving a continuous scroll. */
+export class CoalescedGridRequest {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private latest: (() => void) | null = null;
   schedule(callback: () => void): void {
-    this.cancel();
-    this.timer = setTimeout(() => { this.timer = null; callback(); }, GRID_SCROLL_SETTLE_MS);
+    this.latest = callback;
+    if (this.timer != null) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const latest = this.latest;
+      this.latest = null;
+      latest?.();
+    }, GRID_SCROLL_REQUEST_INTERVAL_MS);
   }
   cancel(): void {
     if (this.timer != null) clearTimeout(this.timer);
     this.timer = null;
+    this.latest = null;
   }
 }

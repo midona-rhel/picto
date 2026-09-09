@@ -508,13 +508,6 @@ class GridSessionController {
     if (needsCancellation) this.supersedeNativeWindow();
   }
 
-  handleScrollActivity(): void {
-    // The still-mounted outgoing canvas reports scroll activity before its
-    // debounced window request. Neither event owns a pending navigation.
-    if (this.pendingNavigationVersion != null) return;
-    this.cancelWindowRequest();
-  }
-
   private supersedeNativeWindow(): void {
     void supersedeItemWindow({ channel: this.windowChannel, generation: this.windowRequest })
       .catch(error => console.warn('Could not supersede grid query', error));

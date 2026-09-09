@@ -127,8 +127,8 @@ export const AUTH_SITES = Object.freeze({
   subscribestar: cookieSite(
     'subscribestar',
     'SubscribeStar',
-    'https://subscribestar.art/login',
-    'https://subscribestar.art',
+    'https://www.subscribestar.com/login',
+    'https://www.subscribestar.com',
     {
       cookieNames: Object.freeze(['_personalization_id', '18_plus_agreement_generic']),
       authenticatedCookieNames: Object.freeze(['_personalization_id']),

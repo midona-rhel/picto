@@ -81,6 +81,10 @@ impl NativeSourceRunner {
             site_id = %query.site_id,
             attempt = query.attempt_count,
             post_limit = query.source_post_batch_size(),
+            configured_post_limit = query.configured_post_limit(),
+            initial_run_complete = query.initial_run_complete,
+            history_complete = query.resume_cursor.as_deref() == Some(""),
+            resume_cursor_bytes = query.resume_cursor.as_deref().map(str::len),
             "Native source query started"
         );
         if !descriptor.anonymous && credentials.is_empty() {
@@ -142,7 +146,7 @@ impl NativeSourceRunner {
                     tracing::debug!(
                         target: "picto_core::native_source",
                         run_query_id = query.run_query_id,
-                        added_posts = session.added_count(),
+                        settled_posts = session.settled_count(),
                         "Native source query reached its post budget"
                     );
                     break Some(encode_runtime_cursor(&partitions, session.cursors())?);
@@ -152,7 +156,8 @@ impl NativeSourceRunner {
                     tracing::debug!(
                         target: "picto_core::native_source",
                         run_query_id = query.run_query_id,
-                        added_posts = session.added_count(),
+                        settled_posts = session.settled_count(),
+                        bounded_refresh,
                         "Native source query reached the end of the source"
                     );
                     break Some(String::new());
@@ -336,6 +341,14 @@ impl NativeSourceRunner {
                             .unwrap_or_default()
                             >= PERIODIC_RECHECK_POSTS_PER_PARTITION
                     {
+                        #[cfg(debug_assertions)]
+                        tracing::debug!(
+                            target: "picto_core::native_source",
+                            run_query_id = query.run_query_id,
+                            partition = %post.partition.0,
+                            known_posts = rechecked_by_partition.get(&post.partition),
+                            "Native source query reached its known-post refresh cutoff"
+                        );
                         session
                             .finish_current_partition()
                             .map_err(map_source_error)?;
@@ -709,6 +722,40 @@ fn stored_request_credentials(
             }));
         }
     }
+    if owner == "subscribestar" {
+        let origin = credentials
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("origin"))
+            .map(|(_, value)| value);
+        credentials.allowed_domains = match origin {
+            None => ["subscribestar.art".to_owned()].into_iter().collect(),
+            Some(value) => url::Url::parse(value)
+                .ok()
+                .filter(|url| {
+                    url.scheme() == "https"
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.port().is_none()
+                        && url.path() == "/"
+                        && url.query().is_none()
+                        && url.fragment().is_none()
+                })
+                .and_then(|url| {
+                    let host = url
+                        .host_str()?
+                        .strip_prefix("www.")
+                        .unwrap_or(url.host_str()?);
+                    matches!(
+                        host,
+                        "subscribestar.com" | "subscribestar.adult" | "subscribestar.art"
+                    )
+                    .then(|| host.to_owned())
+                })
+                .into_iter()
+                .collect(),
+        };
+    }
     credentials
 }
 
@@ -1032,6 +1079,51 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn subscribestar_credentials_remain_on_the_authenticated_service() {
+        for (origin, expected) in [
+            (None, Some("subscribestar.art")),
+            (
+                Some("https://www.subscribestar.com"),
+                Some("subscribestar.com"),
+            ),
+            (
+                Some("https://subscribestar.adult"),
+                Some("subscribestar.adult"),
+            ),
+            (Some("https://subscribestar.art"), Some("subscribestar.art")),
+            (Some("https://subscribestar.com.evil.test"), None),
+            (Some("https://subscribestar.com/?token=fixture"), None),
+        ] {
+            let credential = SiteCredential {
+                site_category: "subscribestar".into(),
+                credential_type: CredentialType::Cookies,
+                username: None,
+                password: None,
+                oauth_token: None,
+                cookies: Some(
+                    [("session".to_owned(), "fixture".to_owned())]
+                        .into_iter()
+                        .collect(),
+                ),
+                headers: origin.map(|origin| {
+                    [("Origin".to_owned(), origin.to_owned())]
+                        .into_iter()
+                        .collect()
+                }),
+            };
+            let request =
+                stored_request_credentials(credential, "subscribestar", "subscribestar.art");
+            for host in [
+                "subscribestar.com",
+                "subscribestar.adult",
+                "subscribestar.art",
+            ] {
+                assert_eq!(request.permits(host), expected == Some(host));
+            }
+        }
     }
 
     #[test]

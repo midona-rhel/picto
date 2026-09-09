@@ -450,7 +450,6 @@ describe('gridController pagination', () => {
     queryItemsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
       .mockResolvedValueOnce({ ...page([item(100001)], 1_000_000), start: 100000 });
     const pending = gridController.requestWindowAt(999999);
-    gridController.handleScrollActivity();
     void gridController.requestWindowAt(500000);
     const latest = gridController.requestWindowAt(100500);
     finish?.({ ...page([item(999999)], 1_000_000), start: 998500 });
@@ -630,6 +629,23 @@ describe('gridController pagination', () => {
     expect(store.get(gridErrorAtom)).toBeNull();
   });
 
+  it('keeps loading while repeated scroll destinations remain inside the same window', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 1_000_000 });
+    let finish!: (value: EntityViewPage & { start: number }) => void;
+    queryItemsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    supersedeWindowMock.mockClear();
+    const pending = gridController.requestWindowAt(100500);
+    for (let index = 100510; index < 100990; index += 10) {
+      void gridController.requestWindowAt(index);
+    }
+    expect(queryItemsMock).toHaveBeenCalledOnce();
+    expect(supersedeWindowMock).not.toHaveBeenCalled();
+    finish({ ...page([item(100001)], 1_000_000), start: 100000 });
+    await pending;
+    expect(store.get(gridItemsAtom)[0].root_id).toBe(100001);
+    expect(store.get(gridErrorAtom)).toBeNull();
+  });
+
   it('removes affected stale rows and fills a complete loaded window from the tail', async () => {
     const loaded = Array.from({ length: 501 }, (_, index) => item(index + 1));
     store.set(gridSessionAtom, {
@@ -764,9 +780,7 @@ describe('gridController pagination', () => {
     let resolveDestination: ((value: ReturnType<typeof page>) => void) | undefined;
     queryItemsMock.mockImplementationOnce(() => new Promise(resolve => { resolveDestination = resolve; }));
     const pending = gridController.prepareNavigation({ kind: 'inbox' });
-    gridController.handleScrollActivity();
     await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledOnce());
-    gridController.handleScrollActivity();
     await gridController.requestWindowAt(999000);
     await gridController.reconcile();
     expect(queryItemsMock).toHaveBeenCalledOnce();
