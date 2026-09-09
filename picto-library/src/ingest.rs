@@ -352,9 +352,9 @@ pub(crate) fn insert_one(
     Arc::make_mut(&mut snapshot.folder_count).insert(root_id.0, assigned_folders);
     Arc::make_mut(&mut snapshot.total_bytes).insert(root_id.0, input.facts.size_bytes);
     Arc::make_mut(&mut snapshot.media_count).insert(root_id.0, 1);
-    Arc::make_mut(&mut snapshot.imported_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
+    Arc::make_mut(&mut snapshot.imported_at).insert(root_id.0, input.imported_at_ms);
     if let Some(value) = input.captured_at_ms {
-        Arc::make_mut(&mut snapshot.captured_at).insert(root_id.0, value.max(0) as u64);
+        Arc::make_mut(&mut snapshot.captured_at).insert(root_id.0, value);
     }
     Arc::make_mut(&mut snapshot.modified_at).insert(root_id.0, input.imported_at_ms.max(0) as u64);
     if let Some(value) = input.facts.width {
@@ -387,6 +387,7 @@ pub(crate) fn insert_one(
 
     let affected_roots = RoaringBitmap::from_iter([root_id.0]);
 
+    Arc::make_mut(&mut snapshot.name_index).insert(root_id.0, &input.media_name);
     fts::mark_one(transaction, root_id, input.imported_at_ms)?;
     snapshot.revision = revision;
     Ok(IngestResult {
@@ -570,6 +571,7 @@ fn refresh_existing_file(
                 "UPDATE library_root SET name = ?2 WHERE root_id = ?1",
                 params![owner.0, preferred_name],
             )?;
+            Arc::make_mut(&mut snapshot.name_index).insert(owner.0, preferred_name);
         }
         if replace_note {
             transaction.execute(

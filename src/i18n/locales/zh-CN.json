@@ -1466,5 +1466,9 @@
   "Zoom to fit": "缩放以适应",
   "Keep deleted files": "保留已删除的文件",
   "days": "天",
-  "Recently deleted cloud files can be restored immediately during this period.": "在此期间，可以立即恢复最近删除的云端文件。"
+  "Recently deleted cloud files can be restored immediately during this period.": "在此期间，可以立即恢复最近删除的云端文件。",
+  "Opening your library": "正在打开您的库",
+  "Updating your library database": "正在更新您的库数据库",
+  "Loading your library": "正在加载您的库",
+  "Starting library services": "正在启动库服务"
 }

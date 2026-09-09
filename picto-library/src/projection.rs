@@ -13,6 +13,7 @@ use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
 use crate::ordering::{self, OrderOwnerKind};
 use crate::predicate::ViewQuerySpec;
+use crate::query_request::{LoadStage, OpenStage};
 use crate::{LibraryDatabase, Result};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -129,6 +130,98 @@ impl Deref for SharedBitmap {
 const ID_MAP_SHARD_SHIFT: u32 = 10;
 const ID_MAP_SHARD_MASK: u32 = (1 << ID_MAP_SHARD_SHIFT) - 1;
 
+/// Signed canonical timestamps, ordered without losing pre-epoch values.
+/// Date filters deliberately retain their existing nonnegative/clamped semantics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DateIndex(NumericIndex);
+
+impl DateIndex {
+    fn key(value: i64) -> u64 {
+        (value as u64) ^ (1u64 << 63)
+    }
+
+    pub fn insert(&mut self, id: u32, value: i64) {
+        self.0.insert(id, Self::key(value));
+    }
+
+    pub fn remove(&mut self, id: u32) {
+        self.0.remove(id);
+    }
+
+    /// The canonical signed timestamp, for cursor keys.
+    pub fn signed_value(&self, id: u32) -> Option<i64> {
+        self.0.value(id).map(|key| (key ^ (1u64 << 63)) as i64)
+    }
+
+    /// Existing nonnegative scalar consumers retain their pre-epoch clamping.
+    pub fn value(&self, id: u32) -> Option<u64> {
+        self.0
+            .value(id)
+            .map(|key| ((key ^ (1u64 << 63)) as i64).max(0) as u64)
+    }
+
+    pub fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
+        if minimum.is_some_and(|value| value > i64::MAX as u64) {
+            return RoaringBitmap::new();
+        }
+        let minimum = minimum
+            .filter(|&value| value > 0)
+            .map(|value| Self::key(value as i64));
+        let maximum = maximum.map(|value| Self::key(value.min(i64::MAX as u64) as i64));
+        self.0.between(minimum, maximum)
+    }
+
+    pub(crate) fn ordered_window(
+        &self,
+        selection: &RoaringBitmap,
+        start: usize,
+        limit: usize,
+        descending: bool,
+        missing: bool,
+    ) -> Result<Option<Vec<u32>>> {
+        let index = &self.0.merged_order()?.index;
+        let absent = selection - &index.present;
+        if absent.is_empty() || !missing {
+            return self.0.ordered_window(selection, start, limit, descending);
+        }
+        // SQL's COALESCE(date, -1) ties missing dates with actual -1 values.
+        // Select three disjoint ranges; never materialize a full matching order.
+        let below = selection & &index.between(None, Some(Self::key(-2)));
+        let equal = (selection & &index.between(Some(Self::key(-1)), Some(Self::key(-1)))) | absent;
+        let above = selection & &index.between(Some(Self::key(0)), None);
+        let mut groups = [(below, false), (equal, true), (above, false)];
+        if descending {
+            groups.reverse();
+        }
+        let mut skip = start;
+        let mut output = Vec::with_capacity(limit.min(selection.len() as usize));
+        for (ids, equal) in groups {
+            crate::query_request::check()?;
+            if skip >= ids.len() as usize {
+                skip -= ids.len() as usize;
+                continue;
+            }
+            select_numeric_window(
+                if equal { &[] } else { &index.slices },
+                &ids,
+                skip,
+                limit - output.len(),
+                descending,
+                &mut output,
+            )?;
+            skip = 0;
+            if output.len() == limit {
+                break;
+            }
+        }
+        Ok(Some(output))
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.0.estimated_bytes()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShardedIdMap<V> {
     shards: BTreeMap<u32, Arc<HashMap<u16, V>>>,
@@ -147,14 +240,6 @@ impl<V: Clone> ShardedIdMap<V> {
         self.shards
             .get(&(id >> ID_MAP_SHARD_SHIFT))
             .and_then(|shard| shard.get(&((id & ID_MAP_SHARD_MASK) as u16)))
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &V)> {
-        self.shards.iter().flat_map(|(high, shard)| {
-            shard
-                .iter()
-                .map(move |(low, value)| ((high << ID_MAP_SHARD_SHIFT) | u32::from(*low), value))
-        })
     }
 
     pub(crate) fn insert(&mut self, id: u32, value: V) -> Option<V> {
@@ -176,7 +261,7 @@ impl<V: Clone> ShardedIdMap<V> {
         result
     }
 
-    fn estimated_bytes(&self) -> usize {
+    pub(crate) fn estimated_bytes(&self) -> usize {
         self.shards
             .values()
             .map(|shard| {
@@ -194,6 +279,13 @@ impl<V: Clone> ShardedIdMap<V> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumericIndex {
     shards: BTreeMap<u16, Arc<NumericShard>>,
+    #[serde(skip)]
+    order_slices: std::sync::OnceLock<Arc<NumericOrderIndex>>,
+}
+
+#[derive(Debug)]
+struct NumericOrderIndex {
+    index: NumericShard,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -204,6 +296,7 @@ struct NumericShard {
 
 impl NumericIndex {
     pub fn insert(&mut self, id: u32, value: u64) {
+        self.order_slices.take();
         let shard = Arc::make_mut(
             self.shards
                 .entry((id >> 16) as u16)
@@ -223,6 +316,7 @@ impl NumericIndex {
     }
 
     pub fn remove(&mut self, id: u32) {
+        self.order_slices.take();
         let high = (id >> 16) as u16;
         let Some(shard) = self.shards.get_mut(&high) else {
             return;
@@ -252,14 +346,204 @@ impl NumericIndex {
         self.shards.values().map(|shard| shard.sum(selection)).sum()
     }
 
+    /// Radix-select an ordinal window without materializing the matching order.
+    /// Equal values use ID order, reversed together with values for descending.
+    pub(crate) fn ordered_window(
+        &self,
+        selection: &RoaringBitmap,
+        start: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Result<Option<Vec<u32>>> {
+        crate::query_request::check()?;
+        if selection.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let merged = &self.merged_order()?.index;
+        if !selection.is_subset(&merged.present) {
+            return Ok(None);
+        }
+        let mut output = Vec::with_capacity(limit.min(selection.len() as usize));
+        select_numeric_window(
+            &merged.slices,
+            selection,
+            start,
+            limit,
+            descending,
+            &mut output,
+        )?;
+        Ok(Some(output))
+    }
+
+    /// An ordinal window over every selected root. Roots the index holds no
+    /// value for sort as the smallest value, in ID order, so a selection wider
+    /// than the index still has one total order.
+    pub(crate) fn ordered_window_total(
+        &self,
+        selection: &RoaringBitmap,
+        start: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Result<Vec<u32>> {
+        if let Some(ids) = self.ordered_window(selection, start, limit, descending)? {
+            return Ok(ids);
+        }
+        let merged = &self.merged_order()?.index;
+        let present = selection & &merged.present;
+        let absent = selection - &present;
+        let mut groups = [(absent, true), (present, false)];
+        if descending {
+            groups.reverse();
+        }
+        let mut skip = start;
+        let mut output = Vec::with_capacity(limit.min(selection.len() as usize));
+        for (ids, plain) in groups {
+            crate::query_request::check()?;
+            if skip >= ids.len() as usize {
+                skip -= ids.len() as usize;
+                continue;
+            }
+            select_numeric_window(
+                if plain { &[] } else { &merged.slices },
+                &ids,
+                skip,
+                limit - output.len(),
+                descending,
+                &mut output,
+            )?;
+            skip = 0;
+            if output.len() == limit {
+                break;
+            }
+        }
+        Ok(output)
+    }
+
+    fn merged_order(&self) -> Result<&NumericOrderIndex> {
+        // Shared across queries, not across writes. This bounded bit-slice view
+        // avoids re-merging the same projection on every scroll window.
+        if self.order_slices.get().is_none() {
+            let mut merged = NumericShard::default();
+            for shard in self.shards.values() {
+                crate::query_request::check()?;
+                merged.present |= &shard.present;
+                merged.slices.resize_with(
+                    merged.slices.len().max(shard.slices.len()),
+                    RoaringBitmap::new,
+                );
+                for (target, source) in merged.slices.iter_mut().zip(&shard.slices) {
+                    crate::query_request::check()?;
+                    *target |= source;
+                }
+            }
+            crate::query_request::check()?;
+            let _ = self
+                .order_slices
+                .set(Arc::new(NumericOrderIndex { index: merged }));
+        }
+        Ok(self
+            .order_slices
+            .get()
+            .expect("complete numeric ordering index"))
+    }
+
     fn estimated_bytes(&self) -> usize {
         self.shards
             .values()
             .map(|shard| shard.estimated_bytes())
             .sum::<usize>()
+            + self
+                .order_slices
+                .get()
+                .map_or(0, |index| index.index.estimated_bytes())
             + self.shards.len()
                 * (std::mem::size_of::<u16>() + std::mem::size_of::<Arc<NumericShard>>())
     }
+}
+
+fn select_numeric_window(
+    slices: &[RoaringBitmap],
+    matches: &RoaringBitmap,
+    start: usize,
+    limit: usize,
+    descending: bool,
+    output: &mut Vec<u32>,
+) -> Result<()> {
+    crate::query_request::check()?;
+    if start >= matches.len() as usize || limit == 0 {
+        return Ok(());
+    }
+    let Some((slice, lower)) = slices.split_last() else {
+        if descending {
+            let last = matches
+                .select((matches.len() as usize - 1 - start) as u32)
+                .unwrap();
+            output.extend(matches.range(..=last).rev().take(limit));
+        } else {
+            let first = matches.select(start as u32).unwrap();
+            output.extend(matches.range(first..).take(limit));
+        }
+        return Ok(());
+    };
+    if matches.len() == 1 {
+        output.extend(matches);
+        return Ok(());
+    }
+    // Finish small radix buckets directly. Splitting down to individual IDs
+    // would allocate thousands of tiny bitmaps for a normal 1,500-item window.
+    if matches.len() <= 256 && slices.len() <= 16 {
+        let mut values = matches
+            .iter()
+            .map(|id| {
+                let value = slices.iter().enumerate().fold(0u64, |value, (bit, slice)| {
+                    value | (u64::from(slice.contains(id)) << bit)
+                });
+                (value, id)
+            })
+            .collect::<Vec<_>>();
+        values.sort_unstable();
+        if descending {
+            output.extend(
+                values
+                    .into_iter()
+                    .rev()
+                    .skip(start)
+                    .take(limit)
+                    .map(|(_, id)| id),
+            );
+        } else {
+            output.extend(values.into_iter().skip(start).take(limit).map(|(_, id)| id));
+        }
+        return Ok(());
+    }
+    let ones_len = matches.intersection_len(slice);
+    if ones_len == 0 || ones_len == matches.len() {
+        return select_numeric_window(lower, matches, start, limit, descending, output);
+    }
+    let ones = matches & slice;
+    let zeros = matches - &ones;
+    let (first, second) = if descending {
+        (ones, zeros)
+    } else {
+        (zeros, ones)
+    };
+    let first_len = first.len() as usize;
+    let before = output.len();
+    if start < first_len {
+        select_numeric_window(lower, &first, start, limit, descending, output)?;
+    }
+    let remaining = limit - (output.len() - before);
+    if remaining > 0 {
+        select_numeric_window(
+            lower,
+            &second,
+            start.saturating_sub(first_len),
+            remaining,
+            descending,
+            output,
+        )?;
+    }
+    Ok(())
 }
 
 impl NumericShard {
@@ -286,8 +570,8 @@ impl NumericShard {
         if let Some(minimum) = minimum {
             result -= &self.less_than(minimum);
         }
-        if let Some(maximum) = maximum {
-            result &= self.less_than(maximum.saturating_add(1));
+        if let Some(exclusive) = maximum.and_then(|value| value.checked_add(1)) {
+            result &= self.less_than(exclusive);
         }
         result
     }
@@ -339,6 +623,14 @@ impl NumericShard {
 #[derive(Debug, Clone)]
 pub struct ProjectionSnapshot {
     pub revision: u64,
+    pub text_index: Arc<crate::text_index::TextIndex>,
+    pub name_index: Arc<crate::name_index::NameIndex>,
+    /// Drawing facts of every root, hydrated for grid summaries without SQLite.
+    pub drawing: Arc<crate::browsing::DrawingIndex>,
+    /// Recently viewed roots, most recent first; ties break by descending ID.
+    pub recent_views: Arc<Vec<(RootId, i64)>>,
+    /// Parent of every folder, for folder-tree scopes.
+    pub folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
     pub(crate) query_versions: crate::query_dependencies::QueryVersions,
     pub lifecycle: Arc<HashMap<Lifecycle, SharedBitmap>>,
     pub ratings: Arc<HashMap<Rating, SharedBitmap>>,
@@ -362,8 +654,8 @@ pub struct ProjectionSnapshot {
     pub width: Arc<NumericIndex>,
     pub height: Arc<NumericIndex>,
     pub duration: Arc<NumericIndex>,
-    pub imported_at: Arc<NumericIndex>,
-    pub captured_at: Arc<NumericIndex>,
+    pub imported_at: Arc<DateIndex>,
+    pub captured_at: Arc<DateIndex>,
     pub modified_at: Arc<NumericIndex>,
     pub notes_present: Arc<RoaringBitmap>,
     pub urls_present: Arc<RoaringBitmap>,
@@ -435,13 +727,12 @@ impl ProjectionSnapshot {
             &self.width,
             &self.height,
             &self.duration,
-            &self.imported_at,
-            &self.captured_at,
             &self.modified_at,
         ]
         .into_iter()
         .map(|index| index.estimated_bytes())
         .sum::<usize>();
+        bytes += self.imported_at.estimated_bytes() + self.captured_at.estimated_bytes();
         bytes += self
             .smart_queries
             .values()
@@ -452,7 +743,15 @@ impl ProjectionSnapshot {
             .values()
             .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
             .sum::<usize>();
+        bytes += self.recent_views.capacity() * std::mem::size_of::<(RootId, i64)>();
+        bytes += self.folder_parents.capacity()
+            * (std::mem::size_of::<FolderId>()
+                + std::mem::size_of::<Option<FolderId>>()
+                + 2 * std::mem::size_of::<usize>());
         bytes
+            + self.text_index.estimated_bytes()
+            + self.name_index.estimated_bytes()
+            + self.drawing.estimated_bytes()
     }
 }
 
@@ -483,37 +782,188 @@ fn shared_bitmap_pair_estimated_bytes(
 
 pub struct ProjectionStore {
     snapshot: ArcSwap<ProjectionSnapshot>,
+    load_statistics: ProjectionLoadStatistics,
+}
+
+/// Non-overlapping startup stages in microseconds. The resident text, name,
+/// drawing and navigation state is rebuilt from canonical rows on every open;
+/// only the bitmap and index checkpoint is reused, and recovery from a missing
+/// or stale checkpoint is reported separately.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ProjectionLoadStatistics {
+    pub total_us: u64,
+    pub schema_validation_us: u64,
+    pub checkpoint_read_us: u64,
+    pub checkpoint_decode_us: u64,
+    pub checkpoint_validation_us: u64,
+    pub text_load_us: u64,
+    pub name_load_us: u64,
+    pub drawing_load_us: u64,
+    pub navigation_load_us: u64,
+    pub canonical_recovery_us: u64,
+    pub recovery_persistence_us: u64,
+    pub checkpoint_payload_bytes: usize,
+    pub checkpoint_reused: bool,
+}
+
+/// Resident state rebuilt from canonical rows on every open and never
+/// checkpointed: one streaming scan each is simpler than another persisted
+/// derived format with its own journal and repair lifecycle.
+struct ResidentState {
+    text_index: Arc<crate::text_index::TextIndex>,
+    name_index: Arc<crate::name_index::NameIndex>,
+    drawing: Arc<crate::browsing::DrawingIndex>,
+    recent_views: Arc<Vec<(RootId, i64)>>,
+    folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
+}
+
+impl ResidentState {
+    fn load(
+        connection: &Connection,
+        statistics: &mut ProjectionLoadStatistics,
+        progress: &mut dyn FnMut(OpenStage),
+    ) -> Result<Self> {
+        progress(OpenStage::Loading(LoadStage::Text));
+        let stage = std::time::Instant::now();
+        let text_index = Arc::new(crate::text_index::TextIndex::load(connection)?);
+        statistics.text_load_us = stage.elapsed().as_micros() as u64;
+        progress(OpenStage::Loading(LoadStage::Names));
+        let stage = std::time::Instant::now();
+        let name_index = Arc::new(crate::name_index::NameIndex::load(connection)?);
+        statistics.name_load_us = stage.elapsed().as_micros() as u64;
+        progress(OpenStage::Loading(LoadStage::Drawing));
+        let stage = std::time::Instant::now();
+        let drawing = Arc::new(crate::browsing::DrawingIndex::load(connection)?);
+        statistics.drawing_load_us = stage.elapsed().as_micros() as u64;
+        progress(OpenStage::Loading(LoadStage::Navigation));
+        let stage = std::time::Instant::now();
+        let recent_views = Arc::new(load_recent_views(connection)?);
+        let folder_parents = Arc::new(load_folder_parents(connection)?);
+        statistics.navigation_load_us = stage.elapsed().as_micros() as u64;
+        Ok(Self {
+            text_index,
+            name_index,
+            drawing,
+            recent_views,
+            folder_parents,
+        })
+    }
+
+    fn attach(self, snapshot: &mut ProjectionSnapshot) {
+        snapshot.text_index = self.text_index;
+        snapshot.name_index = self.name_index;
+        snapshot.drawing = self.drawing;
+        snapshot.recent_views = self.recent_views;
+        snapshot.folder_parents = self.folder_parents;
+    }
+}
+
+/// Recently viewed roots in display order: most recent first, ties by
+/// descending ID, exactly the canonical `recent_view` order.
+pub(crate) fn load_recent_views(connection: &Connection) -> Result<Vec<(RootId, i64)>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT root_id, viewed_at_ms FROM recent_view
+         ORDER BY viewed_at_ms DESC, root_id DESC",
+    )?;
+    let values = statement
+        .query_map([], |row| Ok((RootId(row.get(0)?), row.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+    Ok(values)
+}
+
+pub(crate) fn load_folder_parents(
+    connection: &Connection,
+) -> Result<HashMap<FolderId, Option<FolderId>>> {
+    let mut statement =
+        connection.prepare_cached("SELECT folder_id, parent_id FROM folder_definition")?;
+    let values = statement
+        .query_map([], |row| {
+            Ok((
+                FolderId(row.get(0)?),
+                row.get::<_, Option<u32>>(1)?.map(FolderId),
+            ))
+        })?
+        .collect::<std::result::Result<HashMap<_, _>, rusqlite::Error>>()?;
+    Ok(values)
 }
 
 impl ProjectionStore {
     pub fn load(database: &LibraryDatabase) -> Result<Self> {
+        Self::load_with(database, &mut |_| {})
+    }
+
+    /// Load, reporting each stage. Cancellation is the caller's scoped open
+    /// token: the resident scans and the canonical rebuild check it as they
+    /// run, and the atomic steps (checkpoint read and decode, the recovery
+    /// write) are checked immediately before and after.
+    pub fn load_with(
+        database: &LibraryDatabase,
+        progress: &mut dyn FnMut(OpenStage),
+    ) -> Result<Self> {
+        let started = std::time::Instant::now();
+        let mut statistics = ProjectionLoadStatistics::default();
         let (snapshot, recovered_partitions) = database.read(
             crate::database::WorkPriority::CorrectnessRecovery,
             |connection| {
+                let stage = std::time::Instant::now();
                 let revision = crate::schema::validate(connection)?;
-                if let Some(payload) = crate::checkpoint::read(connection, revision)? {
-                    let snapshot = crate::checkpoint::decode(&payload, revision)?;
-                    if crate::checkpoint::tag_projection_matches(connection, &snapshot)?
+                statistics.schema_validation_us = stage.elapsed().as_micros() as u64;
+                progress(OpenStage::Loading(LoadStage::Checkpoint));
+                crate::query_request::check()?;
+                let stage = std::time::Instant::now();
+                let payload = crate::checkpoint::read(connection, revision)?;
+                statistics.checkpoint_read_us = stage.elapsed().as_micros() as u64;
+                let resident = ResidentState::load(connection, &mut statistics, progress)?;
+                if let Some(payload) = payload {
+                    statistics.checkpoint_payload_bytes = payload.len();
+                    progress(OpenStage::Loading(LoadStage::Validation));
+                    crate::query_request::check()?;
+                    let stage = std::time::Instant::now();
+                    let mut snapshot = crate::checkpoint::decode(&payload, revision)?;
+                    statistics.checkpoint_decode_us = stage.elapsed().as_micros() as u64;
+                    let stage = std::time::Instant::now();
+                    let valid = crate::checkpoint::tag_projection_matches(connection, &snapshot)?
                         && crate::smart::projection_matches(connection, &snapshot)?
-                        && snapshot_partitions_match(&snapshot)
-                    {
-                        Ok((snapshot, false))
-                    } else {
-                        // A copied or interrupted checkpoint may have a valid checksum and outer
-                        // revision while carrying stale derived state. Rebuild from canonical data.
-                        load(connection, Some(&snapshot))
+                        && snapshot_partitions_match(&snapshot);
+                    statistics.checkpoint_validation_us = stage.elapsed().as_micros() as u64;
+                    crate::query_request::check()?;
+                    if valid {
+                        statistics.checkpoint_reused = true;
+                        resident.attach(&mut snapshot);
+                        return Ok((snapshot, false));
                     }
+                    // A copied or interrupted checkpoint may have a valid checksum and outer
+                    // revision while carrying stale derived state. Rebuild from canonical data.
+                    progress(OpenStage::Loading(LoadStage::Canonical));
+                    let stage = std::time::Instant::now();
+                    let recovered = load(connection, Some(&snapshot), resident, progress)?;
+                    statistics.canonical_recovery_us = stage.elapsed().as_micros() as u64;
+                    Ok(recovered)
                 } else {
-                    load(connection, None)
+                    progress(OpenStage::Loading(LoadStage::Canonical));
+                    let stage = std::time::Instant::now();
+                    let recovered = load(connection, None, resident, progress)?;
+                    statistics.canonical_recovery_us = stage.elapsed().as_micros() as u64;
+                    Ok(recovered)
                 }
             },
         )?;
         if recovered_partitions {
+            progress(OpenStage::Loading(LoadStage::Recovery));
+            crate::query_request::check()?;
+            let stage = std::time::Instant::now();
             persist_recovered_partitions(database, &snapshot)?;
+            statistics.recovery_persistence_us = stage.elapsed().as_micros() as u64;
         }
+        statistics.total_us = started.elapsed().as_micros() as u64;
         Ok(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
+            load_statistics: statistics,
         })
+    }
+
+    pub fn load_statistics(&self) -> &ProjectionLoadStatistics {
+        &self.load_statistics
     }
 
     pub fn snapshot(&self) -> Arc<ProjectionSnapshot> {
@@ -530,6 +980,8 @@ impl ProjectionStore {
 fn load(
     connection: &Connection,
     checkpoint_fallback: Option<&ProjectionSnapshot>,
+    resident: ResidentState,
+    progress: &mut dyn FnMut(OpenStage),
 ) -> Result<(ProjectionSnapshot, bool)> {
     let revision = crate::schema::validate(connection)?;
     let canonical = bitmap::load_all(connection)?;
@@ -606,7 +1058,10 @@ fn load(
             row.get::<_, Vec<u8>>(3)?,
         ))
     })?;
-    for row in rows {
+    for (index, row) in rows.enumerate() {
+        if index % 256 == 0 {
+            crate::query_request::check()?;
+        }
         let (kind, owner_id, checksum, payload) = row?;
         let values = ordering::decode(&payload, &checksum)?;
         match kind {
@@ -647,8 +1102,8 @@ fn load(
     let mut width = NumericIndex::default();
     let mut height = NumericIndex::default();
     let mut duration = NumericIndex::default();
-    let mut imported_at = NumericIndex::default();
-    let mut captured_at = NumericIndex::default();
+    let mut imported_at = DateIndex::default();
+    let mut captured_at = DateIndex::default();
     let mut modified_at = NumericIndex::default();
     let mut notes_present = RoaringBitmap::new();
     let mut urls_present = RoaringBitmap::new();
@@ -679,7 +1134,10 @@ fn load(
             row.get::<_, String>(12)?,
         ))
     })?;
-    for row in rows {
+    for (index, row) in rows.enumerate() {
+        if index % 1024 == 0 {
+            crate::query_request::check()?;
+        }
         let (
             root_id,
             kind,
@@ -707,9 +1165,9 @@ fn load(
         root_kinds.entry(kind).or_default().insert(root_id);
         total_bytes.insert(root_id, bytes);
         media_count.insert(root_id, count as u64);
-        imported_at.insert(root_id, imported.max(0) as u64);
+        imported_at.insert(root_id, imported);
         if let Some(value) = captured {
-            captured_at.insert(root_id, value.max(0) as u64);
+            captured_at.insert(root_id, value);
         }
         modified_at.insert(root_id, modified.max(0) as u64);
         if let Some(value) = root_width {
@@ -765,7 +1223,10 @@ fn load(
     let media_rows = media_statement.query_map([], |row| {
         Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
     })?;
-    for row in media_rows {
+    for (index, row) in media_rows.enumerate() {
+        if index % 1024 == 0 {
+            crate::query_request::check()?;
+        }
         let (media_id, media_mime) = row?;
         let owner = media_owner.get(media_id).ok_or_else(|| {
             crate::LibraryError::InvalidState(format!("media {media_id} has no owning root"))
@@ -823,6 +1284,11 @@ fn load(
 
     let mut snapshot = ProjectionSnapshot {
         revision,
+        text_index: resident.text_index,
+        name_index: resident.name_index,
+        drawing: resident.drawing,
+        recent_views: resident.recent_views,
+        folder_parents: resident.folder_parents,
         query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: Arc::new(lifecycle),
         ratings: Arc::new(ratings),
@@ -856,7 +1322,12 @@ fn load(
         smart_queries: Arc::new(HashMap::new()),
         smart_effective_queries: Arc::new(HashMap::new()),
     };
+    // Smart-folder evaluation may run on a worker pool that cannot see the
+    // open token, so it is bracketed by checks rather than checked inside.
+    progress(OpenStage::Loading(LoadStage::Smart));
+    crate::query_request::check()?;
     crate::smart::load(connection, &mut snapshot)?;
+    crate::query_request::check()?;
     Ok((snapshot, recovered_lifecycle || recovered_rating))
 }
 
@@ -1008,6 +1479,150 @@ pub fn cell_center(cell: u32) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_date_windows_match_sql_with_nulls_ties_and_retained_snapshots() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE dates(id INTEGER PRIMARY KEY, value INTEGER)")
+            .unwrap();
+        let mut index = DateIndex::default();
+        for n in 0..600u32 {
+            let id = n * 131 + 1;
+            let value = match n % 9 {
+                0 => None,
+                1 => Some(i64::MIN),
+                2 => Some(-100),
+                3 => Some(-1),
+                4 => Some(0),
+                5 => Some(i64::MAX),
+                _ => Some(i64::from(n % 17)),
+            };
+            connection
+                .execute(
+                    "INSERT INTO dates VALUES (?1,?2)",
+                    rusqlite::params![id, value],
+                )
+                .unwrap();
+            if let Some(value) = value {
+                index.insert(id, value);
+            }
+        }
+        let selection: RoaringBitmap = (0..600u32)
+            .filter(|n| n % 7 != 0)
+            .map(|n| n * 131 + 1)
+            .collect();
+        // Warm a derived order, then retain the snapshot across an update/removal.
+        index.ordered_window(&selection, 0, 4, false, true).unwrap();
+        let previous = index.clone();
+        index.insert(132, 1234);
+        index.remove(263);
+        connection.execute_batch("UPDATE dates SET value=1234 WHERE id=132; UPDATE dates SET value=NULL WHERE id=263;").unwrap();
+        assert_eq!(previous.0.value(132), Some(DateIndex::key(i64::MIN)));
+        assert_eq!(previous.0.value(263), Some(DateIndex::key(-100)));
+        let persisted: DateIndex =
+            bincode::deserialize(&bincode::serialize(&index).unwrap()).unwrap();
+        for index in [&index, &persisted] {
+            for descending in [false, true] {
+                let direction = if descending { "DESC" } else { "ASC" };
+                let expected = connection.prepare(&format!("SELECT id FROM dates ORDER BY COALESCE(value,-1) {direction}, id {direction}"))
+                    .unwrap().query_map([], |row| row.get::<_,u32>(0)).unwrap()
+                    .map(|row| row.unwrap()).filter(|id| selection.contains(*id)).collect::<Vec<_>>();
+                for start in [0, 1, 55, 120, 250, 500, 515] {
+                    for limit in [0, 1, 4, 137, 1500] {
+                        assert_eq!(
+                            index
+                                .ordered_window(&selection, start, limit, descending, true)
+                                .unwrap()
+                                .unwrap(),
+                            expected
+                                .iter()
+                                .skip(start)
+                                .take(limit)
+                                .copied()
+                                .collect::<Vec<_>>(),
+                            "{start} {limit} {descending}"
+                        );
+                    }
+                }
+            }
+            for minimum in [None, Some(0), Some(1), Some(17), Some(u64::MAX)] {
+                for maximum in [None, Some(0), Some(7), Some(u64::MAX)] {
+                    let expected = connection
+                        .prepare("SELECT id,value FROM dates WHERE value IS NOT NULL")
+                        .unwrap()
+                        .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))
+                        .unwrap()
+                        .map(|row| row.unwrap())
+                        .filter(|(_, value)| {
+                            let value = (*value).max(0) as u64;
+                            minimum.is_none_or(|min| value >= min)
+                                && maximum.is_none_or(|max| value <= max)
+                        })
+                        .map(|(id, _)| id)
+                        .collect::<RoaringBitmap>();
+                    assert_eq!(index.between(minimum, maximum), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_ordinal_windows_match_value_and_id_sort_after_writes() {
+        let mut index = NumericIndex::default();
+        let mut values = Vec::new();
+        for i in 0u32..3000 {
+            let id = i * 67;
+            let value = match i % 7 {
+                0 => 0,
+                1 => u64::MAX,
+                2 => 42,
+                _ => (u64::from(i) * 7919) % 1201,
+            };
+            index.insert(id, value);
+            if i % 3 != 0 {
+                values.push((value, id));
+            }
+        }
+        let all_ids = values.iter().map(|(_, id)| *id).collect();
+        index
+            .ordered_window(&all_ids, 0, 1, false)
+            .unwrap()
+            .unwrap();
+        let previous = index.clone();
+        index.insert(67, 17);
+        values.iter_mut().find(|(_, id)| *id == 67).unwrap().0 = 17;
+        index.remove(134);
+        values.retain(|(_, id)| *id != 134);
+        assert_eq!(previous.value(67), Some(u64::MAX));
+        let matches = values.iter().map(|(_, id)| *id).collect();
+        for descending in [false, true] {
+            values.sort_unstable();
+            if descending {
+                values.reverse();
+            }
+            for start in [0, 1, 17, 700, 1500, 1997, 2000] {
+                for limit in [0, 1, 7, 500, 1500] {
+                    assert_eq!(
+                        index
+                            .ordered_window(&matches, start, limit, descending)
+                            .unwrap()
+                            .unwrap(),
+                        values
+                            .iter()
+                            .skip(start)
+                            .take(limit)
+                            .map(|(_, id)| *id)
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        assert!(index
+            .ordered_window(&[u32::MAX].into_iter().collect(), 0, 1, false)
+            .unwrap()
+            .is_none());
+    }
 
     #[test]
     fn numeric_ranges_and_sums_are_exact() {

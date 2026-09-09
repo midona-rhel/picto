@@ -76,7 +76,8 @@ pub fn resolve(
             query,
             excluded_root_ids,
         } => {
-            let mut selected = query::matching_roots(connection, snapshot, query)?;
+            let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+            let mut selected = query::matching_roots(snapshot, query, &media)?;
             selected -= excluded_root_ids
                 .iter()
                 .map(|id| id.0)
@@ -88,7 +89,8 @@ pub fn resolve(
             anchor_root_id,
             focus_root_id,
         } => {
-            let ordered = query::all_ordered_ids(connection, snapshot, query)?;
+            let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+            let ordered = query::all_ordered_ids(snapshot, query, &media)?;
             let anchor = ordered
                 .iter()
                 .position(|id| id == anchor_root_id)
@@ -131,7 +133,8 @@ pub fn resolve_ordered(
                 .iter()
                 .map(|id| id.0)
                 .collect::<RoaringBitmap>();
-            Ok(query::all_ordered_ids(connection, snapshot, query)?
+            let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+            Ok(query::all_ordered_ids(snapshot, query, &media)?
                 .into_iter()
                 .filter(|root_id| !excluded.contains(root_id.0))
                 .collect())
@@ -141,7 +144,8 @@ pub fn resolve_ordered(
             let SelectionTarget::Range { query, .. } = target else {
                 unreachable!()
             };
-            Ok(query::all_ordered_ids(connection, snapshot, query)?
+            let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+            Ok(query::all_ordered_ids(snapshot, query, &media)?
                 .into_iter()
                 .filter(|root_id| selected.contains(root_id.0))
                 .collect())

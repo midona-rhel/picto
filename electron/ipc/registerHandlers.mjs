@@ -302,8 +302,11 @@ export function registerIpcHandlers({
       return null;
     }
     if (command === 'library.initial_read_failed') {
+      // The host ignores a report that arrives while another library is
+      // already opening (a read that failed because the switch closed the
+      // previous library); the chooser only belongs to an applied failure.
       const failure = await libraryService.failActiveLibrary(args?.message);
-      windowManager.openLibraryManager();
+      if (failure) windowManager.openLibraryManager();
       return failure;
     }
     if (command === 'open_in_new_window') {

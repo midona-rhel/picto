@@ -16,6 +16,7 @@ import {
 import {
   currentGridQueryAtom,
   gridSessionAtom,
+  gridTransitionPhaseAtom,
   initialGridFilters,
   initialGridView,
   pendingGridIntentAtom,
@@ -37,6 +38,22 @@ const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
 export interface PreparedGridNavigation {
   scopeKey: string;
   session: GridSessionSnapshot;
+  queryVersion: number;
+  preserveSelection?: boolean;
+  preferencePatch?: ViewPrefsPatch;
+}
+
+interface NavigationOptions {
+  filters?: QueryFilters;
+  sort?: ItemSort;
+  restoreProgress?: number;
+}
+
+function windowStartAt(index: number, total: number): number {
+  return Math.max(0, Math.min(
+    Math.floor((index - PAGE_SIZE) / PAGE_SIZE) * PAGE_SIZE,
+    Math.max(0, total - GRID_WINDOW_SIZE),
+  ));
 }
 
 function scopeToKey(scope: BaseScope): string {
@@ -174,8 +191,16 @@ class GridSessionController {
   private windowLoad: Promise<void> | null = null;
   private queuedWindow: { start: number; generation: number; request: number } | null = null;
   private activeWindow: { start: number; generation: number; request: number } | null = null;
+  private preparationRequest: number | null = null;
+  private pendingNavigationVersion: number | null = null;
+  private refreshWanted = false;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshRunning: Promise<boolean> | null = null;
+  private lastRefreshTarget = -Infinity;
+  private lastRefreshCompletedAt = -Infinity;
+  private lastRefreshDurationMs = 0;
 
-  async navigateTo(scope: BaseScope, options?: { filters?: QueryFilters; sort?: ItemSort }): Promise<void> {
+  async navigateTo(scope: BaseScope, options?: NavigationOptions): Promise<void> {
     const request = ++this.navigationRequest;
     const prepared = await this.prepareNavigation(scope, options);
     if (request !== this.navigationRequest) return;
@@ -185,17 +210,34 @@ class GridSessionController {
   /** Fetch a complete destination without exposing partial state to mounted consumers. */
   async prepareNavigation(
     scope: BaseScope,
-    options?: { filters?: QueryFilters; sort?: ItemSort },
+    options?: NavigationOptions,
   ): Promise<PreparedGridNavigation> {
     this.cancelWindowRequest();
     this.cancelSearch();
     const queryVersion = ++this.queryVersion;
     const current = store.get(gridSessionAtom);
     const scopeKey = scopeToKey(scope);
-    const [defaults, overrides] = await Promise.all([
-      getViewPrefs(GRID_DEFAULTS_SCOPE).catch(() => null),
-      getViewPrefs(scopeKey).catch(() => null),
-    ]);
+    this.pendingNavigationVersion = queryVersion;
+    const deadline = Date.now() + 10_000;
+    let preferenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let preferences: [ViewPrefsDto | null, ViewPrefsDto | null] = [null, null];
+    let preferenceError: Error | null = null;
+    try {
+      preferences = await Promise.race([
+        Promise.all([
+          getViewPrefs(GRID_DEFAULTS_SCOPE).catch(() => null),
+          getViewPrefs(scopeKey).catch(() => null),
+        ]),
+        new Promise<never>((_, reject) => {
+          preferenceTimer = setTimeout(() => reject(new Error('The library view took too long to load. Please retry.')), 10_000);
+        }),
+      ]);
+    } catch (error) {
+      preferenceError = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      if (preferenceTimer != null) clearTimeout(preferenceTimer);
+    }
+    const [defaults, overrides] = preferences;
     const preferred = stateFromPreferences(scope, defaults, overrides);
     const session: GridSessionSnapshot = {
       ...current,
@@ -220,18 +262,63 @@ class GridSessionController {
       active: true,
     };
 
+    if (preferenceError) return { scopeKey, queryVersion,
+      session: { ...session, status: 'error', error: preferenceError.message } };
+    return this.prepareSession(scopeKey, session, queryVersion, options?.restoreProgress, deadline);
+  }
+
+  /** Sort/view preparation uses the same destination path without mutating the outgoing grid. */
+  async prepareIntent(intent: Exclude<GridIntent, { type: 'filter' }>): Promise<PreparedGridNavigation> {
+    this.cancelWindowRequest();
+    this.cancelSearch();
+    const queryVersion = ++this.queryVersion;
+    this.pendingNavigationVersion = queryVersion;
+    const current = store.get(gridSessionAtom);
+    const session: GridSessionSnapshot = {
+      ...current,
+      generation: current.generation + 1,
+      error: null,
+      ...(intent.type === 'sort' ? {
+        sort: { field: intent.field, direction: intent.direction,
+          randomSeed: intent.field === 'random' ? createRandomSeed() : null },
+      } : { view: { ...current.view, ...intent.patch } }),
+    };
+    const changesQuery = intent.type === 'sort'
+      || session.view.showSubfolders !== current.view.showSubfolders;
+    const prepared = changesQuery
+      ? await this.prepareSession(this.scopeKey, session, queryVersion)
+      : { scopeKey: this.scopeKey, session, queryVersion };
+    return { ...prepared, preserveSelection: intent.type === 'view',
+      preferencePatch: intent.type === 'sort'
+        ? { sort_field: intent.field, sort_order: intent.direction } : undefined };
+  }
+
+  private async prepareSession(
+    scopeKey: string,
+    session: GridSessionSnapshot,
+    queryVersion: number,
+    restoreProgress = 0,
+    deadline = Date.now() + 10_000,
+  ): Promise<PreparedGridNavigation> {
+    const progress = Number.isFinite(restoreProgress) ? Math.max(0, Math.min(1, restoreProgress)) : 0;
+    const request = this.windowRequest;
+    const isCurrent = () => queryVersion === this.queryVersion && request === this.windowRequest;
+    if (isCurrent()) this.preparationRequest = request;
     try {
-      const result = await this.queryFirstPageUntilCurrent(
-        queryForSession(session),
-        () => queryVersion === this.queryVersion,
-      );
-      if (result == null) throw new Error('Grid navigation was superseded');
+      if (!isCurrent()) throw new Error('Grid navigation was superseded');
+      const query = queryForSession(session);
+      const result = await queryItemWindow(query, {
+        position: progress > 0 ? { kind: 'fraction', value: progress } : { kind: 'ordinal', value: 0 },
+        limit: progress > 0 ? GRID_WINDOW_SIZE : PAGE_SIZE,
+      }, { channel: this.windowChannel, generation: request }, deadline - Date.now());
+      if (!isCurrent()) throw new Error('Grid navigation was superseded');
       return {
         scopeKey,
+        queryVersion,
         session: {
           ...session,
           items: result.items,
-          queryHeadItems: result.items.slice(0, 4),
+          queryHeadItems: result.head_items,
           windowStart: result.start,
           totalCount: result.total,
           totalSizeBytes: result.total_size_bytes,
@@ -242,24 +329,55 @@ class GridSessionController {
     } catch (error) {
       return {
         scopeKey,
+        queryVersion,
         session: {
           ...session,
+          items: [],
+          queryHeadItems: [],
+          totalCount: null,
           status: 'error',
           error: error instanceof Error ? error.message : String(error),
         },
       };
+    } finally {
+      if (this.preparationRequest === request) this.preparationRequest = null;
     }
   }
 
   /** Commit every grid-facing value synchronously while the workspace is hidden. */
   commitNavigation(prepared: PreparedGridNavigation): void {
+    if (prepared.queryVersion !== this.queryVersion) return;
+    this.pendingNavigationVersion = null;
     this.navigationRequest += 1;
     this.scopeKey = prepared.scopeKey;
-    store.set(clearSelectionAtom);
+    if (!prepared.preserveSelection) store.set(clearSelectionAtom);
     store.set(gridSessionAtom, prepared.session);
+    this.observeNewerRevision(prepared.session.revision);
+    if (prepared.preferencePatch) this.saveViewPref(prepared.preferencePatch);
+  }
+
+  cancelPreparation(): void {
+    this.pendingNavigationVersion = null;
+    if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    this.refreshWanted = false;
+    this.lastRefreshTarget = -Infinity;
+    this.lastRefreshCompletedAt = -Infinity;
+    this.lastRefreshDurationMs = 0;
+    this.cancelWindowRequest();
+    this.queryVersion += 1;
+    this.navigationRequest += 1;
+    this.cancelSearch();
   }
 
   deactivate(): void {
+    this.pendingNavigationVersion = null;
+    if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    this.refreshWanted = false;
+    this.lastRefreshTarget = -Infinity;
+    this.lastRefreshCompletedAt = -Infinity;
+    this.lastRefreshDurationMs = 0;
     this.cancelWindowRequest();
     this.queryVersion += 1;
     this.cancelSearch();
@@ -296,7 +414,7 @@ class GridSessionController {
       return;
     }
     if (intent.type === 'sort') {
-      this.setSortNow(intent.field, intent.direction);
+      void this.prepareIntent(intent).then(prepared => this.commitNavigation(prepared));
       return;
     }
     const changesQuery = intent.patch.showSubfolders != null
@@ -335,6 +453,7 @@ class GridSessionController {
 
   async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
     this.cancelWindowRequest();
+    const request = this.windowRequest;
     const queryVersion = this.queryVersion;
     const generation = options?.generation ?? store.get(gridSessionAtom).generation + 1;
     updateSession((current) => ({
@@ -343,39 +462,57 @@ class GridSessionController {
       status: 'loading',
       error: null,
       items: options?.preserveItems ? current.items : [],
-      queryHeadItems: [],
+      queryHeadItems: options?.preserveItems ? current.queryHeadItems : [],
       windowStart: options?.preserveItems ? current.windowStart : 0,
       totalCount: options?.preserveItems ? current.totalCount : null,
     }));
     try {
       const query = store.get(currentGridQueryAtom);
-      const result = await this.queryFirstPageUntilCurrent(
-        query,
-        () => queryVersion === this.queryVersion && store.get(gridSessionAtom).generation === generation,
-      );
-      if (result == null) return;
+      this.preparationRequest = request;
+      const result = await queryItemWindow(query, { position: { kind: 'ordinal', value: 0 }, limit: PAGE_SIZE }, {
+        channel: this.windowChannel, generation: request,
+      });
+      if (request === this.preparationRequest) this.preparationRequest = null;
+      if (queryVersion !== this.queryVersion || request !== this.windowRequest
+        || store.get(gridSessionAtom).generation !== generation) return;
       const current = store.get(gridSessionAtom);
+      if (result.revision < current.revision) {
+        updateSession({ status: 'error', error: 'The library returned an older view. Please retry.' });
+        return;
+      }
       updateSession({
         items: reuseStablePageItems(current.items, result.items),
-        queryHeadItems: result.items.slice(0, 4),
+        queryHeadItems: reuseStablePageItems(current.queryHeadItems, result.head_items),
         windowStart: result.start,
         totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
         revision: result.revision,
         status: 'idle',
       });
+      this.observeNewerRevision(result.revision);
     } catch (error) {
-      if (store.get(gridSessionAtom).generation !== generation) return;
+      if (store.get(gridSessionAtom).generation !== generation || queryVersion !== this.queryVersion
+        || request !== this.windowRequest) return;
       updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (this.preparationRequest === request) this.preparationRequest = null;
     }
   }
 
   /** Supersede an in-flight destination immediately when scrolling resumes. */
   cancelWindowRequest(): void {
-    const needsCancellation = this.activeWindow?.request === this.windowRequest;
+    const needsCancellation = this.activeWindow?.request === this.windowRequest
+      || this.preparationRequest === this.windowRequest;
     this.windowRequest++;
     this.queuedWindow = null;
     if (needsCancellation) this.supersedeNativeWindow();
+  }
+
+  handleScrollActivity(): void {
+    // The still-mounted outgoing canvas reports scroll activity before its
+    // debounced window request. Neither event owns a pending navigation.
+    if (this.pendingNavigationVersion != null) return;
+    this.cancelWindowRequest();
   }
 
   private supersedeNativeWindow(): void {
@@ -384,12 +521,11 @@ class GridSessionController {
   }
 
   requestWindowAt(index: number): Promise<void> {
+    // Scroll events from the outgoing surface cannot supersede its destination.
+    if (this.pendingNavigationVersion != null) return Promise.resolve();
     const current = store.get(gridSessionAtom);
     if (!current.active || current.status === 'loading') return Promise.resolve();
-    const start = Math.max(0, Math.min(
-      Math.floor((index - PAGE_SIZE) / PAGE_SIZE) * PAGE_SIZE,
-      Math.max(0, (current.totalCount ?? 0) - GRID_WINDOW_SIZE),
-    ));
+    const start = windowStartAt(index, current.totalCount ?? 0);
     if (start === current.windowStart && current.items.length >= Math.min(GRID_WINDOW_SIZE, current.totalCount ?? 0)) {
       this.cancelWindowRequest();
       return Promise.resolve();
@@ -410,20 +546,19 @@ class GridSessionController {
       this.queuedWindow = null;
       updateSession({ status: 'appending', error: null });
       try {
-        const result = await queryItemWindow(store.get(currentGridQueryAtom), { start: destination.start, limit: GRID_WINDOW_SIZE }, {
+        const result = await queryItemWindow(store.get(currentGridQueryAtom), { position: { kind: 'ordinal', value: destination.start }, limit: GRID_WINDOW_SIZE }, {
           channel: this.windowChannel, generation: destination.request,
         });
         const current = store.get(gridSessionAtom);
         if (current.generation !== destination.generation || destination.request !== this.windowRequest || !current.active) continue;
-        if (result.revision < libraryInvalidation.latestRevision('library')) {
-          this.queuedWindow = { ...destination, request: ++this.windowRequest };
-          continue;
-        }
+        if (result.revision < current.revision) continue;
         updateSession({
           items: reuseStablePageItems(current.items, result.items), windowStart: result.start,
+          queryHeadItems: reuseStablePageItems(current.queryHeadItems, result.head_items),
           totalCount: result.total, totalSizeBytes: result.total_size_bytes,
           revision: result.revision, status: 'idle', error: null,
         });
+        this.observeNewerRevision(result.revision);
       } catch (error) {
         if (store.get(gridSessionAtom).generation === destination.generation && destination.request === this.windowRequest) {
           updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
@@ -431,29 +566,50 @@ class GridSessionController {
       } finally {
         this.activeWindow = null;
         if (store.get(gridSessionAtom).generation === destination.generation && store.get(gridSessionAtom).status === 'appending') updateSession({ status: 'idle' });
+        this.scheduleRefresh();
       }
     }
   }
 
-  async reconcile(_affectedItemIds: readonly number[] = []): Promise<boolean> {
+  reconcile(_affectedItemIds: readonly number[] = []): Promise<boolean> {
+    this.refreshWanted = true;
+    if (this.refreshRunning) return this.refreshRunning;
+    if (this.pendingNavigationVersion != null) return Promise.resolve(false);
+    const current = store.get(gridSessionAtom);
+    const phase = store.get(gridTransitionPhaseAtom);
+    if (phase === 'fading_out' || phase === 'waiting') return Promise.resolve(false);
+    if (!current.active || current.status === 'loading' || current.status === 'appending') return Promise.resolve(false);
+    this.refreshWanted = false;
+    const started = Date.now();
+    this.refreshRunning = this.reconcileSnapshot().finally(() => {
+      this.refreshRunning = null;
+      this.lastRefreshCompletedAt = Date.now();
+      this.lastRefreshDurationMs = Math.max(0, this.lastRefreshCompletedAt - started);
+      this.scheduleRefresh();
+    });
+    return this.refreshRunning;
+  }
+
+  private async reconcileSnapshot(): Promise<boolean> {
     const before = store.get(gridSessionAtom);
     if (!before.active || before.status === 'loading' || before.status === 'appending') return false;
     const generation = before.generation;
     const queryVersion = this.queryVersion;
+    this.cancelWindowRequest();
+    const request = this.windowRequest;
 
     try {
       const query = store.get(currentGridQueryAtom);
-      this.cancelWindowRequest();
-      const request = this.windowRequest;
-      const [result, head] = await Promise.all([
-        queryItemWindow(query, { start: before.windowStart, limit: Math.min(GRID_WINDOW_SIZE, Math.max(PAGE_SIZE, before.items.length)) }),
-        before.windowStart === 0 ? Promise.resolve(null) : queryItemWindow(query, { start: 0, limit: 4 }),
-      ]);
+      this.preparationRequest = request;
+      const result = await queryItemWindow(query, {
+        position: { kind: 'ordinal', value: before.windowStart },
+        limit: Math.min(GRID_WINDOW_SIZE, Math.max(PAGE_SIZE, before.items.length)),
+      }, { channel: this.windowChannel, generation: request });
+      if (this.preparationRequest === request) this.preparationRequest = null;
       if (queryVersion !== this.queryVersion || request !== this.windowRequest) return false;
-      if (result.revision < libraryInvalidation.latestRevision('library')
-        || (head != null && head.revision < libraryInvalidation.latestRevision('library'))) return this.reconcile();
       const current = store.get(gridSessionAtom);
       if (current.generation !== generation || !current.active) return false;
+      if (result.revision < current.revision) return false;
       const previousById = new Map(current.items.map((item) => [item.root_id, item]));
       const items = result.items.map((item) => {
         const previous = previousById.get(item.root_id);
@@ -461,24 +617,28 @@ class GridSessionController {
       });
       updateSession({
         items,
-        queryHeadItems: (head?.items ?? result.items).slice(0, 4),
+        queryHeadItems: reuseStablePageItems(current.queryHeadItems, result.head_items),
         windowStart: result.start,
         totalCount: result.total,
         totalSizeBytes: result.total_size_bytes,
         revision: result.revision,
         error: null,
       });
+      this.observeNewerRevision(result.revision);
       return true;
     } catch (error) {
-      if (store.get(gridSessionAtom).generation === generation) {
+      if (store.get(gridSessionAtom).generation === generation && queryVersion === this.queryVersion
+        && request === this.windowRequest) {
         updateSession({ error: error instanceof Error ? error.message : String(error) });
       }
       return false;
+    } finally {
+      if (this.preparationRequest === request) this.preparationRequest = null;
     }
   }
 
   useManualFolderOrder(): void {
-    this.setSortNow('folder_order', 'ascending');
+    this.applyIntent({ type: 'sort', field: 'folder_order', direction: 'ascending' });
   }
 
   private setFiltersNow(filters: QueryFilters): void {
@@ -486,20 +646,6 @@ class GridSessionController {
     updateSession({ filters: cloneFilters(filters) });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
-    void this.loadFirstPage({ preserveItems: true });
-  }
-
-  private setSortNow(field: SortField, direction: SortDirection): void {
-    updateSession({
-      sort: {
-        field,
-        direction,
-        randomSeed: field === 'random' ? createRandomSeed() : null,
-      },
-    });
-    this.queryVersion += 1;
-    store.set(clearSelectionAtom);
-    this.saveViewPref({ sort_field: field, sort_order: direction });
     void this.loadFirstPage({ preserveItems: true });
   }
 
@@ -526,16 +672,40 @@ class GridSessionController {
     });
   }
 
-  private async queryFirstPageUntilCurrent(
-    query: EntityViewQuery,
-    isCurrent: () => boolean,
-  ) {
-    while (isCurrent()) {
-      const result = await queryItemWindow(query, { start: 0, limit: PAGE_SIZE });
-      if (!isCurrent()) return null;
-      if (result.revision >= libraryInvalidation.latestRevision('library')) return result;
+  private observeNewerRevision(revision: number): void {
+    const latest = libraryInvalidation.latestRevision('library');
+    if (latest > revision && latest > this.lastRefreshTarget) {
+      this.lastRefreshTarget = latest;
+      this.refreshWanted = true;
     }
-    return null;
+    this.scheduleRefresh();
+  }
+
+  /** Committed invalidations coalesce here; the event adapter owns no scheduler. */
+  requestReconcile(): void {
+    this.refreshWanted = true;
+    this.scheduleRefresh();
+  }
+
+  flushPendingRefresh(): void {
+    this.scheduleRefresh();
+  }
+
+  private scheduleRefresh(): void {
+    const current = store.get(gridSessionAtom);
+    const phase = store.get(gridTransitionPhaseAtom);
+    if (!this.refreshWanted || this.refreshTimer != null || this.refreshRunning
+      || this.pendingNavigationVersion != null
+      || phase === 'fading_out' || phase === 'waiting'
+      || !current.active || current.status === 'loading' || current.status === 'appending') return;
+    // Fast edits should not leave a stale grid for two seconds. Under sustained
+    // writes, spend at most roughly a quarter of time refreshing (up to a one
+    // second cooldown); keep one coalesced successor, not a request per event.
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.refreshWanted) void this.reconcile();
+    }, Math.max(40, Math.min(1_000, this.lastRefreshDurationMs * 3)
+      - (Date.now() - this.lastRefreshCompletedAt)));
   }
 }
 
@@ -546,6 +716,7 @@ function itemSummaryEqual(
   return left.root_id === right.root_id
     && left.kind === right.kind
     && left.lifecycle === right.lifecycle
+    && left.cover_media_id === right.cover_media_id
     && left.name === right.name
     && left.content_hash === right.content_hash
     && left.mime === right.mime
@@ -555,7 +726,11 @@ function itemSummaryEqual(
     && left.frame_count === right.frame_count
     && JSON.stringify(left.palette) === JSON.stringify(right.palette)
     && left.rating === right.rating
-    && left.media_count === right.media_count;
+    && left.media_count === right.media_count
+    && left.total_size_bytes === right.total_size_bytes
+    && left.imported_at_ms === right.imported_at_ms
+    && left.captured_at_ms === right.captured_at_ms
+    && left.modified_at_ms === right.modified_at_ms;
 }
 
 function reuseStablePageItems(

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
+import { finishGridCommit } from '../gridBenchmarkTiming';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { gridViewportMissesWindow, gridWindowDestination, placeGridWindow, SettledGridRequest } from './gridWindow';
@@ -59,6 +60,8 @@ import {
 } from './canvasViewportUtils';
 import { useCanvasViewport } from './useCanvasViewport';
 import styles from './CanvasGrid.module.css';
+import { GRID_TEXT_ROW_HEIGHT } from '../gridAppearance';
+import type { GridLayoutConfig } from './gridLayoutModel';
 import type { BaseScope } from '../../../shared/types/canonical';
 import { resolveRenderedGridItem } from './renderItemAdapter';
 import { labToHex } from '../../../shared/lib/labColor';
@@ -73,7 +76,6 @@ import {
 import { useScrollToTop } from '../../../shared/hooks/useScrollToTop';
 import { ScrollToTopButton } from '../../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 
-const TEXT_NAME_ROW_H = 20;
 const RETURN_TO_TOP_THRESHOLD = 200;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 const EMPTY_FOLDER_NODE_SET = new Set<string>();
@@ -182,6 +184,8 @@ export interface CanvasGridProps {
   onEmptyContextMenu?: (position: { x: number; y: number }) => void;
   onLoadMore?: () => void;
   onFirstPaint?: () => void;
+  onLayoutConfigChange?: (config: GridLayoutConfig) => void;
+  surfaceVisible?: boolean;
   onScrollPositionChange?: (position: GridScrollPosition) => void;
   interactive?: boolean;
   /** Restore scroll position on first paint (e.g., after back/forward navigation). */
@@ -235,6 +239,8 @@ export function CanvasGrid({
   onSelectionChange,
   onLoadMore,
   onFirstPaint,
+  onLayoutConfigChange,
+  surfaceVisible = true,
   onScrollPositionChange,
   interactive = true,
   initialScrollPosition = null,
@@ -372,7 +378,12 @@ export function CanvasGrid({
   }), []);
   const { layoutWidth, headerHeight, committedSizeRef } = useCanvasViewport(viewportRefs, headerContent, viewportCommitKey);
 
-  const textHeight = (showName ? TEXT_NAME_ROW_H : 0) + (showResolution ? TEXT_NAME_ROW_H : 0);
+  const textHeight = (showName ? GRID_TEXT_ROW_HEIGHT : 0) + (showResolution ? GRID_TEXT_ROW_HEIGHT : 0);
+
+  useLayoutEffect(() => {
+    onLayoutConfigChange?.({ width: layoutWidth.width, scrollbarWidth: layoutWidth.scrollbarWidth,
+      targetSize, gap, viewMode, textHeight });
+  }, [onLayoutConfigChange, layoutWidth, targetSize, gap, viewMode, textHeight]);
 
   const layoutRuntimeRef = useRef(new GridLayoutRuntime());
   const localLayout = useMemo(() => layoutRuntimeRef.current.update(items, {
@@ -590,9 +601,9 @@ export function CanvasGrid({
     );
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
-    pipeline.updatePlan(planTiles, visibleScrollTop + vp.viewportHeight / 2, vp.dpr, now);
+    pipeline.updatePlan(surfaceVisible ? planTiles : [], visibleScrollTop + vp.viewportHeight / 2, vp.dpr, now);
     revealTrackerRef.current.updateViewport(
-      viewportHashes,
+      surfaceVisible ? viewportHashes : EMPTY_FOLDER_NODE_SET,
       now,
       (itemId) => {
         const itemIndex = layoutModel.itemIdToIndex.get(Number(itemId));
@@ -615,7 +626,7 @@ export function CanvasGrid({
       positions: layoutModel.positions,
       items: layoutModel.items,
       atlasGet: (hash) => pipeline.get(hash),
-      revealProgress: (entityHash) => revealTrackerRef.current.getProgress(entityHash, now),
+      revealProgress: (entityHash) => surfaceVisible ? revealTrackerRef.current.getProgress(entityHash, now) : 0,
       revealAnimating: (entityHash) => revealTrackerRef.current.isAnimating(entityHash, now),
       activeTiles,
       draw: drawCtx,
@@ -655,11 +666,13 @@ export function CanvasGrid({
 
     // First paint notification
     const notifyFirstPaint = onFirstPaintRef.current;
-    if (!firstPaintRef.current && notifyFirstPaint) {
+    if (!firstPaintRef.current && notifyFirstPaint
+      && !gridViewportMissesWindow(layoutModel, visibleScrollTop, vp.viewportHeight)) {
+      finishGridCommit(items);
       firstPaintRef.current = true;
       notifyFirstPaint();
     }
-  }, [layoutModel, viewMode, fitThumbnails, grayscale, showName, showExtension, showExtensionLabel, showItemCount, showResolution, textHeight, headerHeight]);
+  }, [layoutModel, surfaceVisible, viewMode, fitThumbnails, grayscale, showName, showExtension, showExtensionLabel, showItemCount, showResolution, textHeight, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
@@ -875,7 +888,7 @@ export function CanvasGrid({
   useEffect(() => {
     if (!firstPaintRef.current && onFirstPaint) markDirty('base');
   }, [markDirty, onFirstPaint]);
-  useEffect(() => { markDirty('base'); }, [showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, grayscale, markDirty]);
+  useEffect(() => { markDirty('base'); }, [surfaceVisible, showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, grayscale, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedItemIds, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
   useEffect(() => {
@@ -935,6 +948,11 @@ export function CanvasGrid({
     const pipeline = pipelineRef.current;
     const model = layoutModelRef.current;
     if (!pipeline || viewportHeight <= 0) return;
+    if (!surfaceVisible) {
+      pipeline.updatePlan([], visibleScrollTop + viewportHeight / 2, dpr, now);
+      revealTrackerRef.current.clear();
+      return;
+    }
 
     const candidates = viewportCandidateBufRef.current;
     candidates.length = 0;
@@ -970,7 +988,7 @@ export function CanvasGrid({
           && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
       },
     );
-  }, [fitThumbnails, viewMode]);
+  }, [fitThumbnails, viewMode, surfaceVisible]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {

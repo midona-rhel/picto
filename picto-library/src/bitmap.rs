@@ -124,7 +124,10 @@ pub fn load_all(connection: &Connection) -> Result<HashMap<BitmapKey, RoaringBit
         ))
     })?;
     let mut bitmaps = HashMap::new();
-    for row in rows {
+    for (index, row) in rows.enumerate() {
+        if index % 64 == 0 {
+            crate::query_request::check()?;
+        }
         let (domain, key_id, high, expected_checksum, payload, cardinality, version) = row?;
         if version != BITMAP_FORMAT_VERSION {
             return Err(LibraryError::InvalidState(format!(

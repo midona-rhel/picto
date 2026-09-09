@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+# Test harnesses can reset derived query caches without reopening SQLite.
+# This entry point is absent from production builds.
+benchmark-internals = []
+
+[[example]]
+name = "browse_acceptance_probe"
+required-features = ["benchmark-internals"]
+
 [dependencies]
 arc-swap = "1.7"
 bincode = "1.3"

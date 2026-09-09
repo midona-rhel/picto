@@ -409,7 +409,11 @@ export function LibraryManager() {
       setShowCloudOpen(false);
       setSelectedCloudLibrary(null);
       setCloudName('');
-      setMessage(t('Opened "{value0}" from cloud.', { value0: baseName(result.path) }));
+      // A join that completed while another library was being opened is
+      // listed (and selected here) without being open.
+      if (result.opened !== false) {
+        setMessage(t('Opened "{value0}" from cloud.', { value0: baseName(result.path) }));
+      }
       await refreshCloud();
     });
   };

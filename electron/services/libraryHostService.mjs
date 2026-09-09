@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { LIBRARY_OPEN_CANCELLED, isLibraryOpenCancelled } from '../libraryOpenCancellation.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -49,10 +50,195 @@ export function createLibraryHostService({
   runFileAttributeCommand = execFileAsync,
   setFileIcon = null,
 }) {
-  let openingLibraryPath = null;
   let tutorialSession = null;
+  // The session a guided-tour finish is restoring from, kept until that
+  // finish settles. The tour is over as soon as the finish starts (switching
+  // is allowed again and supersedes the restore); a tour started meanwhile
+  // returns to this session's previous library, not to the tour directory.
+  let finishingSession = null;
   let libraryFailure = null;
+  // Every open/close flow claims an attempt. Only the newest attempt owns the
+  // UI state (opening path, current root, history, menu, events); an older
+  // attempt whose steps settle later must stay silent. An attempt records
+  // its outcome once it settles: 'published', or one of the failure outcomes
+  // of `settleFailedOpen`.
+  let currentAttempt = null;
+  let shuttingDown = false;
   const coverExtensions = ['jpg', 'png'];
+
+  function markShuttingDown() {
+    shuttingDown = true;
+  }
+
+  function isShuttingDown() {
+    return shuttingDown;
+  }
+
+  function beginAttempt(libraryPath) {
+    currentAttempt = { path: libraryPath, outcome: null };
+    return currentAttempt;
+  }
+
+  function ownsAttempt(attempt) {
+    return currentAttempt === attempt;
+  }
+
+  /** The library the attempt in flight is opening; null once it settled. */
+  function openingPath() {
+    return currentAttempt !== null && currentAttempt.outcome === null ? currentAttempt.path : null;
+  }
+
+  /**
+   * Refuses to go on once a newer attempt owns the UI. Every native close or
+   * open a flow issues is preceded by this check in the same tick, so that a
+   * superseded flow never closes the library the newer attempt is opening.
+   */
+  function ensureOwned(attempt) {
+    if (!ownsAttempt(attempt)) throw new Error(LIBRARY_OPEN_CANCELLED);
+  }
+
+  /**
+   * Closes the open library on behalf of `attempt`. Nothing is open until an
+   * open publishes: a root that still names the closed library makes every
+   * entry point refuse to open it again and delete refuse to remove it.
+   */
+  async function closeUnderAttempt(attempt) {
+    ensureOwned(attempt);
+    try {
+      await closeLibrary();
+    } finally {
+      if (ownsAttempt(attempt)) setCurrentLibraryRoot(null);
+    }
+  }
+
+  /**
+   * Starts the native open of `attempt`. Every flow starts its open here:
+   * once the host is shutting down, or once a newer attempt owns the UI, the
+   * open is refused with the cancellation sentinel instead of being started,
+   * so nothing opens after the shutdown close or behind a newer switch.
+   * `settleFailedOpen` classifies the refusal as 'shutdown' or 'superseded'.
+   */
+  async function startNativeOpen(attempt, open) {
+    if (shuttingDown || !ownsAttempt(attempt)) throw new Error(LIBRARY_OPEN_CANCELLED);
+    return open();
+  }
+
+  function reportOpenFailure(libraryPath, error, cancelled = false) {
+    sendToAllWindows('library-open-failed', {
+      path: libraryPath,
+      message: error?.message ?? String(error),
+      ...(cancelled ? { cancelled: true } : {}),
+    });
+  }
+
+  /**
+   * Classifies a rejection of `attempt`; a settled attempt keeps its first
+   * outcome, except that losing ownership always reads as superseded. Sends
+   * nothing itself (see `reportSettledFailure`). Returns:
+   * - 'superseded': a newer attempt owns the UI; nothing may be touched or
+   *   sent for this one.
+   * - 'shutdown': the host is quitting; nothing is sent. The shutdown close
+   *   lands underneath whatever is in flight, so the error it surfaces is not
+   *   always the sentinel (a close right after the open published fails the
+   *   theme read instead); the flag decides, not the message.
+   * - 'cancelled': cancelled by an explicit close.
+   * - 'failed': any other error.
+   * - 'published': the attempt had already published; the error came after.
+   */
+  function settleFailedOpen(attempt, error) {
+    if (attempt.outcome === 'published') return 'published';
+    if (!ownsAttempt(attempt)) return 'superseded';
+    if (attempt.outcome === null) {
+      attempt.outcome = shuttingDown ? 'shutdown' : isLibraryOpenCancelled(error) ? 'cancelled' : 'failed';
+    }
+    return attempt.outcome;
+  }
+
+  /**
+   * Sends `library-open-failed` once for an attempt that settled as failed
+   * or cancelled (`cancelled: true` marks the latter). A flow that falls
+   * back to another library instead does not call this; `runAttempt` does
+   * for everything else.
+   */
+  function reportSettledFailure(attempt, error) {
+    const outcome = settleFailedOpen(attempt, error);
+    if ((outcome !== 'failed' && outcome !== 'cancelled') || attempt.reported) return;
+    attempt.reported = true;
+    reportOpenFailure(attempt.path, error, outcome === 'cancelled');
+  }
+
+  /** Makes the library `attempt` opened current and tells every window. */
+  function publishOpen(attempt, payload = {}) {
+    ensureOwned(attempt);
+    attempt.outcome = 'published';
+    setCurrentLibraryRoot(attempt.path);
+    sendToAllWindows('library-switched', { path: attempt.path, ...payload });
+  }
+
+  /**
+   * Runs `flow` under a fresh attempt for `libraryPath`. Whatever the flow
+   * rejects with is settled here, so that no rejection between claiming the
+   * attempt and its native open (a close failing its checkpoint, a rename or
+   * history write failing) can leave the opening path set forever: the
+   * failure is reported to the windows unless the flow already fell back,
+   * stays silent while shutting down, and is rethrown. A superseded flow
+   * resolves with `onSuperseded(error)` when given, else rejects with the
+   * cancellation sentinel whatever error the takeover surfaced as.
+   */
+  async function runAttempt(libraryPath, flow, { onSuperseded } = {}) {
+    const attempt = beginAttempt(libraryPath);
+    try {
+      return await flow(attempt);
+    } catch (error) {
+      if (settleFailedOpen(attempt, error) !== 'superseded') {
+        reportSettledFailure(attempt, error);
+        throw error;
+      }
+      if (onSuperseded) return onSuperseded(error);
+      throw new Error(LIBRARY_OPEN_CANCELLED);
+    }
+  }
+
+  /**
+   * Re-opens `libraryPath` under `attempt` after that attempt closed the
+   * library and then failed before its own open could publish (a guided-tour
+   * start/reset that failed, a rename/move whose disk operation failed).
+   * Returns 'published' once `library-switched` went out, or 'superseded'
+   * when a newer attempt owns the UI. A reopen that fails or is cancelled
+   * leaves nothing open (root null) and rethrows.
+   */
+  async function reopenUnderAttempt(attempt, libraryPath, payload = {}) {
+    if (!ownsAttempt(attempt)) return 'superseded';
+    // The earlier failure was classified and not reported; the attempt now
+    // opens the fallback, whose own failure is what the windows learn of.
+    attempt.path = libraryPath;
+    attempt.outcome = null;
+    try {
+      await startNativeOpen(attempt, () => openLibrary(libraryPath));
+      publishOpen(attempt, payload);
+      return 'published';
+    } catch (error) {
+      if (settleFailedOpen(attempt, error) === 'superseded') return 'superseded';
+      throw error;
+    }
+  }
+
+  /**
+   * Runs bookkeeping (history, library meta, menu) for a library that is
+   * open and published, or valid on disk. What the library is does not
+   * depend on this: a failure is logged, never surfaced as an open failure
+   * or as a failure of the flow.
+   */
+  async function recordLibrary(libraryPath, record) {
+    try {
+      await record();
+    } catch (error) {
+      console.warn('[library] library bookkeeping failed', {
+        libraryPath,
+        message: error?.message ?? String(error),
+      });
+    }
+  }
 
   function materializedCoverPath(libraryPath, extension) {
     return path.join(libraryPath, `.picto-library-cover.${extension}`);
@@ -125,9 +311,23 @@ export function createLibraryHostService({
   async function cleanupStaleTutorialLibraries() {
     if (!tutorialRoot) return;
     for (const entry of await fs.readdir(tutorialRoot, { withFileTypes: true }).catch(() => [])) {
-      if (entry.isDirectory() && entry.name.startsWith('picto-guided-tour-')) {
-        await fs.rm(path.join(tutorialRoot, entry.name), { recursive: true, force: true });
-      }
+      if (!entry.isDirectory() || !entry.name.startsWith('picto-guided-tour-')) continue;
+      const sessionPath = path.join(tutorialRoot, entry.name);
+      // A finish still closing its tour library owns that directory; the
+      // next cleanup removes it.
+      if (sessionPath === finishingSession?.sessionPath) continue;
+      await fs.rm(sessionPath, { recursive: true, force: true });
+    }
+  }
+
+  async function removeTutorialSessionDirectory(session) {
+    try {
+      await fs.rm(session.sessionPath, { recursive: true, force: true });
+    } catch (error) {
+      console.warn('[library] unable to remove the guided-tour session directory', {
+        sessionPath: session.sessionPath,
+        message: error?.message ?? String(error),
+      });
     }
   }
 
@@ -260,93 +460,94 @@ export function createLibraryHostService({
 
   async function switchLibrary(newPath) {
     if (tutorialSession) throw new Error('Exit the guided tour before switching libraries');
-    openingLibraryPath = newPath;
+    // The requested library is already opening (a double-click, a repeated
+    // menu click): restarting the open would only throw away its progress.
+    if (openingPath() === newPath) return;
     libraryFailure = null;
-    sendToAllWindows('library-switching', { path: newPath });
+    return runAttempt(newPath, async (attempt) => {
+      sendToAllWindows('library-switching', { path: newPath });
+      await applyPlatformLibraryIcon(newPath);
+      await closeUnderAttempt(attempt);
+      await startNativeOpen(attempt, () => openLibrary(newPath));
+      // Published first: the library is open once its native open completed,
+      // and the bookkeeping that follows cannot make it not open.
+      publishOpen(attempt);
+      await recordLibrary(newPath, () => addLibraryToHistory(newPath));
+      buildAppMenu();
+    }, { onSuperseded: () => undefined });
+  }
 
-    await applyPlatformLibraryIcon(newPath);
+  async function createTutorialSession(previousPath) {
+    const sessionPath = await fs.mkdtemp(path.join(tutorialRoot, 'picto-guided-tour-'));
+    const libraryPath = path.join(sessionPath, 'Guided Tour.library');
+    await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
+    return { path: libraryPath, sessionPath, previousPath };
+  }
 
-    await closeLibrary();
+  /**
+   * Opens and seeds the tour library of `session` under `attempt`, ending
+   * the session when that fails. A superseded or cancelled tour rejects with
+   * the cancellation sentinel, so that the renderer never runs tour steps
+   * against whatever library is open instead; a failed one re-opens the
+   * previous library under the same attempt and rejects with the tour error.
+   * `abandoned` lists every session whose directory is disposable then.
+   */
+  async function openTutorialSession(attempt, session, abandoned = [session]) {
     try {
-      await openLibrary(newPath);
+      sendToAllWindows('library-switching', { path: session.path, tutorial: true });
+      await closeUnderAttempt(attempt);
+      await startNativeOpen(attempt, () => openTutorialLibrary(session.path, tutorialFixtureRoot));
+      ensureOwned(attempt);
+      // Every seed command re-checks ownership: a takeover (a cloud join is
+      // not gated by the tour) must not have the rest of the seed land in
+      // whatever library is open by then.
+      await seedTutorialLibrary(() => ensureOwned(attempt));
+      publishOpen(attempt, { tutorial: true });
+      buildAppMenu();
+      return { path: session.path };
     } catch (error) {
-      openingLibraryPath = null;
-      sendToAllWindows('library-open-failed', { path: newPath, message: error?.message ?? String(error) });
+      const outcome = settleFailedOpen(attempt, error);
+      if (outcome === 'shutdown') throw error;
+      if (abandoned.includes(tutorialSession)) tutorialSession = null;
+      for (const entry of abandoned) await removeTutorialSessionDirectory(entry);
+      if (outcome === 'superseded') throw new Error(LIBRARY_OPEN_CANCELLED);
+      if (outcome === 'cancelled') throw error;
+      if (await reopenUnderAttempt(attempt, session.previousPath, { restored: true }) === 'superseded') {
+        throw new Error(LIBRARY_OPEN_CANCELLED);
+      }
       throw error;
     }
-
-    setCurrentLibraryRoot(newPath);
-    openingLibraryPath = null;
-    await addLibraryToHistory(newPath);
-    buildAppMenu();
-
-    sendToAllWindows('library-switched', { path: newPath });
   }
 
   async function startTutorialLibrary() {
     if (tutorialSession) return { path: tutorialSession.path };
-    const previousPath = getCurrentLibraryRoot();
+    // A tour started while the previous one is still being restored returns
+    // to the same user library, never to the tour directory being removed.
+    const previousPath = finishingSession?.previousPath ?? getCurrentLibraryRoot();
     if (!previousPath) throw new Error('Open a library before starting the guided tour');
     await cleanupStaleTutorialLibraries();
-    const sessionPath = await fs.mkdtemp(path.join(tutorialRoot, 'picto-guided-tour-'));
-    const libraryPath = path.join(sessionPath, 'Guided Tour.library');
-    await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
-    tutorialSession = { path: libraryPath, sessionPath, previousPath };
-    openingLibraryPath = libraryPath;
-    sendToAllWindows('library-switching', { path: libraryPath, tutorial: true });
-    try {
-      await closeLibrary();
-      await openTutorialLibrary(libraryPath, tutorialFixtureRoot);
-      setCurrentLibraryRoot(libraryPath);
-      await seedTutorialLibrary();
-      openingLibraryPath = null;
-      buildAppMenu();
-      sendToAllWindows('library-switched', { path: libraryPath, tutorial: true });
-      return { path: libraryPath };
-    } catch (error) {
-      openingLibraryPath = null;
-      tutorialSession = null;
-      await fs.rm(sessionPath, { recursive: true, force: true });
-      await openLibrary(previousPath);
-      setCurrentLibraryRoot(previousPath);
-      sendToAllWindows('library-switched', { path: previousPath, restored: true });
-      throw error;
-    }
+    const session = await createTutorialSession(previousPath);
+    tutorialSession = session;
+    return runAttempt(session.path, (attempt) => openTutorialSession(attempt, session));
   }
 
   async function resetTutorialLibrary() {
     if (!tutorialSession) throw new Error('The guided tour is not running');
-    const previousPath = tutorialSession.previousPath;
-    const previousSessionPath = tutorialSession.sessionPath;
-    const sessionPath = await fs.mkdtemp(path.join(tutorialRoot, 'picto-guided-tour-'));
-    const libraryPath = path.join(sessionPath, 'Guided Tour.library');
-    await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
-    openingLibraryPath = libraryPath;
-    sendToAllWindows('library-switching', { path: libraryPath, tutorial: true });
-    await closeLibrary();
-    try {
-      await fs.rm(previousSessionPath, { recursive: true, force: true });
-      tutorialSession = { path: libraryPath, sessionPath, previousPath };
-      await openTutorialLibrary(libraryPath, tutorialFixtureRoot);
-      setCurrentLibraryRoot(libraryPath);
-      await seedTutorialLibrary();
-      openingLibraryPath = null;
-      buildAppMenu();
-      sendToAllWindows('library-switched', { path: libraryPath, tutorial: true });
-      return { path: libraryPath };
-    } catch (error) {
-      openingLibraryPath = null;
-      tutorialSession = null;
-      await fs.rm(sessionPath, { recursive: true, force: true });
-      await openLibrary(previousPath);
-      setCurrentLibraryRoot(previousPath);
-      sendToAllWindows('library-switched', { path: previousPath, restored: true });
-      throw error;
-    }
+    const previous = tutorialSession;
+    const session = await createTutorialSession(previous.previousPath);
+    tutorialSession = session;
+    return runAttempt(session.path, async (attempt) => {
+      const result = await openTutorialSession(attempt, session, [previous, session]);
+      await removeTutorialSessionDirectory(previous);
+      return result;
+    });
   }
 
-  async function seedTutorialLibrary() {
-    const command = async (name, args) => JSON.parse(await invokeSerialized(name, args));
+  async function seedTutorialLibrary(beforeCommand = () => {}) {
+    const command = async (name, args) => {
+      beforeCommand();
+      return JSON.parse(await invokeSerialized(name, args));
+    };
     const referenceFolder = await command('folders.create', {
       name: 'Renaissance reference', parent_id: null, folder_key: 'tutorial-reference',
     });
@@ -453,20 +654,31 @@ export function createLibraryHostService({
   async function finishTutorialLibrary() {
     if (!tutorialSession) return { restored: false };
     const session = tutorialSession;
+    // The tour is over now: switching is allowed again and supersedes this
+    // restore, which then touches nothing (the directory is removed by the
+    // next cleanup).
     tutorialSession = null;
-    openingLibraryPath = session.previousPath;
-    sendToAllWindows('library-switching', { path: session.previousPath, tutorial: false });
-    await closeLibrary();
+    finishingSession = session;
     try {
-      await openLibrary(session.previousPath);
-      setCurrentLibraryRoot(session.previousPath);
-      openingLibraryPath = null;
-      buildAppMenu();
-      sendToAllWindows('library-switched', { path: session.previousPath, restored: true });
+      return await runAttempt(session.previousPath, async (attempt) => {
+        try {
+          sendToAllWindows('library-switching', { path: session.previousPath, tutorial: false });
+          await closeUnderAttempt(attempt);
+          await startNativeOpen(attempt, () => openLibrary(session.previousPath));
+          publishOpen(attempt, { restored: true });
+          buildAppMenu();
+        } catch (error) {
+          if (settleFailedOpen(attempt, error) !== 'superseded') await removeTutorialSessionDirectory(session);
+          throw error;
+        }
+        // Published first: a removal failing (EBUSY on Windows) must not
+        // leave the open library unpublished.
+        await removeTutorialSessionDirectory(session);
+        return { restored: true, path: session.previousPath };
+      }, { onSuperseded: () => ({ restored: false, path: session.previousPath }) });
     } finally {
-      await fs.rm(session.sessionPath, { recursive: true, force: true });
+      if (finishingSession === session) finishingSession = null;
     }
-    return { restored: true, path: session.previousPath };
   }
 
   function getTutorialSession() {
@@ -483,6 +695,10 @@ export function createLibraryHostService({
     const libraryPath = path.join(savePath, `${cleanName}.library`);
     await fs.mkdir(libraryPath, { recursive: true });
     await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
+    // Listed as soon as it exists on disk: a switch superseded before it
+    // publishes must not leave the new library unlisted. The switch lists
+    // it again once it publishes.
+    await recordLibrary(libraryPath, () => addLibraryToHistory(libraryPath));
     await switchLibrary(libraryPath);
     return libraryPath;
   }
@@ -513,38 +729,80 @@ export function createLibraryHostService({
     }
 
     const previousPath = getCurrentLibraryRoot();
-    openingLibraryPath = targetRoot;
     libraryFailure = null;
-    let joined = false;
-    sendToAllWindows('library-switching', { path: targetRoot });
-    try {
-      const serialized = await invokeSerialized('cloud.library.join', {
-        provider,
-        account_label: accountLabel,
-        root_path: rootPath,
-        library_id: libraryId,
-        target_root: targetRoot,
+    // The native join closes the previous library itself, restores it when
+    // the join fails, and leaves nothing open when its open is cancelled.
+    let joined = null;
+    // Set once the joined library is valid on disk and listed without being
+    // published: it can be opened from Library Manager.
+    let listed = false;
+    const removeRemnants = () => fs.rm(targetRoot, { recursive: true, force: true }).catch(() => {});
+    const listJoinedLibrary = async () => {
+      await recordLibrary(targetRoot, async () => {
+        await addLibraryToHistory(targetRoot);
+        await setLibraryMeta(targetRoot, { cloudLibraryId: libraryId });
       });
-      const result = JSON.parse(serialized);
-      joined = true;
-      await applyPlatformLibraryIcon(targetRoot);
-      setCurrentLibraryRoot(targetRoot);
-      openingLibraryPath = null;
-      await addLibraryToHistory(targetRoot);
-      await setLibraryMeta(targetRoot, { cloudLibraryId: libraryId });
       buildAppMenu();
-      sendToAllWindows('library-switched', { path: targetRoot });
-      return result;
-    } catch (error) {
-      openingLibraryPath = null;
-      if (!joined) await fs.rm(targetRoot, { recursive: true, force: true }).catch(() => {});
-      sendToAllWindows('library-open-failed', {
-        path: targetRoot,
-        message: error?.message ?? String(error),
-      });
-      if (previousPath) sendToAllWindows('library-switched', { path: previousPath });
-      throw error;
-    }
+    };
+    return runAttempt(targetRoot, async (attempt) => {
+      try {
+        sendToAllWindows('library-switching', { path: targetRoot });
+        const serialized = await startNativeOpen(attempt, () => invokeSerialized('cloud.library.join', {
+          provider,
+          account_label: accountLabel,
+          root_path: rootPath,
+          library_id: libraryId,
+          target_root: targetRoot,
+        }));
+        joined = JSON.parse(serialized);
+        ensureOwned(attempt);
+        await applyPlatformLibraryIcon(targetRoot);
+        // Published first: the library is open once the native join
+        // completed, and the bookkeeping that follows cannot make it not open.
+        publishOpen(attempt);
+        await listJoinedLibrary();
+        return joined;
+      } catch (error) {
+        const outcome = settleFailedOpen(attempt, error);
+        if (outcome === 'failed') {
+          // A failed join leaves only remnants worth removing: the native
+          // join sets its database aside and restores the previous library
+          // itself. The windows learn of the failure before the previous
+          // library is back.
+          if (!joined) await removeRemnants();
+          reportSettledFailure(attempt, error);
+          if (previousPath) sendToAllWindows('library-switched', { path: previousPath });
+          throw error;
+        }
+        // Superseded, cancelled, or shut down. The joined library is valid
+        // on disk when the join completed natively, and also when the
+        // sentinel interrupted it: the native join holds the invocation
+        // write lock through its download, so a cancel can only hit its
+        // final open, after which the database is complete at the target.
+        // Left unlisted, that library would refuse every later join to its
+        // folder ("already exists"). A sentinel with no database (the open
+        // was refused before it started) or a native failure underneath a
+        // takeover leaves only staging remnants, which would block every
+        // later join to that folder as well.
+        if (joined || (isLibraryOpenCancelled(error) && await isValidLibrary(targetRoot))) {
+          listed = true;
+          await listJoinedLibrary();
+        } else {
+          await removeRemnants();
+        }
+        // A cancelled open leaves nothing open; nothing is published.
+        if (outcome === 'cancelled') setCurrentLibraryRoot(null);
+        throw error;
+      }
+    }, {
+      // The joined library exists (closed by the newer attempt) and is
+      // listed so that it can be opened from Library Manager; nothing is
+      // published. Without the native result, the caller learns the path
+      // and the library it joined.
+      onSuperseded: () => (listed
+        ? { ...(joined ?? { library_id: libraryId, path: targetRoot }), opened: false }
+        : null),
+    });
   }
 
   async function openLibraryDialog() {
@@ -621,23 +879,36 @@ export function createLibraryHostService({
     }
 
     if (libraryPath === getCurrentLibraryRoot()) {
-      sendToAllWindows('library-switching', { path: newPath });
-  
-      await closeLibrary();
-      try {
-        await fs.rename(libraryPath, newPath);
-      } catch (err) {
-        await openLibrary(libraryPath);
-    
-        sendToAllWindows('library-switched', { path: libraryPath });
-        throw new Error(`Failed to rename library: ${err.message}`);
-      }
-      await updateLibraryPath(libraryPath, newPath);
-      setCurrentLibraryRoot(newPath);
-      await openLibrary(newPath);
-  
-      sendToAllWindows('library-switched', { path: newPath });
-      buildAppMenu();
+      let renamed = false;
+      return runAttempt(newPath, async (attempt) => {
+        sendToAllWindows('library-switching', { path: newPath });
+        await closeUnderAttempt(attempt);
+        ensureOwned(attempt);
+        try {
+          await fs.rename(libraryPath, newPath);
+        } catch (err) {
+          const renameError = new Error(`Failed to rename library: ${err.message}`);
+          await reopenUnderAttempt(attempt, libraryPath);
+          throw renameError;
+        }
+        // The disk rename happened: the library exists under its new name
+        // whatever happens next. Recording it in the history is bookkeeping
+        // that can only be logged, never turned into an open failure.
+        renamed = true;
+        await recordLibrary(newPath, () => updateLibraryPath(libraryPath, newPath));
+        await startNativeOpen(attempt, () => openLibrary(newPath));
+        publishOpen(attempt);
+        buildAppMenu();
+        return { newPath };
+      }, {
+        // Superseded after the rename reached the disk, the library exists
+        // under its new name; before that, the caller learns why nothing
+        // was renamed.
+        onSuperseded: (error) => {
+          if (renamed) return { newPath };
+          throw error;
+        },
+      });
     } else {
       await fs.rename(libraryPath, newPath);
       await updateLibraryPath(libraryPath, newPath);
@@ -677,22 +948,36 @@ export function createLibraryHostService({
 
     if (oldExists) {
       if (oldPath === getCurrentLibraryRoot()) {
-        sendToAllWindows('library-switching', { path: newPath });
-    
-        await closeLibrary();
-        try {
-          await fs.rename(oldPath, newPath);
-        } catch (err) {
-          await openLibrary(oldPath);
-      
-          sendToAllWindows('library-switched', { path: oldPath });
-          throw new Error(`Failed to move library: ${err.message}`);
-        }
-        await updateLibraryPath(oldPath, newPath);
-        setCurrentLibraryRoot(newPath);
-        await openLibrary(newPath);
-    
-        sendToAllWindows('library-switched', { path: newPath });
+        let moved = false;
+        return runAttempt(newPath, async (attempt) => {
+          sendToAllWindows('library-switching', { path: newPath });
+          await closeUnderAttempt(attempt);
+          ensureOwned(attempt);
+          try {
+            await fs.rename(oldPath, newPath);
+          } catch (err) {
+            const moveError = new Error(`Failed to move library: ${err.message}`);
+            await reopenUnderAttempt(attempt, oldPath);
+            throw moveError;
+          }
+          // The move happened: the library exists at its new place whatever
+          // happens next. Recording it in the history is bookkeeping that
+          // can only be logged, never turned into an open failure.
+          moved = true;
+          await recordLibrary(newPath, () => updateLibraryPath(oldPath, newPath));
+          await startNativeOpen(attempt, () => openLibrary(newPath));
+          publishOpen(attempt);
+          buildAppMenu();
+          return { action: 'relocated', newPath };
+        }, {
+          // Superseded after the move reached the disk, the library exists
+          // at its new place; before that, the caller learns why nothing
+          // was moved.
+          onSuperseded: (error) => {
+            if (moved) return { action: 'relocated', newPath };
+            throw error;
+          },
+        });
       } else {
         await fs.rename(oldPath, newPath);
         await updateLibraryPath(oldPath, newPath);
@@ -743,7 +1028,7 @@ export function createLibraryHostService({
       ...config,
       libraryMeta,
       currentPath: getCurrentLibraryRoot(),
-      openingPath: openingLibraryPath,
+      openingPath: openingPath(),
       libraryFailure,
       existsMap,
       coverExistsMap,
@@ -767,21 +1052,32 @@ export function createLibraryHostService({
   }
 
   async function failActiveLibrary(message) {
-    const failureMessage = String(message || 'The library navigation could not be loaded.');
+    // A report that arrives while an open is in flight, or while no library
+    // is current, is stale: it comes from a window of the library that a
+    // switch just closed (its reads fail with "No library is open"), not
+    // from the library being opened. Acting on it would cancel the newer
+    // open, or blame a library that already failed, and open the chooser
+    // a second time.
     const failedPath = getCurrentLibraryRoot();
-    libraryFailure = { path: failedPath, message: failureMessage };
-    openingLibraryPath = null;
-    if (failedPath) {
-      try {
-        await closeLibrary();
-      } catch (error) {
-        console.error('[library] failed to close after an initial read failure', error);
-      }
+    if (openingPath() !== null || !failedPath) return null;
+    const failureMessage = String(message || 'The library navigation could not be loaded.');
+    // A switch started during the close below clears the shared failure;
+    // the windows still learn of this one.
+    const failure = { path: failedPath, message: failureMessage };
+    libraryFailure = failure;
+    try {
+      await closeLibrary();
+    } catch (error) {
+      console.error('[library] failed to close after an initial read failure', error);
     }
+    // A switch that started during that close owns the UI now (it may even
+    // have published its library): this report describes a library that is
+    // no longer current, so it must neither clear the root nor reach windows.
+    if (openingPath() !== null || getCurrentLibraryRoot() !== failedPath) return null;
     setCurrentLibraryRoot(null);
     buildAppMenu();
-    sendToAllWindows('library-open-failed', libraryFailure);
-    return libraryFailure;
+    sendToAllWindows('library-open-failed', failure);
+    return failure;
   }
 
   async function setLibraryMeta(libraryPath, meta) {
@@ -821,19 +1117,14 @@ export function createLibraryHostService({
   async function initializeInitialLibrary(libraryPath, { remember = true } = {}) {
     await cleanupStaleTutorialLibraries();
     await applyPlatformLibraryIcon(libraryPath);
-    openingLibraryPath = libraryPath;
-    sendToAllWindows('library-switching', { path: libraryPath });
-    try {
-      await openLibrary(libraryPath);
-    } catch (error) {
-      openingLibraryPath = null;
-      sendToAllWindows('library-open-failed', { path: libraryPath, message: error?.message ?? String(error) });
-      throw error;
-    }
-    setCurrentLibraryRoot(libraryPath);
-    openingLibraryPath = null;
-    if (remember) await addLibraryToHistory(libraryPath);
-    sendToAllWindows('library-switched', { path: libraryPath });
+    return runAttempt(libraryPath, async (attempt) => {
+      sendToAllWindows('library-switching', { path: libraryPath });
+      await startNativeOpen(attempt, () => openLibrary(libraryPath));
+      // Published first: the library is open once its native open completed,
+      // and the bookkeeping that follows cannot make it not open.
+      publishOpen(attempt);
+      if (remember) await recordLibrary(libraryPath, () => addLibraryToHistory(libraryPath));
+    }, { onSuperseded: () => undefined });
   }
 
   return {
@@ -842,9 +1133,11 @@ export function createLibraryHostService({
     getLibraryConfig,
     handleMissingLibrary,
     initializeInitialLibrary,
+    isShuttingDown,
     isValidLibrary,
     libraryDisplayName,
     joinCloudLibrary,
+    markShuttingDown,
     openLibraryAndShow,
     openLibraryDialog,
     relocateLibrary,

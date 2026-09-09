@@ -4,6 +4,10 @@ use thiserror::Error;
 pub enum LibraryError {
     #[error("query superseded")]
     QuerySuperseded,
+    #[error("The library view took too long to load. Please retry.")]
+    QueryDeadline,
+    #[error("library open cancelled")]
+    OpenCancelled,
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("serialization error: {0}")]

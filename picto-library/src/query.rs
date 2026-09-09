@@ -6,11 +6,10 @@ use std::time::Instant;
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use roaring::RoaringBitmap;
-use rusqlite::{params_from_iter, types::Value, Connection};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::fts;
 use crate::model::{
     FileId, FolderId, ImmutableMediaFacts, LabColor, Lifecycle, MediaId, MediaRecord, Rating,
     RootDetails, RootId, RootKind, RootRecord, SmartFolderId,
@@ -20,8 +19,6 @@ use crate::predicate::{self, FilterExpr, ItemSort, SortDirection, SortField, Vie
 use crate::projection::ProjectionSnapshot;
 use crate::query_dependencies::QueryKey;
 use crate::{LibraryError, Result};
-
-const SCAN_CHUNK: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -54,8 +51,62 @@ pub struct PageRequest {
 /// An exact ordinal window in the canonical filtered order, not a SQL OFFSET scan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowRequest {
-    pub start: usize,
+    pub position: WindowPosition,
     pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum WindowPosition {
+    Ordinal(usize),
+    Fraction(f64),
+}
+
+impl WindowRequest {
+    pub fn at(start: usize, limit: usize) -> Self {
+        Self {
+            position: WindowPosition::Ordinal(start),
+            limit,
+        }
+    }
+
+    fn resolve(&self, total: usize, limit: usize) -> Result<usize> {
+        let start = match self.position {
+            WindowPosition::Ordinal(start) => start,
+            WindowPosition::Fraction(fraction) => {
+                if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+                    return Err(LibraryError::InvalidInput(
+                        "scroll fraction must be between zero and one".into(),
+                    ));
+                }
+                // Keep the existing 500-item alignment and one-page leading buffer.
+                let index = (fraction * total as f64).floor() as usize;
+                index.saturating_sub(500) / 500 * 500
+            }
+        };
+        Ok(start.min(total.saturating_sub(limit)))
+    }
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+
+    #[test]
+    fn fractions_preserve_alignment_and_clamp_to_the_actual_matching_set() {
+        let at = |fraction| WindowRequest {
+            position: WindowPosition::Fraction(fraction),
+            limit: 1500,
+        };
+        assert_eq!(at(0.5).resolve(1_000_000, 1500).unwrap(), 499_500);
+        assert_eq!(at(1.0).resolve(1_000_000, 1500).unwrap(), 998_500);
+        assert_eq!(at(1.0).resolve(3, 1500).unwrap(), 0);
+        assert_eq!(at(0.0).resolve(0, 1500).unwrap(), 0);
+        for invalid in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            assert!(at(invalid).resolve(1_000_000, 1500).is_err());
+        }
+        assert!(serde_json::from_str::<WindowRequest>(r#"{"start":0,"limit":500}"#).is_err());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +114,7 @@ pub struct RootWindow {
     #[serde(flatten)]
     pub page: RootPage,
     pub start: usize,
+    pub head_items: Vec<RootSummary>,
 }
 
 struct OrderedResult {
@@ -70,8 +122,6 @@ struct OrderedResult {
     key: QueryKey,
     query: RootQuery,
     ids: Vec<RootId>,
-    media_count: u128,
-    total_size_bytes: u128,
 }
 
 /// Up to eight compact orders, capped at three million IDs (12 MB). This lets
@@ -106,108 +156,286 @@ impl OrderCache {
     }
 }
 
+/// Roots sharing a file with an inspected item. Duplicate inspection is the
+/// one scope whose membership is not resident: file identities live only in
+/// canonical tables, so the caller resolves it inside a consistent read before
+/// the query runs on the captured snapshot. Every other scope ignores it.
+#[derive(Debug, Default)]
+pub struct MediaMatches(Option<RoaringBitmap>);
+
+impl MediaMatches {
+    pub fn required(scope: &ItemScope) -> bool {
+        matches!(scope, ItemScope::MediaMatches { .. })
+    }
+
+    pub fn resolve(
+        connection: &Connection,
+        snapshot: &ProjectionSnapshot,
+        scope: &ItemScope,
+    ) -> Result<Self> {
+        let ItemScope::MediaMatches { item_id } = scope else {
+            return Ok(Self(None));
+        };
+        Ok(Self(Some(media_match_roots(
+            connection, snapshot, *item_id,
+        )?)))
+    }
+
+    fn roots(&self) -> Result<&RoaringBitmap> {
+        self.0.as_ref().ok_or_else(|| {
+            LibraryError::InvalidState("media matches were not resolved before the query".into())
+        })
+    }
+}
+
 pub(crate) fn window_cached(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
     request: &WindowRequest,
+    media: &MediaMatches,
     matches_cache: &MatchCache,
     order_cache: &OrderCache,
 ) -> Result<RootWindow> {
+    crate::query_request::check()?;
     let limit = request.limit.clamp(1, 1500);
-    if query.view.sort.field == SortField::Random
-        && !matches!(&query.scope, ItemScope::RecentlyViewed)
-    {
-        let matches = cached_matches(connection, snapshot, query, Some(matches_cache))?;
-        let total = matches.len() as usize;
-        let start = request.start.min(total.saturating_sub(limit));
-        let started = Instant::now();
-        let ids = random_window_ids(&matches, &query.view.sort, start, limit);
-        matches_cache
-            .metrics
-            .order_us
-            .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
-        return Ok(RootWindow {
-            start,
-            page: RootPage {
-                items: measured_summaries(connection, snapshot, &ids, Some(matches_cache))?,
-                next_cursor: None,
-                total: matches.len(),
-                media_count: matches.media_count,
-                total_size_bytes: matches.total_size_bytes,
-                revision: snapshot.revision,
-            },
-        });
-    }
-    let key = QueryKey::ordered(snapshot, query);
-    let cached = order_cache.get(&key, query);
-    // Keep first paint cheap: constructing the complete order is only necessary
-    // once navigation leaves the initial page. Subsequent jumps reuse its IDs.
-    if request.start == 0 && cached.is_none() && limit <= 1000 {
-        return Ok(RootWindow {
-            page: page_cached(
-                connection,
-                snapshot,
-                query,
-                &PageRequest {
-                    limit,
-                    cursor: None,
-                },
-                matches_cache,
-            )?,
-            start: 0,
-        });
-    }
-    let ordered = if let Some(ordered) = cached {
-        ordered
+    let matches = cached_matches(snapshot, query, media, Some(matches_cache))?;
+    let start = request.resolve(matches.len() as usize, limit)?;
+    let started = Instant::now();
+    let ids = window_ids(
+        snapshot,
+        query,
+        &matches,
+        start,
+        limit,
+        order_cache,
+        &matches_cache.metrics,
+    )?;
+    let head_ids = if start == 0 && ids.len() >= (matches.len() as usize).min(4) {
+        ids.iter().take(4).copied().collect::<Vec<_>>()
     } else {
-        let matches = cached_matches(connection, snapshot, query, Some(matches_cache))?;
-        let started = Instant::now();
-        let (ids, _) = ordered_page_ids(
-            connection,
+        window_ids(
             snapshot,
             query,
             &matches,
-            matches.len() as usize + 1,
-            None,
-        )?;
-        matches_cache
-            .metrics
-            .order_builds
-            .fetch_add(1, Ordering::Relaxed);
-        matches_cache
-            .metrics
-            .order_us
-            .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
-        let ordered = Arc::new(OrderedResult {
-            revision: snapshot.revision,
-            key,
-            query: query.clone(),
-            ids,
-            media_count: matches.media_count,
-            total_size_bytes: matches.total_size_bytes,
-        });
-        order_cache.insert(ordered.clone());
-        ordered
+            0,
+            4,
+            order_cache,
+            &matches_cache.metrics,
+        )?
     };
-    let start = request.start.min(ordered.ids.len().saturating_sub(limit));
-    let end = (start + limit).min(ordered.ids.len());
+    matches_cache
+        .metrics
+        .order_us
+        .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    crate::query_request::check()?;
+    // Hydrate each root once, even when the requested window overlaps its preview.
+    let mut selected = ids.clone();
+    // Only four preview IDs need lookup. Avoid building two extra hash tables
+    // for every 1,500-item scroll window just to recover those four positions.
+    selected.extend(head_ids.iter().copied().filter(|id| !ids.contains(id)));
+    let mut items = measured_summaries(snapshot, &selected, Some(matches_cache))?;
+    let head_items = head_ids
+        .iter()
+        .map(|id| {
+            items[selected
+                .iter()
+                .position(|selected| selected == id)
+                .expect("selected preview")]
+            .clone()
+        })
+        .collect();
+    items.truncate(ids.len());
+    crate::query_request::check()?;
     Ok(RootWindow {
         start,
+        head_items,
         page: RootPage {
-            items: measured_summaries(
-                connection,
-                snapshot,
-                &ordered.ids[start..end],
-                Some(matches_cache),
-            )?,
+            items,
             next_cursor: None,
-            total: ordered.ids.len() as u64,
-            media_count: ordered.media_count,
-            total_size_bytes: ordered.total_size_bytes,
+            total: matches.len(),
+            media_count: matches.media_count,
+            total_size_bytes: matches.total_size_bytes,
             revision: snapshot.revision,
         },
     })
+}
+
+fn window_ids(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    matches: &RoaringBitmap,
+    start: usize,
+    limit: usize,
+    order_cache: &OrderCache,
+    metrics: &QueryMetrics,
+) -> Result<Vec<RootId>> {
+    crate::query_request::check()?;
+    if matches.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(ids) = direct_window(snapshot, query, matches, start, limit)? {
+        return Ok(ids);
+    }
+    let order = cached_complete_order(snapshot, query, matches, Some((order_cache, metrics)))?;
+    Ok(order.ids[start..(start + limit).min(order.ids.len())].to_vec())
+}
+
+/// Ordinal windows that seek the resident order directly, without
+/// enumerating the matching set. Only the recently viewed order, a short
+/// resident list in its own display order, is served by enumeration instead.
+fn direct_window(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    matches: &RoaringBitmap,
+    start: usize,
+    limit: usize,
+) -> Result<Option<Vec<RootId>>> {
+    if matches!(query.scope, ItemScope::RecentlyViewed) {
+        return Ok(None);
+    }
+    let descending = query.view.sort.direction == SortDirection::Descending;
+    let ids = match query.view.sort.field {
+        SortField::FolderOrder if matches!(query.scope, ItemScope::Folder { .. }) => {
+            let ItemScope::Folder { folder_id } = query.scope else {
+                unreachable!()
+            };
+            let mut output = Vec::with_capacity(limit);
+            let mut remaining = start;
+            if let Some(order) = snapshot.folder_orders.get(&folder_id) {
+                for (index, id) in order.iter().enumerate() {
+                    if index % 256 == 0 {
+                        crate::query_request::check()?;
+                    }
+                    if !matches.contains(id.0) {
+                        continue;
+                    }
+                    if remaining > 0 {
+                        remaining -= 1;
+                        continue;
+                    }
+                    output.push(*id);
+                    if output.len() == limit {
+                        break;
+                    }
+                }
+            }
+            output
+        }
+        SortField::Name => snapshot
+            .name_index
+            .window(matches, start, limit, descending)?
+            .into_iter()
+            .map(RootId)
+            .collect(),
+        SortField::Random => random_window_ids(matches, &query.view.sort, start, limit),
+        // Folder trees have always used descending import order, not the
+        // explicit order of any one constituent folder.
+        SortField::FolderOrder => snapshot
+            .imported_at
+            .ordered_window(matches, start, limit, true, true)?
+            .expect("date windows cover every root")
+            .into_iter()
+            .map(RootId)
+            .collect(),
+        SortField::ImportedAt | SortField::CapturedAt => {
+            let captured = query.view.sort.field == SortField::CapturedAt;
+            let index = if captured {
+                &snapshot.captured_at
+            } else {
+                &snapshot.imported_at
+            };
+            index
+                .ordered_window(matches, start, limit, descending, true)?
+                .expect("date windows cover every root")
+                .into_iter()
+                .map(RootId)
+                .collect()
+        }
+        SortField::TotalSize => snapshot
+            .total_bytes
+            .ordered_window_total(matches, start, limit, descending)?
+            .into_iter()
+            .map(RootId)
+            .collect(),
+        SortField::Rating => {
+            let mut ratings = Rating::ALL;
+            if descending {
+                ratings.reverse();
+            }
+            let mut skip = start;
+            let mut output = Vec::with_capacity(limit);
+            for rating in ratings {
+                let roots = snapshot.rating(rating) & matches;
+                if skip >= roots.len() as usize {
+                    skip -= roots.len() as usize;
+                    continue;
+                }
+                for ordinal in skip..(roots.len() as usize).min(skip + limit - output.len()) {
+                    let rank = if descending {
+                        roots.len() as usize - 1 - ordinal
+                    } else {
+                        ordinal
+                    };
+                    if let Some(id) = roots.select(rank as u32) {
+                        output.push(RootId(id));
+                    }
+                }
+                skip = 0;
+                if output.len() == limit {
+                    break;
+                }
+            }
+            output
+        }
+    };
+    Ok(Some(ids))
+}
+
+/// Every matching root in display order: the recently viewed list filtered
+/// to the matches, or one complete direct window for any other sort. Cursor
+/// paging and range selection need positions, not ordinal windows.
+fn complete_order(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    matches: &RoaringBitmap,
+) -> Result<Vec<RootId>> {
+    if matches!(query.scope, ItemScope::RecentlyViewed) {
+        return Ok(snapshot
+            .recent_views
+            .iter()
+            .filter(|(id, _)| matches.contains(id.0))
+            .map(|(id, _)| *id)
+            .collect());
+    }
+    Ok(
+        direct_window(snapshot, query, matches, 0, matches.len() as usize)?
+            .expect("every other sort has a direct window"),
+    )
+}
+
+fn cached_complete_order(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    matches: &RoaringBitmap,
+    caches: Option<(&OrderCache, &QueryMetrics)>,
+) -> Result<Arc<OrderedResult>> {
+    let key = QueryKey::ordered(snapshot, query);
+    if let Some(ordered) = caches.and_then(|(cache, _)| cache.get(&key, query)) {
+        return Ok(ordered);
+    }
+    let ids = complete_order(snapshot, query, matches)?;
+    crate::query_request::check()?;
+    let ordered = Arc::new(OrderedResult {
+        revision: snapshot.revision,
+        key,
+        query: query.clone(),
+        ids,
+    });
+    if let Some((cache, metrics)) = caches {
+        metrics.order_builds.fetch_add(1, Ordering::Relaxed);
+        cache.insert(ordered.clone());
+    }
+    Ok(ordered)
 }
 
 impl Default for PageRequest {
@@ -525,7 +753,8 @@ struct MatchCacheEntry {
 }
 
 struct MatchedResult {
-    ids: RoaringBitmap,
+    ids: Arc<RoaringBitmap>,
+    aggregate_key: QueryKey,
     media_count: u128,
     total_size_bytes: u128,
 }
@@ -564,6 +793,7 @@ impl MatchCache {
             summary_items: m.summary_items.load(Ordering::Relaxed),
         }
     }
+
     fn get(
         &self,
         key: &QueryKey,
@@ -590,10 +820,12 @@ impl MatchCache {
         if entries.iter().any(|entry| entry.revision > revision) {
             return;
         }
-        if entries
-            .iter()
-            .any(|entry| entry.key == key && entry.scope == *scope && entry.filter == *filter)
-        {
+        if entries.iter().any(|entry| {
+            entry.key == key
+                && entry.scope == *scope
+                && entry.filter == *filter
+                && entry.matches.aggregate_key == matches.aggregate_key
+        }) {
             return;
         }
         entries.retain(|entry| entry.scope != *scope || entry.filter != *filter);
@@ -617,12 +849,14 @@ impl MatchCache {
 }
 
 pub fn matching_roots(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
+    media: &MediaMatches,
 ) -> Result<RoaringBitmap> {
-    let universe = scope_bitmap(connection, snapshot, &query.scope)?;
-    let mut text = |field, value: &str| fts::search(connection, field, value);
+    let universe = scope_bitmap(snapshot, &query.scope, media)?;
+    let mut text = |field, value: &str, candidates: &RoaringBitmap| {
+        snapshot.text_index.search(field, value, candidates)
+    };
     predicate::evaluate(&query.view.filter, &universe, snapshot, &mut text)
 }
 
@@ -630,11 +864,11 @@ pub fn matching_roots(
 /// A collection contributes to every MIME represented by one of its members,
 /// matching the semantics of the MIME filter projection itself.
 pub fn mime_facets(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
+    media: &MediaMatches,
 ) -> Result<MimeFacets> {
-    let matches = matching_roots(connection, snapshot, query)?;
+    let matches = matching_roots(snapshot, query, media)?;
     let mut values = snapshot
         .mime
         .iter()
@@ -654,33 +888,41 @@ pub fn mime_facets(
 }
 
 pub fn page(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
     request: &PageRequest,
+    media: &MediaMatches,
 ) -> Result<RootPage> {
-    page_inner(connection, snapshot, query, request, None)
+    page_inner(snapshot, query, request, media, None)
 }
 
 pub(crate) fn page_cached(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
     request: &PageRequest,
-    cache: &MatchCache,
+    media: &MediaMatches,
+    match_cache: &MatchCache,
+    order_cache: &OrderCache,
 ) -> Result<RootPage> {
-    page_inner(connection, snapshot, query, request, Some(cache))
+    page_inner(
+        snapshot,
+        query,
+        request,
+        media,
+        Some((match_cache, order_cache)),
+    )
 }
 
 fn page_inner(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
     request: &PageRequest,
-    cache: Option<&MatchCache>,
+    media: &MediaMatches,
+    caches: Option<(&MatchCache, &OrderCache)>,
 ) -> Result<RootPage> {
     let limit = request.limit.clamp(1, 1000);
-    let matches = cached_matches(connection, snapshot, query, cache)?;
+    let match_cache = caches.map(|(cache, _)| cache);
+    let matches = cached_matches(snapshot, query, media, match_cache)?;
     if matches.is_empty() {
         return Ok(RootPage {
             items: Vec::new(),
@@ -697,16 +939,22 @@ fn page_inner(
         .map(serde_json::from_str)
         .transpose()?;
     let started = Instant::now();
-    let (ids, next_cursor) =
-        ordered_page_ids(connection, snapshot, query, &matches, limit, cursor)?;
-    if let Some(cache) = cache {
+    let (ids, next_cursor) = ordered_page_ids(
+        snapshot,
+        query,
+        &matches,
+        limit,
+        cursor,
+        caches.map(|(match_cache, order_cache)| (order_cache, &match_cache.metrics)),
+    )?;
+    if let Some(cache) = match_cache {
         cache
             .metrics
             .order_us
             .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
     Ok(RootPage {
-        items: measured_summaries(connection, snapshot, &ids, cache)?,
+        items: measured_summaries(snapshot, &ids, match_cache)?,
         next_cursor,
         total: matches.len(),
         media_count: matches.media_count,
@@ -716,18 +964,27 @@ fn page_inner(
 }
 
 fn cached_matches(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
+    media: &MediaMatches,
     cache: Option<&MatchCache>,
 ) -> Result<Arc<MatchedResult>> {
     let key = QueryKey::matches(snapshot, query);
-    if let Some(hit) = cache.and_then(|cache| cache.get(&key, &query.scope, &query.view.filter)) {
-        return Ok(hit);
+    let aggregate_key = QueryKey::aggregates(snapshot);
+    let hit = cache.and_then(|cache| cache.get(&key, &query.scope, &query.view.filter));
+    if let Some(hit) = &hit {
+        if hit.aggregate_key == aggregate_key {
+            return Ok(hit.clone());
+        }
     }
     let started = Instant::now();
-    let ids = matching_roots(connection, snapshot, query)?;
-    if let Some(cache) = cache {
+    let ids = if let Some(hit) = &hit {
+        hit.ids.clone()
+    } else {
+        Arc::new(matching_roots(snapshot, query, media)?)
+    };
+    crate::query_request::check()?;
+    if let Some(cache) = cache.filter(|_| hit.is_none()) {
         cache.metrics.match_builds.fetch_add(1, Ordering::Relaxed);
         cache
             .metrics
@@ -736,10 +993,12 @@ fn cached_matches(
     }
     let started = Instant::now();
     let result = Arc::new(MatchedResult {
+        aggregate_key,
         media_count: snapshot.media_count.sum(&ids),
         total_size_bytes: snapshot.total_bytes.sum(&ids),
         ids,
     });
+    crate::query_request::check()?;
     if let Some(cache) = cache {
         cache
             .metrics
@@ -757,151 +1016,129 @@ fn cached_matches(
 }
 
 fn ordered_page_ids(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
     matches: &RoaringBitmap,
     limit: usize,
     cursor: Option<Cursor>,
+    caches: Option<(&OrderCache, &QueryMetrics)>,
 ) -> Result<(Vec<RootId>, Option<String>)> {
     if matches.is_empty() {
         return Ok((Vec::new(), None));
     }
-    if cursor.is_none() && limit > matches.len() as usize && matches.len() > SPARSE_SCAN_MAXIMUM {
-        // Enumerate the compact order once. Repeating limited scans would be
-        // particularly costly for expression sorts without a matching index.
-        let recent = matches!(query.scope, ItemScope::RecentlyViewed);
-        let expression = if recent {
-            Some("root.viewed_at_ms")
-        } else {
-            match query.view.sort.field {
-                SortField::Name => Some("root.name COLLATE NOCASE"),
-                SortField::ImportedAt => Some("root.imported_at_ms"),
-                SortField::CapturedAt => Some("COALESCE(root.captured_at_ms, -1)"),
-                SortField::TotalSize => Some("root.total_size_bytes"),
-                SortField::FolderOrder if matches!(query.scope, ItemScope::FolderTree { .. }) => {
-                    Some("root.imported_at_ms")
-                }
-                _ => None,
+    if !matches!(query.scope, ItemScope::RecentlyViewed) {
+        match query.view.sort.field {
+            SortField::FolderOrder if matches!(query.scope, ItemScope::Folder { .. }) => {
+                return page_folder_order(snapshot, query, matches, limit, cursor)
             }
-        };
-        if let Some(expression) = expression {
-            let direction = if recent || (query.view.sort.field == SortField::FolderOrder) {
-                "DESC"
-            } else {
-                direction_sql(query.view.sort.direction)
-            };
-            let table = if recent {
-                "recent_view"
-            } else {
-                "library_root"
-            };
-            let sql = format!("SELECT root.root_id FROM {table} root ORDER BY {expression} {direction}, root.root_id {direction}");
-            let mut statement = connection.prepare(&sql)?;
-            let mut rows = statement.query([])?;
-            let mut ids = Vec::with_capacity(matches.len() as usize);
-            while let Some(row) = rows.next()? {
-                let id = row.get::<_, u32>(0)?;
-                if matches.contains(id) {
-                    ids.push(RootId(id));
-                }
+            SortField::Rating => {
+                return page_rating(snapshot, matches, &query.view.sort, limit, cursor)
             }
-            return Ok((ids, None));
-        }
-    }
-    let sparse = matches.len() <= SPARSE_SCAN_MAXIMUM;
-    let (ids, next_cursor) = match query.scope {
-        ItemScope::RecentlyViewed => page_recent_order(connection, matches, limit, cursor)?,
-        _ => match query.view.sort.field {
-            SortField::FolderOrder if matches!(&query.scope, ItemScope::FolderTree { .. }) => {
-                let sort = ItemSort {
-                    field: SortField::ImportedAt,
-                    direction: SortDirection::Descending,
-                    random_seed: None,
-                };
-                scan_integer(
-                    connection,
-                    "root.imported_at_ms",
+            SortField::Random => return page_random(matches, &query.view.sort, limit, cursor),
+            SortField::Name => {
+                return page_name(
+                    &snapshot.name_index,
                     matches,
-                    sparse,
-                    &sort,
+                    &query.view.sort,
                     limit,
                     cursor,
-                )?
+                )
             }
-            SortField::FolderOrder => page_folder_order(snapshot, query, matches, limit, cursor)?,
-            SortField::Rating => page_rating(snapshot, matches, &query.view.sort, limit, cursor)?,
-            SortField::Random => page_random(matches, &query.view.sort, limit, cursor)?,
-            SortField::Name => {
-                scan_text(connection, matches, sparse, &query.view.sort, limit, cursor)?
-            }
-            SortField::ImportedAt => scan_integer(
-                connection,
-                "root.imported_at_ms",
-                matches,
-                sparse,
-                &query.view.sort,
-                limit,
-                cursor,
-            )?,
-            SortField::CapturedAt => scan_integer(
-                connection,
-                "COALESCE(root.captured_at_ms, -1)",
-                matches,
-                sparse,
-                &query.view.sort,
-                limit,
-                cursor,
-            )?,
-            SortField::TotalSize => scan_integer(
-                connection,
-                "root.total_size_bytes",
-                matches,
-                sparse,
-                &query.view.sort,
-                limit,
-                cursor,
-            )?,
-        },
+            _ => {}
+        }
+    }
+    let order = cached_complete_order(snapshot, query, matches, caches)?;
+    page_by_integer_key(snapshot, query, &order.ids, limit, cursor)
+}
+
+/// The value half of the `(value, ID)` key that orders `id` under an integer
+/// sort or the recently viewed order. Keys agree with the resident orders:
+/// value first, ID second, both reversed together for descending sorts, and
+/// a missing captured date ties with `-1` exactly as the canonical
+/// `COALESCE(captured_at_ms, -1)` expression did.
+fn integer_key(snapshot: &ProjectionSnapshot, query: &RootQuery, id: u32) -> i64 {
+    if matches!(query.scope, ItemScope::RecentlyViewed) {
+        return snapshot
+            .recent_views
+            .iter()
+            .find(|(root, _)| root.0 == id)
+            .map_or(i64::MIN, |(_, viewed_at_ms)| *viewed_at_ms);
+    }
+    match query.view.sort.field {
+        SortField::CapturedAt => snapshot.captured_at.signed_value(id).unwrap_or(-1),
+        SortField::TotalSize => snapshot
+            .total_bytes
+            .value(id)
+            .map_or(i64::MIN, |value| value.min(i64::MAX as u64) as i64),
+        _ => snapshot.imported_at.signed_value(id).unwrap_or(-1),
+    }
+}
+
+fn page_by_integer_key(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    order: &[RootId],
+    limit: usize,
+    cursor: Option<Cursor>,
+) -> Result<(Vec<RootId>, Option<String>)> {
+    // Recently viewed and folder-tree orders are always descending.
+    let descending = matches!(query.scope, ItemScope::RecentlyViewed)
+        || query.view.sort.field == SortField::FolderOrder
+        || query.view.sort.direction == SortDirection::Descending;
+    let start = match cursor {
+        Some(Cursor::Integer { value, root_id }) => {
+            let cursor = (value, root_id);
+            order.partition_point(|id| {
+                let key = (integer_key(snapshot, query, id.0), id.0);
+                if descending {
+                    key >= cursor
+                } else {
+                    key <= cursor
+                }
+            })
+        }
+        None => 0,
+        _ => {
+            return Err(LibraryError::InvalidInput(
+                "cursor does not match sort".into(),
+            ))
+        }
     };
-    Ok((ids, next_cursor))
+    crate::query_request::check()?;
+    let ids = order[start..(start + limit).min(order.len())].to_vec();
+    let next = (ids.len() == limit)
+        .then(|| {
+            ids.last().map(|id| {
+                serde_json::to_string(&Cursor::Integer {
+                    value: integer_key(snapshot, query, id.0),
+                    root_id: id.0,
+                })
+            })
+        })
+        .flatten()
+        .transpose()?;
+    Ok((ids, next))
 }
 
 pub fn all_ordered_ids(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
+    media: &MediaMatches,
 ) -> Result<Vec<RootId>> {
-    let mut cursor = None;
-    let mut ids = Vec::new();
-    loop {
-        let page = page(
-            connection,
-            snapshot,
-            query,
-            &PageRequest {
-                limit: 1000,
-                cursor,
-            },
-        )?;
-        ids.extend(page.items.into_iter().map(|item| item.root_id));
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            return Ok(ids);
-        }
-    }
+    let matches = matching_roots(snapshot, query, media)?;
+    complete_order(snapshot, query, &matches)
 }
 
 fn scope_bitmap(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     scope: &ItemScope,
+    media: &MediaMatches,
 ) -> Result<RoaringBitmap> {
     Ok(match scope {
         ItemScope::All => snapshot.active().clone(),
         ItemScope::Inbox => snapshot.lifecycle(Lifecycle::Inbox).clone(),
         ItemScope::Trash => snapshot.lifecycle(Lifecycle::Trash).clone(),
-        ItemScope::MediaMatches { item_id } => media_match_roots(connection, snapshot, *item_id)?,
+        ItemScope::MediaMatches { .. } => media.roots()?.clone(),
         ItemScope::Untagged => {
             let mut values = snapshot.active().clone();
             values &= snapshot.tag_count.between(Some(0), Some(0));
@@ -923,12 +1160,22 @@ fn scope_bitmap(
         }
         ItemScope::FolderTree { folder_id } => {
             let mut values = RoaringBitmap::new();
-            for descendant_id in
-                descendant_ids(connection, "folder_definition", "folder_id", folder_id.0)?
-            {
-                if let Some(descendant) = snapshot.folders.get(&FolderId(descendant_id)) {
-                    values |= descendant;
+            let mut visited = std::collections::HashSet::new();
+            let mut pending = vec![*folder_id];
+            while let Some(folder_id) = pending.pop() {
+                if !visited.insert(folder_id) {
+                    continue;
                 }
+                if let Some(members) = snapshot.folders.get(&folder_id) {
+                    values |= members;
+                }
+                pending.extend(
+                    snapshot
+                        .folder_parents
+                        .iter()
+                        .filter(|(_, parent)| **parent == Some(folder_id))
+                        .map(|(child, _)| *child),
+                );
             }
             values &= snapshot.active();
             values
@@ -943,35 +1190,15 @@ fn scope_bitmap(
             values
         }
         ItemScope::RecentlyViewed => {
-            let mut statement = connection.prepare_cached("SELECT root_id FROM recent_view")?;
-            let rows = statement.query_map([], |row| row.get::<_, u32>(0))?;
-            let mut values = rows.collect::<std::result::Result<RoaringBitmap, _>>()?;
+            let mut values = snapshot
+                .recent_views
+                .iter()
+                .map(|(id, _)| id.0)
+                .collect::<RoaringBitmap>();
             values &= snapshot.active();
             values
         }
     })
-}
-
-fn descendant_ids(
-    connection: &Connection,
-    table: &str,
-    id_column: &str,
-    root_id: u32,
-) -> Result<Vec<u32>> {
-    let sql = format!(
-        "WITH RECURSIVE descendants(id) AS (
-             SELECT ?1
-             UNION ALL
-             SELECT child.{id_column}
-             FROM {table} child
-             JOIN descendants parent ON child.parent_id = parent.id
-         )
-         SELECT id FROM descendants"
-    );
-    let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map([root_id], |row| row.get::<_, u32>(0))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
 }
 
 fn media_match_roots(
@@ -1022,259 +1249,38 @@ fn media_match_roots(
     Ok(roots)
 }
 
-/// Below this many matches, fetch sort keys for just the matching roots and
-/// order them in memory instead of scanning the table in sort order. A scan
-/// reads roughly `total / matches` rows per emitted item, which for a sparse
-/// match set dwarfs the point lookups this path performs. The branch choice is
-/// stable across the pages of one query because the match count is.
-const SPARSE_SCAN_MAXIMUM: u64 = 2048;
-
-fn sparse_scan_integer(
-    connection: &Connection,
-    expression: &str,
+fn page_name(
+    index: &crate::name_index::NameIndex,
     matches: &RoaringBitmap,
-    sort: &ItemSort,
-    limit: usize,
-    cursor: Option<(i64, u32)>,
-) -> Result<(Vec<RootId>, Option<String>)> {
-    let ids = matches.iter().collect::<Vec<_>>();
-    let mut entries = Vec::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT root.root_id, {expression} AS sort_value
-             FROM library_root root
-             WHERE root.root_id IN ({placeholders})"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(chunk), |row| {
-            Ok((row.get::<_, i64>(1)?, row.get::<_, u32>(0)?))
-        })?;
-        for row in rows {
-            entries.push(row?);
-        }
-    }
-    entries.sort_unstable();
-    if sort.direction == SortDirection::Descending {
-        entries.reverse();
-    }
-    let mut output = Vec::with_capacity(limit);
-    let mut last = None;
-    for (value, root_id) in entries {
-        if let Some(cursor) = cursor {
-            let after = match sort.direction {
-                SortDirection::Ascending => (value, root_id) > cursor,
-                SortDirection::Descending => (value, root_id) < cursor,
-            };
-            if !after {
-                continue;
-            }
-        }
-        if output.len() == limit {
-            break;
-        }
-        output.push(RootId(root_id));
-        last = Some((value, root_id));
-    }
-    let next = (output.len() == limit)
-        .then(|| {
-            last.map(|(value, root_id)| serde_json::to_string(&Cursor::Integer { value, root_id }))
-        })
-        .flatten()
-        .transpose()?;
-    Ok((output, next))
-}
-
-fn scan_integer(
-    connection: &Connection,
-    expression: &str,
-    matches: &RoaringBitmap,
-    sparse: bool,
     sort: &ItemSort,
     limit: usize,
     cursor: Option<Cursor>,
 ) -> Result<(Vec<RootId>, Option<String>)> {
-    let direction = direction_sql(sort.direction);
-    let mut scan_cursor = match cursor {
-        Some(Cursor::Integer { value, root_id }) => Some((value, root_id)),
-        None => None,
+    let descending = sort.direction == SortDirection::Descending;
+    let start = match cursor {
+        Some(Cursor::Text { value, root_id }) => index.after(matches, &value, root_id, descending),
+        None => 0,
         _ => {
             return Err(LibraryError::InvalidInput(
                 "cursor does not match sort".into(),
             ))
         }
     };
-    if sparse {
-        return sparse_scan_integer(connection, expression, matches, sort, limit, scan_cursor);
-    }
-    let mut output = Vec::with_capacity(limit);
-    loop {
-        let (where_sql, mut values) = integer_cursor_sql(expression, direction, scan_cursor);
-        values.push(Value::Integer(SCAN_CHUNK as i64));
-        let sql = format!(
-            "SELECT root.root_id, {expression} AS sort_value
-             FROM library_root root
-             {where_sql}
-             ORDER BY {expression} {direction}, root.root_id {direction}
-             LIMIT ?{}",
-            values.len()
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement
-            .query_map(params_from_iter(values), |row| {
-                Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        if rows.is_empty() {
-            return Ok((output, None));
-        }
-        let row_count = rows.len();
-        for (root_id, value) in rows {
-            scan_cursor = Some((value, root_id));
-            if matches.contains(root_id) {
-                output.push(RootId(root_id));
-                if output.len() == limit {
-                    return Ok((
-                        output,
-                        Some(serde_json::to_string(&Cursor::Integer { value, root_id })?),
-                    ));
-                }
-            }
-        }
-        if row_count < SCAN_CHUNK {
-            return Ok((output, None));
-        }
-    }
-}
-
-/// Mirrors SQLite's NOCASE collation, which folds only ASCII upper case
-/// before a byte-wise comparison.
-fn nocase_key(value: &str) -> Vec<u8> {
-    value
-        .bytes()
-        .map(|byte| byte.to_ascii_lowercase())
-        .collect()
-}
-
-fn sparse_scan_text(
-    connection: &Connection,
-    matches: &RoaringBitmap,
-    sort: &ItemSort,
-    limit: usize,
-    cursor: Option<(String, u32)>,
-) -> Result<(Vec<RootId>, Option<String>)> {
-    let ids = matches.iter().collect::<Vec<_>>();
-    let mut entries = Vec::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT root.root_id, root.name
-             FROM library_root root
-             WHERE root.root_id IN ({placeholders})"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(chunk), |row| {
-            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (root_id, name) = row?;
-            entries.push((nocase_key(&name), root_id, name));
-        }
-    }
-    entries.sort_unstable_by(|left, right| (&left.0, left.1).cmp(&(&right.0, right.1)));
-    if sort.direction == SortDirection::Descending {
-        entries.reverse();
-    }
-    let cursor = cursor.map(|(value, root_id)| (nocase_key(&value), root_id));
-    let mut output = Vec::with_capacity(limit);
-    let mut last = None;
-    for (key, root_id, name) in entries {
-        if let Some((cursor_key, cursor_root)) = &cursor {
-            let after = match sort.direction {
-                SortDirection::Ascending => (&key, root_id) > (cursor_key, *cursor_root),
-                SortDirection::Descending => (&key, root_id) < (cursor_key, *cursor_root),
-            };
-            if !after {
-                continue;
-            }
-        }
-        if output.len() == limit {
-            break;
-        }
-        output.push(RootId(root_id));
-        last = Some((name, root_id));
-    }
-    let next = (output.len() == limit)
-        .then(|| {
-            last.map(|(value, root_id)| serde_json::to_string(&Cursor::Text { value, root_id }))
-        })
-        .flatten()
-        .transpose()?;
-    Ok((output, next))
-}
-
-fn scan_text(
-    connection: &Connection,
-    matches: &RoaringBitmap,
-    sparse: bool,
-    sort: &ItemSort,
-    limit: usize,
-    cursor: Option<Cursor>,
-) -> Result<(Vec<RootId>, Option<String>)> {
-    let direction = direction_sql(sort.direction);
-    let mut scan_cursor = match cursor {
-        Some(Cursor::Text { value, root_id }) => Some((value, root_id)),
-        None => None,
-        _ => {
-            return Err(LibraryError::InvalidInput(
-                "cursor does not match sort".into(),
-            ))
-        }
+    let ids = index.window(matches, start, limit, descending)?;
+    let next = if ids.len() == limit {
+        ids.last()
+            .map(|&root_id| {
+                let value = index
+                    .name(root_id)
+                    .expect("name index returned its own root")
+                    .to_owned();
+                serde_json::to_string(&Cursor::Text { value, root_id })
+            })
+            .transpose()?
+    } else {
+        None
     };
-    if sparse {
-        return sparse_scan_text(connection, matches, sort, limit, scan_cursor);
-    }
-    let mut output = Vec::with_capacity(limit);
-    loop {
-        let (where_sql, mut values) = text_cursor_sql(direction, scan_cursor.as_ref());
-        values.push(Value::Integer(SCAN_CHUNK as i64));
-        let sql = format!(
-            "SELECT root.root_id, root.name
-             FROM library_root root {where_sql}
-             ORDER BY root.name COLLATE NOCASE {direction}, root.root_id {direction}
-             LIMIT ?{}",
-            values.len()
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement
-            .query_map(params_from_iter(values), |row| {
-                Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        if rows.is_empty() {
-            return Ok((output, None));
-        }
-        let row_count = rows.len();
-        for (root_id, value) in rows {
-            scan_cursor = Some((value.clone(), root_id));
-            if matches.contains(root_id) {
-                output.push(RootId(root_id));
-                if output.len() == limit {
-                    return Ok((
-                        output,
-                        Some(serde_json::to_string(&Cursor::Text { value, root_id })?),
-                    ));
-                }
-            }
-        }
-        if row_count < SCAN_CHUNK {
-            return Ok((output, None));
-        }
-    }
+    Ok((ids.into_iter().map(RootId).collect(), next))
 }
 
 fn page_rating(
@@ -1457,80 +1463,13 @@ fn page_folder_order(
     Ok((output, next))
 }
 
-fn page_recent_order(
-    connection: &Connection,
-    matches: &RoaringBitmap,
-    limit: usize,
-    cursor: Option<Cursor>,
-) -> Result<(Vec<RootId>, Option<String>)> {
-    let mut scan_cursor = match cursor {
-        Some(Cursor::Integer { value, root_id }) => Some((value, root_id)),
-        None => None,
-        _ => {
-            return Err(LibraryError::InvalidInput(
-                "cursor does not match recently viewed order".into(),
-            ))
-        }
-    };
-    let mut output = Vec::with_capacity(limit);
-    loop {
-        let rows = if let Some((viewed_at_ms, root_id)) = scan_cursor {
-            let mut statement = connection.prepare_cached(
-                "SELECT root_id, viewed_at_ms FROM recent_view
-                 WHERE (viewed_at_ms, root_id) < (?1, ?2)
-                 ORDER BY viewed_at_ms DESC, root_id DESC LIMIT ?3",
-            )?;
-            let values = statement
-                .query_map(
-                    rusqlite::params![viewed_at_ms, root_id, SCAN_CHUNK as i64],
-                    |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)),
-                )?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            values
-        } else {
-            let mut statement = connection.prepare_cached(
-                "SELECT root_id, viewed_at_ms FROM recent_view
-                 ORDER BY viewed_at_ms DESC, root_id DESC LIMIT ?1",
-            )?;
-            let values = statement
-                .query_map([SCAN_CHUNK as i64], |row| {
-                    Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            values
-        };
-        if rows.is_empty() {
-            return Ok((output, None));
-        }
-        for (root_id, viewed_at_ms) in &rows {
-            scan_cursor = Some((*viewed_at_ms, *root_id));
-            if matches.contains(*root_id) {
-                output.push(RootId(*root_id));
-                if output.len() == limit {
-                    return Ok((
-                        output,
-                        Some(serde_json::to_string(&Cursor::Integer {
-                            value: *viewed_at_ms,
-                            root_id: *root_id,
-                        })?),
-                    ));
-                }
-            }
-        }
-        if rows.len() < SCAN_CHUNK {
-            return Ok((output, None));
-        }
-    }
-}
-
 fn measured_summaries(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     ids: &[RootId],
     cache: Option<&MatchCache>,
 ) -> Result<Vec<RootSummary>> {
     let started = Instant::now();
-    let result = load_summaries(connection, snapshot, ids);
+    let result = load_summaries(snapshot, ids);
     if let Some(cache) = cache {
         cache
             .metrics
@@ -1544,75 +1483,48 @@ fn measured_summaries(
     result
 }
 
-fn load_summaries(
-    connection: &Connection,
-    snapshot: &ProjectionSnapshot,
-    ids: &[RootId],
-) -> Result<Vec<RootSummary>> {
-    let mut by_id = HashMap::with_capacity(ids.len());
-    for chunk in ids.chunks(500) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT root.root_id, root.name, root.cover_media_id,
-                file.content_hash, file.mime, file.width, file.height, file.duration_ms,
-                file.frame_count, root.imported_at_ms,
-                root.captured_at_ms, root.modified_at_ms, root.media_count,
-                root.total_size_bytes
-         FROM library_root root
-         JOIN media_item media ON media.media_id = root.cover_media_id
-         JOIN media_file file ON file.file_id = media.file_id
-         WHERE root.root_id IN ({placeholders})"
-        );
-        let mut statement = connection.prepare_cached(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(chunk.iter().map(|root_id| root_id.0)),
-            |row| {
-                let id = row.get::<_, u32>(0)?;
-                Ok(RootSummary {
-                    root_id: RootId(id),
-                    kind: if snapshot
-                        .root_kinds
-                        .get(&RootKind::Collection)
-                        .is_some_and(|roots| roots.contains(id))
-                    {
-                        RootKind::Collection
-                    } else {
-                        RootKind::Media
-                    },
-                    lifecycle: lifecycle_for(snapshot, id),
-                    name: row.get(1)?,
-                    cover_media_id: crate::MediaId(row.get(2)?),
-                    content_hash: row.get(3)?,
-                    mime: row.get(4)?,
-                    width: row.get(5)?,
-                    height: row.get(6)?,
-                    duration_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
-                    frame_count: row.get(8)?,
-                    palette: snapshot
-                        .cover_palettes
-                        .get(id)
-                        .map(|palette| palette.as_ref().clone())
-                        .unwrap_or_default(),
-                    imported_at_ms: row.get(9)?,
-                    captured_at_ms: row.get(10)?,
-                    modified_at_ms: row.get(11)?,
-                    media_count: row.get(12)?,
-                    total_size_bytes: row.get::<_, i64>(13)? as u64,
-                    rating: rating_for(snapshot, id),
-                })
-            },
-        )?;
-        for row in rows {
-            let summary = row?;
-            by_id.insert(summary.root_id, summary);
-        }
-    }
+/// Grid summaries hydrated from the captured snapshot alone: drawing facts
+/// from the resident records, names from the alphabetical index, kind,
+/// lifecycle, rating and palette from the bitmaps and palette map.
+fn load_summaries(snapshot: &ProjectionSnapshot, ids: &[RootId]) -> Result<Vec<RootSummary>> {
+    let collections = snapshot.root_kinds.get(&RootKind::Collection);
     ids.iter()
-        .map(|root_id| {
-            by_id.remove(root_id).ok_or_else(|| {
-                LibraryError::InvalidState(format!("missing root summary {root_id}"))
+        .enumerate()
+        .map(|(index, root_id)| {
+            if index % 256 == 0 {
+                crate::query_request::check()?;
+            }
+            let id = root_id.0;
+            let missing = || LibraryError::InvalidState(format!("missing root summary {root_id}"));
+            let record = snapshot.drawing.record(id).ok_or_else(missing)?;
+            let name = snapshot.name_index.name(id).ok_or_else(missing)?;
+            Ok(RootSummary {
+                root_id: *root_id,
+                kind: if collections.is_some_and(|roots| roots.contains(id)) {
+                    RootKind::Collection
+                } else {
+                    RootKind::Media
+                },
+                lifecycle: lifecycle_for(snapshot, id),
+                name: name.into(),
+                cover_media_id: crate::MediaId(record.row.cover),
+                content_hash: record.content_hash.into(),
+                mime: record.mime.into(),
+                width: record.row.width,
+                height: record.row.height,
+                duration_ms: record.row.duration.map(|value| value as u64),
+                frame_count: record.row.frames,
+                palette: snapshot
+                    .cover_palettes
+                    .get(id)
+                    .map(|palette| palette.as_ref().clone())
+                    .unwrap_or_default(),
+                imported_at_ms: record.row.imported,
+                captured_at_ms: record.row.captured,
+                modified_at_ms: record.row.modified,
+                media_count: record.row.count,
+                total_size_bytes: record.row.bytes,
+                rating: rating_for(snapshot, id),
             })
         })
         .collect()
@@ -1632,47 +1544,6 @@ fn lifecycle_for(snapshot: &ProjectionSnapshot, root_id: u32) -> Lifecycle {
         .unwrap_or(Lifecycle::Active)
 }
 
-fn text_cursor_sql(direction: &str, cursor: Option<&(String, u32)>) -> (String, Vec<Value>) {
-    // Keep the indexed columns bare and apply NOCASE to the bound. Putting
-    // COLLATE on the column inside the tuple prevents SQLite's range seek.
-    cursor.map_or_else(
-        || (String::new(), Vec::new()),
-        |(value, root_id)| {
-            let comparison = if direction == "ASC" { ">" } else { "<" };
-            (
-                format!("WHERE (root.name, root.root_id) {comparison} (?1 COLLATE NOCASE, ?2)"),
-                vec![Value::Text(value.clone()), Value::Integer(*root_id as i64)],
-            )
-        },
-    )
-}
-
-fn integer_cursor_sql(
-    expression: &str,
-    direction: &str,
-    cursor: Option<(i64, u32)>,
-) -> (String, Vec<Value>) {
-    cursor.map_or_else(
-        || (String::new(), Vec::new()),
-        |(value, root_id)| {
-            let comparison = if direction == "ASC" { ">" } else { "<" };
-            // A lexicographic bound lets SQLite seek past the cursor instead
-            // of rescanning the index prefix for every candidate chunk.
-            (
-                format!("WHERE ({expression}, root.root_id) {comparison} (?1, ?2)"),
-                vec![Value::Integer(value), Value::Integer(root_id as i64)],
-            )
-        },
-    )
-}
-
-fn direction_sql(direction: SortDirection) -> &'static str {
-    match direction {
-        SortDirection::Ascending => "ASC",
-        SortDirection::Descending => "DESC",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1690,8 +1561,6 @@ mod tests {
                 key: QueryKey::test_key(revision),
                 query,
                 ids: vec![RootId(1)],
-                media_count: 1,
-                total_size_bytes: 1,
             })
         };
         cache.insert(entry(2, query.clone()));
@@ -1728,27 +1597,137 @@ mod tests {
             key: QueryKey::test_key(3),
             query: query.clone(),
             ids: vec![RootId(1); 3_000_000],
-            media_count: 0,
-            total_size_bytes: 0,
         }));
         assert_eq!(cache.0.lock().len(), 1);
     }
 
-    #[test]
-    fn dense_cached_orders_match_cursor_scans_with_ties_and_null_dates() {
+    const NAMES: &[&str] = &[
+        "Alpha", "alpha", "ALPHA", "beta-1", "Beta-2", "Gamma", "gamma", "Art", "art", "zeta",
+    ];
+
+    /// Canonical rows with ties, NOCASE-equal names and null captured dates:
+    /// the SQL ORDER BY oracle every resident order is checked against.
+    fn scan_fixture() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE library_root (
+                     root_id INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     imported_at_ms INTEGER NOT NULL,
+                     captured_at_ms INTEGER,
+                     total_size_bytes INTEGER NOT NULL
+                 );
+                 CREATE TABLE recent_view (
+                     root_id INTEGER PRIMARY KEY,
+                     viewed_at_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for root_id in 1u32..=30 {
+            connection
+                .execute(
+                    "INSERT INTO library_root VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        root_id,
+                        NAMES[root_id as usize % NAMES.len()],
+                        100 + (root_id % 7) as i64,
+                        (root_id % 3 != 0).then_some(500 - root_id as i64),
+                        ((root_id * 37) % 11) as i64,
+                    ],
+                )
+                .unwrap();
+        }
+        connection
+    }
+
+    /// A snapshot whose resident indexes mirror the fixture rows exactly.
+    fn resident_snapshot(connection: &Connection) -> ProjectionSnapshot {
         let directory = tempfile::tempdir().unwrap();
         let library = crate::Library::create(directory.path().join("library.sqlite")).unwrap();
-        let snapshot = library.projections().snapshot();
+        let mut snapshot = (*library.projections().snapshot()).clone();
+        let mut statement = connection
+            .prepare("SELECT root_id, imported_at_ms, captured_at_ms, total_size_bytes FROM library_root")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap();
+        for row in rows {
+            let (id, imported, captured, bytes) = row.unwrap();
+            Arc::make_mut(&mut snapshot.imported_at).insert(id, imported);
+            if let Some(captured) = captured {
+                Arc::make_mut(&mut snapshot.captured_at).insert(id, captured);
+            }
+            Arc::make_mut(&mut snapshot.total_bytes).insert(id, bytes as u64);
+        }
+        snapshot.name_index = Arc::new(crate::name_index::NameIndex::load(connection).unwrap());
+        snapshot.recent_views = Arc::new(crate::projection::load_recent_views(connection).unwrap());
+        snapshot
+    }
+
+    fn direction_sql(direction: SortDirection) -> &'static str {
+        match direction {
+            SortDirection::Ascending => "ASC",
+            SortDirection::Descending => "DESC",
+        }
+    }
+
+    fn oracle(connection: &Connection, sql: &str) -> Vec<RootId> {
+        connection
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, u32>(0).map(RootId))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn sort(direction: SortDirection) -> ItemSort {
+        ItemSort {
+            field: SortField::ImportedAt,
+            direction,
+            random_seed: None,
+        }
+    }
+
+    fn walk(
+        mut fetch: impl FnMut(Option<Cursor>) -> (Vec<RootId>, Option<String>),
+    ) -> Vec<(Vec<RootId>, Option<String>)> {
+        let mut pages = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let decoded = cursor
+                .as_deref()
+                .map(|value| serde_json::from_str(value).unwrap());
+            let (ids, next) = fetch(decoded);
+            let done = next.is_none();
+            pages.push((ids, next.clone()));
+            cursor = next;
+            if done {
+                return pages;
+            }
+        }
+    }
+
+    #[test]
+    fn resident_windows_cursor_pages_and_complete_orders_match_sql_with_ties_and_null_dates() {
         let connection = scan_fixture();
         connection
             .execute_batch(
                 "WITH RECURSIVE n(id) AS (SELECT 31 UNION ALL SELECT id+1 FROM n WHERE id<4100)
             INSERT INTO library_root SELECT id, CASE WHEN id%2=0 THEN 'ALpha' ELSE 'alpha' END,
             id%11, CASE WHEN id%3=0 THEN NULL ELSE id%13 END, id%19 FROM n;
-            CREATE TABLE recent_view(root_id INTEGER PRIMARY KEY, viewed_at_ms INTEGER);
             INSERT INTO recent_view SELECT root_id, root_id%9 FROM library_root;",
             )
             .unwrap();
+        let snapshot = resident_snapshot(&connection);
         let matches: RoaringBitmap = (1..=4100).filter(|id| id % 7 != 0).collect();
         for scope in [
             ItemScope::All,
@@ -1780,88 +1759,119 @@ mod tests {
                             ..ViewQuerySpec::default()
                         },
                     };
-                    let (all, _) = ordered_page_ids(
-                        &connection,
-                        &snapshot,
-                        &query,
-                        &matches,
-                        matches.len() as usize + 1,
-                        None,
-                    )
-                    .unwrap();
+                    let expected = if matches!(scope, ItemScope::RecentlyViewed) {
+                        oracle(
+                            &connection,
+                            "SELECT root_id FROM recent_view WHERE root_id % 7 != 0
+                             ORDER BY viewed_at_ms DESC, root_id DESC",
+                        )
+                    } else {
+                        let (expression, direction) = match field {
+                            SortField::ImportedAt => ("imported_at_ms", direction_sql(direction)),
+                            SortField::Name => ("name COLLATE NOCASE", direction_sql(direction)),
+                            SortField::CapturedAt => {
+                                ("COALESCE(captured_at_ms, -1)", direction_sql(direction))
+                            }
+                            SortField::TotalSize => ("total_size_bytes", direction_sql(direction)),
+                            SortField::FolderOrder => ("imported_at_ms", "DESC"),
+                            SortField::Rating | SortField::Random => unreachable!(),
+                        };
+                        oracle(
+                            &connection,
+                            &format!(
+                                "SELECT root_id FROM library_root WHERE root_id % 7 != 0
+                                 ORDER BY {expression} {direction}, root_id {direction}"
+                            ),
+                        )
+                    };
+                    let label = format!("{scope:?} {field:?} {direction:?}");
+                    assert_eq!(
+                        complete_order(&snapshot, &query, &matches).unwrap(),
+                        expected,
+                        "{label}"
+                    );
                     let pages = walk(|cursor| {
-                        ordered_page_ids(&connection, &snapshot, &query, &matches, 137, cursor)
-                            .unwrap()
+                        ordered_page_ids(&snapshot, &query, &matches, 137, cursor, None).unwrap()
                     });
-                    let expected: Vec<_> = pages.into_iter().flat_map(|(ids, _)| ids).collect();
-                    assert_eq!(all, expected, "{scope:?} {field:?} {direction:?}");
+                    let paged: Vec<_> = pages.into_iter().flat_map(|(ids, _)| ids).collect();
+                    assert_eq!(paged, expected, "pages {label}");
+                    let cache = OrderCache::default();
+                    let metrics = QueryMetrics::default();
+                    for (start, limit) in [
+                        (0, 4),
+                        (0, 1500),
+                        (1, 7),
+                        (2000, 137),
+                        (expected.len() - 1, 1500),
+                        (expected.len() - 3000, 1500),
+                    ] {
+                        assert_eq!(
+                            window_ids(&snapshot, &query, &matches, start, limit, &cache, &metrics)
+                                .unwrap(),
+                            expected[start..(start + limit).min(expected.len())],
+                            "window {label} {start} {limit}"
+                        );
+                    }
                 }
             }
         }
+        let empty = RoaringBitmap::new();
+        let query = RootQuery {
+            scope: ItemScope::All,
+            view: ViewQuerySpec::default(),
+        };
+        assert_eq!(
+            ordered_page_ids(&snapshot, &query, &empty, 7, None, None).unwrap(),
+            (Vec::new(), None)
+        );
     }
 
-    const NAMES: &[&str] = &[
-        "Alpha", "alpha", "ALPHA", "beta-1", "Beta-2", "Gamma", "gamma", "Art", "art", "zeta",
-    ];
-
-    fn scan_fixture() -> Connection {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE library_root (
-                     root_id INTEGER PRIMARY KEY,
-                     name TEXT NOT NULL,
-                     imported_at_ms INTEGER NOT NULL,
-                     captured_at_ms INTEGER,
-                     total_size_bytes INTEGER NOT NULL
-                 );
-                 CREATE INDEX idx_probe_imported ON library_root(imported_at_ms, root_id);
-                 CREATE INDEX idx_probe_name ON library_root(name COLLATE NOCASE, root_id);
-                 CREATE INDEX idx_probe_size ON library_root(total_size_bytes, root_id)",
+    #[test]
+    fn folder_tree_scopes_walk_resident_parents_and_tolerate_cycles() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = crate::Library::create(directory.path().join("library.sqlite")).unwrap();
+        let mut snapshot = (*library.projections().snapshot()).clone();
+        let folder = FolderId;
+        snapshot.folder_parents = Arc::new(HashMap::from([
+            (folder(1), None),
+            (folder(2), Some(folder(1))),
+            (folder(3), Some(folder(2))),
+            (folder(4), None),
+            (folder(5), Some(folder(6))),
+            (folder(6), Some(folder(5))),
+        ]));
+        snapshot.folders = Arc::new(
+            (1..=6)
+                .map(|id| (folder(id), [id].into_iter().collect()))
+                .collect(),
+        );
+        Arc::make_mut(&mut snapshot.lifecycle)
+            .insert(Lifecycle::Active, (1..=5).collect::<RoaringBitmap>().into());
+        let tree = |id| {
+            scope_bitmap(
+                &snapshot,
+                &ItemScope::FolderTree {
+                    folder_id: folder(id),
+                },
+                &MediaMatches::default(),
             )
-            .unwrap();
-        for root_id in 1u32..=30 {
-            connection
-                .execute(
-                    "INSERT INTO library_root VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![
-                        root_id,
-                        NAMES[root_id as usize % NAMES.len()],
-                        100 + (root_id % 7) as i64,
-                        (root_id % 3 != 0).then_some(500 - root_id as i64),
-                        ((root_id * 37) % 11) as i64,
-                    ],
-                )
-                .unwrap();
-        }
-        connection
-    }
-
-    fn sort(direction: SortDirection) -> ItemSort {
-        ItemSort {
-            field: SortField::ImportedAt,
-            direction,
-            random_seed: None,
-        }
-    }
-
-    fn walk(
-        mut fetch: impl FnMut(Option<Cursor>) -> (Vec<RootId>, Option<String>),
-    ) -> Vec<(Vec<RootId>, Option<String>)> {
-        let mut pages = Vec::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let decoded = cursor
-                .as_deref()
-                .map(|value| serde_json::from_str(value).unwrap());
-            let (ids, next) = fetch(decoded);
-            let done = next.is_none();
-            pages.push((ids, next.clone()));
-            cursor = next;
-            if done {
-                return pages;
-            }
-        }
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(tree(1), [1, 2, 3]);
+        assert_eq!(tree(2), [2, 3]);
+        assert_eq!(tree(4), [4]);
+        assert_eq!(tree(5), [5]);
+        assert!(tree(99).is_empty());
+        assert!(matches!(
+            scope_bitmap(
+                &snapshot,
+                &ItemScope::MediaMatches { item_id: 1 },
+                &MediaMatches::default()
+            ),
+            Err(LibraryError::InvalidState(_))
+        ));
     }
 
     #[test]
@@ -1930,223 +1940,21 @@ mod tests {
     }
 
     #[test]
-    fn sparse_integer_paging_matches_the_ordered_scan() {
+    fn name_pages_match_sqlite_in_both_directions() {
         let connection = scan_fixture();
-        let matches = [1u32, 4, 5, 9, 12, 13, 17, 18, 21, 26, 30]
-            .into_iter()
-            .collect::<RoaringBitmap>();
-        for expression in [
-            "root.imported_at_ms",
-            "COALESCE(root.captured_at_ms, -1)",
-            "root.total_size_bytes",
-        ] {
-            for direction in [SortDirection::Ascending, SortDirection::Descending] {
-                for limit in [1usize, 3, 4, 11, 20] {
-                    let run = |sparse: bool| {
-                        walk(|cursor| {
-                            scan_integer(
-                                &connection,
-                                expression,
-                                &matches,
-                                sparse,
-                                &sort(direction),
-                                limit,
-                                cursor,
-                            )
-                            .unwrap()
-                        })
-                    };
-                    assert_eq!(
-                        run(true),
-                        run(false),
-                        "expression {expression}, direction {direction:?}, limit {limit}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn sparse_text_paging_matches_the_ordered_scan() {
-        let connection = scan_fixture();
-        let matches = [2u32, 3, 7, 8, 11, 14, 19, 22, 23, 28]
-            .into_iter()
-            .collect::<RoaringBitmap>();
+        let index = crate::name_index::NameIndex::load(&connection).unwrap();
+        let matches = (1..=30).filter(|id| id % 3 != 0).collect::<RoaringBitmap>();
         for direction in [SortDirection::Ascending, SortDirection::Descending] {
-            for limit in [1usize, 3, 4, 10, 20] {
-                let run = |sparse: bool| {
-                    walk(|cursor| {
-                        scan_text(
-                            &connection,
-                            &matches,
-                            sparse,
-                            &sort(direction),
-                            limit,
-                            cursor,
-                        )
-                        .unwrap()
-                    })
-                };
-                assert_eq!(
-                    run(true),
-                    run(false),
-                    "direction {direction:?}, limit {limit}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn sparse_paging_handles_empty_and_full_match_sets() {
-        let connection = scan_fixture();
-        let empty = RoaringBitmap::new();
-        let all = (1u32..=30).collect::<RoaringBitmap>();
-        for matches in [&empty, &all] {
-            let run = |sparse: bool| {
-                walk(|cursor| {
-                    scan_integer(
-                        &connection,
-                        "root.imported_at_ms",
-                        matches,
-                        sparse,
-                        &sort(SortDirection::Ascending),
-                        7,
-                        cursor,
-                    )
-                    .unwrap()
+            let sql = format!("SELECT root_id FROM library_root WHERE root_id % 3 != 0 ORDER BY name COLLATE NOCASE {0}, root_id {0}", direction_sql(direction));
+            let expected = oracle(&connection, &sql);
+            for limit in [1, 3, 4, 10, 20] {
+                let actual = walk(|cursor| {
+                    page_name(&index, &matches, &sort(direction), limit, cursor).unwrap()
                 })
-            };
-            assert_eq!(run(true), run(false));
-        }
-    }
-
-    #[test]
-    fn numeric_cursor_seeks_the_index_in_both_directions() {
-        let connection = scan_fixture();
-        for direction in [SortDirection::Ascending, SortDirection::Descending] {
-            for (expression, cursor_value) in
-                [("root.imported_at_ms", 103), ("root.total_size_bytes", 5)]
-            {
-                let direction = direction_sql(direction);
-                let (predicate, mut values) =
-                    integer_cursor_sql(expression, direction, Some((cursor_value, 15)));
-                values.push(Value::Integer(3));
-                let sql = format!("EXPLAIN QUERY PLAN SELECT root.root_id, {expression} FROM library_root root {predicate}
-                    ORDER BY {expression} {direction}, root.root_id {direction} LIMIT ?{}", values.len());
-                let plan = connection
-                    .prepare(&sql)
-                    .unwrap()
-                    .query_map(params_from_iter(values), |row| row.get::<_, String>(3))
-                    .unwrap()
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .unwrap()
-                    .join(" ");
-                assert!(
-                    plan.contains("SEARCH root USING COVERING INDEX"),
-                    "cursor must seek, not rescan: {plan}"
-                );
-                assert!(
-                    !plan.contains("TEMP B-TREE"),
-                    "cursor must preserve indexed order: {plan}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn name_cursor_seeks_the_case_insensitive_index_in_both_directions() {
-        let connection = scan_fixture();
-        for direction in ["ASC", "DESC"] {
-            let (predicate, values) = text_cursor_sql(direction, Some(&("beta-1".into(), 15)));
-            let sql = format!("EXPLAIN QUERY PLAN SELECT root.root_id, root.name FROM library_root root {predicate}
-                ORDER BY root.name COLLATE NOCASE {direction}, root.root_id {direction} LIMIT 3");
-            let plan = connection
-                .prepare(&sql)
-                .unwrap()
-                .query_map(params_from_iter(values), |row| row.get::<_, String>(3))
-                .unwrap()
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .unwrap()
-                .join(" ");
-            assert!(
-                plan.contains("SEARCH root USING COVERING INDEX"),
-                "name cursor must seek: {plan}"
-            );
-            assert!(
-                !plan.contains("TEMP B-TREE"),
-                "name cursor must preserve index order: {plan}"
-            );
-        }
-    }
-
-    #[test]
-    fn recent_paging_preserves_ties_and_filtered_membership() {
-        let connection = scan_fixture();
-        connection.execute_batch("CREATE TABLE recent_view(root_id INTEGER PRIMARY KEY, viewed_at_ms INTEGER NOT NULL);
-            CREATE INDEX idx_recent_viewed ON recent_view(viewed_at_ms DESC, root_id);
-            INSERT INTO recent_view SELECT root_id, imported_at_ms FROM library_root").unwrap();
-        let matches = (1u32..=30)
-            .filter(|id| id % 3 != 0)
-            .collect::<RoaringBitmap>();
-        let expected = connection.prepare("SELECT root_id FROM recent_view WHERE root_id % 3 != 0 ORDER BY viewed_at_ms DESC, root_id DESC")
-            .unwrap().query_map([], |row| row.get::<_, u32>(0).map(RootId)).unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
-        for limit in [1, 3, 7, 20, 30] {
-            let actual =
-                walk(|cursor| page_recent_order(&connection, &matches, limit, cursor).unwrap())
-                    .into_iter()
-                    .flat_map(|(ids, _)| ids)
-                    .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    fn cursor_paging_crosses_rejected_chunks_without_losing_or_repeating_items() {
-        let connection = scan_fixture();
-        connection.execute_batch("WITH RECURSIVE ids(id) AS (VALUES(31) UNION ALL SELECT id + 1 FROM ids WHERE id < 5000)
-            INSERT INTO library_root SELECT id, CASE WHEN id % 2 = 0 THEN 'Alpha' ELSE 'alpha' END,
-            id / 3, CASE WHEN id % 4 = 0 THEN NULL ELSE id / 5 END, id % 100 FROM ids").unwrap();
-        let matches = [10u32, 1023, 1024, 1025, 2030, 4096, 5000]
-            .into_iter()
-            .collect::<RoaringBitmap>();
-        for direction in [SortDirection::Ascending, SortDirection::Descending] {
-            for limit in [1, 3, 7] {
-                for expression in [
-                    "root.imported_at_ms",
-                    "COALESCE(root.captured_at_ms, -1)",
-                    "root.total_size_bytes",
-                ] {
-                    let run = |sparse| {
-                        walk(|cursor| {
-                            scan_integer(
-                                &connection,
-                                expression,
-                                &matches,
-                                sparse,
-                                &sort(direction),
-                                limit,
-                                cursor,
-                            )
-                            .unwrap()
-                        })
-                    };
-                    assert_eq!(run(false), run(true), "{expression} {direction:?} {limit}");
-                }
-                let run = |sparse| {
-                    walk(|cursor| {
-                        scan_text(
-                            &connection,
-                            &matches,
-                            sparse,
-                            &sort(direction),
-                            limit,
-                            cursor,
-                        )
-                        .unwrap()
-                    })
-                };
-                assert_eq!(run(false), run(true), "name {direction:?} {limit}");
+                .into_iter()
+                .flat_map(|(ids, _)| ids)
+                .collect::<Vec<_>>();
+                assert_eq!(actual, expected);
             }
         }
     }

@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::model::{FolderId, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
-use crate::projection::{NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBitmap};
+use crate::projection::{DateIndex, NumericIndex, ProjectionSnapshot, ShardedIdMap, SharedBitmap};
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v10";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v11-signed-dates";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
@@ -33,8 +33,8 @@ struct CheckpointData {
     width: NumericIndex,
     height: NumericIndex,
     duration: NumericIndex,
-    imported_at: NumericIndex,
-    captured_at: NumericIndex,
+    imported_at: DateIndex,
+    captured_at: DateIndex,
     modified_at: NumericIndex,
     notes_present: roaring::RoaringBitmap,
     urls_present: roaring::RoaringBitmap,
@@ -123,6 +123,13 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         .collect::<Result<_>>()?;
     Ok(ProjectionSnapshot {
         revision,
+        // Resident text, names, drawing facts and navigation state are rebuilt
+        // from canonical rows by ProjectionStore::load, never checkpointed.
+        text_index: std::sync::Arc::new(crate::text_index::TextIndex::default()),
+        name_index: std::sync::Arc::new(crate::name_index::NameIndex::default()),
+        drawing: std::sync::Arc::new(crate::browsing::DrawingIndex::default()),
+        recent_views: std::sync::Arc::new(Vec::new()),
+        folder_parents: std::sync::Arc::new(std::collections::HashMap::new()),
         query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: std::sync::Arc::new(data.lifecycle),
         ratings: std::sync::Arc::new(data.ratings),

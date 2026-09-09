@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::bitmap::BitmapKey;
 use crate::model::{FileId, FolderId, MediaId, RootId, RootKind, SmartFolderId};
 use crate::ordering::OrderOwnerKind;
-use crate::projection::ProjectionSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagDefinitionState {
@@ -100,7 +99,40 @@ pub struct StructuralMediaNoteState {
 pub struct StructuralState {
     pub roots: Arc<Vec<StructuralRootState>>,
     pub media_notes: Arc<Vec<StructuralMediaNoteState>>,
-    pub projection: Arc<ProjectionSnapshot>,
+    pub memberships: HashMap<BitmapKey, RoaringBitmap>,
+    pub folders: BTreeMap<FolderId, Vec<StructuralFolderPosition>>,
+    pub collections: BTreeMap<RootId, Vec<MediaId>>,
+}
+
+/// Only affected members are retained, anchored to their original neighbours.
+/// Later imports into the same folder are not replaced when structure is undone.
+#[derive(Debug, Clone)]
+pub struct StructuralFolderPosition {
+    pub root_id: RootId,
+    pub previous: Option<RootId>,
+    pub next_unaffected: Option<RootId>,
+    pub ordinal: usize,
+}
+
+impl StructuralState {
+    fn membership_bytes(&self) -> usize {
+        self.memberships
+            .values()
+            .map(|ids| ids.serialized_size() + 32)
+            .sum::<usize>()
+            + self
+                .folders
+                .values()
+                .map(|positions| {
+                    positions.capacity() * std::mem::size_of::<StructuralFolderPosition>() + 32
+                })
+                .sum::<usize>()
+            + self
+                .collections
+                .values()
+                .map(|ids| ids.capacity() * std::mem::size_of::<MediaId>() + 32)
+                .sum::<usize>()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -311,8 +343,8 @@ impl SemanticChange {
                 roots
                     + media_notes
                     + affected.serialized_size()
-                    + before.projection.estimated_bytes()
-                    + after.projection.estimated_bytes()
+                    + before.membership_bytes()
+                    + after.membership_bytes()
             }
             Self::DuplicateResolution(state) => state.estimated_bytes(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),

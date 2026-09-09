@@ -22,8 +22,29 @@ export function queryItems(query: EntityViewQuery, page: QueryPage): Promise<Ent
 
 export interface QueryRequest { channel: string; generation: number }
 
-export function queryItemWindow(query: EntityViewQuery, window: { start: number; limit: number }, request?: QueryRequest): Promise<EntityViewPage & { start: number }> {
-  return invoke('items.window', { query, window, request });
+export type WindowPosition = { kind: 'ordinal'; value: number } | { kind: 'fraction'; value: number };
+export interface ItemWindowRequest { position: WindowPosition; limit: number }
+export interface EntityViewWindow extends EntityViewPage {
+  start: number;
+  head_items: EntityViewPage['items'];
+}
+
+export async function queryItemWindow(query: EntityViewQuery, window: ItemWindowRequest, request?: QueryRequest, timeoutMs = 10_000): Promise<EntityViewWindow> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      invoke<EntityViewWindow>('items.window', { query, window, request }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          if (request) void supersedeItemWindow({ ...request, generation: request.generation + 1 })
+            .catch(error => console.warn('Could not cancel timed-out grid query', error));
+          reject(new Error('The library view took too long to load. Please retry.'));
+        }, Math.max(0, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timer != null) clearTimeout(timer);
+  }
 }
 
 export function supersedeItemWindow(request: QueryRequest): Promise<void> {

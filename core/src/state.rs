@@ -5,10 +5,12 @@
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
+use picto_library::OpenCancellation;
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -16,6 +18,74 @@ use crate::library_application::LibraryApplication;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 type WorkerHandle = (&'static str, tokio::task::JoinHandle<()>);
+
+/// The error message of an open that was cancelled by a later open, a close
+/// or process shutdown. The shell matches it literally.
+pub const OPEN_CANCELLED_MESSAGE: &str = "Library open was cancelled";
+
+/// What the in-flight open is doing, as the shell shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum OpenStage {
+    Opening = 0,
+    Migrating = 1,
+    Loading = 2,
+    Starting = 3,
+}
+
+impl OpenStage {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Migrating,
+            2 => Self::Loading,
+            3 => Self::Starting,
+            _ => Self::Opening,
+        }
+    }
+}
+
+/// The one open in flight, if any. A later open, a close or shutdown cancels
+/// it; `library.open_status` reads it without waiting for the open.
+struct OpeningLibrary {
+    root: PathBuf,
+    cancel: OpenCancellation,
+    stage: Arc<AtomicU8>,
+}
+
+static OPENING: OnceLock<parking_lot::Mutex<Option<OpeningLibrary>>> = OnceLock::new();
+
+fn opening_lock() -> &'static parking_lot::Mutex<Option<OpeningLibrary>> {
+    OPENING.get_or_init(|| parking_lot::Mutex::new(None))
+}
+
+/// Cancel the open in flight, if any, before queueing behind it.
+fn cancel_in_flight_open() {
+    if let Some(opening) = opening_lock().lock().as_ref() {
+        opening.cancel.cancel();
+    }
+}
+
+/// Clears the in-flight record on every exit from `open_library_inner`.
+struct OpeningGuard;
+
+impl Drop for OpeningGuard {
+    fn drop(&mut self) {
+        *opening_lock().lock() = None;
+    }
+}
+
+#[derive(serde::Serialize)]
+struct OpenStatus {
+    path: String,
+    stage: OpenStage,
+}
+
+fn open_status() -> Option<OpenStatus> {
+    opening_lock().lock().as_ref().map(|opening| OpenStatus {
+        path: opening.root.to_string_lossy().into_owned(),
+        stage: OpenStage::from_u8(opening.stage.load(Ordering::Relaxed)),
+    })
+}
 
 pub struct BackendState {
     application: Arc<LibraryApplication>,
@@ -89,6 +159,7 @@ pub fn init_tracing() {
 }
 
 pub async fn open_library(library_root: PathBuf) -> Result<Arc<BackendState>, String> {
+    cancel_in_flight_open();
     let _lifecycle = lifecycle_lock().lock().await;
     let _invocations = invocation_lock().write().await;
     open_library_inner(library_root, None).await
@@ -98,29 +169,74 @@ pub async fn open_tutorial_library(
     library_root: PathBuf,
     fixture_root: PathBuf,
 ) -> Result<Arc<BackendState>, String> {
+    cancel_in_flight_open();
     let _lifecycle = lifecycle_lock().lock().await;
     let _invocations = invocation_lock().write().await;
     open_library_inner(library_root, Some(fixture_root)).await
 }
 
+/// Open one library. The in-flight record exists from before the previous
+/// library is torn down until the new state is published, so a cancel at
+/// any point is honoured at the next stage boundary; the synchronous open
+/// runs on the blocking pool so the runtime keeps answering status reads.
 async fn open_library_inner(
     library_root: PathBuf,
     tutorial_fixture_root: Option<PathBuf>,
 ) -> Result<Arc<BackendState>, String> {
-    close_library_inner().await?;
-    let database_path = library_root.join("library.sqlite");
-    let application = Arc::new(if database_path.exists() {
-        LibraryApplication::open(&library_root)?
-    } else {
-        LibraryApplication::create(&library_root)?
+    let cancel = OpenCancellation::new();
+    let stage = Arc::new(AtomicU8::new(OpenStage::Opening as u8));
+    *opening_lock().lock() = Some(OpeningLibrary {
+        root: library_root.clone(),
+        cancel: cancel.clone(),
+        stage: Arc::clone(&stage),
     });
+    let _opening = OpeningGuard;
+    let cancelled = || -> Result<(), String> {
+        if cancel.is_cancelled() {
+            Err(OPEN_CANCELLED_MESSAGE.to_string())
+        } else {
+            Ok(())
+        }
+    };
+    close_library_inner().await?;
+    cancelled()?;
+    let database_path = library_root.join("library.sqlite");
+    let opened = {
+        let root = library_root.clone();
+        let handle = cancel.clone();
+        let stage = Arc::clone(&stage);
+        tokio::task::spawn_blocking(move || {
+            if database_path.exists() {
+                let mut progress = |reported: picto_library::OpenStage| {
+                    let value = match reported {
+                        picto_library::OpenStage::Migrating => OpenStage::Migrating,
+                        picto_library::OpenStage::Loading(_) => OpenStage::Loading,
+                        picto_library::OpenStage::Ready => OpenStage::Starting,
+                    };
+                    stage.store(value as u8, Ordering::Relaxed);
+                };
+                LibraryApplication::open_with(&root, &handle, &mut progress)
+            } else {
+                LibraryApplication::create(&root)
+            }
+        })
+        .await
+        .map_err(|error| format!("Library open task failed: {error}"))?
+    };
+    let application = match opened {
+        Ok(application) => Arc::new(application),
+        Err(_) if cancel.is_cancelled() => return Err(OPEN_CANCELLED_MESSAGE.to_string()),
+        Err(error) => return Err(error),
+    };
     if let Err(error) = crate::ai_models::migrate_legacy_storage(application.as_ref()) {
         tracing::warn!(%error, "Could not migrate legacy AI model storage");
     }
-    let cancel = CancellationToken::new();
+    stage.store(OpenStage::Starting as u8, Ordering::Relaxed);
+    cancelled()?;
+    let workers_cancel = CancellationToken::new();
     let state = Arc::new(BackendState {
         application,
-        cancel,
+        cancel: workers_cancel,
         workers: tokio::sync::Mutex::new(Vec::new()),
         read_cache: parking_lot::Mutex::new(LruCache::new(
             NonZeroUsize::new(16).expect("nonzero query cache capacity"),
@@ -136,6 +252,14 @@ async fn open_library_inner(
         crate::library_runtime::start(Arc::clone(&state.application), state.cancel.clone())?
     };
     *state.workers.lock().await = workers;
+    if cancel.is_cancelled() {
+        // Tear the just-started workers down through their own token; no
+        // checkpoint is written for a library that was never published.
+        state.cancel.cancel();
+        let workers = std::mem::take(&mut *state.workers.lock().await);
+        join_workers(workers).await;
+        return Err(OPEN_CANCELLED_MESSAGE.to_string());
+    }
     *state_lock()
         .write()
         .map_err(|_| "Backend state lock poisoned".to_string())? = Some(Arc::clone(&state));
@@ -152,6 +276,10 @@ pub fn get_state() -> Result<Arc<BackendState>, String> {
 }
 
 pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
+    if command == "library.open_status" {
+        // Answered from the in-flight record without waiting for the open.
+        return serde_json::to_string(&open_status()).map_err(|error| error.to_string());
+    }
     if command == "cloud.providers.detect" {
         return serde_json::to_string(&crate::cloud::provider::detect_roots())
             .map_err(|error| error.to_string());
@@ -348,6 +476,11 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
         return Err(error);
     }
     if let Err(error) = open_library_inner(library_root.clone(), None).await {
+        if error == OPEN_CANCELLED_MESSAGE {
+            // The restored database is valid and activated; a cancelled open
+            // (a later open, close or shutdown) must not undo the restore.
+            return Err(error);
+        }
         rollback_database_activation(
             &database_path,
             &prepared.emergency_copy_path,
@@ -409,6 +542,11 @@ async fn join_cloud_library(args_json: &str) -> Result<String, String> {
         return Err(error);
     }
     if let Err(error) = open_library_inner(target_root.clone(), None).await {
+        if error == OPEN_CANCELLED_MESSAGE {
+            // The joined database is complete and in place; a cancelled open
+            // must not mark it failed or reopen the previous library.
+            return Err(error);
+        }
         let failed = target_root.join(format!("failed-cloud-join-{}.sqlite", uuid::Uuid::new_v4()));
         let _ = std::fs::rename(&database_path, failed);
         if let Some(previous_root) = previous_root {
@@ -667,6 +805,7 @@ fn summarize_item_ids(item_ids: &[picto_library::RootId]) -> Value {
 }
 
 pub async fn close_library() -> Result<(), String> {
+    cancel_in_flight_open();
     let _lifecycle = lifecycle_lock().lock().await;
     let _invocations = invocation_lock().write().await;
     close_library_inner().await
@@ -715,6 +854,35 @@ async fn join_workers(workers: Vec<WorkerHandle>) {
 #[cfg(test)]
 mod tests {
     use super::{initialize_joined_database, QUEUE_CLOUD_MEDIA_RECOVERY_SQL};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_close_racing_an_open_leaves_nothing_open_and_no_in_flight_record() {
+        assert_eq!(
+            super::invoke("library.open_status", "{}").await.unwrap(),
+            "null"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("Racing.library");
+        let opening = tokio::spawn(super::open_library(root.clone()));
+        super::close_library().await.unwrap();
+        // Either the open finished first and the close closed it, or the
+        // close cancelled it; both leave the same observable state.
+        match opening.await.unwrap() {
+            Ok(_) => {}
+            Err(error) => assert_eq!(error, super::OPEN_CANCELLED_MESSAGE),
+        }
+        super::close_library().await.unwrap();
+        assert!(super::get_state().is_err());
+        assert_eq!(
+            super::invoke("library.open_status", "{}").await.unwrap(),
+            "null"
+        );
+        // The directory is still a valid library afterwards.
+        super::open_library(root).await.unwrap();
+        assert!(super::get_state().is_ok());
+        super::close_library().await.unwrap();
+        assert!(super::get_state().is_err());
+    }
 
     #[test]
     fn cloud_join_recovery_upsert_is_valid_sqlite() {

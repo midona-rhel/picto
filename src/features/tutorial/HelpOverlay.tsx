@@ -3,11 +3,12 @@ import {
 } from 'react';
 import { IconChevronLeft, IconChevronRight, IconQuestionMark } from '@tabler/icons-react';
 import { WindowCloseButton } from '../../shared/ui/WindowControls';
-import { GUIDED_TOUR_STEPS, type TutorialPlacement } from './tutorialSteps';
+import { GUIDED_TOUR_STEPS, type TutorialAction, type TutorialPlacement } from './tutorialSteps';
 import {
   executeTutorialActions, finishTutorialSession, startTutorialSession, waitForTutorialCondition,
 } from './tutorialRuntime';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { isLibraryOpenCancelled } from '../library/libraryOpenCancellation';
 import styles from './HelpOverlay.module.css';
 import { t } from '../../i18n';
 
@@ -107,39 +108,63 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
     };
   }, [mode]);
 
-  const prepareStep = useCallback(async (nextIndex: number) => {
+  // The host cancelled the tour library (another library was opened in its
+  // place, or the app is quitting): the tour is over, and its steps must not
+  // run against whatever library is open now. The host session is already
+  // gone; finishing only restores the interface state captured at the start.
+  const leaveCancelledTour = useCallback(async (started: boolean) => {
+    if (started) await finishTutorialSession().catch(() => undefined);
+    setMode('closed');
+    setIndex(0);
+  }, []);
+
+  // Moves the tour to `nextIndex`, running `leave` (the actions that undo
+  // the current step when going back) before the next step's own actions.
+  // Every step transition handles the tour library being cancelled here.
+  const prepareStep = useCallback(async (nextIndex: number, leave?: readonly TutorialAction[]) => {
     const next = GUIDED_TOUR_STEPS[nextIndex];
     if (!next) return;
     setBusy(true);
     setError(null);
     try {
+      if (leave) await executeTutorialActions(leave);
       await executeTutorialActions(next.enter);
       await waitForTutorialCondition(next.waitFor);
       setIndex(nextIndex);
       requestAnimationFrame(measure);
     } catch (reason) {
+      if (isLibraryOpenCancelled(reason)) {
+        await leaveCancelledTour(true);
+        return;
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
-  }, [measure]);
+  }, [leaveCancelledTour, measure]);
 
   const start = useCallback(async () => {
     setBusy(true);
     setError(null);
+    let started = false;
     try {
       await startTutorialSession();
+      started = true;
       setMode('tour');
       setIndex(0);
       await executeTutorialActions(GUIDED_TOUR_STEPS[0].enter);
       await waitForTutorialCondition(GUIDED_TOUR_STEPS[0].waitFor);
     } catch (reason) {
+      if (isLibraryOpenCancelled(reason)) {
+        await leaveCancelledTour(started);
+        return;
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
       setMode('launcher');
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [leaveCancelledTour]);
 
   const exit = useCallback(async () => {
     if (closingRef.current) return;
@@ -151,6 +176,12 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
       setMode('closed');
       setIndex(0);
     } catch (reason) {
+      // A cancelled restore still ends the tour; the gate shows what is open.
+      if (isLibraryOpenCancelled(reason)) {
+        setMode('closed');
+        setIndex(0);
+        return;
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       closingRef.current = false;
@@ -160,8 +191,7 @@ export function HelpOverlay({ onPracticeChange }: { onPracticeChange?: (active: 
 
   const previous = async () => {
     if (index === 0 || busy) return;
-    await executeTutorialActions(active.leaveBackward);
-    await prepareStep(index - 1);
+    await prepareStep(index - 1, active.leaveBackward);
   };
   const next = async () => {
     if (busy) return;

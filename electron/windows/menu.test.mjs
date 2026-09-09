@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { createMenuManager } from './menu.mjs';
+import { LIBRARY_OPEN_CANCELLED } from '../libraryOpenCancellation.mjs';
 
 function buildMenuTemplate(platform = 'linux', overrides = {}) {
   let template = null;
@@ -194,4 +195,37 @@ test('keeps selection commands disabled until renderer context makes them valid'
     action: 'set-rating',
     rating: 5,
   });
+});
+
+test('a recent-library switch cancelled by quitting is neither logged nor left unhandled', async () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const failures = [new Error(LIBRARY_OPEN_CANCELLED), new Error('database is locked')];
+  const template = buildMenuTemplate('win32', {
+    getCachedConfig: () => ({ pinnedLibraries: [], libraryHistory: ['/Pictures/A.library'] }),
+    switchLibrary: async () => { throw failures.shift(); },
+  });
+  const recent = template.find((item) => item.label === 'Library').submenu
+    .find((item) => item.label === 'Recent Libraries').submenu;
+  const entry = recent.find((item) => item.label === '/Pictures/A.library');
+
+  await entry.click();
+  expect(error).not.toHaveBeenCalled();
+
+  await entry.click();
+  expect(error).toHaveBeenCalledWith('[menu] could not switch library', {
+    libraryPath: '/Pictures/A.library',
+    message: 'database is locked',
+  });
+});
+
+test('an Open Library… switch cancelled by quitting is neither logged nor left unhandled', async () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const template = buildMenuTemplate('win32', {
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ['/Pictures/B.library'] }) },
+    switchLibrary: async () => { throw new Error(LIBRARY_OPEN_CANCELLED); },
+  });
+  const open = template.find((item) => item.label === 'Library').submenu.find((item) => item.label === 'Open Library…');
+
+  await open.click();
+  expect(error).not.toHaveBeenCalled();
 });

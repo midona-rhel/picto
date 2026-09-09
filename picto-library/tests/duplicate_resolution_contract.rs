@@ -638,9 +638,34 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
             "meaningful-name",
             "meaningful-file",
             "A quiet landscape",
+            color.clone(),
+        ))
+        .unwrap();
+    let (between, _) = library
+        .ingest(&named_import(
+            "between",
+            "between-file",
+            "99 bottles",
             color,
         ))
         .unwrap();
+    let order = || {
+        let mut query = picto_library::query::RootQuery {
+            scope: picto_library::query::ItemScope::All,
+            view: Default::default(),
+        };
+        query.view.sort.field = picto_library::predicate::SortField::Name;
+        query.view.sort.direction = picto_library::predicate::SortDirection::Ascending;
+        library
+            .query_window(&query, &picto_library::query::WindowRequest::at(0, 10))
+            .unwrap()
+            .page
+            .items
+            .into_iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(), vec![weak_root, between, meaningful_root]);
     let weak_file = file_id(&library, weak_root);
     let meaningful_file = file_id(&library, meaningful_root);
     library
@@ -659,6 +684,7 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
         )
         .unwrap();
     assert!(result.receipt.resources.contains(&"library".to_string()));
+    assert_eq!(order(), vec![between, weak_root, meaningful_root]);
     for root_id in [weak_root, meaningful_root] {
         let details = library.details(root_id).unwrap();
         assert_eq!(details.root.name, "A quiet landscape");
@@ -666,6 +692,7 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
     }
 
     library.undo().unwrap().unwrap();
+    assert_eq!(order(), vec![weak_root, between, meaningful_root]);
     assert_eq!(
         library.details(weak_root).unwrap().root.name,
         "938475938475.png"
@@ -676,6 +703,7 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
     );
 
     library.redo().unwrap().unwrap();
+    assert_eq!(order(), vec![between, weak_root, meaningful_root]);
     for root_id in [weak_root, meaningful_root] {
         assert_eq!(
             library.details(root_id).unwrap().root.name,

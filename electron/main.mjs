@@ -91,6 +91,9 @@ function reportPackagedSmoke(event, details = {}) {
 }
 
 function closeNativeLibraryOnce() {
+  // Closing cancels an in-flight open; the host must already know the app is
+  // quitting so that cancellation stays silent instead of re-opening windows.
+  libraryHost.markShuttingDown();
   nativeClosePromise ??= closeLibrary();
   return nativeClosePromise;
 }
@@ -206,6 +209,7 @@ async function verifyPackagedSmokeReleaseNotes() {
 }
 
 function awaitNativeShutdownBeforeQuit(event) {
+  libraryHost.markShuttingDown();
   if (nativeShutdownSettled) return;
   event.preventDefault();
   nativeQuitPromise ??= closeNativeLibraryOnce()
@@ -403,6 +407,9 @@ function drainAssociatedFiles() {
         if (entry.kind === 'library') await libraryHost.switchLibrary(entry.path);
         else enqueuePictoPack(entry.path);
       } catch (error) {
+        // Quitting cancels or refuses the open, and the error it surfaces is
+        // not always the cancellation sentinel; nothing is worth a dialog then.
+        if (libraryHost.isShuttingDown()) continue;
         console.error(`[main] could not open associated ${entry.kind}`, error);
         dialog.showErrorBox(
           entry.kind === 'library' ? 'Could not open Picto Library' : 'Could not open Picto Pack',
@@ -534,7 +541,9 @@ async function bootstrapApplication() {
     ? startupLibrary.path
     : await resolveInitialLibrary(config);
 
-  if (!libraryToOpen && config.lastLibrary) {
+  // No startup dialog once the app is quitting: it would outlive the quit or
+  // block it.
+  if (!libraryToOpen && config.lastLibrary && !libraryHost.isShuttingDown()) {
     const result = await libraryHost.handleMissingLibrary(config.lastLibrary);
     if (result.action === 'relocated') {
       libraryToOpen = result.newPath;
@@ -550,9 +559,12 @@ async function bootstrapApplication() {
       });
     } finally {
       // Construct native materials and the first document with the library's
-      // theme. Still show the app's error state if opening the library fails.
-      const mainWin = windowManager.createWindow('main');
-      setMainWindow(mainWin);
+      // theme. Still show the app's error state if opening the library fails,
+      // unless the app is already quitting (the open was cancelled for that).
+      if (!libraryHost.isShuttingDown()) {
+        const mainWin = windowManager.createWindow('main');
+        setMainWindow(mainWin);
+      }
     }
     reportPackagedSmoke('native-library-initialized');
     console.info('[main] library initialized in native core');
@@ -565,14 +577,14 @@ async function bootstrapApplication() {
   buildAppMenu();
   console.info('[main] app menu built');
 
-  if (!windowManager.getWindow('main')) {
+  if (!libraryHost.isShuttingDown() && !windowManager.getWindow('main')) {
     console.info('[main] creating main window');
     const mainWin = windowManager.createWindow('main');
     setMainWindow(mainWin);
     console.info('[main] main window creation requested');
   }
 
-  if (startupLibrary && libraryToOpen !== startupLibrary.path) {
+  if (startupLibrary && libraryToOpen !== startupLibrary.path && !libraryHost.isShuttingDown()) {
     dialog.showErrorBox('Could not open Picto Library', `The library is missing or invalid:\n${startupLibrary.path}`);
   }
   bootstrapComplete = true;
@@ -617,6 +629,9 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((err) => {
+  // A startup open interrupted by quitting is the expected outcome, not a
+  // failure, whatever error the interruption surfaced as.
+  if (libraryHost.isShuttingDown()) return;
   failPackagedSmoke('bootstrap-failed', { message: err?.message ?? String(err) });
   console.error('[main] app.whenReady failed:', err);
 });

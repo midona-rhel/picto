@@ -11,7 +11,7 @@ const expression = `(${async function () {
     filter: { kind: 'all', value: [] },
     sort: { field: 'imported_at', direction: 'descending', random_seed: null },
   }};
-  const head = (await invoke('items.window', { query: all, window: { start: 0, limit: 4 } })).value;
+  const head = (await invoke('items.window', { query: all, window: { position: { kind: 'ordinal', value: 0 }, limit: 4 } })).value;
   if (head.total !== 1000000) throw new Error('Expected the isolated million-item library');
   for (let i = 0; i < 2; i++) {
     const page = (await invoke('items.query', { query: all, page: { limit: 4, cursor: null } })).value;
@@ -19,24 +19,24 @@ const expression = `(${async function () {
   }
   const samples = [];
   for (const start of [999999, 250000, 0]) {
-    const result = await invoke('items.window', { query: all, window: { start, limit: 1500 } });
+    const result = await invoke('items.window', { query: all, window: { position: { kind: 'ordinal', value: start }, limit: 1500 } });
     if (result.value.items.length !== 1500 || result.value.total !== head.total) throw new Error('Incomplete grid window');
     samples.push({ start: result.value.start, roundTripMs: result.roundTripMs, nativeMs: result.nativeMs });
   }
   const navigation = (await invoke('navigation.get')).value;
   for (const folder of navigation.smart_folders) {
-    const result = await invoke('items.window', { query: { ...all, scope: { kind: 'smart_folder', smart_folder_id: folder.smart_folder_id } }, window: { start: 999999, limit: 50 } });
+    const result = await invoke('items.window', { query: { ...all, scope: { kind: 'smart_folder', smart_folder_id: folder.smart_folder_id } }, window: { position: { kind: 'ordinal', value: 999999 }, limit: 50 } });
     if (result.value.total > 0 && result.value.items.length === 0) throw new Error('Empty smart-folder window');
     samples.push({ smartFolder: folder.name, total: result.value.total, returned: result.value.items.length, roundTripMs: result.roundTripMs });
   }
-  const verified = (await invoke('items.window', { query: all, window: { start: 0, limit: 4 } })).value;
+  const verified = (await invoke('items.window', { query: all, window: { position: { kind: 'ordinal', value: 0 }, limit: 4 } })).value;
   if (JSON.stringify(head.items) !== JSON.stringify(verified.items)) throw new Error('Query head changed after distant reads');
   const channel = crypto.randomUUID();
   const query = { ...all, view: { ...all.view,
     filter: { kind: 'clause', value: { clause: 'imported_at', minimum_ms: 0, maximum_ms: Date.now() + 1000000000000 } },
     sort: { field: 'name', direction: 'ascending', random_seed: null },
   }};
-  const pending = invoke('items.window', { query, window: { start: 999999, limit: 1500 }, request: { channel, generation: 1 } })
+  const pending = invoke('items.window', { query, window: { position: { kind: 'ordinal', value: 999999 }, limit: 1500 }, request: { channel, generation: 1 } })
     .then(() => 'completed', error => String(error));
   await new Promise(resolve => setTimeout(resolve, 5));
   const cancelledAt = performance.now();
@@ -44,7 +44,7 @@ const expression = `(${async function () {
   const outcome = await pending;
   const cancellationMs = performance.now() - cancelledAt;
   if (!outcome.includes('query superseded')) throw new Error('The obsolete query was not interrupted: ' + outcome);
-  const next = await invoke('items.window', { query: all, window: { start: 500000, limit: 500 }, request: { channel, generation: 2 } });
+  const next = await invoke('items.window', { query: all, window: { position: { kind: 'ordinal', value: 500000 }, limit: 500 }, request: { channel, generation: 2 } });
   if (next.value.items.length !== 500) throw new Error('Cancellation affected the next query');
   let decodedThumbnails = 0;
   for (const item of head.items) {

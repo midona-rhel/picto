@@ -62,6 +62,47 @@ describe('guided tour', () => {
     expect(screen.getByRole('button', { name: 'Help and tutorial' })).toBeInTheDocument();
   });
 
+  it('shows the failure and stays in the launcher when the tour library cannot be opened', async () => {
+    runtime.startTutorialSession.mockRejectedValueOnce(new Error('fixture missing'));
+    renderHelp();
+    fireEvent.click(screen.getByRole('button', { name: 'Help and tutorial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start guided tour' }));
+
+    expect(await screen.findByText('fixture missing')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start guided tour' })).toBeEnabled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(runtime.executeTutorialActions).not.toHaveBeenCalled();
+    expect(runtime.finishTutorialSession).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the launcher silently when the tour was superseded or cancelled', async () => {
+    runtime.startTutorialSession.mockRejectedValueOnce(new Error('Library open was cancelled'));
+    renderHelp();
+    fireEvent.click(screen.getByRole('button', { name: 'Help and tutorial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start guided tour' }));
+
+    expect(await screen.findByRole('button', { name: 'Help and tutorial' })).toBeInTheDocument();
+    expect(screen.queryByText('Library open was cancelled')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(runtime.executeTutorialActions).not.toHaveBeenCalled();
+    expect(runtime.finishTutorialSession).not.toHaveBeenCalled();
+  });
+
+  it('leaves the tour when a step finds the tour library cancelled', async () => {
+    renderHelp();
+    fireEvent.click(screen.getByRole('button', { name: 'Help and tutorial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start guided tour' }));
+    await screen.findByRole('dialog');
+    runtime.executeTutorialActions.mockRejectedValueOnce(new Error('Library open was cancelled'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Next/ }));
+
+    await waitFor(() => expect(runtime.finishTutorialSession).toHaveBeenCalledOnce());
+    expect(await screen.findByRole('button', { name: 'Help and tutorial' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('Library open was cancelled')).not.toBeInTheDocument();
+  });
+
   it('prepares each real view before advancing', async () => {
     renderHelp();
     fireEvent.click(screen.getByRole('button', { name: 'Help and tutorial' }));
@@ -70,5 +111,22 @@ describe('guided tour', () => {
     fireEvent.click(screen.getByRole('button', { name: /Next/ }));
     await waitFor(() => expect(runtime.executeTutorialActions).toHaveBeenCalledWith(GUIDED_TOUR_STEPS[1].enter));
     expect(screen.getByRole('dialog')).toHaveTextContent('Your tutorial library');
+  });
+
+  it('leaves the tour when Previous finds the tour library cancelled', async () => {
+    renderHelp();
+    fireEvent.click(screen.getByRole('button', { name: 'Help and tutorial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start guided tour' }));
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Next/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Previous/ })).toBeEnabled());
+    runtime.executeTutorialActions.mockRejectedValueOnce(new Error('Library open was cancelled'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Previous/ }));
+
+    await waitFor(() => expect(runtime.finishTutorialSession).toHaveBeenCalledOnce());
+    expect(await screen.findByRole('button', { name: 'Help and tutorial' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('Library open was cancelled')).not.toBeInTheDocument();
   });
 });

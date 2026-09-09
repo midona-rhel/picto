@@ -10,6 +10,7 @@ export function gridGapForSpacing(spacing: GridSpacing): number {
   return GRID_GAPS[spacing];
 }
 export const GRID_TILE_RADIUS = 4;
+export const GRID_TEXT_ROW_HEIGHT = 20;
 export const GRID_SELECTION_COLOR = '#3297ff';
 export const GRID_SELECTION_INNER_WIDTH = 1;
 export const GRID_SELECTION_OUTER_WIDTH = 2;

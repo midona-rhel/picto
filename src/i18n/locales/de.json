@@ -1466,5 +1466,9 @@
   "Zoom to fit": "Passend zoomen",
   "Keep deleted files": "Gelöschte Dateien behalten",
   "days": "Tage",
-  "Recently deleted cloud files can be restored immediately during this period.": "Kürzlich gelöschte Cloud-Dateien können während dieses Zeitraums sofort wiederhergestellt werden."
+  "Recently deleted cloud files can be restored immediately during this period.": "Kürzlich gelöschte Cloud-Dateien können während dieses Zeitraums sofort wiederhergestellt werden.",
+  "Opening your library": "Ihre Bibliothek wird geöffnet",
+  "Updating your library database": "Ihre Bibliotheksdatenbank wird aktualisiert",
+  "Loading your library": "Ihre Bibliothek wird geladen",
+  "Starting library services": "Bibliotheksdienste werden gestartet"
 }

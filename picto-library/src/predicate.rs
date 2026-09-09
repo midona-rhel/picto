@@ -269,15 +269,22 @@ pub fn evaluate(
     expression: &FilterExpr,
     universe: &RoaringBitmap,
     snapshot: &ProjectionSnapshot,
-    text: &mut impl FnMut(TextField, &str) -> Result<RoaringBitmap>,
+    text: &mut impl FnMut(TextField, &str, &RoaringBitmap) -> Result<RoaringBitmap>,
 ) -> Result<RoaringBitmap> {
+    crate::query_request::check()?;
     if universe.is_empty() {
         return Ok(RoaringBitmap::new());
     }
     match expression {
         FilterExpr::All(children) => {
             let mut result = universe.clone();
-            for child in children {
+            // Conjunctions are commutative. Narrow cheap bitmap predicates first;
+            // text must see that narrowed set, including inside OR/NOT branches.
+            for child in children
+                .iter()
+                .filter(|child| !contains_text(child))
+                .chain(children.iter().filter(|child| contains_text(child)))
+            {
                 result = evaluate(child, &result, snapshot, text)?;
                 if result.is_empty() {
                     break;
@@ -306,7 +313,7 @@ fn evaluate_clause(
     clause: &FilterClause,
     universe: &RoaringBitmap,
     snapshot: &ProjectionSnapshot,
-    text: &mut impl FnMut(TextField, &str) -> Result<RoaringBitmap>,
+    text: &mut impl FnMut(TextField, &str, &RoaringBitmap) -> Result<RoaringBitmap>,
 ) -> Result<RoaringBitmap> {
     let mut result = match clause {
         FilterClause::Tags { tag_ids, mode } => set_match(
@@ -385,8 +392,10 @@ fn evaluate_clause(
         FilterClause::SourceUrlsPresent { present } => {
             presence(universe, &snapshot.urls_present, *present)
         }
-        FilterClause::Color { color, delta_e } => color_matches(snapshot, color, *delta_e),
-        FilterClause::Text { field, query } => text(*field, query)?,
+        FilterClause::Color { color, delta_e } => {
+            color_matches(snapshot, color, *delta_e, universe)?
+        }
+        FilterClause::Text { field, query } => text(*field, query, universe)?,
     };
     result &= universe;
     Ok(result)
@@ -447,10 +456,12 @@ fn color_matches(
     snapshot: &ProjectionSnapshot,
     requested: &LabColor,
     delta_e: f32,
-) -> RoaringBitmap {
+    universe: &RoaringBitmap,
+) -> Result<RoaringBitmap> {
     let cell_radius = 7.0_f32;
     let mut candidates = RoaringBitmap::new();
     for (cell, roots) in snapshot.color_cells.iter() {
+        crate::query_request::check()?;
         let (l, a, b) = cell_center(*cell);
         let distance =
             ((l - requested.l).powi(2) + (a - requested.a).powi(2) + (b - requested.b).powi(2))
@@ -459,28 +470,73 @@ fn color_matches(
             candidates |= roots;
         }
     }
-    candidates
-        .into_iter()
-        .filter(|root_id| {
-            snapshot
-                .cover_palettes
-                .get(*root_id)
-                .is_some_and(|palette| {
-                    palette.iter().any(|color| {
-                        ((color.l - requested.l).powi(2)
-                            + (color.a - requested.a).powi(2)
-                            + (color.b - requested.b).powi(2))
-                        .sqrt()
-                            <= delta_e
-                    })
-                })
-        })
-        .collect()
+    candidates &= universe;
+    let mut result = RoaringBitmap::new();
+    for (index, root_id) in candidates.iter().enumerate() {
+        if index % 64 == 0 {
+            crate::query_request::check()?;
+        }
+        if snapshot.cover_palettes.get(root_id).is_some_and(|palette| {
+            palette.iter().any(|color| {
+                ((color.l - requested.l).powi(2)
+                    + (color.a - requested.a).powi(2)
+                    + (color.b - requested.b).powi(2))
+                .sqrt()
+                    <= delta_e
+            })
+        }) {
+            result.insert(root_id);
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conjunction_narrows_text_candidates_without_changing_or_and_exclusion() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = crate::Library::create(directory.path().join("library.sqlite")).unwrap();
+        let mut snapshot = (*library.projections().snapshot()).clone();
+        for id in 1..=4 {
+            std::sync::Arc::make_mut(&mut snapshot.width).insert(id, id as u64);
+        }
+        let universe: RoaringBitmap = (1..=4).collect();
+        let expression = FilterExpr::All(vec![
+            FilterExpr::Any(vec![
+                FilterExpr::Clause(FilterClause::Text {
+                    field: TextField::Name,
+                    query: "yes".into(),
+                }),
+                FilterExpr::Not(Box::new(FilterExpr::Clause(FilterClause::Text {
+                    field: TextField::Notes,
+                    query: "no".into(),
+                }))),
+            ]),
+            FilterExpr::Clause(FilterClause::Width {
+                minimum: Some(2),
+                maximum: Some(3),
+            }),
+        ]);
+        let narrowed: RoaringBitmap = [2, 3].into_iter().collect();
+        let mut visited = 0;
+        let mut text = |_: TextField, query: &str, candidates: &RoaringBitmap| {
+            assert_eq!(candidates, &narrowed);
+            visited += 1;
+            Ok(if query == "yes" {
+                [2].into_iter().collect()
+            } else {
+                [3].into_iter().collect()
+            })
+        };
+        assert_eq!(
+            evaluate(&expression, &universe, &snapshot, &mut text).unwrap(),
+            [2].into_iter().collect()
+        );
+        assert_eq!(visited, 2);
+    }
 
     #[test]
     fn smart_dependencies_are_derived_from_the_shared_filter_expression() {

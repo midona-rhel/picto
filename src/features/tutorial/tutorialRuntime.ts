@@ -1,5 +1,5 @@
 import { getDefaultStore } from 'jotai';
-import { invoke } from '../../platform/ipc';
+import { invoke, normalizeInvokeError } from '../../platform/ipc';
 import {
   captureNavigationSession, navigateToNode, resetNavigationHistory, restoreNavigationSession,
   type NavigationSessionSnapshot,
@@ -33,6 +33,26 @@ let snapshot: TutorialUiSnapshot | null = null;
 let lastLifecycleItemId: number | null = null;
 const originalCollectionOrder = new Map<number, number[]>();
 
+type TutorialHost = {
+  start(): Promise<{ path: string }>;
+  reset(): Promise<{ path: string }>;
+  finish(): Promise<{ restored: boolean; path?: string }>;
+};
+
+/**
+ * The tour host calls go through the preload bridge directly, whose
+ * rejections carry the `ipcRenderer.invoke` prefix; strip it so that the
+ * host's cancellation sentinel (a superseded or cancelled tour) is
+ * recognizable and every other message reads as the host wrote it.
+ */
+async function tutorialHost<T>(call: (host: TutorialHost) => Promise<T>): Promise<T> {
+  try {
+    return await call((window as any).picto.tutorial);
+  } catch (error) {
+    throw normalizeInvokeError(error);
+  }
+}
+
 function cloneSelection(selection: TutorialUiSnapshot['selection']): TutorialUiSnapshot['selection'] {
   return {
     ...selection,
@@ -56,9 +76,11 @@ export async function startTutorialSession(): Promise<void> {
     scrollTop: document.querySelector<HTMLElement>('[data-grid-scroll-container]')?.scrollTop ?? 0,
     navigation: captureNavigationSession(),
   };
+  // A superseded or cancelled tour rejects here without opening anything;
+  // there is then nothing to finish, and the snapshot is dropped.
   let opened = false;
   try {
-    await (window as any).picto.tutorial.start();
+    await tutorialHost((host) => host.start());
     opened = true;
     store.set(viewerSessionAtom, null);
     store.set(quickLookSessionAtom, null);
@@ -81,7 +103,7 @@ export async function startTutorialSession(): Promise<void> {
 
 export async function finishTutorialSession(): Promise<void> {
   const restore = snapshot;
-  await (window as any).picto.tutorial.finish();
+  await tutorialHost((host) => host.finish());
   snapshot = null;
   if (!restore) return;
   store.set(sidebarCollapsedAtom, restore.sidebarCollapsed);
@@ -183,7 +205,7 @@ async function runTutorialSubscription(): Promise<void> {
 async function setTutorialSubscriptionRuns(count: 0 | 1 | 2): Promise<void> {
   const current = await tutorialSubscriptionRunCount();
   if (current > count || (count === 0 && current !== 0)) {
-    await (window as any).picto.tutorial.reset();
+    await tutorialHost((host) => host.reset());
     originalCollectionOrder.clear();
     lastLifecycleItemId = null;
     store.set(viewerSessionAtom, null);

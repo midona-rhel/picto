@@ -40,3 +40,13 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.picto_node]
 opt-level = 2
+
+# Interactive debug queries exercise these dependencies directly (bitmap
+# membership, ordinal selection and SQLite row reads). Keep dependency hot
+# loops optimized just like image decoding; application debug info is retained.
+[profile.dev.package.roaring]
+opt-level = 3
+[profile.dev.package.rusqlite]
+opt-level = 3
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3

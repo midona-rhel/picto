@@ -20,6 +20,7 @@ export default defineConfig({
       },
     },
     exclude: [
+      '**/artifacts/**',
       '**/node_modules/**',
       '**/dist/**',
       'scripts/subscription-verifier-mcp.test.mjs',

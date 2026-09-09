@@ -23,6 +23,7 @@ use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{ProjectionSnapshot, ProjectionStore};
 use crate::publication::{MutationReceipt, PublicationCoordinator};
 use crate::query::{LibraryCounts, PageRequest, RootPage, RootQuery};
+use crate::query_request::{OpenCancellation, OpenStage};
 use crate::selection::{SelectionSummary, SelectionTarget};
 use crate::smart::SmartFolderRecord;
 use crate::{LibraryDatabase, LibraryError, Result};
@@ -31,6 +32,36 @@ struct PublishedDelta {
     snapshot: ProjectionSnapshot,
     receipt: MutationReceipt,
     history: Option<HistoryEntry>,
+}
+
+/// The one owner of resident derived state. Every publishing transaction
+/// settles here before commit: the dirty-root journal names every root whose
+/// canonical browsing facts changed, and the receipt names the auxiliary
+/// tables that changed. A failed transaction publishes nothing, so the
+/// resident model never drifts from what readers can see.
+impl crate::database::PublicationDelta for PublishedDelta {
+    fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+        let snapshot = &mut self.snapshot;
+        let dirty = Arc::make_mut(&mut snapshot.drawing).settle(transaction)?;
+        if !dirty.is_empty() {
+            Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &dirty)?;
+        }
+        // Receipts carry the renderer's resource names.
+        let changed = |resource: &str| self.receipt.resources.iter().any(|value| value == resource);
+        if changed("recently_viewed")
+            || snapshot
+                .recent_views
+                .iter()
+                .any(|(root_id, _)| dirty.contains(root_id.0))
+        {
+            snapshot.recent_views = Arc::new(crate::projection::load_recent_views(transaction)?);
+        }
+        if changed("folders") {
+            snapshot.folder_parents =
+                Arc::new(crate::projection::load_folder_parents(transaction)?);
+        }
+        Ok(())
+    }
 }
 
 enum TextMutation {
@@ -54,7 +85,28 @@ impl Library {
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_database(LibraryDatabase::open(path)?)
+        Self::open_with(path, &OpenCancellation::default(), &mut |_| {})
+    }
+
+    /// Open under a cancellation handle, reporting each stage in order. The
+    /// handle is checked at every stage boundary and inside the migration and
+    /// resident scans; a cancelled open returns `OpenCancelled` having
+    /// committed nothing. `progress` runs on the opening thread while
+    /// database connections are held, so it must not block.
+    pub fn open_with(
+        path: impl AsRef<Path>,
+        cancellation: &OpenCancellation,
+        progress: &mut dyn FnMut(OpenStage),
+    ) -> Result<Self> {
+        let token = crate::query_request::Cancellation::for_open(cancellation);
+        token.check()?;
+        // Entered on this thread for the synchronous open only; dropped
+        // before the caller regains control.
+        let _execution = token.enter();
+        let database = LibraryDatabase::open_with(path, cancellation, progress)?;
+        let library = Self::from_database_with(database, progress)?;
+        progress(OpenStage::Ready);
+        Ok(library)
     }
 
     /// Merge the legacy explicit `general` namespace into the canonical
@@ -80,7 +132,17 @@ impl Library {
     }
 
     fn from_database(database: LibraryDatabase) -> Result<Self> {
+        Self::from_database_with(database, &mut |_| {})
+    }
+
+    fn from_database_with(
+        database: LibraryDatabase,
+        progress: &mut dyn FnMut(OpenStage),
+    ) -> Result<Self> {
         let database = Arc::new(database);
+        // Checked before, not inside, this bounded housekeeping write so it
+        // stays atomic.
+        crate::query_request::check()?;
         database.maintenance_write(WorkPriority::CorrectnessRecovery, |transaction| {
             transaction.execute(
                 "DELETE FROM view_pref
@@ -94,9 +156,12 @@ impl Library {
                         ))",
                 [],
             )?;
+            // The resident model is rebuilt from canonical rows below, so
+            // journal rows left behind by an earlier session carry nothing.
+            transaction.execute("DELETE FROM browsing_dirty_root", [])?;
             Ok(())
         })?;
-        let projections = Arc::new(ProjectionStore::load(&database)?);
+        let projections = Arc::new(ProjectionStore::load_with(&database, progress)?);
         Ok(Self {
             database,
             projections,
@@ -371,26 +436,58 @@ impl Library {
     }
 
     pub fn query(&self, query: &RootQuery, page: &PageRequest) -> Result<RootPage> {
-        let match_cache = self.match_cache.clone();
-        self.database.read_consistent(
-            WorkPriority::VisibleRead,
-            |revision| self.capture_revision(revision),
-            |connection, snapshot| {
-                crate::query::page_cached(connection, &snapshot, query, page, &match_cache)
-            },
-        )
+        self.scoped(&query.scope, |snapshot, media| {
+            crate::query::page_cached(
+                snapshot,
+                query,
+                page,
+                media,
+                &self.match_cache,
+                &self.order_cache,
+            )
+        })
     }
 
     pub fn mime_facets(&self, query: &RootQuery) -> Result<crate::query::MimeFacets> {
-        self.database.read_consistent(
-            WorkPriority::VisibleRead,
-            |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::query::mime_facets(connection, &snapshot, query),
+        self.scoped(&query.scope, |snapshot, media| {
+            crate::query::mime_facets(snapshot, query, media)
+        })
+    }
+
+    /// Run a query on one captured snapshot. Duplicate inspection is the one
+    /// scope that still reads canonical tables, inside a consistent read that
+    /// captures the matching snapshot; every other query never touches SQLite.
+    fn scoped<T>(
+        &self,
+        scope: &crate::query::ItemScope,
+        run: impl FnOnce(&ProjectionSnapshot, &crate::query::MediaMatches) -> Result<T>,
+    ) -> Result<T> {
+        if crate::query::MediaMatches::required(scope) {
+            return self.database.read_consistent(
+                WorkPriority::VisibleRead,
+                |revision| self.capture_revision(revision),
+                |connection, snapshot| {
+                    let media = crate::query::MediaMatches::resolve(connection, &snapshot, scope)?;
+                    run(&snapshot, &media)
+                },
+            );
+        }
+        run(
+            &self.projections.snapshot(),
+            &crate::query::MediaMatches::default(),
         )
     }
 
     pub fn query_statistics(&self) -> crate::query::QueryStatistics {
         self.match_cache.statistics()
+    }
+
+    /// Retain the open database/projections but discard all browsing result
+    /// caches. Only benchmark binaries expose this operation.
+    #[cfg(feature = "benchmark-internals")]
+    pub fn reset_browsing_caches_for_benchmark(&mut self) {
+        self.match_cache = Arc::new(crate::query::MatchCache::default());
+        self.order_cache = Arc::new(crate::query::OrderCache::default());
     }
 
     pub fn query_window(
@@ -412,37 +509,47 @@ impl Library {
         window: &crate::query::WindowRequest,
         request: Option<&crate::query_request::QueryRequest>,
     ) -> Result<crate::query::RootWindow> {
+        self.prepare_window(query, window, request, Ok)
+    }
+
+    pub fn query_window_json(
+        &self,
+        query: &RootQuery,
+        window: &crate::query::WindowRequest,
+        request: Option<&crate::query_request::QueryRequest>,
+    ) -> Result<String> {
+        self.prepare_window(query, window, request, |result| {
+            crate::query_request::serialize(&result)
+        })
+    }
+
+    fn prepare_window<T>(
+        &self,
+        query: &RootQuery,
+        window: &crate::query::WindowRequest,
+        request: Option<&crate::query_request::QueryRequest>,
+        finish: impl FnOnce(crate::query::RootWindow) -> Result<T>,
+    ) -> Result<T> {
         let cancellation = request
             .map(|request| self.window_requests.begin(request))
-            .transpose()?;
-        if let Some(cancellation) = &cancellation {
+            .transpose()?
+            .unwrap_or_else(crate::query_request::Cancellation::deadline);
+        cancellation.check()?;
+        let _execution = cancellation.enter();
+        let result = self.scoped(&query.scope, |snapshot, media| {
             cancellation.check()?;
-        }
-        self.database.read_consistent(
-            WorkPriority::VisibleRead,
-            |revision| self.capture_revision(revision),
-            |connection, snapshot| {
-                if let Some(cancellation) = &cancellation {
-                    cancellation.check()?;
-                }
-                let _progress = cancellation
-                    .as_ref()
-                    .map(|cancellation| cancellation.install(connection))
-                    .transpose()?;
-                let result = crate::query::window_cached(
-                    connection,
-                    &snapshot,
-                    query,
-                    window,
-                    &self.match_cache,
-                    &self.order_cache,
-                );
-                if let Some(cancellation) = &cancellation {
-                    cancellation.check()?;
-                }
-                result
-            },
-        )
+            let result = crate::query::window_cached(
+                snapshot,
+                query,
+                window,
+                media,
+                &self.match_cache,
+                &self.order_cache,
+            );
+            cancellation.check()?;
+            result
+        })?;
+        finish(result)
     }
 
     pub fn details(&self, root_id: RootId) -> Result<crate::RootDetails> {
@@ -454,11 +561,7 @@ impl Library {
     }
 
     pub fn counts(&self) -> Result<LibraryCounts> {
-        self.database.read_consistent(
-            WorkPriority::VisibleRead,
-            |revision| self.capture_revision(revision),
-            |_, snapshot| Ok(crate::query::counts(&snapshot)),
-        )
+        Ok(crate::query::counts(&self.projections.snapshot()))
     }
 
     pub fn sidebar_counts(&self) -> Result<crate::SidebarCounts> {
@@ -468,12 +571,12 @@ impl Library {
             |connection, snapshot| {
                 let counts = crate::query::counts(&snapshot);
                 let recently_viewed = crate::query::matching_roots(
-                    connection,
                     &snapshot,
                     &crate::query::RootQuery {
                         scope: crate::query::ItemScope::RecentlyViewed,
                         view: Default::default(),
                     },
+                    &crate::query::MediaMatches::default(),
                 )?
                 .len();
                 let duplicates = crate::duplicate::count_visible_candidates(connection, &snapshot)?;
@@ -1643,6 +1746,7 @@ impl Library {
                     return Ok(None);
                 }
                 let mut next = (*snapshot).clone();
+                Arc::make_mut(&mut next.text_index).refresh(transaction, &settled)?;
                 crate::smart::settle_affected_for(
                     transaction,
                     &mut next,
@@ -2519,6 +2623,7 @@ impl Library {
                 drop(root_update);
                 drop(media_update);
                 crate::fts::mark_dirty(transaction, &changed, 1, modified_at_ms)?;
+                Arc::make_mut(&mut next.name_index).refresh(transaction, &changed)?;
                 crate::smart::settle_affected_for(
                     transaction,
                     &mut next,
@@ -6125,6 +6230,8 @@ fn apply_semantic_change(
                     rusqlite::params![replacement.root_id.0, replacement.name],
                 )?;
                 crate::fts::mark_one(transaction, replacement.root_id, revision as i64)?;
+                Arc::make_mut(&mut snapshot.name_index)
+                    .insert(replacement.root_id.0, &replacement.name);
                 Arc::make_mut(&mut snapshot.modified_at).insert(
                     replacement.root_id.0,
                     replacement.modified_at_ms.max(0) as u64,
@@ -6688,14 +6795,7 @@ fn apply_semantic_change(
 }
 
 fn load_recent_views(connection: &rusqlite::Connection) -> Result<Vec<(RootId, i64)>> {
-    let mut statement = connection.prepare(
-        "SELECT root_id, viewed_at_ms FROM recent_view
-         ORDER BY viewed_at_ms DESC, root_id DESC",
-    )?;
-    let values = statement
-        .query_map([], |row| Ok((RootId(row.get(0)?), row.get(1)?)))?
-        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
-    Ok(values)
+    crate::projection::load_recent_views(connection)
 }
 
 fn restore_structure(
@@ -6711,11 +6811,26 @@ fn restore_structure(
             "cannot replay history because collection structure changed".into(),
         ));
     }
-    if load_structural_media_notes(transaction, &expected.projection, affected)?
-        != *expected.media_notes
-    {
+    if load_structural_media_notes(transaction, snapshot, affected)? != *expected.media_notes {
         return Err(LibraryError::InvalidState(
             "cannot replay history because retained media notes changed".into(),
+        ));
+    }
+
+    let current_collections = affected
+        .iter()
+        .filter_map(|id| {
+            snapshot
+                .collection_orders
+                .get(&RootId(id))
+                .map(|members| (RootId(id), members.as_ref().clone()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if structural_memberships(snapshot, affected) != expected.memberships
+        || current_collections != expected.collections
+    {
+        return Err(LibraryError::InvalidState(
+            "cannot replay history because affected memberships changed".into(),
         ));
     }
 
@@ -6787,9 +6902,24 @@ fn restore_structure(
     }
     drop(restore_media_notes);
 
-    restore_structure_bitmaps(transaction, revision, snapshot, &replacement.projection)?;
-    restore_structure_orders(transaction, revision, snapshot, &replacement.projection)?;
-    *snapshot = (*replacement.projection).clone();
+    restore_structure_bitmaps(transaction, revision, snapshot, affected, replacement)?;
+    restore_structure_orders(transaction, revision, snapshot, affected, replacement)?;
+    for media in expected.media_notes.iter() {
+        Arc::make_mut(&mut snapshot.media_owner).remove(media.media_id.0);
+    }
+    for root in replacement
+        .roots
+        .iter()
+        .filter(|root| root.kind == RootKind::Media)
+    {
+        Arc::make_mut(&mut snapshot.media_owner).insert(root.root_id.0, root.root_id);
+    }
+    for (root, members) in &replacement.collections {
+        for media in members {
+            Arc::make_mut(&mut snapshot.media_owner).insert(media.0, *root);
+        }
+    }
+    crate::group::refresh_structural_projections(transaction, snapshot, affected)?;
     snapshot.revision = revision;
     Ok(())
 }
@@ -6797,54 +6927,24 @@ fn restore_structure(
 fn restore_structure_bitmaps(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
-    current: &ProjectionSnapshot,
-    replacement: &ProjectionSnapshot,
+    current: &mut ProjectionSnapshot,
+    affected: &RoaringBitmap,
+    replacement: &StructuralState,
 ) -> Result<()> {
-    for lifecycle in Lifecycle::ALL {
-        if current.lifecycle(lifecycle) != replacement.lifecycle(lifecycle) {
-            bitmap::replace(
-                transaction,
-                revision,
-                BitmapKey {
-                    domain: BitmapDomain::Lifecycle,
-                    key_id: lifecycle.bitmap_key(),
-                },
-                replacement.lifecycle(lifecycle),
-            )?;
-        }
-    }
-    for rating in Rating::ALL {
-        if current.rating(rating) != replacement.rating(rating) {
-            bitmap::replace(
-                transaction,
-                revision,
-                BitmapKey {
-                    domain: BitmapDomain::Rating,
-                    key_id: rating.bitmap_key(),
-                },
-                replacement.rating(rating),
-            )?;
-        }
-    }
-    let tag_ids = current
-        .tags
+    let keys = structural_memberships(current, affected)
         .keys()
-        .chain(replacement.tags.keys())
+        .chain(replacement.memberships.keys())
         .copied()
-        .collect::<BTreeSet<_>>();
-    for tag_id in tag_ids {
-        let before = current.tags.get(&tag_id).map(|values| &**values);
-        let after = replacement.tags.get(&tag_id).map(|values| &**values);
+        .collect::<HashSet<_>>();
+    for key in keys {
+        let before = projection_bitmap(current, key);
+        let mut after = &before - affected;
+        if let Some(ids) = replacement.memberships.get(&key) {
+            after |= ids;
+        }
         if before != after {
-            bitmap::replace(
-                transaction,
-                revision,
-                BitmapKey {
-                    domain: BitmapDomain::Tag,
-                    key_id: tag_id.0,
-                },
-                after.unwrap_or(&RoaringBitmap::new()),
-            )?;
+            bitmap::replace(transaction, revision, key, &after)?;
+            set_projection_bitmap(current, key, after);
         }
     }
     Ok(())
@@ -6853,47 +6953,49 @@ fn restore_structure_bitmaps(
 fn restore_structure_orders(
     transaction: &rusqlite::Transaction<'_>,
     revision: u64,
-    current: &ProjectionSnapshot,
-    replacement: &ProjectionSnapshot,
+    current: &mut ProjectionSnapshot,
+    affected: &RoaringBitmap,
+    replacement: &StructuralState,
 ) -> Result<()> {
     let folders = current
         .folder_orders
-        .keys()
-        .chain(replacement.folder_orders.keys())
-        .copied()
+        .iter()
+        .filter(|(_, ids)| ids.iter().any(|id| affected.contains(id.0)))
+        .map(|(id, _)| *id)
+        .chain(replacement.folders.keys().copied())
         .collect::<BTreeSet<_>>();
     for folder_id in folders {
-        let before = current.folder_orders.get(&folder_id);
-        let after = replacement.folder_orders.get(&folder_id);
-        if before == after {
-            continue;
-        }
-        if let Some(after) = after {
-            ordering::replace(
-                transaction,
-                revision,
-                OrderOwnerKind::Folder,
-                folder_id.0,
-                &after.iter().map(|root| root.0).collect::<Vec<_>>(),
-            )?;
-        } else {
-            ordering::delete(transaction, OrderOwnerKind::Folder, folder_id.0)?;
-        }
+        let retained = current
+            .folder_orders
+            .get(&folder_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter(|id| !affected.contains(id.0))
+            .copied()
+            .collect::<Vec<_>>();
+        let after = merge_structural_folder_positions(
+            &retained,
+            replacement
+                .folders
+                .get(&folder_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        ordering::replace(
+            transaction,
+            revision,
+            OrderOwnerKind::Folder,
+            folder_id.0,
+            &after.iter().map(|root| root.0).collect::<Vec<_>>(),
+        )?;
+        Arc::make_mut(&mut current.folders)
+            .insert(folder_id, after.iter().map(|root| root.0).collect());
+        Arc::make_mut(&mut current.folder_orders).insert(folder_id, Arc::new(after));
     }
 
-    let collections = current
-        .collection_orders
-        .keys()
-        .chain(replacement.collection_orders.keys())
-        .copied()
-        .collect::<BTreeSet<_>>();
-    for root_id in collections {
-        let before = current.collection_orders.get(&root_id);
-        let after = replacement.collection_orders.get(&root_id);
-        if before == after {
-            continue;
-        }
-        if let Some(after) = after {
+    for id in affected {
+        let root_id = RootId(id);
+        if let Some(after) = replacement.collections.get(&root_id) {
             ordering::replace(
                 transaction,
                 revision,
@@ -6901,11 +7003,57 @@ fn restore_structure_orders(
                 root_id.0,
                 &after.iter().map(|media| media.0).collect::<Vec<_>>(),
             )?;
+            Arc::make_mut(&mut current.collection_orders).insert(root_id, Arc::new(after.clone()));
         } else {
             ordering::delete(transaction, OrderOwnerKind::Collection, root_id.0)?;
+            Arc::make_mut(&mut current.collection_orders).remove(&root_id);
         }
     }
     Ok(())
+}
+
+fn merge_structural_folder_positions(
+    retained: &[RootId],
+    positions: &[crate::history::StructuralFolderPosition],
+) -> Vec<RootId> {
+    // Reinsert blocks in one pass rather than repeatedly shifting a large folder.
+    let anchors = retained
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect::<HashMap<_, _>>();
+    let mut restored = HashMap::new();
+    let mut buckets: std::collections::BTreeMap<usize, Vec<RootId>> =
+        std::collections::BTreeMap::new();
+    for position in positions {
+        let slot = position
+            .previous
+            .and_then(|id| {
+                restored
+                    .get(&id)
+                    .copied()
+                    .or_else(|| anchors.get(&id).map(|index| index + 1))
+            })
+            .or_else(|| {
+                position
+                    .next_unaffected
+                    .and_then(|id| anchors.get(&id).copied())
+            })
+            .unwrap_or(position.ordinal.min(retained.len()));
+        buckets.entry(slot).or_default().push(position.root_id);
+        restored.insert(position.root_id, slot);
+    }
+    let mut result = Vec::with_capacity(retained.len() + positions.len());
+    for (index, id) in retained.iter().enumerate() {
+        if let Some(roots) = buckets.remove(&index) {
+            result.extend(roots);
+        }
+        result.push(*id);
+    }
+    if let Some(roots) = buckets.remove(&retained.len()) {
+        result.extend(roots);
+    }
+    result
 }
 
 fn projection_bitmap(snapshot: &ProjectionSnapshot, key: BitmapKey) -> RoaringBitmap {
@@ -7855,6 +8003,27 @@ fn capture_structure(
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,
 ) -> Result<StructuralState> {
+    let mut folders = std::collections::BTreeMap::new();
+    for (folder, order) in snapshot.folder_orders.iter() {
+        let mut next_unaffected = None;
+        let mut positions = Vec::new();
+        for (ordinal, root_id) in order.iter().enumerate().rev() {
+            if affected.contains(root_id.0) {
+                positions.push(crate::history::StructuralFolderPosition {
+                    root_id: *root_id,
+                    previous: ordinal.checked_sub(1).map(|index| order[index]),
+                    next_unaffected,
+                    ordinal,
+                });
+            } else {
+                next_unaffected = Some(*root_id);
+            }
+        }
+        if !positions.is_empty() {
+            positions.reverse();
+            folders.insert(*folder, positions);
+        }
+    }
     Ok(StructuralState {
         roots: Arc::new(load_structural_roots(transaction, affected)?),
         media_notes: Arc::new(load_structural_media_notes(
@@ -7862,8 +8031,60 @@ fn capture_structure(
             snapshot,
             affected,
         )?),
-        projection: Arc::new(snapshot.clone()),
+        memberships: structural_memberships(snapshot, affected),
+        folders,
+        collections: affected
+            .iter()
+            .filter_map(|id| {
+                snapshot
+                    .collection_orders
+                    .get(&RootId(id))
+                    .map(|members| (RootId(id), members.as_ref().clone()))
+            })
+            .collect(),
     })
+}
+
+fn structural_memberships(
+    snapshot: &ProjectionSnapshot,
+    affected: &RoaringBitmap,
+) -> HashMap<BitmapKey, RoaringBitmap> {
+    let entries = snapshot
+        .lifecycle
+        .iter()
+        .map(|(value, ids)| {
+            (
+                BitmapKey {
+                    domain: BitmapDomain::Lifecycle,
+                    key_id: value.bitmap_key(),
+                },
+                ids,
+            )
+        })
+        .chain(snapshot.ratings.iter().map(|(value, ids)| {
+            (
+                BitmapKey {
+                    domain: BitmapDomain::Rating,
+                    key_id: value.bitmap_key(),
+                },
+                ids,
+            )
+        }))
+        .chain(snapshot.tags.iter().map(|(value, ids)| {
+            (
+                BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: value.0,
+                },
+                ids,
+            )
+        }));
+    entries
+        .filter_map(|(key, members)| {
+            let ids = members & affected;
+            (!ids.is_empty()).then_some((key, ids))
+        })
+        .collect()
 }
 
 fn load_structural_media_notes(
@@ -7871,12 +8092,14 @@ fn load_structural_media_notes(
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,
 ) -> Result<Vec<StructuralMediaNoteState>> {
-    let mut media_ids = snapshot
-        .media_owner
-        .iter()
-        .filter_map(|(media_id, owner)| affected.contains(owner.0).then_some(media_id))
-        .collect::<Vec<_>>();
-    media_ids.sort_unstable();
+    let mut media_ids = BTreeSet::new();
+    for id in affected {
+        if let Some(members) = snapshot.collection_orders.get(&RootId(id)) {
+            media_ids.extend(members.iter().map(|media| media.0));
+        } else if snapshot.media_owner.get(id) == Some(&RootId(id)) {
+            media_ids.insert(id);
+        }
+    }
     let mut statement =
         transaction.prepare_cached("SELECT media_notes FROM media_item WHERE media_id = ?1")?;
     media_ids

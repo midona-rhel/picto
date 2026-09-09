@@ -525,7 +525,13 @@ pub(crate) fn resolve(
                     params![winner_file_id.0, loser_file_id.0],
                 )?;
                 let name_changes = duplicate_name_changes(transaction, &snapshot, &pair_media_ids)?;
-                apply_name_changes(transaction, &name_changes, true, decided_at_ms)?;
+                apply_name_changes(
+                    transaction,
+                    &mut snapshot,
+                    &name_changes,
+                    true,
+                    decided_at_ms,
+                )?;
                 transaction.execute(
                     "UPDATE duplicate_pair
                  SET status = ?3, decided_at_ms = ?4, winner_file_id = ?5
@@ -612,6 +618,7 @@ pub(crate) fn replay(
     }
     apply_name_changes(
         transaction,
+        snapshot,
         &state.name_changes,
         use_after,
         state.decided_at_ms,
@@ -713,6 +720,7 @@ fn duplicate_name_changes(
 
 fn apply_name_changes(
     transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
     changes: &[DuplicateNameChange],
     use_after: bool,
     now_ms: i64,
@@ -766,6 +774,12 @@ fn apply_name_changes(
                 "UPDATE library_root SET name = ?2 WHERE root_id = ?1",
                 params![root_id.0, replacement_root],
             )?;
+            Arc::make_mut(&mut snapshot.name_index).insert(
+                root_id.0,
+                replacement_root.as_deref().ok_or_else(|| {
+                    LibraryError::InvalidState("duplicate root name is missing".into())
+                })?,
+            );
         }
         crate::fts::mark_one(transaction, change.root_id, now_ms)?;
     }

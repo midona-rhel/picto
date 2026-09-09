@@ -159,7 +159,6 @@ fn text_search_stays_fast_at_scale() {
         library.ingest_batch(&inputs).unwrap();
     }
     println!("ingest {items} items: {:?}", ingest_started.elapsed());
-
     let settle_started = Instant::now();
     let mut settled = 0usize;
     while library.settle_fts(SETTLE_BATCH).unwrap().is_some() {
@@ -267,7 +266,7 @@ fn text_search_stays_fast_at_scale() {
                             .len();
                         best = best.min(started.elapsed());
                     }
-                    println!("raw fts::search {query:?}: {matched} matches, best of 5: {best:?}");
+                    println!("instr oracle fts::search {query:?}: {matched} matches, best of 5: {best:?}");
                 }
                 Ok(())
             },

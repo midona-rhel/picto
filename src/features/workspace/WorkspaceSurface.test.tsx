@@ -1,4 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { Provider, getDefaultStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../../state/navigation';
@@ -11,9 +12,11 @@ import { resetNavigationHistory, saveScrollPosition } from '../../state/navigati
 vi.mock('../../controllers/gridController', () => ({
   gridController: {
     navigateTo: vi.fn(async () => {}),
-    prepareNavigation: vi.fn(async () => ({ scopeKey: 'test', session: {} })),
+    prepareNavigation: vi.fn(async () => ({ scopeKey: 'test', session: {}, queryVersion: 1 })),
+    prepareIntent: vi.fn(async () => ({ scopeKey: 'test', session: {}, queryVersion: 1 })),
     commitNavigation: vi.fn(),
     deactivate: vi.fn(),
+    cancelPreparation: vi.fn(),
     applyIntent: vi.fn(),
   },
 }));
@@ -38,7 +41,9 @@ describe('workspace surface coordinator', () => {
     vi.useFakeTimers();
     vi.mocked(gridController.navigateTo).mockClear();
     vi.mocked(gridController.prepareNavigation).mockReset();
-    vi.mocked(gridController.prepareNavigation).mockResolvedValue({ scopeKey: 'test', session: {} as never });
+    vi.mocked(gridController.prepareNavigation).mockResolvedValue({ scopeKey: 'test', session: {} as never, queryVersion: 1 });
+    vi.mocked(gridController.prepareIntent).mockReset();
+    vi.mocked(gridController.prepareIntent).mockResolvedValue({ scopeKey: 'test', session: {} as never, queryVersion: 1 });
     vi.mocked(gridController.commitNavigation).mockClear();
   });
   afterEach(() => { vi.useRealTimers(); });
@@ -52,6 +57,14 @@ describe('workspace surface coordinator', () => {
 
     expect(gridController.navigateTo).toHaveBeenCalledOnce();
     expect(gridController.navigateTo).toHaveBeenCalledWith({ kind: 'all' });
+  });
+
+  it('restarts canceled initial preparation during the development remount cycle', () => {
+    const store = getDefaultStore();
+    store.set(activeNodeIdAtom, 'system:active');
+    store.set(displayedSurfaceNodeIdAtom, 'system:active');
+    render(<StrictMode><Provider store={store}><WorkspaceSurface /></Provider></StrictMode>);
+    expect(gridController.navigateTo).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the outgoing surface mounted until the single midpoint commit', async () => {
@@ -123,7 +136,7 @@ describe('workspace surface coordinator', () => {
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true, status: 'idle' });
     let finishLoad: (() => void) | undefined;
     vi.mocked(gridController.prepareNavigation).mockImplementation(
-      () => new Promise((resolve) => { finishLoad = () => resolve({ scopeKey: 'folder:7', session: {} as never }); }),
+      () => new Promise((resolve) => { finishLoad = () => resolve({ scopeKey: 'folder:7', session: {} as never, queryVersion: 1 }); }),
     );
     render(<Provider store={store}><WorkspaceSurface /></Provider>);
 
@@ -173,7 +186,7 @@ describe('workspace surface coordinator', () => {
     let finishLoad: (() => void) | undefined;
     vi.mocked(gridController.prepareNavigation).mockClear();
     vi.mocked(gridController.prepareNavigation).mockImplementation(
-      () => new Promise((resolve) => { finishLoad = () => resolve({ scopeKey: 'folder:7', session: {} as never }); }),
+      () => new Promise((resolve) => { finishLoad = () => resolve({ scopeKey: 'folder:7', session: {} as never, queryVersion: 1 }); }),
     );
 
     await act(async () => store.set(activeNodeIdAtom, 'folder:7'));
@@ -305,5 +318,48 @@ describe('workspace surface coordinator', () => {
 
     expect(screen.getByTestId('grid-screen')).toHaveAttribute('data-scroll-top', '24000');
     expect(store.get(gridTransitionPhaseAtom)).toBe('idle');
+  });
+
+  it('prepares a sort during fade-out and cannot reveal the old grid while that sort is pending', async () => {
+    const store = getDefaultStore();
+    store.set(activeNodeIdAtom, 'system:active');
+    store.set(displayedSurfaceNodeIdAtom, 'system:active');
+    store.set(pendingGridIntentAtom, null);
+    let finish!: () => void;
+    vi.mocked(gridController.prepareIntent).mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ scopeKey: 'system:active', session: {} as never, queryVersion: 2 });
+    }));
+    render(<Provider store={store}><WorkspaceSurface /></Provider>);
+    const intent = { type: 'sort', field: 'name', direction: 'ascending' } as const;
+    await act(async () => store.set(pendingGridIntentAtom, intent));
+    expect(gridController.prepareIntent).toHaveBeenCalledWith(intent);
+    expect(gridController.commitNavigation).not.toHaveBeenCalled();
+    expect(store.get(gridTransitionPhaseAtom)).toBe('fading_out');
+    await act(async () => vi.advanceTimersByTime(170));
+    screen.getByRole('button', { name: 'Commit frame' }).click();
+    await act(async () => vi.advanceTimersByTime(32));
+    expect(store.get(gridTransitionPhaseAtom)).toBe('waiting');
+    await act(async () => finish());
+    expect(gridController.commitNavigation).toHaveBeenCalledOnce();
+    screen.getByRole('button', { name: 'Commit frame' }).click();
+    await act(async () => vi.advanceTimersByTime(16));
+    expect(store.get(gridTransitionPhaseAtom)).toBe('fading_in');
+  });
+
+  it('hands history progress to prefetch before the fade midpoint', async () => {
+    const store = getDefaultStore();
+    store.set(activeNodeIdAtom, 'system:active');
+    store.set(displayedSurfaceNodeIdAtom, 'system:active');
+    render(<Provider store={store}><WorkspaceSurface /></Provider>);
+    await act(async () => {
+      resetNavigationHistory('folder:7');
+      saveScrollPosition('folder:7', { scrollTop: 7_999_000, progress: 1 });
+      store.set(pendingGridNavigationAtom, { nodeId: 'folder:7', filters: store.get(gridSessionAtom).filters, restoreScroll: true });
+      store.set(activeNodeIdAtom, 'folder:7');
+    });
+    expect(gridController.prepareNavigation).toHaveBeenCalledWith(
+      { kind: 'folder', folder_id: 7 }, expect.objectContaining({ restoreProgress: 1 }),
+    );
+    expect(store.get(gridTransitionPhaseAtom)).toBe('fading_out');
   });
 });

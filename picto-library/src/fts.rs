@@ -1,3 +1,7 @@
+/// Canonical settled-text table maintenance and the exact SQLite substring
+/// oracle the resident text index is verified against. Interactive matching
+/// runs on the resident [`crate::text_index::TextIndex`]; nothing here serves
+/// a browsing window.
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection, Transaction};
 
@@ -15,39 +19,31 @@ fn field_column(field: TextField) -> Option<&'static str> {
     }
 }
 
+/// The exactness oracle: a full-table scan with SQLite's `instr()`, which
+/// compares every byte of both arguments including NUL. It is the definition
+/// the resident matcher is tested against; nothing in production searches
+/// through SQL.
 fn substring_match(
     connection: &Connection,
     column: Option<&str>,
     value: &str,
 ) -> Result<RoaringBitmap> {
-    // LIKE selects trigram candidates. instr() removes false positives when
-    // the literal value contains LIKE wildcard characters.
-    let pattern = format!("%{value}%");
     let sql = match column {
-        Some(column) => format!(
-            "SELECT rowid FROM root_fts
-             WHERE {column} LIKE ?1 AND instr({column}, ?2) > 0"
-        ),
+        Some(column) => format!("SELECT rowid FROM root_fts WHERE instr({column}, ?1) > 0"),
         None => ["name", "notes", "urls", "source_text"]
             .into_iter()
-            .map(|column| {
-                format!(
-                    "SELECT rowid FROM root_fts
-                     WHERE {column} LIKE ?1 AND instr({column}, ?2) > 0"
-                )
-            })
+            .map(|column| format!("SELECT rowid FROM root_fts WHERE instr({column}, ?1) > 0"))
             .collect::<Vec<_>>()
             .join(" UNION "),
     };
     let mut statement = connection.prepare_cached(&sql)?;
-    let rows = statement.query_map([&pattern, value], |row| row.get::<_, u32>(0))?;
+    let rows = statement.query_map([value], |row| row.get::<_, u32>(0))?;
     Ok(rows.collect::<std::result::Result<RoaringBitmap, _>>()?)
 }
 
 /// Matches a complete trimmed query of at least three characters as a literal
-/// substring. Text is lowered before indexing and querying so the trigram path
-/// has consistent Unicode case behavior independent of SQLite's ASCII-only
-/// NOCASE rules.
+/// byte substring. Text is lowered before indexing and querying so Unicode
+/// case behavior is consistent and independent of SQLite's ASCII-only rules.
 pub fn search(connection: &Connection, field: TextField, query: &str) -> Result<RoaringBitmap> {
     let query = query.trim();
     if query.chars().count() < MINIMUM_TEXT_SEARCH_CHARACTERS {
@@ -136,13 +132,6 @@ pub fn settle_batch(transaction: &Transaction<'_>, limit: usize) -> Result<Roari
         transaction.execute("DELETE FROM fts_dirty WHERE root_id = ?1", [root_id])?;
     }
     Ok(unique.into_iter().collect())
-}
-
-pub fn dirty_age_ms(connection: &Connection, now_ms: i64) -> Result<Option<u64>> {
-    let queued = connection.query_row("SELECT MIN(queued_at_ms) FROM fts_dirty", [], |row| {
-        row.get::<_, Option<i64>>(0)
-    })?;
-    Ok(queued.map(|value| now_ms.saturating_sub(value) as u64))
 }
 
 pub fn mark_one(transaction: &Transaction<'_>, root_id: RootId, now_ms: i64) -> Result<()> {

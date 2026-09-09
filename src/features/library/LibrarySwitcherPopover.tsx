@@ -5,8 +5,18 @@ import { invoke } from '../../platform/ipc';
 import { LibraryAvatar } from './LibraryAvatar';
 import { rectToCSS, getViewportCSS } from '../../shared/lib/zoomCompensation';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { isLibraryOpenCancelled } from './libraryOpenCancellation';
 import styles from './LibrarySwitcherPopover.module.css';
 import { t } from '../../i18n';
+
+// The gate's `library-open-failed` event already drives the UI for an open
+// that fails; a cancelled one (superseded, closed, quitting) is no error.
+function logOpenFailure(action: string) {
+  return (error: unknown) => {
+    if (isLibraryOpenCancelled(error)) return;
+    console.error(`[library] could not ${action}`, error);
+  };
+}
 
 interface Entry {
   path: string;
@@ -130,7 +140,9 @@ export function LibrarySwitcherPopover({
                 key={entry.path}
                 className={styles.item}
                 onClick={() => {
-                  if (!entry.current) void (window as any).picto.library.switch(entry.path);
+                  if (!entry.current) {
+                    (window as any).picto.library.switch(entry.path).catch(logOpenFailure('switch library'));
+                  }
                   onClose();
                 }}
               >
@@ -158,7 +170,7 @@ export function LibrarySwitcherPopover({
           <button
             className={styles.functionItem}
             onClick={() => {
-              void (window as any).picto.library.open();
+              (window as any).picto.library.open().catch(logOpenFailure('open library'));
               onClose();
             }}
           >

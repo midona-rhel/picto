@@ -5,6 +5,7 @@ import { adaptGridItem, type CanvasRenderItem } from './renderItemAdapter';
 import type { PlanTile } from './thumbnailPlan';
 import type { GridViewMode, LayoutItem } from '../layout/types';
 import type { GridScrollPosition } from '../../../shared/types/gridScroll';
+import { beginGridPreparation, endGridPreparation } from '../gridBenchmarkTiming';
 
 export interface GridLayoutModel {
   items: CanvasRenderItem[];
@@ -108,14 +109,14 @@ export function restoreGridScrollTop(
   return Math.round(Math.min(1, Math.max(0, position.progress)) * maxScrollTop);
 }
 
-interface LayoutConfig {
+export interface GridLayoutConfig {
   width: number; targetSize: number; gap: number; viewMode: GridViewMode;
   textHeight: number; scrollbarWidth: number;
 }
 
 function createModel(
   source: CanonicalEntityGridItem[],
-  config: LayoutConfig,
+  config: GridLayoutConfig,
   prefix?: { items: CanvasRenderItem[]; ratios: number[]; itemIdToIndex: Map<number, number> },
 ): { model: GridLayoutModel; ratios: number[] } {
   const start = prefix?.items.length ?? 0;
@@ -160,19 +161,34 @@ function createModel(
   } };
 }
 
+const preparedLayouts = new WeakMap<CanonicalEntityGridItem[], {
+  config: GridLayoutConfig;
+  result: ReturnType<typeof createModel>;
+}>();
+
+/** A bounded resident window, never the full query. Weak ownership follows the session's items. */
+export function prepareGridLayout(source: CanonicalEntityGridItem[], config: GridLayoutConfig): void {
+  if (config.width <= 0 || source.length > 1500) return;
+  const started = beginGridPreparation();
+  preparedLayouts.set(source, { config: { ...config }, result: createModel(source, config) });
+  endGridPreparation(source, started);
+}
+
 /** Retains immutable item adaptation across page appends; every other change rebuilds. */
 export class GridLayoutRuntime {
   private source: CanonicalEntityGridItem[] = [];
-  private config: LayoutConfig | null = null;
+  private config: GridLayoutConfig | null = null;
   private model: GridLayoutModel | null = null;
   private ratios: number[] = [];
 
-  update(source: CanonicalEntityGridItem[], config: LayoutConfig): GridLayoutModel {
+  update(source: CanonicalEntityGridItem[], config: GridLayoutConfig): GridLayoutModel {
     if (this.source === source && this.config && sameConfig(this.config, config)) return this.model!;
     const canAppend = this.model != null && this.config != null && sameConfig(this.config, config)
       && source.length > this.source.length
       && this.source.every((item, index) => source[index] === item);
-    const result = createModel(source, config, canAppend ? {
+    const prepared = preparedLayouts.get(source);
+    preparedLayouts.delete(source);
+    const result = prepared && sameConfig(prepared.config, config) ? prepared.result : createModel(source, config, canAppend ? {
       items: this.model!.items,
       ratios: this.ratios,
       itemIdToIndex: this.model!.itemIdToIndex,
@@ -185,7 +201,7 @@ export class GridLayoutRuntime {
   }
 }
 
-function sameConfig(a: LayoutConfig, b: LayoutConfig) {
+function sameConfig(a: GridLayoutConfig, b: GridLayoutConfig) {
   return a.width === b.width && a.targetSize === b.targetSize && a.gap === b.gap
     && a.viewMode === b.viewMode && a.textHeight === b.textHeight
     && a.scrollbarWidth === b.scrollbarWidth;

@@ -10,6 +10,10 @@ import { ManagerSurface } from '../managers/ManagerSurface';
 import { GridScreen } from '../grid/GridScreen';
 import styles from '../grid/GridScreen.module.css';
 import type { GridScrollPosition } from '../../shared/types/gridScroll';
+import { gridDefaultSpacingAtom } from '../../state/grid';
+import { gridGapForSpacing, GRID_TEXT_ROW_HEIGHT } from '../grid/gridAppearance';
+import { prepareGridLayout, type GridLayoutConfig } from '../grid/canvas/gridLayoutModel';
+import { beginGridCommit } from '../grid/gridBenchmarkTiming';
 
 const store = getDefaultStore();
 const TRANSITION_MS = 170;
@@ -56,6 +60,20 @@ export function WorkspaceSurface() {
     promise: Promise<PreparedGridNavigation>;
   } | null>(null);
   const prefetchGenerationRef = useRef(0);
+  const layoutConfigRef = useRef<GridLayoutConfig | null>(null);
+  const captureLayoutConfig = useCallback((config: GridLayoutConfig) => { layoutConfigRef.current = config; }, []);
+  const warmLayout = useCallback((prepared: PreparedGridNavigation, generation: number) => {
+    const config = layoutConfigRef.current;
+    if (config && generation === prefetchGenerationRef.current && prepared.session.status === 'idle') {
+      const view = prepared.session.view;
+      prepareGridLayout(prepared.session.items, { ...config,
+        viewMode: view.mode, targetSize: view.targetSize,
+        gap: gridGapForSpacing(view.spacing ?? store.get(gridDefaultSpacingAtom)),
+        textHeight: (Number(view.showName) + Number(view.showResolution)) * GRID_TEXT_ROW_HEIGHT });
+    }
+    return prepared;
+  }, []);
+  const [committedGeneration, setCommittedGeneration] = useState(0);
   const scrollPositionRef = useRef<GridScrollPosition>({ scrollTop: 0, progress: 0 });
   const restoreScrollPositionRef = useRef<GridScrollPosition | null>(null);
   const delayRef = useRef<number | null>(null);
@@ -106,12 +124,15 @@ export function WorkspaceSurface() {
     prepareScrollRestore(nodeId);
     const generation = ++prefetchGenerationRef.current;
     const options = consumeNavigationOptions(nodeId);
-    const promise = options
-      ? gridController.prepareNavigation(scope, options)
+    const progress = restoreScrollPositionRef.current?.progress ?? 0;
+    const preparationOptions = progress > 0 ? { ...options, restoreProgress: progress } : options;
+    const query = preparationOptions
+      ? gridController.prepareNavigation(scope, preparationOptions)
       : gridController.prepareNavigation(scope);
+    const promise = query.then(prepared => warmLayout(prepared, generation));
     prefetchRef.current = { nodeId, ownerNodeId, generation, promise };
     return promise;
-  }, [consumeNavigationOptions, prepareScrollRestore]);
+  }, [consumeNavigationOptions, prepareScrollRestore, warmLayout]);
 
   const fadeIn = useCallback(() => {
     if (phaseRef.current !== 'waiting') return;
@@ -154,6 +175,7 @@ export function WorkspaceSurface() {
         prefetchRef.current?.generation === generation
         && phaseRef.current === 'waiting'
       ) {
+        beginGridCommit(prepared.session.items);
         closeTransientViewers();
         setDisplayedNodeId(committedOwnerNode);
         setDisplayedDrilldown(committedOwnerNode !== committedNode ? {
@@ -162,6 +184,7 @@ export function WorkspaceSurface() {
         } : null);
         previousNodeRef.current = committedNode;
         gridController.commitNavigation(prepared);
+        setCommittedGeneration(generation!);
       }
     });
   }, [fadeIn, prefetchGrid, setDisplayedNodeId, setPhase]);
@@ -253,21 +276,26 @@ export function WorkspaceSurface() {
       return;
     }
     restoreScrollPositionRef.current = TOP_SCROLL_POSITION;
-    if (phase !== 'idle') {
-      gridController.applyIntent(pendingIntent);
-      setPendingIntent(null);
-      return;
-    }
     setPendingIntent(null);
-    setPhase('fading_out');
-    delayRef.current = window.setTimeout(() => {
-      delayRef.current = null;
-      gridController.applyIntent(pendingIntent);
-      setPhase('waiting');
-    }, TRANSITION_MS);
-  }, [activeScopeNodeId, pendingIntent, phase, setPendingIntent, setPhase]);
+    const generation = ++prefetchGenerationRef.current;
+    const promise = gridController.prepareIntent(pendingIntent).then(prepared => warmLayout(prepared, generation));
+    prefetchRef.current = { nodeId: activeScopeNodeId, ownerNodeId: activeNodeId, generation, promise };
+    if (phaseRef.current === 'idle') startFadeOut();
+    else if (phaseRef.current !== 'fading_out') {
+      cancelSchedule();
+      commitDestination();
+    }
+  }, [activeNodeId, activeScopeNodeId, pendingIntent, setPendingIntent, startFadeOut, cancelSchedule, commitDestination, warmLayout]);
 
-  useEffect(() => cancelSchedule, [cancelSchedule]);
+  useEffect(() => () => {
+    cancelSchedule();
+    // React's development setup/cleanup/setup cycle must start a fresh load
+    // after canceling the first one, just like a real library remount.
+    initializedRef.current = false;
+    prefetchGenerationRef.current += 1;
+    prefetchRef.current = null;
+    gridController.cancelPreparation();
+  }, [cancelSchedule]);
 
   const revealCommittedGrid = useCallback(() => {
     restoreScrollPositionRef.current = null;
@@ -280,6 +308,7 @@ export function WorkspaceSurface() {
     : styles.surfaceIncomingVisible;
   const gridScope = nodeIdToGridScope(displayedScopeNodeId);
   const destinationCommitted = phase === 'waiting'
+    && prefetchRef.current?.generation === committedGeneration
     && displayedScopeNodeId === pendingNodeRef.current
     && displayedNodeId === pendingOwnerNodeRef.current;
   const inlineRestoreCommitted = inlineScrollRestore?.nodeId === displayedScopeNodeId;
@@ -293,9 +322,11 @@ export function WorkspaceSurface() {
 
   return (
     <div className={styles.root}>
-      <div className={`${styles.surface} ${className}`}>
+      <div className={`${styles.surface} ${className}`} data-view-phase={phase}
+        data-view-node={displayedScopeNodeId} data-view-generation={committedGeneration}>
         {gridScope ? (
           <GridScreen
+            onLayoutConfigChange={captureLayoutConfig}
             nodeId={displayedScopeNodeId}
             transitionPhase={phase}
             initialScrollPosition={initialScrollPosition}

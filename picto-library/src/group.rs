@@ -339,6 +339,7 @@ pub(crate) fn detach_many(
         ],
     )?;
     snapshot.revision = revision;
+    Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &affected)?;
     Ok(DetachResult {
         root_ids: media_rows
             .iter()
@@ -425,6 +426,8 @@ struct RootInput {
     imported_at_ms: i64,
     captured_at_ms: Option<i64>,
     total_size_bytes: u64,
+    modified_at_ms: i64,
+    media_count: u32,
 }
 
 struct CoverFacts {
@@ -644,6 +647,7 @@ pub(crate) fn ungroup(
     snapshot.revision = revision;
     let mut affected = new_bitmap;
     affected.insert(collection_id.0);
+    Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &affected)?;
     Ok(UngroupResult {
         roots: new_roots,
         affected,
@@ -903,6 +907,7 @@ pub(crate) fn organize(
     snapshot.revision = revision;
     let mut affected = selected;
     affected.insert(collection_id.0);
+    Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &affected)?;
     Ok(GroupResult {
         collection_id,
         affected,
@@ -913,7 +918,8 @@ pub(crate) fn organize(
 fn load_roots(transaction: &Transaction<'_>, roots: &[RootId]) -> Result<Vec<RootInput>> {
     let mut statement = transaction.prepare_cached(
         "SELECT root.root_id, item.item_kind, root.name, root.notes, root.source_urls_json,
-                root.cover_media_id, root.imported_at_ms, root.captured_at_ms, root.total_size_bytes
+                root.cover_media_id, root.imported_at_ms, root.captured_at_ms, root.total_size_bytes,
+                root.modified_at_ms, root.media_count
          FROM library_root root
          JOIN library_item item ON item.local_id = root.root_id
          WHERE root.root_id = ?1",
@@ -937,6 +943,8 @@ fn load_roots(transaction: &Transaction<'_>, roots: &[RootId]) -> Result<Vec<Roo
                         imported_at_ms: row.get(6)?,
                         captured_at_ms: row.get(7)?,
                         total_size_bytes: row.get::<_, i64>(8)? as u64,
+                        modified_at_ms: row.get(9)?,
+                        media_count: row.get(10)?,
                     })
                 })
                 .map_err(Into::into)
@@ -1095,6 +1103,11 @@ fn settle_folders(
 }
 
 pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
+    Arc::make_mut(&mut snapshot.text_index).remove(roots);
+    let names = Arc::make_mut(&mut snapshot.name_index);
+    for id in roots {
+        names.remove(id);
+    }
     *Arc::make_mut(&mut snapshot.roots_with_images) -= roots;
     for members in Arc::make_mut(&mut snapshot.root_kinds).values_mut() {
         *members -= roots;
@@ -1125,6 +1138,81 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
     }
 }
 
+/// Rebuild only changed roots after canonical history replay. Memberships and
+/// collection orders have already settled in this same transaction/snapshot.
+pub(crate) fn refresh_structural_projections(
+    transaction: &Transaction<'_>,
+    snapshot: &mut ProjectionSnapshot,
+    affected: &RoaringBitmap,
+) -> Result<()> {
+    remove_root_projections(snapshot, affected);
+    let mut exists =
+        transaction.prepare_cached("SELECT EXISTS(SELECT 1 FROM library_root WHERE root_id=?1)")?;
+    let mut ids = Vec::new();
+    for id in affected {
+        if exists.query_row([id], |row| row.get::<_, bool>(0))? {
+            ids.push(RootId(id));
+        }
+    }
+    for root in load_roots(transaction, &ids)? {
+        let id = root.root_id.0;
+        let mut cover = load_cover_facts(transaction, root.cover_media_id)?;
+        cover.size_bytes = root.total_size_bytes;
+        let tags = snapshot
+            .tags
+            .values()
+            .filter(|ids| ids.contains(id))
+            .count() as u64;
+        let folders = snapshot
+            .folders
+            .values()
+            .filter(|ids| ids.contains(id))
+            .count() as u64;
+        let notes = root.notes.as_deref().is_some_and(|value| !value.is_empty());
+        if root.kind == RootKind::Collection {
+            let has_image = snapshot
+                .collection_orders
+                .get(&root.root_id)
+                .is_some_and(|members| {
+                    members
+                        .iter()
+                        .any(|media| snapshot.image_media.contains(media.0))
+                });
+            add_collection_projection(
+                snapshot,
+                root.root_id,
+                &cover,
+                u64::from(root.media_count),
+                root.total_size_bytes,
+                root.imported_at_ms,
+                root.captured_at_ms,
+                root.modified_at_ms,
+                tags,
+                folders,
+                notes,
+                !root.urls.is_empty(),
+                has_image,
+            );
+        } else {
+            add_media_root_projection(
+                snapshot,
+                root.root_id,
+                &cover,
+                root.imported_at_ms,
+                root.captured_at_ms,
+                root.modified_at_ms,
+                tags,
+                folders,
+                notes,
+                !root.urls.is_empty(),
+            );
+        }
+        refresh_root_mime_projection(transaction, snapshot, root.root_id)?;
+    }
+    Arc::make_mut(&mut snapshot.name_index).refresh(transaction, affected)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add_collection_projection(
     snapshot: &mut ProjectionSnapshot,
@@ -1151,9 +1239,9 @@ fn add_collection_projection(
     Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, total_size);
     Arc::make_mut(&mut snapshot.media_count).insert(id, media_count);
-    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
+    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at);
     if let Some(value) = captured_at {
-        Arc::make_mut(&mut snapshot.captured_at).insert(id, value.max(0) as u64);
+        Arc::make_mut(&mut snapshot.captured_at).insert(id, value);
     }
     Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
     if has_notes {
@@ -1293,9 +1381,9 @@ fn add_media_root_projection(
     Arc::make_mut(&mut snapshot.folder_count).insert(id, folder_count);
     Arc::make_mut(&mut snapshot.total_bytes).insert(id, facts.size_bytes);
     Arc::make_mut(&mut snapshot.media_count).insert(id, 1);
-    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at.max(0) as u64);
+    Arc::make_mut(&mut snapshot.imported_at).insert(id, imported_at);
     if let Some(value) = captured_at {
-        Arc::make_mut(&mut snapshot.captured_at).insert(id, value.max(0) as u64);
+        Arc::make_mut(&mut snapshot.captured_at).insert(id, value);
     }
     Arc::make_mut(&mut snapshot.modified_at).insert(id, modified_at.max(0) as u64);
     if let Some(value) = facts.width {

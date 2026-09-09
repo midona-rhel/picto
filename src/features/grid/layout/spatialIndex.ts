@@ -33,22 +33,28 @@ export function buildTileSpatialIndex(positions: ReadonlyArray<LayoutItem | unde
   if (positions.length === 0) return EMPTY_INDEX;
 
   let maxY = 0;
+  let minY = Number.POSITIVE_INFINITY;
   for (let i = 0; i < positions.length; i++) {
     const pos = positions[i];
     if (!pos) continue;
+    minY = Math.min(minY, pos.y);
     const bottom = pos.y + pos.h;
     if (bottom > maxY) maxY = bottom;
   }
 
-  const binCount = Math.max(1, Math.ceil(maxY / BIN_HEIGHT));
+  if (!Number.isFinite(minY)) return EMPTY_INDEX;
+  // Windows near the library tail may start millions of pixels down. Index
+  // their occupied band, not thousands of empty bins between zero and the band.
+  const origin = Math.floor(minY / BIN_HEIGHT) * BIN_HEIGHT;
+  const binCount = Math.max(1, Math.ceil((maxY - origin) / BIN_HEIGHT));
   const bins: number[][] = new Array(binCount);
   for (let b = 0; b < binCount; b++) bins[b] = [];
 
   for (let i = 0; i < positions.length; i++) {
     const pos = positions[i];
     if (!pos) continue;
-    const first = Math.max(0, Math.min(binCount - 1, Math.floor(pos.y / BIN_HEIGHT)));
-    const last = Math.max(0, Math.min(binCount - 1, Math.floor((pos.y + pos.h) / BIN_HEIGHT)));
+    const first = Math.max(0, Math.min(binCount - 1, Math.floor((pos.y - origin) / BIN_HEIGHT)));
+    const last = Math.max(0, Math.min(binCount - 1, Math.floor((pos.y + pos.h - origin) / BIN_HEIGHT)));
     for (let b = first; b <= last; b++) bins[b].push(i);
   }
 
@@ -59,10 +65,10 @@ export function buildTileSpatialIndex(positions: ReadonlyArray<LayoutItem | unde
 
   return {
     queryYRange(top: number, bottom: number, out: number[]): number[] {
-      if (bottom < 0 || top > maxY) return out;
+      if (bottom < minY || top > maxY) return out;
       generation++;
-      const first = Math.max(0, Math.min(binCount - 1, Math.floor(top / BIN_HEIGHT)));
-      const last = Math.max(0, Math.min(binCount - 1, Math.floor(bottom / BIN_HEIGHT)));
+      const first = Math.max(0, Math.min(binCount - 1, Math.floor((top - origin) / BIN_HEIGHT)));
+      const last = Math.max(0, Math.min(binCount - 1, Math.floor((bottom - origin) / BIN_HEIGHT)));
       const start = out.length;
       for (let b = first; b <= last; b++) {
         const bin = bins[b];

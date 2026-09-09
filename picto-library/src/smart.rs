@@ -93,7 +93,6 @@ pub(crate) fn settle_affected_for(
     let changed_local_set = changed_local_ids.iter().copied().collect::<HashSet<_>>();
     let active_affected = SharedBitmap::from(snapshot.active() & affected);
     let local_replacements = evaluate_local_results(
-        connection,
         snapshot,
         &definitions,
         changed_local_ids.iter().copied(),
@@ -248,13 +247,8 @@ pub(crate) fn refresh_all(
         .filter_map(|(id, definition)| definition.parent_id.is_none().then_some(*id))
         .collect::<Vec<_>>();
     let active = SharedBitmap::from(snapshot.active().clone());
-    let local_results = evaluate_local_results(
-        connection,
-        snapshot,
-        &definitions,
-        definitions.keys().copied(),
-        &active,
-    )?;
+    let local_results =
+        evaluate_local_results(snapshot, &definitions, definitions.keys().copied(), &active)?;
     let results = compose_trees(snapshot, &definitions, roots, &local_results)?;
     snapshot.smart_queries = Arc::new(local_queries);
     snapshot.smart_effective_queries = Arc::new(effective_queries);
@@ -281,13 +275,8 @@ pub(crate) fn refresh_subtree(
         .collect::<HashMap<_, _>>();
     let effective_queries = compile_effective_queries(&definitions)?;
     let active = SharedBitmap::from(snapshot.active().clone());
-    let replacement_local = evaluate_local_results(
-        connection,
-        snapshot,
-        &definitions,
-        [smart_folder_id.0],
-        &active,
-    )?;
+    let replacement_local =
+        evaluate_local_results(snapshot, &definitions, [smart_folder_id.0], &active)?;
     let mut local_results = (*snapshot.smart_local_results).clone();
     local_results.retain(|id, _| definitions.contains_key(id));
     local_results.extend(replacement_local);
@@ -308,7 +297,6 @@ pub(crate) fn refresh_subtree(
 }
 
 fn evaluate_local_results(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     definitions: &HashMap<u32, SavedDefinition>,
     ids: impl IntoIterator<Item = u32>,
@@ -327,7 +315,7 @@ fn evaluate_local_results(
 
     let evaluate_structured = |ids: &Vec<u32>| -> Result<(Vec<u32>, SharedBitmap)> {
         let id = ids[0];
-        let mut no_text = |_, _: &str| {
+        let mut no_text = |_, _: &str, _: &RoaringBitmap| {
             Err(LibraryError::InvalidState(
                 "structured smart-folder evaluation reached FTS".into(),
             ))
@@ -354,8 +342,7 @@ fn evaluate_local_results(
     }
     for ids in text {
         let id = ids[0];
-        let result: SharedBitmap =
-            evaluate(connection, snapshot, &definitions[&id].view, base)?.into();
+        let result: SharedBitmap = evaluate(snapshot, &definitions[&id].view, base)?.into();
         results.extend(ids.into_iter().map(|id| (id, result.clone())));
     }
     Ok(results)
@@ -566,11 +553,12 @@ pub fn list(
 }
 
 fn evaluate(
-    connection: &Connection,
     snapshot: &ProjectionSnapshot,
     view: &ViewQuerySpec,
     universe: &RoaringBitmap,
 ) -> Result<RoaringBitmap> {
-    let mut text = |field, query: &str| crate::fts::search(connection, field, query);
+    let mut text = |field, query: &str, candidates: &RoaringBitmap| {
+        snapshot.text_index.search(field, query, candidates)
+    };
     predicate::evaluate(&view.filter, universe, snapshot, &mut text)
 }

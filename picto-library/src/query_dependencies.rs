@@ -29,15 +29,21 @@ pub(crate) enum Dependency {
     Colors,
     Palettes,
     SmartResults,
+    /// Duplicate inspection resolves file identities from canonical tables;
+    /// any non-auxiliary publication invalidates it.
     Sql,
+    Text,
+    Names,
+    RecentViews,
+    FolderParents,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct QueryVersions([u64; 23]);
+pub(crate) struct QueryVersions([u64; 27]);
 
 impl QueryVersions {
     pub(crate) fn new(revision: u64) -> Self {
-        Self([revision; 23])
+        Self([revision; 27])
     }
 
     pub(crate) fn advance(previous: &ProjectionSnapshot, next: &ProjectionSnapshot) -> Self {
@@ -55,7 +61,9 @@ impl QueryVersions {
             width => Width, height => Height, duration => Duration, imported_at => ImportedAt,
             captured_at => CapturedAt, modified_at => ModifiedAt, notes_present => Notes,
             urls_present => Urls, mime => Mime, mime_family => MimeFamily,
-            color_cells => Colors, cover_palettes => Palettes, smart_results => SmartResults);
+            color_cells => Colors, cover_palettes => Palettes, smart_results => SmartResults,
+            text_index => Text, name_index => Names, recent_views => RecentViews,
+            folder_parents => FolderParents);
         // SQL-only dependencies have no corresponding shared projection.
         versions.0[Dependency::Sql as usize] = next.query_versions.0[Dependency::Sql as usize];
         versions
@@ -76,15 +84,16 @@ impl QueryKey {
     }
     pub(crate) fn matches(snapshot: &ProjectionSnapshot, query: &RootQuery) -> Self {
         use Dependency::*;
-        let mut dependencies = vec![Lifecycle, TotalBytes, MediaCount];
+        let mut dependencies = vec![Lifecycle];
         match query.scope {
             ItemScope::All | ItemScope::Inbox | ItemScope::Trash => {}
             ItemScope::Untagged => dependencies.push(TagCount),
             ItemScope::Uncategorized => dependencies.push(FolderCount),
             ItemScope::Folder { .. } => dependencies.push(Folders),
-            ItemScope::FolderTree { .. } => dependencies.extend([Folders, Sql]),
+            ItemScope::FolderTree { .. } => dependencies.extend([Folders, FolderParents]),
             ItemScope::SmartFolder { .. } => dependencies.push(SmartResults),
-            ItemScope::RecentlyViewed | ItemScope::MediaMatches { .. } => dependencies.push(Sql),
+            ItemScope::RecentlyViewed => dependencies.push(RecentViews),
+            ItemScope::MediaMatches { .. } => dependencies.push(Sql),
         }
         filter_dependencies(&query.view.filter, &mut dependencies);
         Self(
@@ -103,7 +112,7 @@ impl QueryKey {
             SortField::CapturedAt => CapturedAt,
             SortField::Rating => Ratings,
             SortField::TotalSize => TotalBytes,
-            SortField::Name => Sql,
+            SortField::Name => Names,
             SortField::FolderOrder if matches!(query.scope, ItemScope::Folder { .. }) => {
                 FolderOrders
             }
@@ -112,6 +121,13 @@ impl QueryKey {
         };
         key.0.push(snapshot.query_versions.0[dependency as usize]);
         key
+    }
+
+    pub(crate) fn aggregates(snapshot: &ProjectionSnapshot) -> Self {
+        Self(vec![
+            snapshot.query_versions.0[Dependency::TotalBytes as usize],
+            snapshot.query_versions.0[Dependency::MediaCount as usize],
+        ])
     }
 }
 
@@ -139,7 +155,7 @@ fn filter_dependencies(filter: &FilterExpr, output: &mut Vec<Dependency>) {
             FilterClause::NotesPresent { .. } => output.push(Notes),
             FilterClause::SourceUrlsPresent { .. } => output.push(Urls),
             FilterClause::Color { .. } => output.extend([Colors, Palettes]),
-            FilterClause::Text { .. } => output.push(Sql),
+            FilterClause::Text { .. } => output.push(Text),
         },
     }
 }

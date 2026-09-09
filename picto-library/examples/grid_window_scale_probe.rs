@@ -12,8 +12,14 @@ fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 fn stats(values: &mut [f64]) -> serde_json::Value {
+    let samples = values.to_vec();
     values.sort_by(f64::total_cmp);
-    json!({"median_ms":values[values.len()/2], "p95_ms":values[(values.len()*95).div_ceil(100)-1], "max_ms":values[values.len()-1]})
+    let mut result = json!({"n":values.len(),"samples_ms":samples,
+        "median_ms":values[values.len().div_ceil(2)-1], "p95_ms":values[(values.len()*95).div_ceil(100)-1], "max_ms":values[values.len()-1]});
+    if values.len() >= 100 {
+        result["p99_ms"] = json!(values[(values.len() * 99).div_ceil(100) - 1]);
+    }
+    result
 }
 
 fn next_random(state: &mut u64) -> u64 {
@@ -87,49 +93,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (label, query) in &queries {
         let stages_before = library.query_statistics();
         let started = Instant::now();
-        let first = library.query_window(
-            query,
-            &WindowRequest {
-                start: 0,
-                limit: 500,
-            },
-        )?;
+        let first = library.query_window(query, &WindowRequest::at(0, 500))?;
         let first_ms = ms(started);
+        let tail_stages_before = library.query_statistics();
         let started = Instant::now();
-        let tail = library.query_window(
-            query,
-            &WindowRequest {
-                start: usize::MAX,
-                limit: 1500,
-            },
-        )?;
+        let tail = library.query_window(query, &WindowRequest::at(usize::MAX, 1500))?;
         let cold_jump_ms = ms(started);
+        let tail_stages = stage_delta(&tail_stages_before, &library.query_statistics());
+        // Tail reads need not populate a full order. Measure cold middle work
+        // explicitly before labeling the following arbitrary jumps as warm.
+        let middle_stages_before = library.query_statistics();
+        let started = Instant::now();
+        library.query_window(
+            query,
+            &WindowRequest::at(first.page.total as usize / 2, 1500),
+        )?;
+        let cold_middle_ms = ms(started);
+        let middle_stages = stage_delta(&middle_stages_before, &library.query_statistics());
         let mut samples = Vec::new();
-        for step in 0..20 {
+        for step in 0..30 {
             let ordinal = first.page.total as usize * ((step * 37) % 100) / 100;
             let started = Instant::now();
-            let result = library.query_window(
-                query,
-                &WindowRequest {
-                    start: ordinal,
-                    limit: 1500,
-                },
-            )?;
+            let result = library.query_window(query, &WindowRequest::at(ordinal, 1500))?;
             samples.push(ms(started));
             assert!(result.page.items.len() <= 1500);
             assert_eq!(result.page.total, first.page.total);
+            assert_eq!(result.head_items, first.head_items);
         }
-        let head = library.query_window(
-            query,
-            &WindowRequest {
-                start: 0,
-                limit: 1500,
-            },
-        )?;
+        let head = library.query_window(query, &WindowRequest::at(0, 1500))?;
         assert_eq!(head.page.items[..first.page.items.len()], first.page.items);
         println!(
             "CASE {}",
-            json!({"case":label,"matches":first.page.total,"first_ms":first_ms,"cold_jump_ms":cold_jump_ms,"warm_jumps":stats(&mut samples),"tail_start":tail.start,"stages":stage_delta(&stages_before,&library.query_statistics())})
+            json!({"case":label,"matches":first.page.total,"first_ms":first_ms,"cold_jump_ms":cold_jump_ms,
+                "cold_tail_stages":tail_stages,"cold_middle_ms":cold_middle_ms,"cold_middle_stages":middle_stages,
+                "warm_jumps":stats(&mut samples),"tail_start":tail.start,"stages":stage_delta(&stages_before,&library.query_statistics())})
         );
     }
     // Reproduce a user repeatedly changing search/filter behavior and then
@@ -159,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let query_index = next_random(&mut random_state) as usize % random_queries.len();
         let (label, query) = random_queries[query_index];
         let started = Instant::now();
-        let head = library.query_window(query, &WindowRequest { start: 0, limit: 4 })?;
+        let head = library.query_window(query, &WindowRequest::at(0, 4))?;
         random_head_ms.push(ms(started));
         let total = head.page.total as usize;
         let start = if total == 0 {
@@ -168,11 +165,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             next_random(&mut random_state) as usize % total
         };
         let started = Instant::now();
-        let window = library.query_window(query, &WindowRequest { start, limit: 1500 })?;
+        let window = library.query_window(query, &WindowRequest::at(start, 1500))?;
         let jump_ms = ms(started);
         random_jump_ms.push(jump_ms);
         random_by_query.entry(label).or_default().push(jump_ms);
-        let verified_head = library.query_window(query, &WindowRequest { start: 0, limit: 4 })?;
+        let verified_head = library.query_window(query, &WindowRequest::at(0, 4))?;
         assert_eq!(window.page.total, head.page.total);
         assert_eq!(verified_head.page.items, head.page.items);
     }
@@ -216,7 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     for start in (0..expected.len()).step_by(1000) {
         let began = Instant::now();
-        let result = library.query_window(query, &WindowRequest { start, limit: 1500 })?;
+        let result = library.query_window(query, &WindowRequest::at(start, 1500))?;
         timings.push(ms(began));
         assert_eq!(
             result
@@ -230,7 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "FULL_WALK {}",
-        json!({"items":expected.len(),"windows":timings.len(),"cursor_walk_ms":cursor_walk_ms,"window_walk_ms":ms(started),"window_samples":stats(&mut timings),"max_hydrated_items":1500,"order_id_bytes":expected.len()*4})
+        json!({"items":expected.len(),"windows":timings.len(),"cursor_walk_ms":cursor_walk_ms,"window_walk_ms":ms(started),"window_samples":stats(&mut timings),"max_hydrated_items":1500,"oracle_id_bytes":expected.len()*4})
     );
     // Mutations run only against the disposable fixture, never the supplied
     // renderable library used for manual testing.
@@ -238,13 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         use picto_library::selection::SelectionTarget;
         use picto_library::{ImmutableMediaFacts, Lifecycle, PreparedImport, Rating};
         let all = &queries[0].1;
-        let head = library.query_window(
-            all,
-            &WindowRequest {
-                start: 0,
-                limit: 1500,
-            },
-        )?;
+        let head = library.query_window(all, &WindowRequest::at(0, 1500))?;
         let target = SelectionTarget::Explicit {
             root_ids: vec![head.page.items[0].root_id],
         };
@@ -262,10 +253,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let started = Instant::now();
             let result = library.query_window(
                 all,
-                &WindowRequest {
-                    start: next_random(&mut random_state) as usize % head.page.total as usize,
-                    limit: 1500,
-                },
+                &WindowRequest::at(
+                    next_random(&mut random_state) as usize % head.page.total as usize,
+                    1500,
+                ),
             )?;
             samples.push(ms(started));
             assert_eq!(result.page.total, head.page.total);
@@ -307,13 +298,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 captured_at_ms: None,
             })?;
             let started = Instant::now();
-            let result = library.query_window(
-                all,
-                &WindowRequest {
-                    start: usize::MAX,
-                    limit: 1500,
-                },
-            )?;
+            let result = library.query_window(all, &WindowRequest::at(usize::MAX, 1500))?;
             samples.push(ms(started));
             assert_eq!(result.page.total, head.page.total + step as u64 + 1);
             // Smart folders use the same canonical match set after each import.
@@ -333,20 +318,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .find(|(label, _)| *label == direct_label)
                     .unwrap()
                     .1;
-                let actual = library.query_window(
-                    query,
-                    &WindowRequest {
-                        start: usize::MAX,
-                        limit: 4,
-                    },
-                )?;
-                let expected = library.query_window(
-                    direct,
-                    &WindowRequest {
-                        start: usize::MAX,
-                        limit: 4,
-                    },
-                )?;
+                let actual = library.query_window(query, &WindowRequest::at(usize::MAX, 4))?;
+                let expected = library.query_window(direct, &WindowRequest::at(usize::MAX, 4))?;
                 assert_eq!(actual.page.total, expected.page.total);
                 assert_eq!(actual.page.items, expected.page.items);
             }

@@ -140,6 +140,476 @@ fn smart_input(
 }
 
 #[test]
+fn structural_undo_preserves_later_imports_and_keeps_only_affected_history() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (folder, _) = library.create_folder("Shared folder", None).unwrap();
+    let mut roots = Vec::new();
+    for i in 0..20 {
+        let mut input = imported(&format!("undo-root-{i}"), Lifecycle::Active, &["original"]);
+        input.folders = vec![folder];
+        roots.push(library.ingest(&input).unwrap().0);
+    }
+    library.history().clear();
+    let original_order = library.projections().snapshot().folder_orders[&folder]
+        .as_ref()
+        .clone();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![roots[5], roots[6], roots[8]],
+            },
+            cover_root_id: roots[6],
+            winning_collection_id: None,
+            name: Some("Undo group".into()),
+            notes: None,
+            modified_at_ms: 1_700_000_001_000,
+        })
+        .unwrap();
+    assert!(
+        library.history().state().bytes < 20_000,
+        "history must not retain library-wide browsing projections"
+    );
+    let mut late = imported("late-unrelated", Lifecycle::Active, &["later:new"]);
+    late.folders = vec![folder];
+    late.facts.mime = "video/webm".into();
+    let (late_root, _) = library.ingest(&late).unwrap();
+    let (late_inbox, _) = library
+        .ingest(&imported("late-inbox", Lifecycle::Inbox, &["later:inbox"]))
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    let late_details = library.details(late_root).unwrap();
+    for undo in [true, false, true] {
+        if undo {
+            library.undo().unwrap().unwrap();
+        } else {
+            library.redo().unwrap().unwrap();
+        }
+        let snapshot = library.projections().snapshot();
+        assert!(snapshot.active().contains(late_root.0));
+        assert!(snapshot.lifecycle(Lifecycle::Inbox).contains(late_inbox.0));
+        assert_eq!(library.details(late_root).unwrap().root, late_details.root);
+        assert!(snapshot.mime["video/webm"].contains(late_root.0));
+        assert!(snapshot.tags[&snapshot.tag_ids_by_name["later:new"]].contains(late_root.0));
+        assert!(snapshot.folder_orders[&folder].contains(&late_root));
+        assert_eq!(snapshot.media_owner.get(late_root.0), Some(&late_root));
+        assert_eq!(library.counts().unwrap().all, if undo { 21 } else { 19 });
+        assert_eq!(snapshot.collection_orders.contains_key(&collection), !undo);
+        if undo {
+            assert_eq!(
+                snapshot.folder_orders[&folder]
+                    .iter()
+                    .filter(|id| **id != late_root)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                original_order
+            );
+        }
+    }
+    drop(library);
+    let library = Library::open(path).unwrap();
+    assert_eq!(library.counts().unwrap().all, 21);
+    assert_eq!(library.counts().unwrap().inbox, 1);
+    assert_eq!(library.details(late_root).unwrap().root, late_details.root);
+}
+
+#[test]
+fn resident_browsing_migration_reuses_the_checkpoint_and_rebuilds_resident_state() {
+    const PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-summary-page-rowids";
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported("persisted-text-猫猫猫", Lifecycle::Active, &[]))
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    library.record_recent_view(root, 5).unwrap();
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+    // Recreate the supported predecessor: identical canonical tables, the
+    // persisted browsing domains it kept, and its checkpoint stamp.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute_batch(&format!("CREATE TABLE browsing_domain(domain TEXT PRIMARY KEY, format_version INTEGER, generation INTEGER, chunk_count INTEGER);
+        CREATE TABLE browsing_chunk(domain TEXT, chunk_id INTEGER, format_version INTEGER, generation INTEGER, checksum BLOB, page_directory BLOB, PRIMARY KEY(domain, chunk_id));
+        CREATE TABLE browsing_page(domain TEXT, chunk_id INTEGER, page_id INTEGER, format_version INTEGER, checksum BLOB, payload BLOB, PRIMARY KEY(domain, page_id));
+        CREATE TABLE browsing_summary_page(page_id INTEGER PRIMARY KEY, format_version INTEGER, checksum BLOB, payload BLOB);
+        CREATE TABLE browsing_text_dirty(chunk_id INTEGER PRIMARY KEY);
+        CREATE TABLE browsing_name_node(node_id INTEGER PRIMARY KEY, checksum BLOB, payload BLOB);
+        CREATE TABLE browsing_name_manifest(singleton INTEGER PRIMARY KEY, format_version INTEGER, generation INTEGER, root_node INTEGER, node_count INTEGER, key_count INTEGER);
+        CREATE TABLE browsing_name_dirty(root_id INTEGER PRIMARY KEY);
+        CREATE TABLE browsing_name_keys(page_id INTEGER PRIMARY KEY, checksum BLOB, payload BLOB);
+        INSERT INTO browsing_summary_page VALUES (0, 3, X'00', X'00');
+        INSERT INTO browsing_dirty_root VALUES ({root});
+        UPDATE library_meta SET schema_fingerprint='{PREDECESSOR}';
+        UPDATE projection_checkpoint SET schema_fingerprint='{PREDECESSOR}';", root = root.0)).unwrap();
+    drop(connection);
+    let verify = |library: &Library| {
+        let mut search = query(ItemScope::All);
+        search.view.filter = FilterExpr::Clause(FilterClause::Text {
+            field: picto_library::predicate::TextField::Name,
+            query: "猫猫猫".into(),
+        });
+        let ids = |window: picto_library::query::RootWindow| {
+            window
+                .page
+                .items
+                .iter()
+                .map(|item| item.root_id)
+                .collect::<Vec<_>>()
+        };
+        let window = library
+            .query_window(&search, &WindowRequest::at(0, 500))
+            .unwrap();
+        assert_eq!(window.page.items[0].name, "persisted-text-猫猫猫.png");
+        assert_eq!(ids(window), [root]);
+        let mut by_name = query(ItemScope::All);
+        by_name.view.sort.field = SortField::Name;
+        assert_eq!(
+            ids(library
+                .query_window(&by_name, &WindowRequest::at(0, 500))
+                .unwrap()),
+            [root]
+        );
+        assert_eq!(
+            ids(library
+                .query_window(
+                    &query(ItemScope::RecentlyViewed),
+                    &WindowRequest::at(0, 500)
+                )
+                .unwrap()),
+            [root]
+        );
+    };
+    let library = Library::open(&path).unwrap();
+    assert!(library.projections().load_statistics().checkpoint_reused);
+    verify(&library);
+    drop(library);
+    let backups = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "backup"))
+        .collect::<Vec<_>>();
+    assert_eq!(backups.len(), 1);
+    let backup = rusqlite::Connection::open(&backups[0]).unwrap();
+    assert_eq!(
+        backup
+            .query_row("SELECT schema_fingerprint FROM library_meta", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        PREDECESSOR
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT name FROM library_root WHERE root_id=?1",
+                [root.0],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "persisted-text-猫猫猫.png"
+    );
+    drop(backup);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'browsing_%' AND name != 'browsing_dirty_root' AND type = 'table'",
+                [],
+                |row| row.get::<_, u32>(0)
+            )
+            .unwrap(),
+        0
+    );
+    drop(connection);
+    let library = Library::open(&path).unwrap();
+    assert!(library.projections().load_statistics().checkpoint_reused);
+    verify(&library);
+}
+
+#[test]
+fn signed_date_windows_survive_group_history_and_checkpoint_reopen() {
+    fn verify(library: &Library) {
+        for (sort, expression) in [
+            (SortField::CapturedAt, "COALESCE(captured_at_ms,-1)"),
+            (SortField::ImportedAt, "imported_at_ms"),
+        ] {
+            for direction in [SortDirection::Ascending, SortDirection::Descending] {
+                let order = if direction == SortDirection::Ascending {
+                    "ASC"
+                } else {
+                    "DESC"
+                };
+                let expected = library.database().read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+                    let mut statement = connection.prepare(&format!("SELECT root_id FROM library_root ORDER BY {expression} {order}, root_id {order}"))?;
+                    let rows = statement.query_map([], |row| row.get::<_,u32>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(rows)
+                }).unwrap();
+                let mut q = query(ItemScope::All);
+                q.view.sort.field = sort;
+                q.view.sort.direction = direction;
+                for requested in [0, expected.len() / 2, usize::MAX] {
+                    let result = library
+                        .query_window(&q, &WindowRequest::at(requested, 3))
+                        .unwrap();
+                    let start = requested.min(expected.len().saturating_sub(3));
+                    assert_eq!(result.page.total as usize, expected.len());
+                    assert_eq!(
+                        result
+                            .page
+                            .items
+                            .iter()
+                            .map(|item| item.root_id.0)
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .skip(start)
+                            .take(3)
+                            .copied()
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(
+                        result
+                            .head_items
+                            .iter()
+                            .map(|item| item.root_id.0)
+                            .collect::<Vec<_>>(),
+                        expected.iter().take(4).copied().collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let mut roots = Vec::new();
+    for (i, date) in [
+        None,
+        Some(-100),
+        Some(-1),
+        Some(0),
+        Some(1),
+        Some(i64::MAX),
+        None,
+        Some(-1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut input = imported(&format!("date-{i}"), Lifecycle::Active, &[]);
+        input.captured_at_ms = date;
+        input.imported_at_ms = date.unwrap_or(-5).min(1000);
+        roots.push(library.ingest(&input).unwrap().0);
+    }
+    verify(&library);
+    library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: roots[..3].to_vec(),
+            },
+            name: Some("dates".into()),
+            cover_root_id: roots[1],
+            winning_collection_id: None,
+            notes: None,
+            modified_at_ms: 100,
+        })
+        .unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert!(library.projections().load_statistics().checkpoint_reused);
+    verify(&library);
+}
+
+#[test]
+fn alphabetical_projection_is_current_before_fts_and_survives_root_history_and_reopen() {
+    fn verify(library: &Library) {
+        for (scope, lifecycle) in [
+            (ItemScope::All, Lifecycle::Active),
+            (ItemScope::Inbox, Lifecycle::Inbox),
+            (ItemScope::Trash, Lifecycle::Trash),
+        ] {
+            let snapshot = library.projections().snapshot();
+            let universe = snapshot.lifecycle(lifecycle);
+            for direction in [SortDirection::Ascending, SortDirection::Descending] {
+                let sql_direction = if direction == SortDirection::Ascending {
+                    "ASC"
+                } else {
+                    "DESC"
+                };
+                let expected = library.database().read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+                    let mut statement = connection.prepare(&format!("SELECT root_id FROM library_root ORDER BY name COLLATE NOCASE {sql_direction}, root_id {sql_direction}"))?;
+                    let ids = statement.query_map([], |row| row.get::<_, u32>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(ids.into_iter().filter(|id| universe.contains(*id)).collect::<Vec<_>>())
+                }).unwrap();
+                let mut q = query(scope.clone());
+                q.view.sort.field = SortField::Name;
+                q.view.sort.direction = direction;
+                for requested in [0, expected.len() / 2, usize::MAX] {
+                    let window = library
+                        .query_window(&q, &WindowRequest::at(requested, 3))
+                        .unwrap();
+                    let start = requested.min(expected.len().saturating_sub(3));
+                    assert_eq!(window.page.total as usize, expected.len());
+                    assert_eq!(window.start, start);
+                    assert_eq!(
+                        window
+                            .head_items
+                            .iter()
+                            .map(|item| item.root_id.0)
+                            .collect::<Vec<_>>(),
+                        expected.iter().take(4).copied().collect::<Vec<_>>()
+                    );
+                    assert_eq!(window.page.revision, snapshot.revision);
+                    assert_eq!(
+                        window
+                            .page
+                            .items
+                            .iter()
+                            .map(|item| item.root_id.0)
+                            .collect::<Vec<_>>(),
+                        expected[start..(start + 3).min(expected.len())]
+                    );
+                }
+                let mut actual = Vec::new();
+                let mut cursor = None;
+                loop {
+                    let page = library
+                        .query(&q, &PageRequest { limit: 2, cursor })
+                        .unwrap();
+                    actual.extend(page.items.iter().map(|item| item.root_id.0));
+                    cursor = page.next_cursor;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let mut roots = Vec::new();
+    for (i, name) in [
+        "Zebra",
+        "Alpha",
+        "alpha",
+        "東京",
+        "938475938475.png",
+        "middle",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut input = imported(&format!("name-{i}"), Lifecycle::Active, &[]);
+        input.media_name = name.into();
+        roots.push(library.ingest(&input).unwrap().0);
+        verify(&library);
+    }
+    // Reimporting the same bytes upgrades a weak standalone name immediately.
+    let mut upgraded = imported("name-4", Lifecycle::Active, &[]);
+    upgraded.stable_key = "new-name-4".into();
+    upgraded.source_identity = None;
+    upgraded.media_name = "A meaningful landscape".into();
+    library.ingest(&upgraded).unwrap();
+    verify(&library);
+    library
+        .rename_roots(
+            &[(roots[0], "a first".into()), (roots[1], "z last".into())],
+            100,
+        )
+        .unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    let (group, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: roots[..3].to_vec(),
+            },
+            cover_root_id: roots[0],
+            winning_collection_id: None,
+            name: Some("group".into()),
+            notes: None,
+            modified_at_ms: 101,
+        })
+        .unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    library
+        .detach_collection_member(group, picto_library::MediaId(roots[0].0), 102)
+        .unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    library.ungroup_collection(group, 103).unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![roots[0], roots[1]],
+    };
+    library.set_lifecycle(&target, Lifecycle::Inbox).unwrap();
+    verify(&library);
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    verify(&library);
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    verify(&library);
+    library.permanently_delete(&target, 104).unwrap();
+    verify(&library);
+    drop(library);
+    verify(&Library::open(&path).unwrap());
+}
+
+#[test]
+fn signed_import_dates_keep_sqlite_order_in_ordinal_windows() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let inputs = [-20, 0, 7, -3, 7, 0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, date)| {
+            let mut input = imported(&format!("signed-{i}"), Lifecycle::Active, &[]);
+            input.imported_at_ms = date;
+            input
+        })
+        .collect::<Vec<_>>();
+    library.ingest_batch(&inputs).unwrap();
+    for direction in [SortDirection::Ascending, SortDirection::Descending] {
+        let mut query = query(ItemScope::All);
+        query.view.sort.direction = direction;
+        let expected = library
+            .query(&query, &PageRequest::default())
+            .unwrap()
+            .items;
+        for start in [0, 2, 4] {
+            let found = library
+                .query_window(&query, &WindowRequest::at(start, 2))
+                .unwrap();
+            assert_eq!(found.page.items, expected[start..start + 2]);
+        }
+    }
+}
+
+#[test]
 fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -182,13 +652,7 @@ fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
         },
     };
     let before_order = library
-        .query_window(
-            &folder_query,
-            &WindowRequest {
-                start: 0,
-                limit: 1500,
-            },
-        )
+        .query_window(&folder_query, &WindowRequest::at(0, 1500))
         .unwrap();
     let mut expected_order: Vec<_> = before_order
         .page
@@ -200,13 +664,7 @@ fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
     library.reorder_folder_items(folder, &reordered).unwrap();
     expected_order[10..13].copy_from_slice(&reordered);
     let after_order = library
-        .query_window(
-            &folder_query,
-            &WindowRequest {
-                start: 0,
-                limit: 1500,
-            },
-        )
+        .query_window(&folder_query, &WindowRequest::at(0, 1500))
         .unwrap();
     assert_eq!(
         after_order
@@ -285,9 +743,35 @@ fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
                         break;
                     }
                 }
+                let before_tail = library.query_statistics();
+                let cold_tail = library
+                    .query_window(&query, &WindowRequest::at(usize::MAX, 7))
+                    .unwrap();
+                let after_tail = library.query_statistics();
+                if expected.len() > 7
+                    && !matches!(scope, ItemScope::RecentlyViewed)
+                    && matches!(
+                        field,
+                        SortField::ImportedAt | SortField::Name | SortField::TotalSize
+                    )
+                {
+                    assert_eq!(
+                        after_tail.order_builds, before_tail.order_builds,
+                        "cold tail must not build a full order: {scope:?} {field:?}"
+                    );
+                }
+                assert_eq!(
+                    cold_tail
+                        .page
+                        .items
+                        .iter()
+                        .map(|item| item.root_id)
+                        .collect::<Vec<_>>(),
+                    expected[expected.len().saturating_sub(7)..]
+                );
                 for start in [0, 17, usize::MAX, 3, 0] {
                     let actual = library
-                        .query_window(&query, &WindowRequest { start, limit: 7 })
+                        .query_window(&query, &WindowRequest::at(start, 7))
                         .unwrap();
                     let start = start.min(expected.len().saturating_sub(7));
                     assert_eq!(actual.start, start);
@@ -310,13 +794,7 @@ fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
         smart_folder_id: smart,
     });
     let before = library
-        .query_window(
-            &query,
-            &WindowRequest {
-                start: 20,
-                limit: 7,
-            },
-        )
+        .query_window(&query, &WindowRequest::at(20, 7))
         .unwrap();
     library
         .set_lifecycle(
@@ -325,13 +803,7 @@ fn ordinal_windows_match_cursor_order_and_refresh_after_mutations() {
         )
         .unwrap();
     let after = library
-        .query_window(
-            &query,
-            &WindowRequest {
-                start: 20,
-                limit: 7,
-            },
-        )
+        .query_window(&query, &WindowRequest::at(20, 7))
         .unwrap();
     assert!(after.page.revision > before.page.revision);
     assert_eq!(after.page.total, 0);
@@ -353,10 +825,7 @@ fn query_caches_survive_unrelated_writes_but_refresh_membership_order_and_summar
         scope: ItemScope::All,
         view: ViewQuerySpec::default(),
     };
-    let window = WindowRequest {
-        start: 0,
-        limit: 1500,
-    };
+    let window = WindowRequest::at(0, 1500);
     let before = library.query_window(&all, &window).unwrap();
     let built = library.query_statistics();
     let selected = SelectionTarget::Explicit {
@@ -422,7 +891,9 @@ fn query_caches_survive_unrelated_writes_but_refresh_membership_order_and_summar
         library.query_window(&named, &window).unwrap().page.items[0].root_id,
         second
     );
-    assert!(library.query_statistics().order_builds > built.order_builds);
+    // This two-root result fits a boundary window, so refreshing its exact
+    // name order no longer requires building a cached full-result order.
+    assert_eq!(library.query_statistics().order_builds, built.order_builds);
 
     let mut filtered = all.clone();
     filtered.view.filter = FilterExpr::Clause(FilterClause::Ratings {
@@ -453,6 +924,49 @@ fn query_caches_survive_unrelated_writes_but_refresh_membership_order_and_summar
 }
 
 #[test]
+fn byte_repairs_refresh_aggregates_without_rebuilding_text_membership() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let input = imported("aggregate-needle", Lifecycle::Active, &[]);
+    let (id, _) = library.ingest(&input).unwrap();
+    library.settle_fts(100).unwrap();
+    let mut q = query(ItemScope::All);
+    q.view.filter = FilterExpr::Clause(FilterClause::Text {
+        field: picto_library::predicate::TextField::Name,
+        query: "needle".into(),
+    });
+    let before = library
+        .query_window(&q, &WindowRequest::at(0, 500))
+        .unwrap();
+    let builds = library.query_statistics().match_builds;
+    library
+        .repair_media_content(
+            picto_library::MediaId(id.0),
+            &picto_library::RepairedMediaContent {
+                expected_hash: input.facts.content_hash,
+                content_hash: "b".repeat(64),
+                file_path: "/synthetic-repaired.png".into(),
+                size_bytes: 512,
+            },
+            42,
+        )
+        .unwrap();
+    let after = library
+        .query_window(&q, &WindowRequest::at(0, 500))
+        .unwrap();
+    assert_eq!(library.query_statistics().match_builds, builds);
+    assert_eq!(before.page.total_size_bytes, 1024);
+    assert_eq!(after.page.total_size_bytes, 512);
+    assert_eq!(after.page.items[0].total_size_bytes, 512);
+    assert_eq!(after.head_items, after.page.items);
+    assert!(after.page.revision > before.page.revision);
+    library
+        .query_window(&q, &WindowRequest::at(0, 500))
+        .unwrap();
+    assert_eq!(library.query_statistics().match_builds, builds);
+}
+
+#[test]
 fn structured_navigation_does_not_evict_expensive_text_matches() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -470,7 +984,7 @@ fn structured_navigation_does_not_evict_expensive_text_matches() {
             ..ViewQuerySpec::default()
         },
     };
-    let window = WindowRequest { start: 0, limit: 4 };
+    let window = WindowRequest::at(0, 4);
     let first = library.query_window(&text, &window).unwrap();
     for minimum in 0..20 {
         let query = RootQuery {
@@ -548,6 +1062,73 @@ fn startup_removes_only_view_preferences_for_missing_navigation_targets() {
 }
 
 #[test]
+fn opening_reports_its_stages_and_a_cancelled_open_leaves_the_checkpoint_reusable() {
+    use picto_library::{LibraryError, LoadStage, OpenCancellation, OpenStage};
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (root, _) = library
+        .ingest(&imported("staged-open", Lifecycle::Active, &[]))
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    let checkpoint_revision = library.database().revision().unwrap();
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+
+    // A current schema never migrates; the load stages arrive in order.
+    let mut stages = Vec::new();
+    let library = Library::open_with(&path, &OpenCancellation::new(), &mut |stage| {
+        stages.push(stage)
+    })
+    .unwrap();
+    assert_eq!(
+        stages,
+        [
+            OpenStage::Loading(LoadStage::Checkpoint),
+            OpenStage::Loading(LoadStage::Text),
+            OpenStage::Loading(LoadStage::Names),
+            OpenStage::Loading(LoadStage::Drawing),
+            OpenStage::Loading(LoadStage::Navigation),
+            OpenStage::Loading(LoadStage::Validation),
+            OpenStage::Ready,
+        ]
+    );
+    assert!(library.projections().load_statistics().checkpoint_reused);
+    drop(library);
+
+    // Cancelling from a stage callback stops the open at the next check.
+    let handle = OpenCancellation::new();
+    let cancel = handle.clone();
+    let mut seen = Vec::new();
+    let error = Library::open_with(&path, &handle, &mut |stage| {
+        seen.push(stage);
+        if stage == OpenStage::Loading(LoadStage::Names) {
+            cancel.cancel();
+        }
+    })
+    .err()
+    .unwrap();
+    assert!(matches!(error, LibraryError::OpenCancelled));
+    assert!(!seen.contains(&OpenStage::Ready));
+    // A pre-cancelled handle never touches the database.
+    let handle = OpenCancellation::new();
+    handle.cancel();
+    assert!(matches!(
+        Library::open_with(&path, &handle, &mut |_| {}),
+        Err(LibraryError::OpenCancelled)
+    ));
+
+    // The cancelled attempts persisted nothing: the checkpoint is still exact.
+    let library = Library::open(&path).unwrap();
+    assert!(library.projections().load_statistics().checkpoint_reused);
+    assert_eq!(
+        library.projections().snapshot().revision,
+        checkpoint_revision
+    );
+    assert!(library.projections().snapshot().active().contains(root.0));
+}
+
+#[test]
 fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
@@ -556,11 +1137,24 @@ fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision(
         .ingest(&imported("checkpoint", Lifecycle::Active, &[]))
         .unwrap();
     let checkpoint_revision = library.database().revision().unwrap();
-    assert!(library.write_projection_checkpoint().unwrap() > 0);
+    let checkpoint_bytes = library.write_projection_checkpoint().unwrap();
+    assert!(checkpoint_bytes > 0);
     assert_eq!(library.database().revision().unwrap(), checkpoint_revision);
     drop(library);
 
     let library = Library::open(&path).unwrap();
+    let startup = library.projections().load_statistics();
+    assert!(startup.checkpoint_reused);
+    assert_eq!(startup.checkpoint_payload_bytes, checkpoint_bytes);
+    assert_eq!(startup.canonical_recovery_us, 0);
+    assert!(
+        startup.total_us
+            >= startup.checkpoint_read_us
+                + startup.checkpoint_decode_us
+                + startup.checkpoint_validation_us
+                + startup.text_load_us
+                + startup.name_load_us
+    );
     assert_eq!(
         library.projections().snapshot().revision,
         checkpoint_revision
@@ -577,6 +1171,7 @@ fn projection_checkpoint_is_revision_exact_and_never_advances_mutation_revision(
     drop(library);
 
     let rebuilt = Library::open(&path).unwrap();
+    assert!(!rebuilt.projections().load_statistics().checkpoint_reused);
     assert_eq!(rebuilt.projections().snapshot().revision, newer_revision);
     assert_eq!(root_tag_count(&rebuilt, root), 1);
 }
@@ -3416,6 +4011,58 @@ fn large_prepared_collection_publishes_as_one_coherent_root() {
 }
 
 #[test]
+fn an_embedded_nul_reaches_search_as_an_ordinary_byte_through_the_public_api() {
+    use picto_library::predicate::TextField;
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("nul-notes", Lifecycle::Active, &[]))
+        .unwrap();
+    let (other, _) = library
+        .ingest(&imported("plain-notes", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .set_notes(
+            &SelectionTarget::Explicit {
+                root_ids: vec![root],
+            },
+            Some("alpha\0omega".into()),
+            1_700_000_000_000,
+        )
+        .unwrap();
+    library
+        .set_notes(
+            &SelectionTarget::Explicit {
+                root_ids: vec![other],
+            },
+            Some("alpha omega".into()),
+            1_700_000_000_000,
+        )
+        .unwrap();
+    library.settle_fts(100).unwrap();
+    let search = |text: &str| {
+        let mut search = query(ItemScope::All);
+        search.view.filter = FilterExpr::Clause(FilterClause::Text {
+            field: TextField::Notes,
+            query: text.into(),
+        });
+        library
+            .query(&search, &PageRequest::default())
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>()
+    };
+    // Text after the NUL is searchable, and a query containing the NUL byte
+    // matches exactly the field that contains it.
+    assert_eq!(search("omega"), vec![other, root]);
+    assert_eq!(search("a\0o"), vec![root]);
+    assert_eq!(search("a o"), vec![other]);
+    assert!(search("alpha\0omega\0").is_empty());
+}
+
+#[test]
 fn text_search_requires_three_characters_and_matches_substrings() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -3550,6 +4197,97 @@ fn text_search_stays_fresh_across_repeated_queries_and_mutations() {
     let after = library.query(&query, &PageRequest::default()).unwrap();
     assert_eq!(after.total, 1, "a rename into the term appears");
     assert_eq!(after.items[0].root_id, sunset);
+}
+
+#[test]
+fn text_projection_tracks_sqlite_through_structural_history_and_checkpoint_reopen() {
+    use picto_library::predicate::TextField;
+    fn verify(library: &Library) {
+        let snapshot = library.projections().snapshot();
+        let universe = (0..1000).collect::<roaring::RoaringBitmap>();
+        for term in ["needle", "renamed", "example", "source"] {
+            let expected = library
+                .database()
+                .read(
+                    picto_library::database::WorkPriority::VisibleRead,
+                    |connection| {
+                        let sql = picto_library::fts::search(connection, TextField::Global, term)?;
+                        assert_eq!(
+                            snapshot
+                                .text_index
+                                .search(TextField::Global, term, &universe)?,
+                            sql
+                        );
+                        Ok(sql & snapshot.lifecycle(Lifecycle::Active))
+                    },
+                )
+                .unwrap();
+            let mut query = query(ItemScope::All);
+            query.view.filter = FilterExpr::Clause(FilterClause::Text {
+                field: TextField::Global,
+                query: term.into(),
+            });
+            let page = library
+                .query_window(&query, &WindowRequest::at(0, 1500))
+                .unwrap();
+            assert_eq!(
+                page.page
+                    .items
+                    .iter()
+                    .map(|item| item.root_id.0)
+                    .collect::<roaring::RoaringBitmap>(),
+                expected
+            );
+        }
+    }
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (first, _) = library
+        .ingest(&imported("needle-one", Lifecycle::Active, &[]))
+        .unwrap();
+    let (second, _) = library
+        .ingest(&imported("needle-two", Lifecycle::Active, &[]))
+        .unwrap();
+    library.settle_fts(64).unwrap();
+    verify(&library);
+    let (group, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![first, second],
+            },
+            cover_root_id: first,
+            winning_collection_id: None,
+            name: Some("needle group".into()),
+            notes: None,
+            modified_at_ms: 42,
+        })
+        .unwrap();
+    verify(&library);
+    library.settle_fts(64).unwrap();
+    verify(&library);
+    library.undo().unwrap().unwrap();
+    verify(&library);
+    library.settle_fts(64).unwrap();
+    verify(&library);
+    library.redo().unwrap().unwrap();
+    verify(&library);
+    library.settle_fts(64).unwrap();
+    library.rename_root(group, "renamed group", 43).unwrap();
+    verify(&library);
+    library.settle_fts(64).unwrap();
+    verify(&library);
+    library.write_projection_checkpoint().unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    verify(&library);
+    let target = SelectionTarget::Explicit {
+        root_ids: vec![group],
+    };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    verify(&library);
+    library.permanently_delete(&target, 44).unwrap();
+    verify(&library);
 }
 
 #[test]

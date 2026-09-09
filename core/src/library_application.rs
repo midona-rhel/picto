@@ -86,8 +86,27 @@ impl LibraryApplication {
     }
 
     pub fn open(root: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_with(
+            root,
+            &picto_library::OpenCancellation::default(),
+            &mut |_| {},
+        )
+    }
+
+    /// Open under a cancellation handle, reporting the library's open stages.
+    /// A cancelled open returns `LibraryError::OpenCancelled`'s message and
+    /// leaves the library files as they were.
+    pub fn open_with(
+        root: impl AsRef<Path>,
+        cancellation: &picto_library::OpenCancellation,
+        progress: &mut dyn FnMut(picto_library::OpenStage),
+    ) -> Result<Self, String> {
         let root = root.as_ref().to_path_buf();
-        let library = Library::open(root.join(DATABASE_FILE)).map_err(|error| error.to_string())?;
+        let library = Library::open_with(root.join(DATABASE_FILE), cancellation, progress)
+            .map_err(|error| error.to_string())?;
+        if cancellation.is_cancelled() {
+            return Err(picto_library::LibraryError::OpenCancelled.to_string());
+        }
         Self::from_library(root, library)
     }
 
@@ -192,9 +211,9 @@ impl LibraryApplication {
         query: &picto_library::query::RootQuery,
         window: &picto_library::query::WindowRequest,
         request: Option<&picto_library::query_request::QueryRequest>,
-    ) -> Result<picto_library::query::RootWindow, String> {
+    ) -> Result<String, String> {
         self.library
-            .query_window_requested(query, window, request)
+            .query_window_json(query, window, request)
             .map_err(|error| error.to_string())
     }
 

@@ -12,6 +12,8 @@ try {
   );
 }
 
+export { LIBRARY_OPEN_CANCELLED, isLibraryOpenCancelled } from './libraryOpenCancellation.mjs';
+
 export function initRuntime(applicationDataRoot) {
   binding.initRuntime(applicationDataRoot);
 }

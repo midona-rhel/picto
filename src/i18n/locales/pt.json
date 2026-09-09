@@ -1466,5 +1466,9 @@
   "Zoom to fit": "Ampliar para caber",
   "Keep deleted files": "Manter ficheiros eliminados",
   "days": "dias",
-  "Recently deleted cloud files can be restored immediately during this period.": "Os ficheiros da nuvem eliminados recentemente podem ser restaurados imediatamente durante este período."
+  "Recently deleted cloud files can be restored immediately during this period.": "Os ficheiros da nuvem eliminados recentemente podem ser restaurados imediatamente durante este período.",
+  "Opening your library": "A abrir a sua biblioteca",
+  "Updating your library database": "A atualizar a base de dados da sua biblioteca",
+  "Loading your library": "A carregar a sua biblioteca",
+  "Starting library services": "A iniciar os serviços da biblioteca"
 }

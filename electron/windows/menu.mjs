@@ -1,3 +1,5 @@
+import { isLibraryOpenCancelled } from '../libraryOpenCancellation.mjs';
+
 export function createMenuManager({
   app,
   Menu,
@@ -27,6 +29,18 @@ export function createMenuManager({
     canCopyNames: false,
     canRegenerateThumbnails: false,
   };
+
+  // Menu clicks have no caller to reject to. A switch cancelled by quitting
+  // (or by a newer switch) is not an error; anything else is only logged.
+  function switchLibraryFromMenu(libraryPath) {
+    return switchLibrary(libraryPath).catch((error) => {
+      if (isLibraryOpenCancelled(error)) return;
+      console.error('[menu] could not switch library', {
+        libraryPath,
+        message: error?.message ?? String(error),
+      });
+    });
+  }
 
   const accelerator = (id, fallback) => {
     if (!Object.hasOwn(shortcutBindings, id)) return fallback;
@@ -65,9 +79,7 @@ export function createMenuManager({
         label: `\u{1F4CC} ${name}`,
         type: isCurrent ? 'checkbox' : 'normal',
         checked: isCurrent,
-        click: () => {
-          if (libraryPath !== getCurrentLibraryRoot()) switchLibrary(libraryPath);
-        },
+        click: () => (libraryPath !== getCurrentLibraryRoot() ? switchLibraryFromMenu(libraryPath) : undefined),
       });
     }
 
@@ -83,9 +95,7 @@ export function createMenuManager({
         label: name,
         type: isCurrent ? 'checkbox' : 'normal',
         checked: isCurrent,
-        click: () => {
-          if (libraryPath !== getCurrentLibraryRoot()) switchLibrary(libraryPath);
-        },
+        click: () => (libraryPath !== getCurrentLibraryRoot() ? switchLibraryFromMenu(libraryPath) : undefined),
       });
     }
 
@@ -165,7 +175,7 @@ export function createMenuManager({
                   });
                   return;
                 }
-                await switchLibrary(picked);
+                await switchLibraryFromMenu(picked);
               }
             },
           },

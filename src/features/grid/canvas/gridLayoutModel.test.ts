@@ -5,6 +5,7 @@ import {
   estimateGridScrollHeight,
   GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT,
   GridLayoutRuntime,
+  prepareGridLayout,
   restoreGridScrollTop,
   type ThumbnailActivationBuffers,
 } from './gridLayoutModel';
@@ -34,6 +35,21 @@ function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height =
 }
 
 describe('buildGridLayoutModel', () => {
+  it('prepares identical visible geometry and rejects warm geometry after a width change', () => {
+    const source = Array.from({ length: 1500 }, (_, i) => item(i + 1, `file-${i}`, 100 + i % 300, 200));
+    for (const viewMode of ['grid', 'waterfall', 'justified'] as const) {
+      const config = { width: 900, targetSize: 200, gap: 16, viewMode, textHeight: 20, scrollbarWidth: 8 };
+      const expected = new GridLayoutRuntime().update(source, config);
+      prepareGridLayout(source, config);
+      const prepared = new GridLayoutRuntime().update(source, config);
+      expect(prepared.positions).toEqual(expected.positions);
+      expect(prepared.items).toEqual(expected.items);
+      prepareGridLayout(source, config);
+      const resized = new GridLayoutRuntime().update(source, { ...config, width: 500 });
+      expect(resized.positions).toEqual(new GridLayoutRuntime().update(source, { ...config, width: 500 }).positions);
+      expect(resized.positions).not.toEqual(expected.positions);
+    }
+  });
   it('builds render, position, spatial, and item lookup data atomically', () => {
     const model = new GridLayoutRuntime().update([item(10), item(11, 'file-11', 200, 100)], {
       width: 500, targetSize: 180, gap: 16, viewMode: 'grid', textHeight: 20, scrollbarWidth: 8,

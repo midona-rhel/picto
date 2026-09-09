@@ -20,6 +20,7 @@ import {
   gridErrorAtom,
   gridSessionAtom,
   gridWindowStartAtom,
+  gridRevisionAtom,
   gridViewModeAtom,
   gridTargetSizeAtom,
   gridShowNameAtom,
@@ -61,6 +62,7 @@ import {
 } from '../../state/inspector';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
+import type { GridLayoutConfig } from './canvas/gridLayoutModel';
 import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntries } from './gridContextMenu';
@@ -114,6 +116,7 @@ import { t } from '../../i18n';
 
 const store = getDefaultStore();
 interface GridScreenProps {
+  onLayoutConfigChange?: (config: GridLayoutConfig) => void;
   nodeId?: string;
   transitionPhase?: GridTransitionPhase;
   initialScrollPosition?: GridScrollPosition | null;
@@ -122,6 +125,7 @@ interface GridScreenProps {
 }
 
 export function GridScreen({
+  onLayoutConfigChange,
   nodeId,
   transitionPhase = 'idle',
   initialScrollPosition = null,
@@ -138,6 +142,7 @@ export function GridScreen({
   const loading = useAtomValue(gridLoadingAtom);
   const error = useAtomValue(gridErrorAtom);
   const windowStart = useAtomValue(gridWindowStartAtom);
+  const revision = useAtomValue(gridRevisionAtom);
   const viewMode = useAtomValue(gridViewModeAtom);
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const showName = useAtomValue(gridShowNameAtom);
@@ -1221,6 +1226,8 @@ export function GridScreen({
 
     return (
       <CanvasGrid
+        onLayoutConfigChange={onLayoutConfigChange}
+        surfaceVisible={transitionPhase !== 'waiting'}
         items={items}
         headerContent={subfolderHeader}
         dragSourceScope={gridScope}
@@ -1237,7 +1244,7 @@ export function GridScreen({
         totalCount={totalCount}
         windowStart={windowStart}
         onRequestWindow={(index) => { void gridController.requestWindowAt(index); }}
-        onScrollActivity={() => gridController.cancelWindowRequest()}
+        onScrollActivity={() => gridController.handleScrollActivity()}
         interactive={!viewerSession && !quickLookSession}
         selectedItemIds={selectedItemIds}
         selectedFolderNodeIds={selectedSubfolderNodeIds}
@@ -1595,7 +1602,10 @@ export function GridScreen({
   };
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} data-grid-revision={revision} data-grid-start={windowStart}
+      data-grid-count={totalCount} data-grid-loaded={items.length}
+      data-grid-first-id={items[0]?.root_id} data-grid-last-id={items[items.length - 1]?.root_id}
+      data-grid-preview={queryHeadItems.map(item => item.root_id).join(',')}>
       {!viewerSession ? <GridFilterToolbar /> : null}
       <div className={styles.surfaceViewport}>
         {renderIncomingSurface()}

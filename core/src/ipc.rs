@@ -41,7 +41,7 @@ pub fn dispatch_library(
                 request: Option<picto_library::query_request::QueryRequest>,
             }
             let input: Input = parse(args_json)?;
-            read(application.query_window(&input.query, &input.window, input.request.as_ref())?)
+            application.query_window(&input.query, &input.window, input.request.as_ref())
         }
         "items.supersede_window" => {
             let input: picto_library::query_request::QueryRequest = parse(args_json)?;

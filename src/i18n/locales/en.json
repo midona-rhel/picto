@@ -1466,5 +1466,9 @@
   "Zoom to fit": "Zoom to fit",
   "Keep deleted files": "Keep deleted files",
   "days": "days",
-  "Recently deleted cloud files can be restored immediately during this period.": "Recently deleted cloud files can be restored immediately during this period."
+  "Recently deleted cloud files can be restored immediately during this period.": "Recently deleted cloud files can be restored immediately during this period.",
+  "Opening your library": "Opening your library",
+  "Updating your library database": "Updating your library database",
+  "Loading your library": "Loading your library",
+  "Starting library services": "Starting library services"
 }

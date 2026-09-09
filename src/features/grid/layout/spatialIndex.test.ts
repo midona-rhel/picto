@@ -73,6 +73,21 @@ describe('buildTileSpatialIndex', () => {
     expect(index.queryYRange(0, 1000, [])).toEqual([]);
   });
 
+  it('matches exact hit testing at the million-grid tail and across shifted bin boundaries', () => {
+    for (const offset of [7_900_003, -1057]) {
+      for (const mode of modes) {
+        const positions = computeLayout(Array.from({ length: 1500 }, (_, i) => 0.4 + i % 13 / 5),
+          1200, 240, 16, mode, 20).positions.map(p => ({ ...p, y: p.y + offset }));
+        const index = buildTileSpatialIndex(positions);
+        for (const top of [offset - 1000, offset, offset + 255, offset + 4096, offset + 40_000]) {
+          const bottom = top + 700;
+          expect(preciseFilter(positions, index.queryYRange(top, bottom, []), top, bottom))
+            .toEqual(bruteForceYRange(positions, top, bottom));
+        }
+      }
+    }
+  });
+
   it('appends to the provided output buffer and returns it', () => {
     const positions: LayoutItem[] = [{ x: 0, y: 0, w: 100, h: 100 }];
     const index = buildTileSpatialIndex(positions);
