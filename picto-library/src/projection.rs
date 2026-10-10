@@ -203,7 +203,11 @@ impl DateIndex {
         // SQL's COALESCE(date, -1) ties missing dates with actual -1 values.
         // Select three disjoint ranges; never materialize a full matching order.
         let below = index.between(None, Some(Self::key(-2)), selection & &index.present);
-        let equal = index.between(Some(Self::key(-1)), Some(Self::key(-1)), selection & &index.present) | absent;
+        let equal = index.between(
+            Some(Self::key(-1)),
+            Some(Self::key(-1)),
+            selection & &index.present,
+        ) | absent;
         let above = index.between(Some(Self::key(0)), None, selection & &index.present);
         let mut groups = [(below, false), (equal, true), (above, false)];
         if descending {
@@ -1094,30 +1098,15 @@ fn load(
     let mut folder_orders = HashMap::new();
     let mut folders = HashMap::new();
     let mut collection_orders = HashMap::new();
-    let mut orders = connection
-        .prepare("SELECT owner_kind, owner_id, checksum, payload FROM ordered_membership")?;
-    let rows = orders.query_map([], |row| {
-        Ok((
-            row.get::<_, u8>(0)?,
-            row.get::<_, u32>(1)?,
-            row.get::<_, Vec<u8>>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
-        ))
-    })?;
-    for (index, row) in rows.enumerate() {
-        if index % 256 == 0 {
-            crate::query_request::check()?;
-        }
-        let (kind, owner_id, checksum, payload) = row?;
-        let values = ordering::decode(&payload, &checksum)?;
+    ordering::load_all(connection, |kind, owner_id, values| {
         match kind {
-            value if value == OrderOwnerKind::Collection as u8 => {
+            OrderOwnerKind::Collection => {
                 collection_orders.insert(
                     RootId(owner_id),
                     Arc::new(values.into_iter().map(MediaId).collect::<Vec<_>>()),
                 );
             }
-            value if value == OrderOwnerKind::Folder as u8 => {
+            OrderOwnerKind::Folder => {
                 let bitmap = values.iter().copied().collect::<RoaringBitmap>();
                 folders.insert(FolderId(owner_id), bitmap.into());
                 folder_orders.insert(
@@ -1125,13 +1114,9 @@ fn load(
                     Arc::new(values.into_iter().map(RootId).collect()),
                 );
             }
-            _ => {
-                return Err(crate::LibraryError::InvalidState(format!(
-                    "unknown ordered membership kind {kind}"
-                )))
-            }
         }
-    }
+        Ok(())
+    })?;
 
     let mut root_kinds: HashMap<RootKind, SharedBitmap> = [
         (RootKind::Media, SharedBitmap::default()),

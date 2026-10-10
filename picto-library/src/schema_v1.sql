@@ -121,15 +121,15 @@ CREATE TABLE canonical_bitmap (
     PRIMARY KEY(domain, key_id, high_bits)
 ) WITHOUT ROWID, STRICT;
 
-CREATE TABLE ordered_membership (
+-- Folder and collection orders, ORDER_CHUNK_LEN ids per row (little-endian
+-- u32). An edit rewrites only the chunks it changes.
+CREATE TABLE ordered_membership_chunk (
     owner_kind INTEGER NOT NULL CHECK (owner_kind IN (1, 2)),
     owner_id INTEGER NOT NULL,
-    revision INTEGER NOT NULL,
-    cardinality INTEGER NOT NULL CHECK (cardinality >= 0),
-    format_version INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
     checksum BLOB NOT NULL,
     payload BLOB NOT NULL,
-    PRIMARY KEY(owner_kind, owner_id)
+    PRIMARY KEY(owner_kind, owner_id, chunk_index)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE recent_view (
