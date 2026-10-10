@@ -19,6 +19,12 @@ const MAX_ZIP_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_ZIP_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_ZIP_COMPRESSION_RATIO: u64 = 200;
+/// An image or other preview read out of an archive (a cover, a frame).
+pub(crate) const MAX_PREVIEW_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+/// A metadata document read out of an archive (container XML, OPF, JSON).
+pub(crate) const MAX_METADATA_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
+/// Cover discovery looks at no more than this many central-directory entries.
+const MAX_PREVIEW_DISCOVERY_ENTRIES: usize = 65_536;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedArchiveEntry {
@@ -151,6 +157,54 @@ fn unsafe_zip(reason: String) -> FileError {
     FileError::UnsupportedFile(format!("Unsafe ZIP archive: {reason}"))
 }
 
+/// Read one named entry of `zip` without ever holding more than `limit`
+/// bytes. The declared size and compression ratio are checked before
+/// allocating, and the bytes actually inflated are checked again, so a forged
+/// size in the archive's metadata cannot get past the budget.
+pub(crate) fn read_entry_bounded<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> FileResult<Vec<u8>> {
+    let mut entry = zip.by_name(name).map_err(|error| {
+        FileError::UnsupportedFile(format!("Could not find '{name}' in archive: {error}"))
+    })?;
+    let declared = entry.size();
+    let compressed = entry.compressed_size();
+    if declared > limit {
+        return Err(unsafe_zip(format!(
+            "entry {name:?} declares {declared} bytes; the limit is {limit}"
+        )));
+    }
+    let too_compressed =
+        |inflated: u64| inflated > 0 && (compressed == 0 || inflated / compressed > MAX_ZIP_COMPRESSION_RATIO);
+    if too_compressed(declared) {
+        return Err(unsafe_zip(format!(
+            "entry {name:?} exceeds the {MAX_ZIP_COMPRESSION_RATIO}:1 compression-ratio limit"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(declared as usize);
+    entry
+        .by_ref()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(FileError::Io)?;
+    let inflated = bytes.len() as u64;
+    if inflated > limit || inflated > declared || too_compressed(inflated) {
+        return Err(unsafe_zip(format!("entry {name:?} inflated past its declared size")));
+    }
+    Ok(bytes)
+}
+
+/// [`read_entry_bounded`] for a UTF-8 metadata document.
+pub(crate) fn read_entry_text_bounded<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> FileResult<String> {
+    String::from_utf8(read_entry_bounded(zip, name, MAX_METADATA_ENTRY_BYTES)?)
+        .map_err(|_| FileError::UnsupportedFile(format!("Archive entry {name:?} is not UTF-8")))
+}
+
 /// Get the path to the cover page (first image) inside a ZIP archive.
 ///
 /// Finds the first image file in the archive, sorted by filename.
@@ -159,6 +213,12 @@ pub fn get_cover_page_path(archive_path: &Path) -> FileResult<String> {
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open zip archive: {}", e)))?;
 
+    if zip.len() > MAX_PREVIEW_DISCOVERY_ENTRIES {
+        return Err(unsafe_zip(format!(
+            "contains {} entries; cover discovery reads at most {MAX_PREVIEW_DISCOVERY_ENTRIES}",
+            zip.len()
+        )));
+    }
     let mut image_paths: Vec<String> = Vec::new();
 
     for i in 0..zip.len() {
@@ -290,14 +350,7 @@ pub fn get_single_file_from_zip_bytes(
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open zip archive: {}", e)))?;
 
-    let mut entry = zip.by_name(path_in_zip).map_err(|e| {
-        FileError::UnsupportedFile(format!("Could not find '{}' in zip: {}", path_in_zip, e))
-    })?;
-
-    let mut buf = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    read_entry_bounded(&mut zip, path_in_zip, MAX_PREVIEW_ENTRY_BYTES)
 }
 
 /// Extract the cover page image bytes from an archive.
@@ -386,14 +439,7 @@ fn read_zip_entry_string(
     zip: &mut zip::ZipArchive<std::fs::File>,
     path: &str,
 ) -> FileResult<String> {
-    let mut entry = zip.by_name(path).map_err(|e| {
-        FileError::Thumbnail(format!("Could not find '{}' in archive: {}", path, e))
-    })?;
-
-    let mut buf = String::new();
-    entry.read_to_string(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    read_entry_text_bounded(zip, path)
 }
 
 #[cfg(test)]
@@ -411,6 +457,81 @@ mod tests {
 
         assert!(error.to_string().contains("1073741824-byte limit"));
         assert!(!directory.path().join("staging").exists());
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbImage::from_pixel(width, height, image::Rgb([200, 40, 40]))
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// Incompressible filler, so only the size limit can reject it.
+    fn noise(len: usize) -> Vec<u8> {
+        let mut state = 0x2545_f491_u32;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ordinary_cbz_and_epub_covers_still_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let cbz = directory.path().join("book.cbz");
+        write_zip(&cbz, &[("pages/002.png", &png(3, 3)), ("pages/001.png", &png(4, 2))]);
+        assert_eq!(get_archive_resolution(&cbz, false).unwrap(), (4, 2));
+
+        let epub = directory.path().join("book.epub");
+        let container = br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
+        let opf = br#"<?xml version="1.0"?><package><manifest><item id="c" href="cover.png" properties="cover-image"/></manifest></package>"#;
+        write_zip(
+            &epub,
+            &[
+                ("META-INF/container.xml", container),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/cover.png", &png(5, 7)),
+            ],
+        );
+        assert_eq!(get_archive_resolution(&epub, true).unwrap(), (5, 7));
+    }
+
+    #[test]
+    fn previews_reject_high_ratio_and_oversized_entries_before_reading_them() {
+        let directory = tempfile::tempdir().unwrap();
+        // 8 MiB of zeros deflates to a few KiB: far past the ratio limit.
+        let bomb = directory.path().join("bomb.cbz");
+        write_zip(&bomb, &[("001.png", &vec![0u8; 8 * 1024 * 1024])]);
+        let error = extract_cover_page(&bomb, false).unwrap_err().to_string();
+        assert!(error.contains("compression-ratio"), "{error}");
+
+        // An incompressible metadata document over its own, smaller budget.
+        let epub = directory.path().join("huge.epub");
+        let oversized = noise(MAX_METADATA_ENTRY_BYTES as usize + 1);
+        write_zip(&epub, &[("META-INF/container.xml", &oversized), ("cover.png", &png(2, 2))]);
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&epub).unwrap()).unwrap();
+        let error = read_entry_text_bounded(&mut zip, "META-INF/container.xml")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("limit"), "{error}");
+        // The EPUB still previews through the generic first-image fallback.
+        assert_eq!(get_archive_resolution(&epub, true).unwrap(), (2, 2));
     }
 }
 
