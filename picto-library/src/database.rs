@@ -11,6 +11,12 @@ use crate::schema;
 use crate::{LibraryError, Result};
 
 const DEFAULT_READERS: usize = 8;
+/// SQLite's own page cache per connection. Without it every connection keeps
+/// about 2 MB and leans on the OS file cache, which Linux keeps generously and
+/// Windows and macOS do not. The cache fills only as pages are read; the
+/// resident projection, not SQLite, serves grid reads.
+const WRITER_CACHE_KIB: i64 = 64 * 1024;
+const READER_CACHE_KIB: i64 = 16 * 1024;
 const GATE_HISTOGRAM_BUCKETS: usize = 32;
 
 /// A prepared publication settles its resident derived state in the same
@@ -179,7 +185,7 @@ impl ReadPool {
         };
         let connection = match idle {
             Some(connection) => connection,
-            None => match open_connection(&self.path, false) {
+            None => match open_connection(&self.path, false, READER_CACHE_KIB) {
                 Ok(connection) => connection,
                 Err(error) => {
                     self.restore_permit();
@@ -234,7 +240,7 @@ impl LibraryDatabase {
                 path.display()
             )));
         }
-        let mut writer = open_connection(&path, true)?;
+        let mut writer = open_connection(&path, true, WRITER_CACHE_KIB)?;
         schema::create(&mut writer)?;
         Self::from_writer(path, writer)
     }
@@ -251,7 +257,7 @@ impl LibraryDatabase {
         progress: &mut dyn FnMut(OpenStage),
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut writer = open_connection(&path, false)?;
+        let mut writer = open_connection(&path, false, WRITER_CACHE_KIB)?;
         schema::migrate_for_open(&mut writer, &path, cancellation, progress)?;
         schema::validate(&writer)?;
         schema::ensure_accelerator_indexes(&writer)?;
@@ -480,7 +486,7 @@ impl LibraryDatabase {
     }
 }
 
-fn open_connection(path: &Path, create: bool) -> Result<Connection> {
+fn open_connection(path: &Path, create: bool, cache_kib: i64) -> Result<Connection> {
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_URI;
@@ -498,8 +504,11 @@ fn open_connection(path: &Path, create: bool) -> Result<Connection> {
          PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
          PRAGMA wal_autocheckpoint = 0;
-         PRAGMA journal_size_limit = 67108864;",
+         PRAGMA journal_size_limit = 67108864;
+         PRAGMA mmap_size = 0;",
     )?;
+    // Negative = KiB rather than pages, so the budget ignores the page size.
+    connection.pragma_update(None, "cache_size", -cache_kib)?;
     Ok(connection)
 }
 
