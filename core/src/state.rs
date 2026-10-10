@@ -324,18 +324,15 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
     let _invocations = invocation_lock().read().await;
     let state = get_state()?;
     let started = Instant::now();
-    let cache_key = matches!(
-        command,
-        "items.query" | "items.mime_facets" | "sidebar.counts"
-    )
-    .then(|| format!("{command}\0{args_json}"));
-    // Commands without a serialized-response cache already capture their own
-    // consistent snapshot. Cancellation must not wait for a database reader.
+    // Only snapshot-only reads are cached, keyed on the query epoch: it moves
+    // when anything those reads observe changes, not on queue bookkeeping.
+    // sidebar.counts also reads duplicate pairs from SQL, so it is not cached
+    // (it is cheap since it stopped counting every tag).
+    let cache_key = matches!(command, "items.query" | "items.mime_facets")
+        .then(|| format!("{command}\0{args_json}"));
     let revision_before = cache_key
         .as_ref()
-        .map(|_| state.application.library().database().revision())
-        .transpose()
-        .map_err(|error| error.to_string())?;
+        .map(|_| state.application.library().query_epoch());
     if let Some(cache_key) = cache_key.as_ref() {
         if let Some((revision, result)) = state.read_cache.lock().get(cache_key) {
             if Some(*revision) == revision_before {
@@ -348,12 +345,7 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         .await?
         .ok_or_else(|| format!("Unknown schema-1 command: {command}"));
     if let (Some(cache_key), Ok(serialized)) = (cache_key, result.as_ref()) {
-        let revision_after = state
-            .application
-            .library()
-            .database()
-            .revision()
-            .map_err(|error| error.to_string())?;
+        let revision_after = state.application.library().query_epoch();
         if revision_before == Some(revision_after) {
             state
                 .read_cache

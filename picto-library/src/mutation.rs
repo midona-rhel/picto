@@ -42,7 +42,13 @@ struct PublishedDelta {
 impl crate::database::PublicationDelta for PublishedDelta {
     fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
         let snapshot = &mut self.snapshot;
-        let dirty = Arc::make_mut(&mut snapshot.drawing).settle(transaction)?;
+        // Most publications change no drawing fact; do not copy the drawing
+        // index for them.
+        let dirty = if crate::browsing::DrawingIndex::journal_is_dirty(transaction)? {
+            Arc::make_mut(&mut snapshot.drawing).settle(transaction)?
+        } else {
+            RoaringBitmap::new()
+        };
         if !dirty.is_empty() {
             Arc::make_mut(&mut snapshot.name_index).refresh(transaction, &dirty)?;
         }
@@ -452,6 +458,13 @@ impl Library {
         }
     }
 
+    /// A version of everything snapshot-only queries can observe. Unlike the
+    /// database revision, queue and subscription bookkeeping does not move it,
+    /// so cached query responses survive background work.
+    pub fn query_epoch(&self) -> u64 {
+        self.projections.snapshot().query_versions.epoch()
+    }
+
     pub fn query(&self, query: &RootQuery, page: &PageRequest) -> Result<RootPage> {
         self.scoped(&query.scope, |snapshot, media| {
             crate::query::page_cached(
@@ -467,7 +480,7 @@ impl Library {
 
     pub fn mime_facets(&self, query: &RootQuery) -> Result<crate::query::MimeFacets> {
         self.scoped(&query.scope, |snapshot, media| {
-            crate::query::mime_facets(snapshot, query, media)
+            crate::query::mime_facets_cached(snapshot, query, media, Some(&self.match_cache))
         })
     }
 
@@ -634,25 +647,27 @@ impl Library {
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
                 let values = connection.query_row(
-                    "SELECT
-                         (SELECT COUNT(*) FROM media_item),
-                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
-                          ON file.file_id = media.file_id WHERE file.mime LIKE 'image/%'),
-                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
-                          ON file.file_id = media.file_id WHERE file.mime LIKE 'video/%'),
-                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
-                          ON file.file_id = media.file_id WHERE file.mime LIKE 'audio/%'),
-                         (SELECT COUNT(*) FROM media_item media JOIN media_file file
-                          ON file.file_id = media.file_id
-                          WHERE file.mime NOT LIKE 'image/%'
-                            AND file.mime NOT LIKE 'video/%'
-                            AND file.mime NOT LIKE 'audio/%'),
-                         (SELECT COUNT(*) FROM media_file),
-                         (SELECT COALESCE(SUM(size_bytes), 0) FROM media_file),
+                    // One pass over media and one over files, instead of six scans.
+                    "WITH assets AS (
+                         SELECT COUNT(*) AS total,
+                                COALESCE(SUM(file.mime LIKE 'image/%'), 0) AS images,
+                                COALESCE(SUM(file.mime LIKE 'video/%'), 0) AS videos,
+                                COALESCE(SUM(file.mime LIKE 'audio/%'), 0) AS audio
+                         FROM media_item media JOIN media_file file ON file.file_id = media.file_id
+                     ), files AS (
+                         SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS bytes
+                         FROM media_file
+                     )
+                     SELECT
+                         assets.total, assets.images, assets.videos, assets.audio,
+                         assets.total - assets.images - assets.videos - assets.audio,
+                         files.total,
+                         files.bytes,
                          (SELECT COUNT(*) FROM tag_definition),
                          (SELECT COUNT(*) FROM folder_definition),
                          (SELECT COUNT(*) FROM smart_folder_definition),
-                         (SELECT COUNT(*) FROM subscription)",
+                         (SELECT COUNT(*) FROM subscription)
+                     FROM assets, files",
                     [],
                     |row| {
                         Ok((
@@ -7275,6 +7290,20 @@ fn publish_delta(
             .snapshot
             .query_versions
             .invalidate_sql(delta.snapshot.revision);
+    }
+    // Announce smart folders only when a result actually changed, so edits
+    // that cannot move any folder do not make every listener reload.
+    if delta.receipt.resources.iter().any(|resource| resource == "smart_folders")
+        && Arc::ptr_eq(
+            &projections.snapshot().smart_results,
+            &delta.snapshot.smart_results,
+        )
+        && Arc::ptr_eq(
+            &projections.snapshot().smart_queries,
+            &delta.snapshot.smart_queries,
+        )
+    {
+        delta.receipt.resources.retain(|resource| resource != "smart_folders");
     }
     projections.publish(delta.snapshot);
     publication.register(&delta.receipt);

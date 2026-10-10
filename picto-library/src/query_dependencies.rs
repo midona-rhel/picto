@@ -69,6 +69,12 @@ impl QueryVersions {
         versions
     }
 
+    /// Changes exactly when some projection a query can read changed (or
+    /// SQL-derived results were invalidated); bookkeeping writes leave it.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.0.iter().copied().max().unwrap_or(0)
+    }
+
     pub(crate) fn invalidate_sql(&mut self, revision: u64) {
         self.0[Dependency::Sql as usize] = revision;
     }

@@ -311,7 +311,9 @@ fn reconcile_ingested_sources(
         .auxiliary_write_if_changed(
             picto_library::database::WorkPriority::CanonicalIngest,
             ["subscriptions".to_owned(), "tasks".to_owned()],
-            [root_id],
+            // Source bookkeeping changes no library item; listing the root would
+            // invalidate SQL-derived query results for nothing.
+            std::iter::empty(),
             |transaction, _| {
                 let mut changed = 0;
                 for (site_id, post_key, source_key, item_key) in &sources {
