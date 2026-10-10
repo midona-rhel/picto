@@ -12,6 +12,7 @@ use picto_library::predicate::{
 use picto_library::query::{ItemScope, RootQuery, WindowPosition, WindowRequest};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
+    LabColor,
     FolderId, GroupRequest, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating,
     RootId, SmartFolderId, SmartFolderInput,
 };
@@ -344,6 +345,97 @@ fn main() -> R<()> {
             library.query_window(query, &bottom)?; Ok(())
         }, Some(|| { b3 = !b3; library.apply_tags(&bump, &["audit:bump".into()], b3)?; Ok(()) }))?;
     }
+    // --- search and filters: every run uses a fresh query, so no cache helps ---
+    let all = |filter: FilterExpr| RootQuery { scope: ItemScope::All, view: ViewQuerySpec { filter, sort: ItemSort::default() } };
+    let text = |q: String| FilterExpr::Clause(FilterClause::Text { field: TextField::Global, query: q });
+    let clause = FilterExpr::Clause;
+    let mut i = 0usize;
+    let mut cold = |label: &str, make: &mut dyn FnMut(usize) -> RootQuery| -> R<()> {
+        let mut samples = Vec::new();
+        let mut total = 0;
+        for _ in 0..runs * 2 {
+            i += 1;
+            let query = make(i);
+            let t = Instant::now();
+            total = library.query_window(&query, &WindowRequest::at(0, 500))?.page.total;
+            samples.push(ms(t));
+        }
+        emit(label, &total.to_string(), &mut samples);
+        Ok(())
+    };
+    cold("search text rare (1 hit)", &mut |i| all(text(format!("ge-00{:06}", 100_000 + i * 1_111))))?;
+    cold("search text common (~1k hits)", &mut |i| all(text(format!("image-00{:03}", 100 + i))))?;
+    cold("search text no match", &mut |i| all(text(format!("zq{i}xw"))))?;
+    cold("search text in notes", &mut |i| all(text(format!("scene {}", 1_000 + i))))?;
+    cold("search text + tag (narrow)", &mut |i| all(FilterExpr::All(vec![tag_filter(vocab_ids[i % 60]), text(format!("image-0{i}"))])))?;
+    cold("search text + rating 5 (100k)", &mut |i| all(FilterExpr::All(vec![clause(FilterClause::Ratings { ratings: vec![Rating::Five] }), text(format!("image-00{:02}", i))])))?;
+    cold("filter width range", &mut |i| all(clause(FilterClause::Width { minimum: Some(800 + i as u64), maximum: Some(2_000) })))?;
+    cold("filter imported range 30%", &mut |i| all(clause(FilterClause::ImportedAt { minimum_ms: Some(BASE_MS + (i * 1_000) as u64), maximum_ms: Some(BASE_MS + at(300_000) as u64 + (i * 1_000) as u64) })))?;
+    cold("filter captured range", &mut |i| all(clause(FilterClause::CapturedAt { minimum_ms: Some(BASE_MS - at(500_000) as u64 * 1_000 + i as u64), maximum_ms: Some(BASE_MS) })))?;
+    cold("filter size range", &mut |i| all(clause(FilterClause::TotalSize { minimum_bytes: Some(1_000_000 + i as u64), maximum_bytes: Some(2_000_000) })))?;
+    cold("filter color", &mut |i| all(clause(FilterClause::Color { color: LabColor { l: 50.0, a: 10.0 + i as f32, b: -20.0, weight: 1.0 }, delta_e: 40.0 })))?;
+    cold("filter tags exact", &mut |i| all(clause(FilterClause::Tags { tag_ids: vec![vocab_ids[i % 60]], mode: SetMatchMode::Exact })))?;
+    cold("filter notes present + urls absent", &mut |i| all(FilterExpr::All(vec![clause(FilterClause::NotesPresent { present: true }), clause(FilterClause::SourceUrlsPresent { present: i % 2 == 0 })])))?;
+    cold("filter complex (any tags, not tag, rating, width, text)", &mut |i| all(FilterExpr::All(vec![
+        FilterExpr::Any(vec![tag_filter(vocab_ids[i % 60]), tag_filter(vocab_ids[(i + 1) % 60]), clause(FilterClause::Ratings { ratings: vec![Rating::Five] })]),
+        FilterExpr::Not(Box::new(tag_filter(vocab_ids[(i + 2) % 60]))),
+        clause(FilterClause::Width { minimum: Some(800 + i as u64), maximum: None }),
+        text(format!("image-0{}", i % 10)),
+    ])))?;
+    // What typing feels like: each keystroke of a growing query, end to end.
+    let mut typed = Vec::new();
+    for word in ["image-000", "scene 12", "example.test/post/77"] {
+        let t = Instant::now();
+        for end in 3..=word.chars().count() {
+            let prefix: String = word.chars().take(end).collect();
+            library.query_window(&all(text(prefix)), &WindowRequest::at(0, 500))?;
+        }
+        typed.push(ms(t));
+    }
+    emit("search typing a word (every keystroke, total)", "3 words", &mut typed);
+    // Select everything a search found and move it to Trash, then back.
+    let found = SelectionTarget::Query { query: all(FilterExpr::All(vec![clause(FilterClause::Ratings { ratings: vec![Rating::Five] }), text("image-00".into())])), excluded_root_ids: Vec::new() };
+    let found_trash = SelectionTarget::Query { query: RootQuery { scope: ItemScope::Trash, view: ViewQuerySpec::default() }, excluded_root_ids: Vec::new() };
+    let mut trash = Vec::new();
+    let mut back = Vec::new();
+    for _ in 0..runs {
+        let t = Instant::now();
+        library.set_lifecycle(&found, Lifecycle::Trash)?;
+        trash.push(ms(t));
+        let t = Instant::now();
+        library.set_lifecycle(&found_trash, Lifecycle::Active)?;
+        back.push(ms(t));
+    }
+    emit("trash select-all of a search (rating 5 + text)", "-", &mut trash);
+    emit("restore all of Trash", "-", &mut back);
+    bench("selection summary of a search select-all", "-", runs, || { library.selection_summary(&found)?; Ok(()) }, None::<fn() -> R<()>>)?;
+    // Shift-click range selection across 50k items of the main view.
+    let first_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(100_000), 1))?;
+    let far_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(150_000), 1))?;
+    let range = SelectionTarget::Range {
+        query: all(FilterExpr::All(Vec::new())),
+        anchor_root_id: first_page.page.items[0].root_id,
+        focus_root_id: far_page.page.items[0].root_id,
+    };
+    bench("selection summary of a 50k shift-click range", "50000", runs, || { library.selection_summary(&range)?; Ok(()) }, None::<fn() -> R<()>>)?;
+    // Typing into the tag picker: one tag search per keystroke.
+    let mut picked = Vec::new();
+    for word in ["vocab:12", "vocab:4"] {
+        let t = Instant::now();
+        for end in 1..=word.len() {
+            library.tag_page(None, Some(&word[..end]), 0, 12)?;
+        }
+        picked.push(ms(t));
+    }
+    emit("tag search typing a word (every keystroke, total)", "2 words", &mut picked);
+    let mut s = 0usize;
+    bench("create smart folder (text rule)", "-", runs, || {
+        s += 1;
+        let (id, _) = library.create_smart_folder(smart_input(&format!("Text {s}"), text(format!("image-0{s}"))))?;
+        library.delete_smart_folder(id)?;
+        Ok(())
+    }, None::<fn() -> R<()>>)?;
+
     print_memory(&library, "before_reopen");
 
     // --- close / reopen ---
@@ -467,24 +559,33 @@ fn prepared(index: usize) -> PreparedImport {
         file_path: format!("/fixture/{index}.png"),
         facts: ImmutableMediaFacts {
             mime: "image/png".into(),
-            size_bytes: 512_000 + (index % 4_096) as u64,
-            width: Some(1_024),
-            height: Some(768),
+            size_bytes: 512_000 + (index * 7_919 % 4_000_000) as u64,
+            width: Some(400 + (index * 37 % 3_600) as u32),
+            height: Some(300 + (index * 53 % 2_700) as u32),
             duration_ms: None,
             frame_count: Some(1),
             content_hash: format!("hash-{index}"),
             perceptual_hash: None,
-            palette: Vec::new(),
+            palette: vec![LabColor {
+                l: (index * 13 % 100) as f32,
+                a: (index * 29 % 160) as f32 - 80.0,
+                b: (index * 41 % 160) as f32 - 80.0,
+                weight: 1.0,
+            }],
         },
         lifecycle: Lifecycle::Active,
         rating: if index.is_multiple_of(10) { Rating::Five } else { Rating::Unrated },
-        notes: None,
+        notes: index.is_multiple_of(7).then(|| format!("note about scene {}", index % 5_000)),
         tags: vec![format!("vocab:{}", index % VOCAB), format!("vocab:{}", (index * 7 + 3) % VOCAB)],
         folders: Vec::new(),
-        source_urls: Vec::new(),
+        source_urls: if index.is_multiple_of(5) {
+            vec![format!("https://example.test/post/{index}")]
+        } else {
+            Vec::new()
+        },
         source_identity: None,
         imported_at_ms: BASE_MS as i64 + index as i64,
-        captured_at_ms: None,
+        captured_at_ms: index.is_multiple_of(2).then_some(BASE_MS as i64 - index as i64 * 1_000),
     }
 }
 
