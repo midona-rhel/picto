@@ -747,6 +747,8 @@ describe('gridController pagination', () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(queryItemsMock).toHaveBeenCalledOnce();
 
+    // The stale scan was superseded in the backend as soon as the query changed.
+    expect(supersedeWindowMock).toHaveBeenCalled();
     resolveFirst?.(page([item(1)], 1));
     await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));
     expect(queryText(queryItemsMock.mock.calls[1][0])).toBe('carol');

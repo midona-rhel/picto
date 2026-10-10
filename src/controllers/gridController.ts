@@ -659,7 +659,10 @@ class GridSessionController {
 
   private runSettledSearch(): void {
     if (this.searchInFlight) {
+      // The query changed while the previous one was still scanning: stop
+      // that scan in the backend instead of letting it finish unseen.
       this.searchQueued = true;
+      this.cancelWindowRequest();
       return;
     }
     this.searchInFlight = (async () => {
