@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '../../platform/ipc';
+import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { ProgressDialog } from '../../shared/ui/ProgressDialog';
@@ -23,16 +24,23 @@ export function CloudSyncBar() {
   useEffect(() => {
     let cancelled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    // Status changes arrive as `cloud` invalidations. Progress written during a
+    // reconcile does not publish, so poll quickly only while one runs, slowly
+    // while sync is configured, and not at all while it is disabled.
     const poll = async () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = undefined;
       const next = await invoke<CloudSyncStatus>('cloud.status.get').catch(() => null);
-      if (!cancelled) {
-        setStatus(next);
-        timeout = setTimeout(poll, next?.state === 'reconciling' ? 250 : 1_000);
-      }
+      if (cancelled) return;
+      setStatus(next);
+      const delay = next?.state === 'reconciling' ? 250 : next && next.state !== 'disabled' ? 15_000 : null;
+      if (delay !== null) timeout = setTimeout(poll, delay);
     };
     void poll();
+    const unregister = libraryInvalidation.register('cloud', () => { void poll(); });
     return () => {
       cancelled = true;
+      unregister();
       if (timeout) clearTimeout(timeout);
     };
   }, []);
