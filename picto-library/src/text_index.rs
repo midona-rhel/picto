@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
+use memchr::memmem::Finder;
+use parking_lot::Mutex;
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
@@ -19,6 +21,21 @@ const SHARD_MASK: u32 = (1 << SHARD_SHIFT) - 1;
 /// Selections up to this size look each root up directly instead of scanning.
 const DIRECT_LOOKUP_MAXIMUM: u64 = 4096;
 static SEARCH_POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+/// Distinguishes text index contents: every mutation takes a fresh value, so a
+/// remembered search can only be reused against the exact text it ran on.
+static GENERATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Recent searches, so typing a longer query narrows the previous result
+/// instead of scanning every root again.
+static RECENT: Mutex<Vec<Recent>> = Mutex::new(Vec::new());
+const RECENT_SEARCHES: usize = 8;
+
+struct Recent {
+    generation: u64,
+    field: TextField,
+    query: String,
+    universe: RoaringBitmap,
+    result: RoaringBitmap,
+}
 
 #[derive(Debug, Clone)]
 struct TextRow {
@@ -41,15 +58,12 @@ fn fields_of(field: TextField) -> Range<usize> {
     }
 }
 
-/// The matching contract for one settled field value: the lowercased,
-/// trimmed literal is a byte substring of the lowercased text. Every byte is
-/// ordinary, including an embedded NUL, so text after a NUL stays searchable
-/// and a query containing one matches exactly the fields containing that
-/// byte sequence. Alphabetical order deliberately differs: it mirrors
-/// SQLite's NOCASE collation, which stops at a NUL.
-fn field_matches(value: &str, query: &str) -> bool {
-    value.contains(query)
-}
+// The matching contract for one settled field value: the lowercased,
+// trimmed literal is a byte substring of the lowercased text. Every byte is
+// ordinary, including an embedded NUL, so text after a NUL stays searchable
+// and a query containing one matches exactly the fields containing that
+// byte sequence. Alphabetical order deliberately differs: it mirrors
+// SQLite's NOCASE collation, which stops at a NUL.
 
 impl TextShard {
     fn bytes(&self) -> usize {
@@ -95,36 +109,73 @@ impl TextShard {
             .map(|index| &self.rows[index])
     }
 
-    fn matches(&self, row: &TextRow, fields: Range<usize>, query: &str) -> bool {
+    fn matches(&self, row: &TextRow, fields: Range<usize>, finder: &Finder<'_>) -> bool {
         fields
             .into_iter()
-            .any(|index| field_matches(self.field(row, index), query))
+            .any(|index| finder.find(self.field(row, index).as_bytes()).is_some())
     }
 
+    /// Roots of this shard in `universe` whose `fields` contain the query.
+    /// A sparse universe looks its rows up; a dense one scans the shard's
+    /// text once with a vectorized substring search and maps each hit back to
+    /// its row, so rows without the query cost nothing per row.
     fn search(
         &self,
-        field: TextField,
-        query: &str,
+        fields: Range<usize>,
+        finder: &Finder<'_>,
         universe: &RoaringBitmap,
         removed: &RoaringBitmap,
-        cancellation: Option<&crate::query_request::Cancellation>,
-    ) -> Result<RoaringBitmap> {
-        let fields = fields_of(field);
+    ) -> RoaringBitmap {
         let mut result = RoaringBitmap::new();
-        for (index, row) in self.rows.iter().enumerate() {
-            if index % 64 == 0 {
-                if let Some(token) = cancellation {
-                    token.check()?;
+        let (Some(first), Some(last)) = (self.rows.first(), self.rows.last()) else {
+            return result;
+        };
+        let candidates = universe.range_cardinality(first.id..=last.id);
+        if candidates == 0 {
+            return result;
+        }
+        if candidates * 8 < self.rows.len() as u64 {
+            for id in universe.range(first.id..=last.id) {
+                if !removed.contains(id)
+                    && self.row(id).is_some_and(|row| self.matches(row, fields.clone(), finder))
+                {
+                    result.insert(id);
                 }
             }
-            if universe.contains(row.id)
-                && !removed.contains(row.id)
-                && self.matches(row, fields.clone(), query)
-            {
+            return result;
+        }
+        let text = self.text.as_bytes();
+        let needle = finder.needle().len();
+        let mut from = 0;
+        while let Some(offset) = finder.find(&text[from..]) {
+            let start = from + offset;
+            let index = self
+                .rows
+                .partition_point(|row| row.bounds[0] as usize <= start)
+                .saturating_sub(1);
+            let row = &self.rows[index];
+            let row_end = row.bounds[4] as usize;
+            if !universe.contains(row.id) || removed.contains(row.id) {
+                from = row_end.max(start + 1);
+                continue;
+            }
+            let hit = fields.clone().any(|field| {
+                let (low, high) = (row.bounds[field] as usize, row.bounds[field + 1] as usize);
+                low <= start && start + needle <= high
+            });
+            if hit {
                 result.insert(row.id);
+                from = row_end.max(start + 1);
+            } else {
+                // A match across two fields, or in a field not searched: a
+                // later one in this row may still count.
+                from = start + 1;
+            }
+            if from >= text.len() {
+                break;
             }
         }
-        Ok(result)
+        result
     }
 }
 
@@ -135,6 +186,7 @@ pub struct TextIndex {
     shards: BTreeMap<u32, Arc<TextShard>>,
     bytes: usize,
     removed: RoaringBitmap,
+    generation: u64,
 }
 
 impl TextIndex {
@@ -162,7 +214,12 @@ impl TextIndex {
         Ok(index)
     }
 
+    fn touch(&mut self) {
+        self.generation = GENERATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn install(&mut self, key: u32, mut shard: TextShard) {
+        self.touch();
         if let Some(previous) = self.shards.remove(&key) {
             self.bytes -= previous.bytes() + 64;
         }
@@ -194,6 +251,7 @@ impl TextIndex {
 
     /// Mask roots immediately; their shards are rebuilt at the next refresh.
     pub(crate) fn remove(&mut self, roots: &RoaringBitmap) {
+        self.touch();
         self.removed |= roots;
     }
 
@@ -234,7 +292,48 @@ impl TextIndex {
             return Ok(RoaringBitmap::new());
         }
         let query = query.to_lowercase();
+        let reused = self.narrowed_universe(field, &query, universe);
+        let universe = reused.as_ref().unwrap_or(universe);
+        let result = self.scan(field, &query, universe)?;
+        let mut recent = RECENT.lock();
+        recent.retain(|entry| entry.generation == self.generation);
+        recent.push(Recent {
+            generation: self.generation,
+            field,
+            query,
+            universe: universe.clone(),
+            result: result.clone(),
+        });
+        if recent.len() > RECENT_SEARCHES {
+            recent.remove(0);
+        }
+        Ok(result)
+    }
+
+    /// Every match of a query that contains an earlier query (typing one more
+    /// letter) is among the earlier matches, so search only those.
+    fn narrowed_universe(
+        &self,
+        field: TextField,
+        query: &str,
+        universe: &RoaringBitmap,
+    ) -> Option<RoaringBitmap> {
+        let recent = RECENT.lock();
+        recent
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.generation == self.generation
+                    && entry.field == field
+                    && query.contains(entry.query.as_str())
+                    && universe.is_subset(&entry.universe)
+            })
+            .map(|entry| &entry.result & universe)
+    }
+
+    fn scan(&self, field: TextField, query: &str, universe: &RoaringBitmap) -> Result<RoaringBitmap> {
         let fields = fields_of(field);
+        let finder = Finder::new(query.as_bytes());
         if universe.len() <= DIRECT_LOOKUP_MAXIMUM {
             let mut matches = RoaringBitmap::new();
             for (index, id) in universe.iter().enumerate() {
@@ -248,7 +347,7 @@ impl TextIndex {
                     continue;
                 };
                 if let Some(row) = shard.row(id) {
-                    if shard.matches(row, fields.clone(), &query) {
+                    if shard.matches(row, fields.clone(), &finder) {
                         matches.insert(id);
                     }
                 }
@@ -257,14 +356,11 @@ impl TextIndex {
         }
         let selected = self.shards.values().collect::<Vec<_>>();
         let cancellation = crate::query_request::current();
-        let search = |shard: &&Arc<TextShard>| {
-            shard.search(
-                field,
-                &query,
-                universe,
-                &self.removed,
-                cancellation.as_ref(),
-            )
+        let search = |shard: &&Arc<TextShard>| -> Result<RoaringBitmap> {
+            if let Some(token) = cancellation.as_ref() {
+                token.check()?;
+            }
+            Ok(shard.search(fields.clone(), &finder, universe, &self.removed))
         };
         if selected.len() >= 32 {
             let pool = SEARCH_POOL.get_or_init(|| {
@@ -459,6 +555,54 @@ mod tests {
                 index.search(TextField::Name, "needle", &universe).unwrap(),
                 crate::fts::search(&connection, TextField::Name, "needle").unwrap() & universe
             );
+        }
+    }
+
+    #[test]
+    fn substring_scans_match_the_sql_oracle_across_fields_universes_and_typing() {
+        // Short field values from a tiny alphabet make matches that start in
+        // one field and end in the next common, which the shard scan must not
+        // count, while a later in-field match in the same row must count.
+        let mut connection = fixture();
+        let transaction = connection.transaction().unwrap();
+        let mut state = 0x9e37_79b9_u64;
+        let word = |state: &mut u64| {
+            (0..(*state % 6) as usize)
+                .map(|_| {
+                    *state ^= *state << 13;
+                    *state ^= *state >> 7;
+                    *state ^= *state << 17;
+                    ["a", "b", "ab", "猫", "z"][(*state % 5) as usize]
+                })
+                .collect::<String>()
+        };
+        for id in 3..9_000 {
+            let fields = [word(&mut state), word(&mut state), word(&mut state), word(&mut state)];
+            transaction
+                .execute(
+                    "INSERT INTO root_fts(rowid,name,notes,urls,source_text) VALUES (?1,?2,?3,?4,?5)",
+                    rusqlite::params![id, fields[0], fields[1], fields[2], fields[3]],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        let index = TextIndex::load(&connection).unwrap();
+        let universes = [
+            (1..9_000).collect::<RoaringBitmap>(),
+            (1..9_000).filter(|id| id % 3 != 0).collect(),
+            (1..9_000).filter(|id| id % 11 == 0).collect(),
+        ];
+        for field in [TextField::Global, TextField::Name, TextField::Notes, TextField::SourceUrl] {
+            // Each query extends the previous one, as typing does.
+            for query in ["aba", "abab", "ababz", "b猫a", "b猫ab", "zzz", "azb"] {
+                for universe in &universes {
+                    assert_eq!(
+                        index.search(field, query, universe).unwrap(),
+                        crate::fts::search(&connection, field, query).unwrap() & universe,
+                        "{field:?} {query:?}"
+                    );
+                }
+            }
         }
     }
 }
