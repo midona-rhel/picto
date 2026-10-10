@@ -15,9 +15,12 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
 
 Current product and release documentation lives in `docs/`:
 
-- [`docs/RELEASE_COMPLETION_PLAN.md`](./docs/RELEASE_COMPLETION_PLAN.md) — executable release backlog
-- [`docs/pbis/active-alpha/`](./docs/pbis/active-alpha/) — current blockers only
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — issues, branches, pull requests and releases
+- [`docs/architecture.md`](./docs/architecture.md) — how the shipped system works
 - [`docs/user-guide/`](./docs/user-guide/) — user guide
+
+Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). `main` holds released
+code; development happens on `dev`.
 
 ## Development
 

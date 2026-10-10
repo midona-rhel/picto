@@ -1,0 +1,45 @@
+name: CI
+
+# Every pull request is verified before review, not only release branches.
+# Release branches keep their own gate (alpha-gate.yml), which calls the same
+# verify workflow and additionally packages and smokes all three platforms.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+  merge_group:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    uses: ./.github/workflows/verify.yml
+
+  branch-policy:
+    name: branch-policy
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Enforce the release-only main branch
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          # main only ever receives a finished release branch. Everything else
+          # lands on dev and reaches main inside the next release.
+          if [ "$BASE" = "main" ] && ! printf '%s' "$HEAD" | grep -Eq '^release/[0-9]+\.[0-9]+\.[0-9]+(-(alpha|rc)([.-][0-9]+)?)?$'; then
+            echo "::error::Pull requests into main must come from release/<version>. Target dev instead."
+            exit 1
+          fi
+          if [ "$BASE" = "dev" ] && ! printf '%s' "$HEAD" | grep -Eq '^(feature|bug|ui|perf|refactor|docs|test|chore|deps|dependabot|release)/|^main$'; then
+            echo "::error::Name the branch by purpose: feature/, bug/, ui/, perf/, refactor/, docs/, test/, chore/ or deps/."
+            exit 1
+          fi

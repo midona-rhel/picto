@@ -71,9 +71,9 @@ Use the Git CLI to inspect `status`, `log`, and remote refs before choosing the 
 Do not infer the remote state from local tags alone. Preserve unrelated work and never stage an
 entire worktree blindly; exclude synthetic libraries, benchmark output and local investigation files.
 
-Keep implementation and release preparation in separate, descriptive commits on `main`. If a work
-branch is needed, create it from current main, not another feature branch, and land it on main before
-creating the release branch. Never rewrite published history to prepare a release.
+Implementation lands on `dev` through reviewed pull requests ([CONTRIBUTING](../CONTRIBUTING.md)).
+`main` holds released code only. Release preparation happens on `release/<version>`, cut from the
+accepted `dev` commit (or from `main` for a hotfix). Never rewrite published history to prepare a release.
 
 Synchronize the application version in all of these files without updating unrelated dependencies:
 
@@ -108,20 +108,27 @@ campaign; preserve meaningful correctness and data-safety coverage.
 
 ### Run the release gate and publish after approval
 
-1. Commit and push the finished changes, synchronized package versions, and user-facing notes on
-   `main`. Keep issue references in commits, not release notes.
-2. Create `release/<version>` from that exact main commit and push it. The Alpha Gate runs renderer
-   tests, Rust lint/tests, and macOS/Windows/Linux packaging and smoke together. Every job must pass.
-3. Only then tag the same commit as `v<version>` and push the tag. Publication checks the matching
-   release branch, main ancestry, successful gate commit, and all three package/smoke artifact sets.
-   It downloads those package artifacts by ID with digest verification and attaches the bundled notes.
+1. Cut `release/<version>` from the accepted `dev` commit and push it. Commit the synchronized
+   package versions and the versioned notes on that branch. Keep issue references in commits, not
+   release notes. Every push to the branch runs the Alpha Gate: renderer tests, Rust lint/tests, and
+   macOS/Windows/Linux packaging and smoke together. Every job must pass on the final head.
+2. Open a pull request from `release/<version>` into `main` and merge it with a **merge commit**
+   (squash is disabled for `main`), so the gated release commit stays in `main`'s ancestry.
+3. Tag the release-branch head (not the merge commit) as `v<version>` and push the tag. Publication
+   checks the matching release branch, main ancestry, successful gate commit, and all three
+   package/smoke artifact sets. It downloads those package artifacts by ID with digest verification
+   and attaches the bundled notes.
+4. Open a pull request from `main` into `dev` and merge it with a merge commit, so release-branch
+   fixes and the version bump return to development. Release branches are kept as the release record.
+
+A hotfix follows the same steps with `release/<version>` cut from `main` instead of `dev`.
 
 No test, lint, audit, signing requirement, or packaged smoke check is skipped to shorten the gate.
 Parallel packaging can spend runner time on a candidate that fails verification, but avoids adding
 verification time to the packaging critical path. Installers are built once, before tagging.
 
-If a gate fails, fix it on main and advance the release branch to that main commit, then wait for
-the new gate. Rerun failed jobs for transient runner failures. If publication fails, rerun only the
+If a gate fails, fix it on the release branch through a pull request (and carry the fix to `dev`
+in step 4), then wait for the new gate. Rerun failed jobs for transient runner failures. If publication fails, rerun only the
 tagged publication job; do not move a published tag or rebuild different binaries under it. Expired
 gate artifacts require rerunning the release-branch gate at the same commit before retrying publication.
 
