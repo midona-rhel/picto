@@ -128,6 +128,17 @@ Unrelated imports, memberships, derived media facts, and folder members remain c
 does not replace them with an older library snapshot. Folder positions are merged in one pass,
 preserving the relative order of unaffected members and additions made after the original edit.
 
+Smart-folder results are stored per folder and settled incrementally. A write names what it
+changed (a tag, ratings, root text, cover facts, folders, lifecycle); only folders whose rules can
+observe that change are re-evaluated, and only over the roots the write touched, with every clause
+intersecting that set before it reads a full index. A folder's result and its cache version change
+only when its membership actually moved. `smart_settle_oracle` checks this against a fresh
+evaluation of every folder after each step of a random edit sequence.
+
+Indexes that only accelerate queries live in `accelerator_indexes.sql` and are created at create
+and open; adding one needs no fingerprint migration. Autocheckpoint is off: the runtime folds the
+WAL back every minute and truncates it on close.
+
 Committed grid invalidations coalesce in the grid controller with one active refresh and one
 pending successor. Fast refreshes use a 40 ms delay. During sustained expensive refresh work,
 the cooldown is three times the previous refresh duration (capped at one second), allowing
