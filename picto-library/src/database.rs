@@ -254,6 +254,7 @@ impl LibraryDatabase {
         let mut writer = open_connection(&path, false)?;
         schema::migrate_for_open(&mut writer, &path, cancellation, progress)?;
         schema::validate(&writer)?;
+        schema::ensure_accelerator_indexes(&writer)?;
         Self::from_writer(path, writer)
     }
 
@@ -444,6 +445,16 @@ impl LibraryDatabase {
         Ok(output)
     }
 
+    /// Copy committed WAL pages into the database without blocking readers or
+    /// waiting for them. Autocheckpoint is off, so this bounds WAL growth
+    /// during long sessions; `checkpoint_wal` truncates on close.
+    pub fn checkpoint_wal_passive(&self) -> Result<()> {
+        let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
+        let writer = self.writer.lock();
+        writer.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     pub fn checkpoint_wal(&self) -> Result<()> {
         let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
         let writer = self.writer.lock();
@@ -486,7 +497,8 @@ fn open_connection(path: &Path, create: bool) -> Result<Connection> {
          PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
-         PRAGMA wal_autocheckpoint = 0;",
+         PRAGMA wal_autocheckpoint = 0;
+         PRAGMA journal_size_limit = 67108864;",
     )?;
     Ok(connection)
 }

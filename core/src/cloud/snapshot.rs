@@ -204,10 +204,10 @@ async fn publish_library_inner(
                         manifest_path,
                     ],
                 )?;
+                // The snapshot now contains these changes; nothing reads them again.
                 transaction.execute(
-                    "UPDATE cloud_journal SET expanded_at_ms = ?1
-                     WHERE expanded_at_ms IS NULL AND revision <= ?2",
-                    rusqlite::params![Utc::now().timestamp_millis(), database_revision as i64],
+                    "DELETE FROM cloud_journal WHERE revision <= ?1",
+                    [database_revision as i64],
                 )?;
                 transaction.execute(
                     "UPDATE cloud_state
