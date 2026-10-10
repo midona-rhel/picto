@@ -436,6 +436,19 @@ fn main() -> R<()> {
         Ok(())
     }, None::<fn() -> R<()>>)?;
 
+    // The first window after an import: new roots change the date index the
+    // default sort reads.
+    let mut import_index = roots + 1_000_000;
+    let newest = RootQuery { scope: ItemScope::All, view: ViewQuerySpec::default() };
+    bench("window first 500 after a 48-item import: All imported desc", "-", runs * 2, || {
+        library.query_window(&newest, &WindowRequest::at(0, 500))?; Ok(())
+    }, Some(|| {
+        let batch = (import_index..import_index + picto_library::ingest::MAX_INGEST_BATCH).map(prepared).collect::<Vec<_>>();
+        import_index += picto_library::ingest::MAX_INGEST_BATCH;
+        library.ingest_batch(&batch)?;
+        Ok(())
+    }))?;
+
     print_memory(&library, "before_reopen");
 
     // --- close / reopen ---
