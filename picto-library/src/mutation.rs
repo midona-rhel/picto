@@ -2586,7 +2586,7 @@ impl Library {
                             continue;
                         }
                         set_projection_bitmap(&mut next, key, after.clone());
-                        bitmap::replace(transaction, revision, key, &after)?;
+                        bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
                         changes.push(SemanticChange::Bitmap {
                             key,
                             before: Arc::new(before),
@@ -2984,7 +2984,7 @@ impl Library {
                     if changed.is_empty() {
                         continue;
                     }
-                    bitmap::replace(
+                    bitmap::replace_changed(
                         transaction,
                         revision,
                         BitmapKey {
@@ -2992,6 +2992,7 @@ impl Library {
                             key_id: tag_id.0,
                         },
                         &after,
+                        &changed,
                     )?;
                     Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
                     let counts = Arc::make_mut(&mut next.tag_count);
@@ -5395,7 +5396,7 @@ impl Library {
                         .or_default();
                     if !(&*values & &roots).is_empty() {
                         *values -= &roots;
-                        bitmap::replace(
+                        bitmap::replace_changed(
                             transaction,
                             revision,
                             BitmapKey {
@@ -5403,6 +5404,7 @@ impl Library {
                                 key_id: lifecycle.bitmap_key(),
                             },
                             values,
+                            &roots,
                         )?;
                     }
                 }
@@ -5410,7 +5412,7 @@ impl Library {
                     let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
                     if !(&*values & &roots).is_empty() {
                         *values -= &roots;
-                        bitmap::replace(
+                        bitmap::replace_changed(
                             transaction,
                             revision,
                             BitmapKey {
@@ -5418,6 +5420,7 @@ impl Library {
                                 key_id: rating.bitmap_key(),
                             },
                             values,
+                            &roots,
                         )?;
                     }
                 }
@@ -5431,7 +5434,7 @@ impl Library {
                 for tag_id in changed_tags {
                     let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
                     *members -= &roots;
-                    bitmap::replace(
+                    bitmap::replace_changed(
                         transaction,
                         revision,
                         BitmapKey {
@@ -5439,6 +5442,7 @@ impl Library {
                             key_id: tag_id.0,
                         },
                         members,
+                        &roots,
                     )?;
                 }
                 let changed_folders = next
@@ -5680,7 +5684,7 @@ impl Library {
                         continue;
                     }
                     Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
-                    bitmap::replace(
+                    bitmap::replace_changed(
                         transaction,
                         revision,
                         BitmapKey {
@@ -5688,6 +5692,7 @@ impl Library {
                             key_id: tag_id.0,
                         },
                         &after,
+                        &changed,
                     )?;
                     let counts = Arc::make_mut(&mut next.tag_count);
                     for root_id in &changed {
@@ -5979,7 +5984,7 @@ impl Library {
                         if tag_changed.is_empty() {
                             continue;
                         }
-                        bitmap::replace(
+                        bitmap::replace_changed(
                             transaction,
                             revision,
                             BitmapKey {
@@ -5987,6 +5992,7 @@ impl Library {
                                 key_id: tag_id.0,
                             },
                             &after,
+                            &tag_changed,
                         )?;
                         Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
                         let counts = Arc::make_mut(&mut next.tag_count);
@@ -6095,7 +6101,7 @@ impl Library {
                     }
                     if before != after {
                         set_projection_bitmap(&mut next, key, after.clone());
-                        bitmap::replace(transaction, revision, key, &after)?;
+                        bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
                         changes.push(SemanticChange::Bitmap {
                             key,
                             before: Arc::new(before),
@@ -6328,7 +6334,7 @@ fn apply_semantic_change(
             }
             let mut next = &current - &changed;
             next |= &(replacement & &changed);
-            bitmap::replace(transaction, revision, *key, &next)?;
+            bitmap::replace_changed(transaction, revision, *key, &next, &changed)?;
             set_projection_bitmap(snapshot, *key, next);
             *affected |= &changed;
             resources.insert("roots".into());
@@ -7213,7 +7219,7 @@ fn restore_structure_bitmaps(
             after |= ids;
         }
         if before != after {
-            bitmap::replace(transaction, revision, key, &after)?;
+            bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
             set_projection_bitmap(current, key, after);
         }
     }
@@ -7509,7 +7515,7 @@ fn remove_tag_in_transaction(
         let mut after = destination_before.clone();
         after |= &source_members;
         if destination_before != after {
-            bitmap::replace(
+            bitmap::replace_changed(
                 transaction,
                 revision,
                 BitmapKey {
@@ -7517,6 +7523,7 @@ fn remove_tag_in_transaction(
                     key_id: destination.0,
                 },
                 &after,
+                &source_members,
             )?;
             Arc::make_mut(&mut snapshot.tags).insert(destination, after.clone().into());
             history_changes.push(SemanticChange::Bitmap {
