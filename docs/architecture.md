@@ -129,8 +129,13 @@ observe that change are re-evaluated, and only over the roots the write touched,
 intersecting that set before it reads a full index. A folder's result and its cache version change
 only when its membership actually moved. `smart_settle_oracle` checks this against a fresh
 evaluation of every folder after each step of a random edit sequence.
+Results cover roots in every lifecycle; a smart-folder scope and its sidebar count intersect them
+with Active on read, as every other scope does. Trashing, restoring or accepting Inbox items
+therefore re-checks no smart folder, however many exist.
 
-Indexes that only accelerate queries live in `accelerator_indexes.sql` and are created at create
+Every SQLite connection sets its own page cache (64 MB for the writer, 16 MB per reader) instead
+of relying on the operating system's file cache, which differs widely between Linux, Windows and
+macOS; memory-mapped I/O is off. Indexes that only accelerate queries live in `accelerator_indexes.sql` and are created at create
 and open; adding one needs no fingerprint migration. Autocheckpoint is off: the runtime folds the
 WAL back every minute and truncates it on close.
 
@@ -159,6 +164,10 @@ publishes a change, with a fallback probe every 2-30 s for work that becomes rea
 publish prepared items in groups of up to 48, flushed at least every 250 ms so the grid fills
 progressively. Auto-tagging on import writes in batches outside the undo history; manual AI tagging
 stays undoable.
+
+`picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
+(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
+never committed.
 
 Committed grid invalidations coalesce in the grid controller with one active refresh and one
 pending successor. Fast refreshes use a 40 ms delay. During sustained expensive refresh work,
