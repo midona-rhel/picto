@@ -346,7 +346,7 @@ const SORT_FIELD_OPTIONS = [
   { value: 'captured_at', label: t("Date Created") },
   { value: 'name', label: t("Name") },
   { value: 'rating', label: t("Rating") },
-  { value: 'size', label: t("File Size") },
+  { value: 'total_size', label: t("File Size") },
   { value: 'random', label: t("Random") },
 ];
 const SORT_DIR_OPTIONS = [
