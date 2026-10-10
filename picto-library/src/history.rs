@@ -57,6 +57,7 @@ pub struct FolderDefinitionState {
     pub watch_path: Option<String>,
     pub watch_enabled: bool,
     pub watch_subfolders: bool,
+    pub watch_lifecycle: crate::Lifecycle,
     pub display_order: i64,
 }
 

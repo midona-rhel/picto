@@ -3901,8 +3901,14 @@ impl Library {
         folder_id: FolderId,
         path: &str,
         include_subfolders: bool,
+        lifecycle: Lifecycle,
     ) -> Result<MutationReceipt> {
         let path = required_name("watch path", path)?;
+        if lifecycle == Lifecycle::Trash {
+            return Err(LibraryError::InvalidInput(
+                "watched folders import into Inbox or Active".into(),
+            ));
+        }
         self.update_folder_definition(
             "folders.set_watch",
             "Set watched folder",
@@ -3910,9 +3916,10 @@ impl Library {
             move |transaction| {
                 if transaction.execute(
                     "UPDATE folder_definition
-                     SET watch_path = ?2, watch_enabled = 1, watch_subfolders = ?3
+                     SET watch_path = ?2, watch_enabled = 1, watch_subfolders = ?3,
+                         watch_lifecycle = ?4
                      WHERE folder_id = ?1",
-                    rusqlite::params![folder_id.0, path, include_subfolders],
+                    rusqlite::params![folder_id.0, path, include_subfolders, lifecycle.watch_code()],
                 )? == 0
                 {
                     return Err(LibraryError::NotFound(format!("folder {folder_id}")));
@@ -6733,8 +6740,8 @@ fn apply_semantic_change(
                         "INSERT INTO folder_definition
                              (folder_id, stable_key, parent_id, name, icon, color, notes,
                               auto_tag_ids, cover_root_id, watch_path, watch_enabled,
-                              watch_subfolders, display_order)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                              watch_subfolders, display_order, watch_lifecycle)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                          ON CONFLICT(folder_id) DO UPDATE SET
                              stable_key = excluded.stable_key,
                              parent_id = excluded.parent_id,
@@ -6747,7 +6754,8 @@ fn apply_semantic_change(
                              watch_path = excluded.watch_path,
                              watch_enabled = excluded.watch_enabled,
                              watch_subfolders = excluded.watch_subfolders,
-                             display_order = excluded.display_order",
+                             display_order = excluded.display_order,
+                             watch_lifecycle = excluded.watch_lifecycle",
                         rusqlite::params![
                             folder.folder_id.0,
                             folder.stable_key,
@@ -6761,7 +6769,8 @@ fn apply_semantic_change(
                             folder.watch_path,
                             folder.watch_enabled,
                             folder.watch_subfolders,
-                            folder.display_order
+                            folder.display_order,
+                            folder.watch_lifecycle.watch_code()
                         ],
                     )?;
                     Arc::make_mut(&mut snapshot.folders)
@@ -7638,7 +7647,8 @@ fn load_folder_definition(
     connection
         .query_row(
             "SELECT stable_key, parent_id, name, icon, color, notes, auto_tag_ids,
-                    cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
+                    cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order,
+                    watch_lifecycle
              FROM folder_definition WHERE folder_id = ?1",
             [folder_id.0],
             |row| {
@@ -7656,6 +7666,7 @@ fn load_folder_definition(
                     watch_enabled: row.get(9)?,
                     watch_subfolders: row.get(10)?,
                     display_order: row.get(11)?,
+                    watch_lifecycle: Lifecycle::from_watch_code(row.get(12)?),
                 })
             },
         )
@@ -7669,7 +7680,8 @@ fn list_folders(
 ) -> Result<Vec<FolderRecord>> {
     let mut statement = connection.prepare(
         "SELECT folder_id, stable_key, parent_id, name, icon, color, notes,
-                cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order
+                cover_root_id, watch_path, watch_enabled, watch_subfolders, display_order,
+                watch_lifecycle
          FROM folder_definition
          ORDER BY parent_id, display_order, folder_id",
     )?;
@@ -7687,6 +7699,7 @@ fn list_folders(
             watch_path: row.get(8)?,
             watch_enabled: row.get(9)?,
             watch_subfolders: row.get(10)?,
+            watch_lifecycle: Lifecycle::from_watch_code(row.get(12)?),
             display_order: row.get(11)?,
             count: snapshot
                 .folders
@@ -7785,6 +7798,7 @@ fn load_folder_clone_rows(
                 watch_path: None,
                 watch_enabled: false,
                 watch_subfolders: false,
+                watch_lifecycle: Lifecycle::Inbox,
                 display_order: row.get(11)?,
             })
         })?

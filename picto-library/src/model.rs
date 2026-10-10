@@ -77,6 +77,19 @@ pub enum Lifecycle {
 impl Lifecycle {
     pub const ALL: [Self; 3] = [Self::Active, Self::Inbox, Self::Trash];
 
+    pub const fn inbox() -> Self {
+        Self::Inbox
+    }
+
+    /// Watched folders may import into Active or Inbox, never Trash.
+    pub(crate) fn from_watch_code(code: i64) -> Self {
+        if code == 1 { Self::Active } else { Self::Inbox }
+    }
+
+    pub(crate) fn watch_code(self) -> i64 {
+        if self == Self::Active { 1 } else { 2 }
+    }
+
     pub const fn bitmap_key(self) -> u32 {
         match self {
             Self::Active => 1,
@@ -191,6 +204,7 @@ pub struct FolderRecord {
     pub watch_path: Option<String>,
     pub watch_enabled: bool,
     pub watch_subfolders: bool,
+    pub watch_lifecycle: Lifecycle,
     pub display_order: i64,
     pub count: u64,
 }
@@ -335,6 +349,9 @@ pub struct FolderWatchInput {
     pub folder_id: FolderId,
     pub path: String,
     pub include_subfolders: bool,
+    /// Status of files the watcher imports: Inbox (default) or Active.
+    #[serde(default = "Lifecycle::inbox")]
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

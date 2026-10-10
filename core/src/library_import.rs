@@ -75,6 +75,7 @@ struct WatchedFolder {
     folder_id: FolderId,
     path: PathBuf,
     recursive: bool,
+    lifecycle: Lifecycle,
 }
 
 #[derive(Debug)]
@@ -84,6 +85,7 @@ struct PendingWatch {
     relative_parent: Option<PathBuf>,
     metadata: fs::Metadata,
     job_key: String,
+    lifecycle: Lifecycle,
 }
 
 pub fn analyze_folder_tree(
@@ -326,6 +328,7 @@ fn attach_source_folder_watch(
         folder_id,
         path: source.to_string_lossy().into_owned(),
         include_subfolders: input.include_subfolders,
+        lifecycle: Lifecycle::Inbox,
     })?;
     Ok(())
 }
@@ -349,7 +352,7 @@ pub async fn scan_watched_folders(
             picto_library::database::WorkPriority::CanonicalIngest,
             |connection| {
                 let mut statement = connection.prepare(
-                    "SELECT folder_id, watch_path, watch_subfolders
+                    "SELECT folder_id, watch_path, watch_subfolders, watch_lifecycle
                  FROM folder_definition
                  WHERE watch_enabled = 1 AND watch_path IS NOT NULL
                  ORDER BY folder_id",
@@ -360,6 +363,11 @@ pub async fn scan_watched_folders(
                             folder_id: FolderId(row.get(0)?),
                             path: PathBuf::from(row.get::<_, String>(1)?),
                             recursive: row.get(2)?,
+                            lifecycle: if row.get::<_, i64>(3)? == 1 {
+                                Lifecycle::Active
+                            } else {
+                                Lifecycle::Inbox
+                            },
                         })
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -426,6 +434,7 @@ pub async fn scan_watched_folders(
         .await
         {
             Ok(mut value) => {
+                value.lifecycle = candidate.lifecycle;
                 let capacity = application
                     .library()
                     .folder_child_capacity(Some(candidate.folder_id))
@@ -493,6 +502,7 @@ fn collect_watched_candidates(
                 relative_parent: candidate.relative_parent,
                 metadata,
                 job_key,
+                lifecycle: watch.lifecycle,
             });
         }
     }
@@ -1140,36 +1150,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watched_folder_queues_each_stable_file_once_for_inbox() {
+    async fn watched_folder_queues_each_stable_file_once_into_its_saved_status() {
         let directory = tempfile::tempdir().unwrap();
-        let watched = directory.path().join("watched");
-        fs::create_dir(&watched).unwrap();
-        let source = watched.join("source.png");
-        png(&source, [10, 20, 30]);
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let folder = application
-            .create_folder(picto_library::CreateFolderInput {
-                name: "Watched".into(),
-                parent_id: None,
-            })
-            .unwrap();
-        application
-            .set_folder_watch(&picto_library::FolderWatchInput {
-                folder_id: folder.folder_id,
-                path: watched.to_string_lossy().into_owned(),
-                include_subfolders: true,
-            })
-            .unwrap();
+        // Each watched folder imports into the status saved with it.
+        for (name, lifecycle, color) in [
+            ("inbox", Lifecycle::Inbox, [10, 20, 30]),
+            ("active", Lifecycle::Active, [40, 50, 60]),
+        ] {
+            let watched = directory.path().join(name);
+            fs::create_dir(&watched).unwrap();
+            png(&watched.join("source.png"), color);
+            let folder = application
+                .create_folder(picto_library::CreateFolderInput {
+                    name: name.into(),
+                    parent_id: None,
+                })
+                .unwrap();
+            application
+                .set_folder_watch(&picto_library::FolderWatchInput {
+                    folder_id: folder.folder_id,
+                    path: watched.to_string_lossy().into_owned(),
+                    include_subfolders: true,
+                    lifecycle,
+                })
+                .unwrap();
 
-        let first = scan_watched_folders(&application).await.unwrap();
-        let second = scan_watched_folders(&application).await.unwrap();
-        assert_eq!(first.queued, 1);
-        assert_eq!(second.already_queued, 1);
+            let first = scan_watched_folders(&application).await.unwrap();
+            let second = scan_watched_folders(&application).await.unwrap();
+            assert_eq!(first.queued, 1);
+            assert_eq!(second.already_queued, 1 + usize::from(lifecycle == Lifecycle::Active));
 
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        let details = application.library().details(settled.root_ids[0]).unwrap();
-        assert_eq!(details.lifecycle, Lifecycle::Inbox);
-        assert_eq!(details.folder_ids, vec![folder.folder_id]);
+            let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+            let details = application.library().details(settled.root_ids[0]).unwrap();
+            assert_eq!(details.lifecycle, lifecycle);
+            assert_eq!(details.folder_ids, vec![folder.folder_id]);
+        }
     }
 
     #[tokio::test]
@@ -1199,6 +1215,7 @@ mod tests {
                 folder_id: destination,
                 path: watched.to_string_lossy().into_owned(),
                 include_subfolders: true,
+                lifecycle: Lifecycle::Inbox,
             })
             .unwrap();
 

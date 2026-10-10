@@ -98,11 +98,13 @@ export function setFolderWatchConfig(
   folderId: number,
   path: string,
   includeSubfolders: boolean,
+  lifecycle: 'inbox' | 'active',
 ): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.watch.set', {
     folder_id: folderId,
     path,
     include_subfolders: includeSubfolders,
+    lifecycle,
   });
 }
 

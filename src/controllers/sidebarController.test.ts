@@ -31,6 +31,7 @@ const navigation: CanonicalNavigationSnapshot = {
     watch_path: null,
     watch_enabled: false,
     watch_subfolders: false,
+      watch_lifecycle: 'inbox',
   }],
   smart_folders: [{
     smart_folder_id: 7,

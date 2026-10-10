@@ -125,6 +125,8 @@ export interface CanonicalFolderRecord {
   watch_path: string | null;
   watch_enabled: boolean;
   watch_subfolders: boolean;
+  /** Status of files the watcher imports. */
+  watch_lifecycle: 'inbox' | 'active';
   display_order: number;
   count: number;
 }

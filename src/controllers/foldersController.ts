@@ -28,6 +28,7 @@ import { announceUndoableMutation } from '../runtime/historyRuntime';
 import { showErrorNotification } from '../shared/lib/notifications';
 import { t } from '../i18n';
 import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
+import type { WatchImportStatus } from '../state/modals';
 
 const store = getDefaultStore();
 
@@ -215,14 +216,14 @@ export const foldersController = {
     watchPath: string;
     enabled: boolean;
     subfolders: boolean;
-    importStatusMode: string;
+    importStatus: WatchImportStatus;
   }): Promise<void> {
     if (!config.enabled) {
       await clearFolderWatchConfig(folderId);
       await announceUndoableMutation('folders.clear_watch');
       return;
     }
-    await setFolderWatchConfig(folderId, config.watchPath, config.subfolders);
+    await setFolderWatchConfig(folderId, config.watchPath, config.subfolders, config.importStatus);
     await announceUndoableMutation('folders.set_watch');
   },
 
