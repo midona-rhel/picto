@@ -374,7 +374,8 @@ impl Library {
             stage_delete_ids(transaction, "delete_media", &media_ids)?;
             stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-            // One set-based read of the deleted media's files.
+            // One set-based read of the deleted media's files. CROSS JOIN keeps
+            // SQLite walking the staged ids rather than every media item.
             let mut files = std::collections::HashMap::new();
             {
                 let mut statement = transaction.prepare_cached(
@@ -382,7 +383,7 @@ impl Library {
                             CASE WHEN cloud.remote_present = 1
                                  THEN cloud.remote_extension ELSE NULL END
                      FROM temp.delete_media selected
-                     JOIN media_item media ON media.media_id = selected.local_id
+                     CROSS JOIN media_item media ON media.media_id = selected.local_id
                      JOIN media_file file ON file.file_id = media.file_id
                      LEFT JOIN cloud_blob_state cloud
                        ON cloud.file_hash = file.content_hash",
@@ -405,8 +406,9 @@ impl Library {
             transaction.execute(
                 "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
                  SELECT item.stable_key, ?1, ?2
-                 FROM library_item item JOIN temp.delete_item selected
-                     ON selected.local_id = item.local_id
+                 FROM temp.delete_item selected CROSS JOIN library_item item
+                     ON item.local_id = selected.local_id
+                 WHERE true
                  ON CONFLICT(stable_key) DO UPDATE SET
                      revision = excluded.revision,
                      deleted_at_ms = excluded.deleted_at_ms",
