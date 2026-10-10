@@ -60,7 +60,7 @@ Select a library and click the **⋯** (Library actions) button.
 | Add to / Remove from Quick Access | Pins the library to the top of the lists. |
 | Rename | Renames the `.library` folder on disk. If it is the open library, Picto closes and reopens it. |
 | Show in File Manager | Reveals the library folder. |
-| Move… | Asks for a destination folder and moves the library folder there. If it is the open library, Picto reopens it from the new place. |
+| Move… | Asks for a destination folder and moves the library folder there. If it is the open library, Picto reopens it from the new place. For a library marked **Missing on disk** this reads **Locate…**: pick the folder that now contains it. |
 | Remove from List | Forgets the library. Its folder stays on disk; open it again with **Open Existing…**. Not available for the open library. |
 | Delete… | After confirmation, permanently deletes the library folder and everything in it. Picto refuses to delete the open library; switch to another one first. **Cannot be undone.** |
 

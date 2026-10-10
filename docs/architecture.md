@@ -134,6 +134,32 @@ Indexes that only accelerate queries live in `accelerator_indexes.sql` and are c
 and open; adding one needs no fingerprint migration. Autocheckpoint is off: the runtime folds the
 WAL back every minute and truncates it on close.
 
+### Writes, history and background work
+
+Every canonical write goes through `Library::publish` (in `picto-library/src/mutation/`, one file
+per aggregate: tags, folders, smart folders, imports, duplicates, structure, undo). It opens the
+writer transaction, settles the delta, publishes the snapshot and records any history entry.
+
+Persistence follows the change, not the size of the thing changed. Bitmaps are stored in 64k-id
+shards and a write re-encodes only shards holding changed ids. Folder and collection orders are
+stored as 1,024-id chunks (`ordered_membership_chunk`); an append rewrites one chunk. A history
+entry for a bitmap keeps only the members it changed, and replay checks and restores only those
+members: later edits to other roots never block an undo, while a later edit to the same roots
+does. Replay re-checks only the smart folders the replayed change can affect.
+
+Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
+subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
+when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual
+hash announces nothing and a palette refreshes only the colour index. The IPC response cache for
+`items.query` and `items.mime_facets` is keyed on the query epoch, which bookkeeping does not move.
+
+Background workers (ingest, FTS, derivatives, AI tagging, subscriptions) sleep until the library
+publishes a change, with a fallback probe every 2-30 s for work that becomes ready with time alone
+(`core/src/work_wake.rs`). An idle library starts no writer transactions between probes. Imports
+publish prepared items in groups of up to 48, flushed at least every 250 ms so the grid fills
+progressively. Auto-tagging on import writes in batches outside the undo history; manual AI tagging
+stays undoable.
+
 Committed grid invalidations coalesce in the grid controller with one active refresh and one
 pending successor. Fast refreshes use a 40 ms delay. During sustained expensive refresh work,
 the cooldown is three times the previous refresh duration (capped at one second), allowing
