@@ -101,16 +101,43 @@ impl DirectoryProvider {
         result.map_err(|error| format!("Cloud sync folder is not writable: {error}"))
     }
 
-    fn resolve(&self, relative: &str) -> Result<PathBuf, String> {
-        let path = Path::new(relative);
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            return Err("Cloud object path escapes its provider root".to_string());
+    /// Resolves an object key inside the provider root. Keys are provider-owned
+    /// identifiers, not host paths: `/`-separated segments of ordinary names.
+    /// Anything a host could read as rooted, drive-relative, device or parent
+    /// (`\\`, `:`, `..`, empty segments) is rejected on every platform, and a
+    /// link inside the root never leads out of it.
+    fn resolve(&self, key: &str) -> Result<PathBuf, String> {
+        let escape = || Err("Cloud object path escapes its provider root".to_string());
+        if key.is_empty() {
+            return escape();
         }
-        Ok(self.root.join(path))
+        let segments = key.split('/').collect::<Vec<_>>();
+        let ordinary = |segment: &&str| {
+            !segment.is_empty()
+                && *segment != "."
+                && *segment != ".."
+                && !segment.chars().any(|c| matches!(c, '\\' | ':') || c.is_control())
+                && !windows_device_name(segment)
+        };
+        if !segments.iter().all(ordinary) {
+            return escape();
+        }
+        let mut path = self.root.clone();
+        for (index, segment) in segments.iter().enumerate() {
+            path.push(segment);
+            match std::fs::symlink_metadata(&path) {
+                // Junctions and other reparse points report as links too.
+                Ok(metadata) if metadata.file_type().is_symlink() => return escape(),
+                Ok(_) => {}
+                // Nothing further down exists yet, so nothing can be a link.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    path.extend(&segments[index + 1..]);
+                    break;
+                }
+                Err(error) => return Err(format!("Failed to inspect cloud object path: {error}")),
+            }
+        }
+        Ok(path)
     }
 
     /// Finds only immediate Picto library manifests. Blob and epoch trees may
@@ -148,6 +175,15 @@ impl DirectoryProvider {
         std::fs::read(path)
             .map_err(|error| format!("Failed to read cloud object {}: {error}", path.display()))
     }
+}
+
+/// `CON`, `NUL`, `COM1`… name devices on Windows whatever their extension.
+fn windows_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit())
 }
 
 fn replace_atomically(temporary: &Path, destination: &Path) -> Result<(), String> {
@@ -551,7 +587,12 @@ impl CloudProvider for DirectoryProvider {
                 {
                     let entry = entry.map_err(|error| error.to_string())?;
                     let path = entry.path();
-                    if path.is_dir() {
+                    let kind = entry.file_type().map_err(|error| error.to_string())?;
+                    if kind.is_symlink() {
+                        // Links never lead a listing out of the provider root.
+                        continue;
+                    }
+                    if kind.is_dir() {
                         pending.push(path);
                     } else {
                         let relative = path
@@ -695,6 +736,66 @@ mod tests {
             .await
             .unwrap_err()
             .contains("another device"));
+    }
+
+    #[tokio::test]
+    async fn object_keys_cannot_reach_outside_the_provider_root() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("provider");
+        std::fs::create_dir_all(root.join("picto")).unwrap();
+        let marker = fixture.path().join("marker.txt");
+        std::fs::write(&marker, b"outside").unwrap();
+        let provider = DirectoryProvider::open(&root).unwrap();
+        let hash = hex::encode(sha2::Sha256::digest(b"x"));
+        let escapes = [
+            "",
+            "/marker.txt",
+            "../marker.txt",
+            "picto/../../marker.txt",
+            "\\marker.txt",
+            "\\\\server\\share\\marker.txt",
+            "\\\\?\\C:\\marker.txt",
+            "C:marker.txt",
+            "C:/marker.txt",
+            "picto\\..\\..\\marker.txt",
+            "picto//marker.txt",
+            "picto/./marker.txt",
+            "picto/NUL",
+            "picto/com1.txt",
+            "picto/marker\u{0}.txt",
+        ];
+        for key in escapes {
+            assert!(provider.exists(key).await.is_err(), "exists {key:?}");
+            assert!(provider.download(key).await.is_err(), "download {key:?}");
+            assert!(provider.list(key).await.is_err(), "list {key:?}");
+            assert!(provider.delete(key).await.is_err(), "delete {key:?}");
+            assert!(provider.upload(key, b"x".to_vec(), &hash).await.is_err(), "upload {key:?}");
+        }
+        assert_eq!(std::fs::read(&marker).unwrap(), b"outside");
+        // Ordinary keys still work.
+        provider.upload("picto/lib/library.json", b"x".to_vec(), &hash).await.unwrap();
+        assert!(provider.exists("picto/lib/library.json").await.unwrap());
+        assert_eq!(provider.list("picto").await.unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn links_inside_the_root_do_not_lead_out_of_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("provider");
+        let outside = fixture.path().join("outside");
+        std::fs::create_dir_all(root.join("picto")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("marker.txt"), b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("picto/linked")).unwrap();
+        std::os::unix::fs::symlink(outside.join("marker.txt"), root.join("picto/file")).unwrap();
+        let provider = DirectoryProvider::open(&root).unwrap();
+
+        assert!(provider.download("picto/linked/marker.txt").await.is_err());
+        assert!(provider.download("picto/file").await.is_err());
+        assert!(provider.delete("picto/linked/marker.txt").await.is_err());
+        assert!(provider.list("picto").await.unwrap().is_empty());
+        assert_eq!(std::fs::read(outside.join("marker.txt")).unwrap(), b"outside");
     }
 
     #[test]
