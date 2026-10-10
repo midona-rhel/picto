@@ -16,7 +16,7 @@ import {
 } from './grid';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
 import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
-import { createEmptyItemFilters } from '../shared/lib/itemFilters';
+import { createEmptyItemFilters, itemFiltersEqual } from '../shared/lib/itemFilters';
 import type { ItemSort } from '../shared/types/canonical';
 import type { GridScrollPosition } from '../shared/types/gridScroll';
 import { subscriptionsSelectionAtom, type SubscriptionsSelection } from './subscriptionsWorkspace';
@@ -106,8 +106,8 @@ function randomSort(): ItemSort {
   };
 }
 
-function filtersKey(filters: QueryFilters | undefined): string {
-  return JSON.stringify(filters ?? createEmptyItemFilters());
+function sameFilters(left: QueryFilters | undefined, right: QueryFilters | undefined): boolean {
+  return itemFiltersEqual(left ?? createEmptyItemFilters(), right ?? createEmptyItemFilters());
 }
 
 function pushEntry(entry: NewHistoryEntry): void {
@@ -118,7 +118,7 @@ function pushEntry(entry: NewHistoryEntry): void {
     last?.nodeId === entry.nodeId
     && last.gridScopeNodeId === entry.gridScopeNodeId
     && selectionKey(last.subsSelection) === selectionKey(entry.subsSelection)
-    && filtersKey(last.filters) === filtersKey(entry.filters)
+    && sameFilters(last.filters, entry.filters)
   ) return;
   stack.push(createHistoryEntry(entry));
   if (stack.length > 100) stack.shift();
