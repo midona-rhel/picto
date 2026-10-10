@@ -270,8 +270,10 @@ fn start_fts_worker(
                 Ok(Err(error)) => tracing::warn!(%error, "Canonical FTS settlement failed"),
                 Err(error) => tracing::warn!(%error, "Canonical FTS worker stopped"),
             }
-            // Text only goes dirty through a published write.
-            if !wake.next(&cancel, Duration::from_millis(100), Duration::from_secs(30)).await {
+            // Text only goes dirty through a published write. Batches stay
+            // small so a user edit never waits long for the writer, and follow
+            // each other quickly so a large import becomes searchable soon.
+            if !wake.next(&cancel, Duration::from_millis(25), Duration::from_secs(30)).await {
                 return;
             }
         }
