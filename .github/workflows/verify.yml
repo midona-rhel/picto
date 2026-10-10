@@ -92,8 +92,23 @@ jobs:
 
       # Keep strict lint ahead of the long Rust test suite. A new compiler lint
       # should fail one named step immediately, not surface after every test has run.
+      # Short messages through a problem matcher put each lint on the pull
+      # request's diff, so a failure is readable without downloading the log.
       - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        # rust-toolchain forces colour; plain text is what the matcher reads.
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set -o pipefail
+          echo "::add-matcher::.github/rust-problem-matcher.json"
+          # Errors without a source location (lockfile, build scripts) become
+          # annotations too.
+          cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings 2>&1 \
+            | tee clippy.log || {
+              (grep -E '^(error|thread)' clippy.log || tail -n 15 clippy.log) \
+                | head -n 20 | sed 's/^/::error title=clippy::/' || true
+              exit 1
+            }
 
       - name: Test Rust workspace
         run: cargo test --workspace --lib --tests --locked --quiet
