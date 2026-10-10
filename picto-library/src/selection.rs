@@ -58,20 +58,13 @@ pub fn resolve(
     snapshot: &ProjectionSnapshot,
     target: &SelectionTarget,
 ) -> Result<RoaringBitmap> {
-    let all_roots =
-        snapshot
-            .root_kinds
-            .values()
-            .fold(RoaringBitmap::new(), |mut result, values| {
-                result |= values;
-                result
-            });
     Ok(match target {
-        SelectionTarget::Explicit { root_ids } => {
-            let mut selected = root_ids.iter().map(|id| id.0).collect::<RoaringBitmap>();
-            selected &= all_roots;
-            selected
-        }
+        // Check only the listed roots instead of unioning every root kind.
+        SelectionTarget::Explicit { root_ids } => root_ids
+            .iter()
+            .map(|id| id.0)
+            .filter(|id| snapshot.root_kinds.values().any(|kind| kind.contains(*id)))
+            .collect(),
         SelectionTarget::Query {
             query,
             excluded_root_ids,
@@ -250,13 +243,32 @@ pub fn collection_note_draft(
     target: &SelectionTarget,
 ) -> Result<CollectionNoteDraft> {
     let ordered = resolve_ordered(connection, snapshot, target)?;
-    let mut statement =
-        connection.prepare_cached("SELECT notes FROM library_root WHERE root_id = ?1")?;
+    // Read the notes of the noted roots in one query, then keep selection order.
+    let noted = ordered
+        .iter()
+        .map(|root_id| root_id.0)
+        .filter(|id| snapshot.notes_present.contains(*id))
+        .collect::<RoaringBitmap>();
+    let mut by_root = std::collections::HashMap::new();
+    if !noted.is_empty() {
+        let mut statement = connection.prepare_cached(
+            "SELECT root_id, notes FROM library_root
+             WHERE root_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        let rows = statement.query_map([id_list(&noted)?], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (root_id, notes) = row?;
+            if let Some(notes) = notes {
+                by_root.insert(root_id, notes);
+            }
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     let mut notes = Vec::new();
     for root_id in ordered {
-        let value = statement.query_row([root_id.0], |row| row.get::<_, Option<String>>(0))?;
-        let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+        let Some(value) = by_root.remove(&root_id.0).filter(|value| !value.trim().is_empty()) else {
             continue;
         };
         if seen.insert(value.clone()) {
@@ -291,6 +303,11 @@ fn preview_hashes(
             .rev()
             .collect::<Vec<_>>(),
         SelectionTarget::Query { .. } | SelectionTarget::Range { .. } => {
+            // The six newest by import date, oldest first, without scanning the
+            // whole selection.
+            if let Some(newest) = snapshot.imported_at.ordered_window(selection, 0, PREVIEW_COUNT, true, false)? {
+                return cover_hashes(connection, newest.into_iter().rev().map(RootId));
+            }
             let mut recent = Vec::with_capacity(PREVIEW_COUNT);
             for root_id in selection {
                 let candidate = (
@@ -311,6 +328,13 @@ fn preview_hashes(
             recent.into_iter().map(|(_, root_id)| root_id).collect()
         }
     };
+    cover_hashes(connection, root_ids)
+}
+
+fn cover_hashes(
+    connection: &Connection,
+    root_ids: impl IntoIterator<Item = RootId>,
+) -> Result<Vec<String>> {
     let mut statement = connection.prepare_cached(
         "SELECT file.content_hash
          FROM library_root root
@@ -337,22 +361,21 @@ fn collection_candidates(
         .root_kinds
         .get(&RootKind::Collection)
         .map_or_else(RoaringBitmap::new, |collections| collections & selection);
-    let mut statement = connection
-        .prepare_cached("SELECT name, media_count FROM library_root WHERE root_id = ?1")?;
-    selected_collections
-        .iter()
-        .map(|root_id| {
-            statement
-                .query_row([root_id], |row| {
-                    Ok(SelectionCollectionCandidate {
-                        collection_id: RootId(root_id),
-                        label: row.get(0)?,
-                        member_count: row.get(1)?,
-                    })
-                })
-                .map_err(Into::into)
+    if selected_collections.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare_cached(
+        "SELECT root_id, name, media_count FROM library_root
+         WHERE root_id IN (SELECT value FROM json_each(?1)) ORDER BY root_id",
+    )?;
+    let rows = statement.query_map([id_list(&selected_collections)?], |row| {
+        Ok(SelectionCollectionCandidate {
+            collection_id: RootId(row.get(0)?),
+            label: row.get(1)?,
+            member_count: row.get(2)?,
         })
-        .collect()
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 fn shared_text(
@@ -361,39 +384,32 @@ fn shared_text(
     compare_notes: bool,
     compare_urls: bool,
 ) -> Result<(Option<String>, Option<Vec<String>>)> {
-    if !compare_notes && !compare_urls {
-        return Ok((None, None));
-    }
-    let mut statement = connection
-        .prepare_cached("SELECT notes, source_urls_json FROM library_root WHERE root_id = ?1")?;
-    let mut notes: Option<Option<String>> = None;
-    let mut urls: Option<Vec<String>> = None;
-    let mut notes_match = compare_notes;
-    let mut urls_match = compare_urls;
-    for root_id in selection {
-        let (current_notes, current_urls): (Option<String>, String) =
-            statement.query_row([root_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        if notes_match {
-            if let Some(expected) = &notes {
-                notes_match = expected == &current_notes;
-            } else {
-                notes = Some(current_notes);
-            }
-        }
-        if urls_match {
-            let current_urls = serde_json::from_str::<Vec<String>>(&current_urls)?;
-            if let Some(expected) = &urls {
-                urls_match = expected == &current_urls;
-            } else {
-                urls = Some(current_urls);
-            }
-        }
-        if !notes_match && !urls_match {
-            break;
-        }
-    }
-    Ok((
-        notes_match.then(|| notes.flatten()).flatten(),
-        urls_match.then_some(urls).flatten(),
-    ))
+    // One query per field: the shared value exists exactly when the selection
+    // holds a single distinct value, so two distinct rows end the scan.
+    let ids = (compare_notes || compare_urls).then(|| id_list(selection)).transpose()?;
+    let distinct = |column: &str| -> Result<Option<Option<String>>> {
+        let mut statement = connection.prepare_cached(&format!(
+            "SELECT DISTINCT {column} FROM library_root
+             WHERE root_id IN (SELECT value FROM json_each(?1)) LIMIT 2"
+        ))?;
+        let values = statement
+            .query_map([ids.as_deref().unwrap_or("[]")], |row| row.get::<_, Option<String>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok((values.len() == 1).then(|| values.into_iter().next().flatten()))
+    };
+    let notes = if compare_notes { distinct("notes")?.flatten() } else { None };
+    let urls = if compare_urls {
+        distinct("source_urls_json")?
+            .flatten()
+            .map(|encoded| serde_json::from_str::<Vec<String>>(&encoded))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok((notes, urls))
+}
+
+/// A JSON array of ids for `json_each`, so one query covers a whole set.
+fn id_list(ids: &RoaringBitmap) -> Result<String> {
+    Ok(serde_json::to_string(&ids.iter().collect::<Vec<_>>())?)
 }

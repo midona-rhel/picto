@@ -658,55 +658,59 @@ pub fn details(
     })
 }
 
+/// Media records in the given order, read with one query for all members.
 fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<MediaRecord>> {
     let mut statement = connection.prepare_cached(
-        "SELECT media.media_name, media.media_notes, file.file_id, file.file_path, file.mime,
-                file.size_bytes, file.width, file.height, file.duration_ms,
-                file.frame_count, file.content_hash, file.perceptual_hash,
+        "SELECT media.media_id, media.media_name, media.media_notes, file.file_id,
+                file.file_path, file.mime, file.size_bytes, file.width, file.height,
+                file.duration_ms, file.frame_count, file.content_hash, file.perceptual_hash,
                 file.palette_json
          FROM media_item media
          JOIN media_file file ON file.file_id = media.file_id
-         WHERE media.media_id = ?1",
+         WHERE media.media_id IN (SELECT value FROM json_each(?1))",
     )?;
+    let ids = serde_json::to_string(&media_ids.iter().map(|id| id.0).collect::<Vec<_>>())?;
+    let mut by_id = statement
+        .query_map([ids], |row| {
+            let palette_json = row.get::<_, String>(13)?;
+            let palette =
+                serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        13,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+            let media_id = MediaId(row.get(0)?);
+            Ok((
+                media_id,
+                MediaRecord {
+                    media_id,
+                    media_name: row.get(1)?,
+                    media_notes: row.get(2)?,
+                    file_id: FileId(row.get(3)?),
+                    file_path: row.get(4)?,
+                    facts: ImmutableMediaFacts {
+                        mime: row.get(5)?,
+                        size_bytes: row.get::<_, i64>(6)? as u64,
+                        width: row.get(7)?,
+                        height: row.get(8)?,
+                        duration_ms: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+                        frame_count: row.get(10)?,
+                        content_hash: row.get(11)?,
+                        perceptual_hash: row.get(12)?,
+                        palette,
+                    },
+                },
+            ))
+        })?
+        .collect::<std::result::Result<std::collections::HashMap<_, _>, _>>()?;
     media_ids
         .iter()
         .map(|media_id| {
-            statement
-                .query_row([media_id.0], |row| {
-                    let palette_json = row.get::<_, String>(12)?;
-                    let palette =
-                        serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                12,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(MediaRecord {
-                        media_id: *media_id,
-                        media_name: row.get(0)?,
-                        media_notes: row.get(1)?,
-                        file_id: FileId(row.get(2)?),
-                        file_path: row.get(3)?,
-                        facts: ImmutableMediaFacts {
-                            mime: row.get(4)?,
-                            size_bytes: row.get::<_, i64>(5)? as u64,
-                            width: row.get(6)?,
-                            height: row.get(7)?,
-                            duration_ms: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
-                            frame_count: row.get(9)?,
-                            content_hash: row.get(10)?,
-                            perceptual_hash: row.get(11)?,
-                            palette,
-                        },
-                    })
-                })
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        LibraryError::InvalidState(format!("missing media {media_id}"))
-                    }
-                    other => other.into(),
-                })
+            by_id
+                .remove(media_id)
+                .ok_or_else(|| LibraryError::InvalidState(format!("missing media {media_id}")))
         })
         .collect()
 }
@@ -877,12 +881,24 @@ pub fn mime_facets(
     query: &RootQuery,
     media: &MediaMatches,
 ) -> Result<MimeFacets> {
-    let matches = matching_roots(snapshot, query, media)?;
+    mime_facets_cached(snapshot, query, media, None)
+}
+
+/// Facets share the grid's match cache, so opening the type filter after a
+/// page load costs one intersection count per MIME and no re-evaluation.
+pub(crate) fn mime_facets_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+) -> Result<MimeFacets> {
+    let matches = cached_matches(snapshot, query, media, cache)?;
+    let matches: &RoaringBitmap = &matches.ids;
     let mut values = snapshot
         .mime
         .iter()
         .filter_map(|(mime, roots)| {
-            let count = (roots & &matches).len();
+            let count = roots.intersection_len(matches);
             (count > 0).then(|| MimeFacet {
                 mime: mime.clone(),
                 count,

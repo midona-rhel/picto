@@ -206,14 +206,24 @@ pub(crate) fn list_candidates(
 ) -> Result<Vec<DuplicateCandidate>> {
     let pairs = list_pairs(connection, Some(DuplicateStatus::Detected), 500)?;
     let mut candidates = Vec::with_capacity(limit.min(pairs.len()));
+    // A file near many others appears in many pairs; read each side once.
+    let mut sides = std::collections::HashMap::<FileId, Option<DuplicateCandidateSide>>::new();
+    let mut side = |file_id: FileId| -> Result<Option<DuplicateCandidateSide>> {
+        if let Some(side) = sides.get(&file_id) {
+            return Ok(side.clone());
+        }
+        let side = candidate_side(connection, snapshot, file_id)?;
+        sides.insert(file_id, side.clone());
+        Ok(side)
+    };
     for pair in pairs {
         if candidates.len() == limit.clamp(1, 500) {
             break;
         }
-        let Some(left) = candidate_side(connection, snapshot, pair.file_id_a)? else {
+        let Some(left) = side(pair.file_id_a)? else {
             continue;
         };
-        let Some(right) = candidate_side(connection, snapshot, pair.file_id_b)? else {
+        let Some(right) = side(pair.file_id_b)? else {
             continue;
         };
         candidates.push(DuplicateCandidate {
