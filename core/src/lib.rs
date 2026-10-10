@@ -36,3 +36,4 @@ pub mod tag_name;
 pub mod tasks;
 pub mod tutorial_source;
 pub mod video_repair;
+pub mod work_wake;
