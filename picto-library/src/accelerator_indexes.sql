@@ -16,3 +16,9 @@ CREATE INDEX IF NOT EXISTS idx_duplicate_pair_file_b ON duplicate_pair(file_id_b
 CREATE INDEX IF NOT EXISTS idx_duplicate_pair_winner ON duplicate_pair(winner_file_id);
 CREATE INDEX IF NOT EXISTS idx_subscription_issue_subscription ON subscription_issue(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_subscription_issue_query ON subscription_issue(query_id);
+-- Status reads that run on every task or cloud change: one row per file once
+-- cloud sync is configured, so a scan would read the whole library.
+CREATE INDEX IF NOT EXISTS idx_cloud_blob_state_state ON cloud_blob_state(state, remote_present);
+CREATE INDEX IF NOT EXISTS idx_cloud_blob_state_error ON cloud_blob_state(file_hash) WHERE last_error IS NOT NULL;
+-- Watched-folder scans look up their own finished jobs among every import.
+CREATE INDEX IF NOT EXISTS idx_ingest_job_source_kind ON ingest_job(source_kind, status, job_key);
