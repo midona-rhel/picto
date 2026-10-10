@@ -1471,5 +1471,9 @@
   "Opening your library": "ライブラリを開いています",
   "Updating your library database": "ライブラリのデータベースを更新しています",
   "Loading your library": "ライブラリを読み込んでいます",
-  "Starting library services": "ライブラリサービスを開始しています"
+  "Starting library services": "ライブラリサービスを開始しています",
+  "Library deleted.": "ライブラリを削除しました。",
+  "Move…": "移動…",
+  "Locate…": "場所を指定…",
+  "Delete…": "削除…"
 }

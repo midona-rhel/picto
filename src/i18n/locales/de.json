@@ -1471,5 +1471,9 @@
   "Opening your library": "Ihre Bibliothek wird geöffnet",
   "Updating your library database": "Ihre Bibliotheksdatenbank wird aktualisiert",
   "Loading your library": "Ihre Bibliothek wird geladen",
-  "Starting library services": "Bibliotheksdienste werden gestartet"
+  "Starting library services": "Bibliotheksdienste werden gestartet",
+  "Library deleted.": "Bibliothek gelöscht.",
+  "Move…": "Verschieben…",
+  "Locate…": "Suchen…",
+  "Delete…": "Löschen…"
 }
