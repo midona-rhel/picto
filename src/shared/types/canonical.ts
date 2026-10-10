@@ -81,12 +81,6 @@ export interface CanonicalEntityDetails {
   revision: number;
 }
 
-export interface CanonicalTagInfo {
-  tag_id: number;
-  namespace: string;
-  subtag: string;
-}
-
 export interface CanonicalTagRecord {
   tag_id: number;
   namespace_id: number;
@@ -106,11 +100,6 @@ export interface CanonicalNamespaceSummary {
   namespace_id: number;
   name: string;
   tag_count: number;
-}
-
-export interface CanonicalFolderInfo {
-  folder_id: number;
-  name: string;
 }
 
 export interface CanonicalFolderRecord {
@@ -244,42 +233,6 @@ export interface MimeFacets {
   revision: number;
 }
 
-export type FilterOp = 'eq' | 'gte' | 'lte' | 'gt' | 'lt';
-
-export interface RatingFilter {
-  value: number;
-  op?: FilterOp;
-}
-
-export type TagMatchMode = 'include' | 'exclude';
-
-export interface TagFilter {
-  tag: string;
-  match_mode?: TagMatchMode;
-}
-
-export interface DateRange {
-  from?: string | null;
-  to?: string | null;
-}
-
-export interface QueryFilters {
-  rating?: RatingFilter | null;
-  colors?: string[] | null;
-  mime_types?: string[] | null;
-  entity_types?: string[] | null;
-  tags?: TagFilter[] | null;
-  date_created?: DateRange | null;
-  date_added?: DateRange | null;
-  date_modified?: DateRange | null;
-  search_text?: string | null;
-}
-
-export interface QuerySort {
-  field?: string;
-  direction?: string;
-}
-
 export interface QueryPage {
   limit?: number;
   cursor?: string | null;
@@ -303,12 +256,6 @@ export interface SidebarNodeDto {
   selectable: boolean;
   expanded_by_default?: boolean;
   meta?: Record<string, unknown> | null;
-}
-
-export interface SidebarTreeResponse {
-  nodes: SidebarNodeDto[];
-  tree_epoch: number;
-  generated_at: string;
 }
 
 // ── Smart folder types ───────────────────────────────────────────

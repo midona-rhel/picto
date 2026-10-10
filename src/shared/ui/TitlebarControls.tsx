@@ -51,10 +51,6 @@ export function TitlebarCounter({ current, total }: { current: number; total: nu
   return <span className={styles.counter}>{current} / {total}</span>;
 }
 
-export function TitlebarValue({ children }: { children: ReactNode }) {
-  return <span className={styles.value}>{children}</span>;
-}
-
 interface TitlebarZoomSliderProps {
   value: number;
   min: number;

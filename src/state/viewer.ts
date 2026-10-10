@@ -8,7 +8,6 @@
 
 import { atom } from 'jotai';
 import type { CanonicalEntityGridItem } from '../shared/types/canonical';
-import { gridItemsAtom } from './grid';
 
 export interface ViewerSession {
   currentIndex: number;
@@ -17,8 +16,6 @@ export interface ViewerSession {
 
 /** null = viewer closed. */
 export const viewerSessionAtom = atom<ViewerSession | null>(null);
-
-export const viewerOpenAtom = atom((get) => get(viewerSessionAtom) != null);
 
 /** null = quicklook closed. */
 export const quickLookSessionAtom = atom<ViewerSession | null>(null);
@@ -77,13 +74,6 @@ export function resolveViewerIndex(
   // Current entity vanished (deleted/moved out of scope): stay near position.
   return Math.min(session.currentIndex, Math.max(items.length - 1, 0));
 }
-
-export const viewerCurrentItemAtom = atom<CanonicalEntityGridItem | null>((get) => {
-  const session = get(viewerSessionAtom);
-  if (!session) return null;
-  const items = get(gridItemsAtom);
-  return items[resolveViewerIndex(session, items)] ?? null;
-});
 
 /** Create a session from items + target item ID. */
 export function createViewerSession(

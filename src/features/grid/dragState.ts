@@ -195,43 +195,17 @@ let internalDragOrigin = false;
 export function setInternalDragOrigin(v: boolean) { internalDragOrigin = v; }
 export function isInternalDragOrigin() { return internalDragOrigin; }
 
-// Saved drag data for restoring internal drag when cursor re-enters
-let savedDragItemIds: number[] = [];
-let savedDragScope: BaseScope | null = null;
-let savedDragOwnerId: number | null = null;
-
 // ── Native drag-out ──
 
 export function startNativeDrag(fileHashes: string[], iconDataUrl: string) {
-  // Save drag data before cancelling so we can restore on re-entry
-  savedDragItemIds = [...state.itemIds];
-  savedDragScope = state.sourceScope;
-  savedDragOwnerId = state.ownerId;
-
   nativeDragPending = true;
   internalDragOrigin = true;
   if (nativeDragTimer) clearTimeout(nativeDragTimer);
   nativeDragTimer = setTimeout(() => {
     nativeDragPending = false;
     internalDragOrigin = false;
-    savedDragItemIds = [];
-    savedDragScope = null;
-    savedDragOwnerId = null;
     nativeDragTimer = null;
   }, 3_000);
   (window as any).picto?.webview?.startNativeDrag?.(fileHashes, iconDataUrl);
   cancelDrag();
-}
-
-/** Restore internal drag from a native drag that re-entered the app window. */
-export function restoreInternalDrag(x: number, y: number) {
-  if (savedDragItemIds.length === 0) return false;
-  nativeDragPending = false;
-  internalDragOrigin = false;
-  if (nativeDragTimer) { clearTimeout(nativeDragTimer); nativeDragTimer = null; }
-  startDrag(savedDragItemIds, x, y, savedDragScope, savedDragOwnerId);
-  savedDragItemIds = [];
-  savedDragScope = null;
-  savedDragOwnerId = null;
-  return true;
 }

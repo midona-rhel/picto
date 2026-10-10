@@ -11,9 +11,8 @@ import type {
   SortField,
 } from '../shared/types/canonical';
 import type { GridSpacing, GridViewMode } from '../shared/types/grid';
-import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from './navigation';
+import { displayedSurfaceNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
-import { nodeIdToGridScope } from '../shared/lib/gridScope';
 import { compileGridQuery, createEmptyItemFilters, type ItemFilters } from '../shared/lib/itemFilters';
 import { t } from '../i18n';
 
@@ -155,14 +154,6 @@ export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
     session.view.showSubfolders,
   );
 });
-
-export const activeGridScopeAtom = atom((get) => nodeIdToGridScope(get(activeNodeIdAtom)));
-export const gridVisibleItemIdsAtom = atom((get) => get(gridSessionAtom).items.map((item) => item.root_id));
-export const gridReconcileContextAtom = atom((get) => ({
-  scope: get(gridSessionAtom).scope,
-  query: get(currentGridQueryAtom),
-  visibleItemIds: get(gridVisibleItemIdsAtom),
-}));
 
 export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
 export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');

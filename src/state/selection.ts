@@ -128,7 +128,6 @@ export const gridSelectionActionAtom = atom(null, (get, set, action: GridSelecti
 });
 
 export const selectionModeAtom = atom((get) => get(gridSelectionAtom).mode);
-export const querySelectionActiveAtom = atom((get) => get(selectionModeAtom) === 'query_results');
 
 /** Loaded IDs are a viewport projection; query-wide selection remains canonical in the target. */
 export const loadedSelectedItemIdsAtom = atom((get) => {
@@ -153,15 +152,6 @@ export const selectedItemIdsAtom = atom<
     set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set(next) });
   },
 );
-
-export const toggleQuerySelectionItemIdAtom = atom(null, (get, set, itemId: number) => {
-  if (get(selectionModeAtom) !== 'query_results') return;
-  set(gridSelectionActionAtom, {
-    type: 'toggle_query_item',
-    itemId,
-    totalCount: get(gridTotalCountAtom) ?? get(gridItemsAtom).length,
-  });
-});
 
 export const selectedSubfolderNodeIdsAtom = atom<
   Set<string>,

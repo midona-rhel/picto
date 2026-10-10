@@ -420,9 +420,9 @@ describe('gridController pagination', () => {
       restoreScroll: true,
       restoreProgress: 1,
     });
-    expect(queryItemsMock.mock.calls.at(-1)?.[1]).toMatchObject({ position: { kind: 'fraction', value: 1 } });
+    expect(queryItemsMock.mock.calls[queryItemsMock.mock.calls.length - 1][1]).toMatchObject({ position: { kind: 'fraction', value: 1 } });
     gridController.applyIntent({ type: 'filter', filters: { ...store.get(gridSessionAtom).filters, text: 'new' } });
-    expect(queryItemsMock.mock.calls.at(-1)?.[1]).toMatchObject({ position: { kind: 'ordinal', value: 0 } });
+    expect(queryItemsMock.mock.calls[queryItemsMock.mock.calls.length - 1][1]).toMatchObject({ position: { kind: 'ordinal', value: 0 } });
   });
 
   it('does not allow an obsolete preparation to commit after a newer destination', async () => {

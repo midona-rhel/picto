@@ -4,13 +4,6 @@ import { recordIpcCall } from '../features/diagnostics/diagnosticsStore';
 
 export type UnlistenFn = () => void;
 
-export interface GpuDiagnostics {
-  hardwareAccelerationEnabled: boolean;
-  featureStatus: Record<string, string>;
-  info: unknown;
-  experimentalFlagsEnabled: boolean;
-}
-
 interface CoreJsonEnvelope {
   __pictoCoreJson: string;
   __pictoNativeMs: number;
