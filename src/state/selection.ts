@@ -1,8 +1,14 @@
 import { atom } from 'jotai';
 import type { EntityTarget, EntityViewQuery } from '../shared/types/canonical';
-import { currentGridQueryAtom, gridItemsAtom, gridTotalCountAtom } from './grid';
+import { currentGridQueryAtom, gridItemsAtom, gridSessionAtom, gridTotalCountAtom } from './grid';
 
 export type SelectionMode = 'explicit' | 'query_results';
+
+/** One end of a shift-click range: the root and where the grid showed it. */
+export interface RangeEnd {
+  id: number;
+  index: number;
+}
 
 export interface GridSelection {
   mode: SelectionMode;
@@ -11,19 +17,26 @@ export interface GridSelection {
   query?: EntityViewQuery | null;
   queryTotalCount?: number | null;
   folderNodeIds: Set<string>;
-  anchor: { kind: 'item'; id: number } | { kind: 'folder'; id: string } | null;
+  /** `index` is the anchor's position in the whole view, when known. */
+  anchor: { kind: 'item'; id: number; index?: number } | { kind: 'folder'; id: string } | null;
+  /**
+   * A query-wide selection limited to a shift-click range whose ends are not
+   * both loaded. The backend resolves it; the renderer only knows positions.
+   */
+  range?: { anchor: RangeEnd; focus: RangeEnd } | null;
 }
 
 export type GridSelectionAction =
   | { type: 'clear' }
-  | { type: 'replace_items'; itemIds: Set<number>; anchor?: number | null }
-  | { type: 'toggle_item'; itemId: number }
+  | { type: 'replace_items'; itemIds: Set<number>; anchor?: number | null; anchorIndex?: number }
+  | { type: 'toggle_item'; itemId: number; index?: number }
   | { type: 'range_items'; itemIds: Set<number> }
+  | { type: 'range_query'; query: EntityViewQuery; anchor: RangeEnd; focus: RangeEnd }
   | { type: 'replace_folders'; ids: Set<string>; anchor?: string | null }
   | { type: 'toggle_folder'; id: string }
   | { type: 'marquee'; itemIds: Set<number>; folderNodeIds: Set<string>; additive: boolean }
   | { type: 'select_all'; totalCount: number; query?: EntityViewQuery }
-  | { type: 'toggle_query_item'; itemId: number; totalCount: number }
+  | { type: 'toggle_query_item'; itemId: number; totalCount: number; index?: number }
   | { type: 'set_anchor'; anchor: GridSelection['anchor'] };
 
 export const emptyGridSelection = (): GridSelection => ({
@@ -34,7 +47,12 @@ export const emptyGridSelection = (): GridSelection => ({
   queryTotalCount: null,
   folderNodeIds: new Set<string>(),
   anchor: null,
+  range: null,
 });
+
+function itemAnchor(id: number, index?: number): GridSelection['anchor'] {
+  return index == null ? { kind: 'item', id } : { kind: 'item', id, index };
+}
 
 export function reduceGridSelection(state: GridSelection, action: GridSelectionAction): GridSelection {
   switch (action.type) {
@@ -44,14 +62,14 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
       return {
         ...emptyGridSelection(),
         itemIds: new Set(action.itemIds),
-        anchor: action.anchor == null ? null : { kind: 'item', id: action.anchor },
+        anchor: action.anchor == null ? null : itemAnchor(action.anchor, action.anchorIndex),
       };
     case 'toggle_item': {
       if (state.mode === 'query_results') {
         const excludedItemIds = new Set(state.excludedItemIds);
         if (excludedItemIds.has(action.itemId)) excludedItemIds.delete(action.itemId);
         else excludedItemIds.add(action.itemId);
-        return { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
+        return { ...state, excludedItemIds, anchor: itemAnchor(action.itemId, action.index) };
       }
       const itemIds = state.folderNodeIds.size > 0 ? new Set<number>() : new Set(state.itemIds);
       if (itemIds.has(action.itemId)) itemIds.delete(action.itemId);
@@ -60,7 +78,7 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         ...state,
         itemIds,
         folderNodeIds: new Set(),
-        anchor: { kind: 'item', id: action.itemId },
+        anchor: itemAnchor(action.itemId, action.index),
       };
     }
     case 'range_items':
@@ -69,6 +87,17 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         itemIds: new Set(action.itemIds),
         anchor: state.anchor?.kind === 'item' ? state.anchor : null,
       };
+    case 'range_query': {
+      const count = Math.abs(action.focus.index - action.anchor.index) + 1;
+      return {
+        ...emptyGridSelection(),
+        mode: 'query_results',
+        query: action.query,
+        queryTotalCount: count,
+        range: { anchor: action.anchor, focus: action.focus },
+        anchor: itemAnchor(action.anchor.id, action.anchor.index),
+      };
+    }
     case 'replace_folders':
       return { ...emptyGridSelection(), folderNodeIds: new Set(action.ids), anchor: action.anchor == null ? null : { kind: 'folder', id: action.anchor } };
     case 'toggle_folder': {
@@ -115,7 +144,7 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
       else excludedItemIds.add(action.itemId);
       return excludedItemIds.size >= (state.queryTotalCount ?? action.totalCount)
         ? emptyGridSelection()
-        : { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
+        : { ...state, excludedItemIds, anchor: state.range ? state.anchor : itemAnchor(action.itemId, action.index) };
     }
     case 'set_anchor':
       return { ...state, anchor: action.anchor };
@@ -133,8 +162,22 @@ export const selectionModeAtom = atom((get) => get(gridSelectionAtom).mode);
 export const loadedSelectedItemIdsAtom = atom((get) => {
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'explicit') return new Set(selection.itemIds);
+  const items = get(gridItemsAtom);
+  const range = selection.range;
+  if (range) {
+    // Only the loaded tiles whose view position falls inside the range.
+    const start = get(gridSessionAtom).windowStart;
+    const low = Math.min(range.anchor.index, range.focus.index) - start;
+    const high = Math.max(range.anchor.index, range.focus.index) - start;
+    const selected = new Set<number>();
+    for (let i = Math.max(0, low); i <= Math.min(items.length - 1, high); i++) {
+      const itemId = items[i]?.root_id;
+      if (itemId != null && !selection.excludedItemIds.has(itemId)) selected.add(itemId);
+    }
+    return selected;
+  }
   return new Set(
-    get(gridItemsAtom)
+    items
       .map((item) => item.root_id)
       .filter((itemId) => !selection.excludedItemIds.has(itemId)),
   );
@@ -194,6 +237,17 @@ export const selectionTargetAtom = atom<EntityTarget | null>((get) => {
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'query_results') {
     if (selection.query == null) return null;
+    if (selection.range) {
+      return {
+        kind: 'range',
+        query: selection.query,
+        anchor_root_id: selection.range.anchor.id,
+        focus_root_id: selection.range.focus.id,
+        anchor_index: selection.range.anchor.index,
+        focus_index: selection.range.focus.index,
+        excluded_root_ids: [...selection.excludedItemIds],
+      };
+    }
     return {
       kind: 'query',
       query: selection.query,

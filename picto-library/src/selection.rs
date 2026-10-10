@@ -22,6 +22,16 @@ pub enum SelectionTarget {
         query: RootQuery,
         anchor_root_id: RootId,
         focus_root_id: RootId,
+        /// Where the grid showed the anchor and focus. With both, the range
+        /// is read straight from the resident order and checked against the
+        /// two ids, instead of ordering the whole view to find them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor_index: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus_index: Option<u64>,
+        /// Roots toggled off inside the range after it was made.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        excluded_root_ids: Vec<RootId>,
     },
 }
 
@@ -94,8 +104,36 @@ pub(crate) fn resolve_with(
             query,
             anchor_root_id,
             focus_root_id,
+            anchor_index,
+            focus_index,
+            excluded_root_ids,
         } => {
+            let excluded = excluded_root_ids
+                .iter()
+                .map(|id| id.0)
+                .collect::<RoaringBitmap>();
             let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+            if let (Some(anchor), Some(focus)) = (anchor_index, focus_index) {
+                let (start, end, first, last) = if anchor <= focus {
+                    (*anchor, *focus, anchor_root_id, focus_root_id)
+                } else {
+                    (*focus, *anchor, focus_root_id, anchor_root_id)
+                };
+                if let Some(ids) = query::ordinal_range(
+                    snapshot,
+                    query,
+                    &media,
+                    cache,
+                    start as usize,
+                    end as usize,
+                )? {
+                    // The view may have moved since the click; only trust the
+                    // positions when both ends still hold the clicked roots.
+                    if ids.first() == Some(first) && ids.last() == Some(last) {
+                        return Ok(ids.iter().map(|id| id.0).collect::<RoaringBitmap>() - &excluded);
+                    }
+                }
+            }
             let cached;
             let computed;
             let ordered: &[RootId] = match caches {
@@ -123,7 +161,7 @@ pub(crate) fn resolve_with(
             } else {
                 (focus, anchor)
             };
-            ordered[start..=end].iter().map(|id| id.0).collect()
+            ordered[start..=end].iter().map(|id| id.0).collect::<RoaringBitmap>() - &excluded
         }
     })
 }

@@ -416,8 +416,35 @@ fn main() -> R<()> {
         query: all(FilterExpr::All(Vec::new())),
         anchor_root_id: first_page.page.items[0].root_id,
         focus_root_id: far_page.page.items[0].root_id,
+        anchor_index: None,
+        focus_index: None,
+        excluded_root_ids: Vec::new(),
     };
     bench("selection summary of a 50k shift-click range", "50000", runs, || { library.selection_summary(&range)?; Ok(()) }, None::<fn() -> R<()>>)?;
+    // The first range after an edit, by ids only and with the grid's positions.
+    let positioned = match range.clone() {
+        SelectionTarget::Range { query, anchor_root_id, focus_root_id, .. } => SelectionTarget::Range {
+            query,
+            anchor_root_id,
+            focus_root_id,
+            anchor_index: Some(first_page.start as u64),
+            focus_index: Some(far_page.start as u64),
+            excluded_root_ids: Vec::new(),
+        },
+        _ => unreachable!(),
+    };
+    let touch = SelectionTarget::Explicit { root_ids: vec![first_page.page.items[0].root_id] };
+    for (label, target) in [("first 50k range after an edit (ids only)", &range), ("first 50k range after an edit (grid positions)", &positioned)] {
+        let mut samples = Vec::new();
+        for _ in 0..runs {
+            library.set_lifecycle(&touch, Lifecycle::Trash)?;
+            library.set_lifecycle(&touch, Lifecycle::Active)?;
+            let t = Instant::now();
+            library.selection_summary(target)?;
+            samples.push(ms(t));
+        }
+        emit(label, "50000", &mut samples);
+    }
     // Typing into the tag picker: one tag search per keystroke.
     let mut picked = Vec::new();
     for word in ["vocab:12", "vocab:4"] {

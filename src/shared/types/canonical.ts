@@ -326,6 +326,10 @@ export type EntityTarget =
       query: EntityViewQuery;
       anchor_root_id: number;
       focus_root_id: number;
+      /** Grid positions of the two ends; the backend checks them against the ids. */
+      anchor_index?: number;
+      focus_index?: number;
+      excluded_root_ids?: number[];
     };
 
 export interface OrganizeCollectionInput {

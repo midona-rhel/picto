@@ -1,11 +1,12 @@
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
-import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
+import type { CanonicalEntityGridItem } from '../shared/types/canonical';
 import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
   emptyGridSelection,
   gridSelectionActionAtom,
+  gridSelectionAtom,
   loadedSelectedItemIdsAtom,
   reduceGridSelection,
   selectedItemIdsAtom,
@@ -40,22 +41,38 @@ function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridIte
 }
 
 describe('selection state', () => {
-  it('exposes range targets without expanding unloaded renderer item IDs', () => {
-    const query = createStore().get(currentGridQueryAtom);
-    const target: EntityTarget = {
-      kind: 'range',
-      query,
-      anchor_root_id: 11,
-      focus_root_id: 999_999,
-    };
-
-    expect(target).toEqual({
-      kind: 'range',
-      query,
-      anchor_root_id: 11,
-      focus_root_id: 999_999,
+  it('keeps a shift-click range with an unloaded anchor as a backend range', () => {
+    const store = createStore();
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [buildGridItem(1, 'a'), buildGridItem(2, 'b'), buildGridItem(3, 'c')],
+      windowStart: 5_000,
+      totalCount: 1_000_000,
     });
-    expect('item_ids' in target).toBe(false);
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, {
+      type: 'range_query',
+      query,
+      anchor: { id: 11, index: 20 },
+      focus: { id: 2, index: 5_001 },
+    });
+
+    expect(store.get(selectionCountAtom)).toBe(4_982);
+    // Loaded tiles light up only up to the focus position.
+    expect(store.get(loadedSelectedItemIdsAtom)).toEqual(new Set([1, 2]));
+    store.set(gridSelectionActionAtom, { type: 'toggle_query_item', itemId: 1, totalCount: 1_000_000 });
+    expect(store.get(selectionCountAtom)).toBe(4_981);
+    expect(store.get(selectionTargetAtom)).toEqual({
+      kind: 'range',
+      query,
+      anchor_root_id: 11,
+      focus_root_id: 2,
+      anchor_index: 20,
+      focus_index: 5_001,
+      excluded_root_ids: [1],
+    });
+    // Toggling inside a range keeps the original anchor for the next shift-click.
+    expect(store.get(gridSelectionAtom).anchor).toEqual({ kind: 'item', id: 11, index: 20 });
   });
 
   it('builds query targets from the canonical grid session', () => {

@@ -280,6 +280,29 @@ fn window_ids(
     Ok(order.ids[start..(start + limit).min(order.ids.len())].to_vec())
 }
 
+/// The ids at positions `start..=end` of the query's order, sought directly
+/// in the resident order. `None` when this order cannot be sought (recently
+/// viewed) or the range runs past the end; callers then fall back to the
+/// complete order.
+pub(crate) fn ordinal_range(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+    start: usize,
+    end: usize,
+) -> Result<Option<Vec<RootId>>> {
+    if end < start {
+        return Ok(None);
+    }
+    let matches = matching_roots_cached(snapshot, query, media, cache)?;
+    if end >= matches.len() as usize {
+        return Ok(None);
+    }
+    let ids = direct_window(snapshot, query, &matches, start, end - start + 1)?;
+    Ok(ids.filter(|ids| ids.len() == end - start + 1))
+}
+
 /// Ordinal windows that seek the resident order directly, without
 /// enumerating the matching set. Only the recently viewed order, a short
 /// resident list in its own display order, is served by enumeration instead.

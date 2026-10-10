@@ -2794,6 +2794,58 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn range_positions_are_trusted_only_when_both_ends_still_match() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    for key in ["a", "b", "c", "d", "e", "f"] {
+        library
+            .ingest(&imported(key, Lifecycle::Active, &[]))
+            .unwrap();
+    }
+    let all = query(ItemScope::All);
+    let order = library
+        .query_window(&all, &WindowRequest::at(0, 10))
+        .unwrap()
+        .page
+        .items
+        .into_iter()
+        .map(|item| item.root_id)
+        .collect::<Vec<_>>();
+    let range = |anchor: usize, focus: usize, positions: Option<(u64, u64)>, excluded: Vec<_>| {
+        SelectionTarget::Range {
+            query: all.clone(),
+            anchor_root_id: order[anchor],
+            focus_root_id: order[focus],
+            anchor_index: positions.map(|(anchor, _)| anchor),
+            focus_index: positions.map(|(_, focus)| focus),
+            excluded_root_ids: excluded,
+        }
+    };
+    let ids_only = library
+        .ordered_image_selection(&range(4, 1, None, Vec::new()))
+        .unwrap();
+    assert_eq!(ids_only, order[1..=4]);
+    // Correct positions, either direction.
+    for target in [range(4, 1, Some((4, 1)), Vec::new()), range(1, 4, Some((1, 4)), Vec::new())] {
+        assert_eq!(library.ordered_image_selection(&target).unwrap(), ids_only);
+        assert_eq!(library.selection_summary(&target).unwrap().selected_count, 4);
+    }
+    // Stale or impossible positions fall back to finding the ids.
+    for positions in [(3, 0), (5, 2), (40, 1)] {
+        let target = range(4, 1, Some(positions), Vec::new());
+        assert_eq!(library.ordered_image_selection(&target).unwrap(), ids_only);
+        assert_eq!(library.selection_summary(&target).unwrap().selected_count, 4);
+    }
+    // Roots toggled off inside the range stay out.
+    let excluded = range(1, 4, Some((1, 4)), vec![order[2]]);
+    assert_eq!(
+        library.ordered_image_selection(&excluded).unwrap(),
+        vec![order[1], order[3], order[4]]
+    );
+    assert_eq!(library.selection_summary(&excluded).unwrap().selected_count, 3);
+}
+
+#[test]
 fn selection_summary_returns_six_ordered_previews_and_structural_collection_candidates() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

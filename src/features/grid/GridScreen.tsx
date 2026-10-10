@@ -37,6 +37,7 @@ import {
   gridScopeAtom,
   gridChildFoldersAtom,
   gridFilterToolbarOpenAtom,
+  currentGridQueryAtom,
   type GridTransitionPhase,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
@@ -1264,8 +1265,23 @@ export function GridScreen({
         }}
         onTileClick={(index, item, event) => {
           const itemId = item.root_id;
+          const position = windowStart + index;
           if (event?.shiftKey && selection.anchor?.kind === 'item') {
-            const anchorIndex = items.findIndex((entry) => entry.root_id === selection.anchor!.id);
+            const anchor = selection.anchor;
+            const anchorIndex = items.findIndex((entry) => entry.root_id === anchor.id);
+            const additive = Boolean(event.metaKey || event.ctrlKey);
+            if (anchorIndex < 0 && anchor.index != null && !additive) {
+              // The anchor scrolled out of the loaded window: let the backend
+              // resolve the range from both positions instead of selecting
+              // only what happens to be loaded.
+              dispatchSelection({
+                type: 'range_query',
+                query: store.get(currentGridQueryAtom),
+                anchor: { id: anchor.id, index: anchor.index },
+                focus: { id: itemId, index: position },
+              });
+              return;
+            }
             const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
             const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
             const base = (event.metaKey || event.ctrlKey)
@@ -1277,10 +1293,10 @@ export function GridScreen({
             dispatchSelection({ type: 'range_items', itemIds: base });
           } else if (event?.metaKey || event?.ctrlKey) {
             dispatchSelection(selectionMode === 'query_results'
-              ? { type: 'toggle_query_item', itemId, totalCount: totalCount ?? items.length }
-              : { type: 'toggle_item', itemId });
+              ? { type: 'toggle_query_item', itemId, totalCount: totalCount ?? items.length, index: position }
+              : { type: 'toggle_item', itemId, index: position });
           } else {
-            dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId });
+            dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId, anchorIndex: position });
           }
         }}
         onTileDoubleClick={(_index, item) => {

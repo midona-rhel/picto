@@ -487,7 +487,7 @@ function useSelectionSummary() {
       store.set(displayedInspectorTargetAtom, {
         kind: 'multi',
         count: selectionCount,
-        selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+        selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
       });
     }, 250);
     void entityMutations.getTargetSelectionSummary(target).then(async (s) => ({
@@ -505,7 +505,7 @@ function useSelectionSummary() {
         store.set(displayedInspectorTargetAtom, {
           kind: 'multi',
           count: s.selected_count,
-          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+          selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
         });
       }
     }).catch(() => {
@@ -519,7 +519,7 @@ function useSelectionSummary() {
         store.set(displayedInspectorTargetAtom, {
           kind: 'multi',
           count: selectionCount,
-          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+          selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
         });
       }
     });
