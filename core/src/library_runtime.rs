@@ -272,15 +272,40 @@ fn start_checkpoint_worker(
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let interval = Duration::from_secs(5 * 60);
+        // WAL pages are folded back every minute; the projection checkpoint is
+        // considered every fifth minute and skipped when nothing changed.
+        let interval = Duration::from_secs(60);
+        let mut tick = 0_u32;
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(interval) => {
+                    tick = tick.wrapping_add(1);
                     let library = Arc::clone(application.library());
-                    match tokio::task::spawn_blocking(move || library.write_projection_checkpoint()).await {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(error)) => tracing::warn!(%error, "Canonical projection checkpoint failed"),
+                    let projection = tick.is_multiple_of(5);
+                    let result = tokio::task::spawn_blocking(move || {
+                        if projection {
+                            library.write_projection_checkpoint()?;
+                            // Without a cloud provider no snapshot will ever
+                            // consume the change journal; keep it from growing.
+                            library.database().maintenance_write(
+                                picto_library::database::WorkPriority::Maintenance,
+                                |transaction| {
+                                    transaction.execute(
+                                        "DELETE FROM cloud_journal WHERE NOT EXISTS (
+                                             SELECT 1 FROM cloud_state WHERE provider IS NOT NULL)",
+                                        [],
+                                    )?;
+                                    Ok(())
+                                },
+                            )?;
+                        }
+                        library.database().checkpoint_wal_passive()
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(%error, "Canonical checkpoint failed"),
                         Err(error) => tracing::warn!(%error, "Canonical checkpoint worker stopped"),
                     }
                 }
