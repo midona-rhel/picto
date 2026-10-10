@@ -134,7 +134,8 @@ impl TextShard {
         if candidates == 0 {
             return result;
         }
-        if candidates * 8 < self.rows.len() as u64 {
+        // Below ~3% of a shard, row lookups beat scanning its text.
+        if candidates * 32 < self.rows.len() as u64 {
             for id in universe.range(first.id..=last.id) {
                 if !removed.contains(id)
                     && self.row(id).is_some_and(|row| self.matches(row, fields.clone(), finder))
@@ -591,6 +592,8 @@ mod tests {
             (1..9_000).collect::<RoaringBitmap>(),
             (1..9_000).filter(|id| id % 3 != 0).collect(),
             (1..9_000).filter(|id| id % 11 == 0).collect(),
+            // Over the direct-lookup limit, but sparse in the later shards.
+            (1..9_000).filter(|id| *id < 4_500 || id % 50 == 0).collect(),
         ];
         for field in [TextField::Global, TextField::Name, TextField::Notes, TextField::SourceUrl] {
             // Each query extends the previous one, as typing does.
