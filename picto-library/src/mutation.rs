@@ -224,27 +224,20 @@ impl Library {
     ) -> Result<(T, MutationReceipt)> {
         let resources = resources.into_iter().collect::<Vec<_>>();
         let item_ids = item_ids.into_iter().collect::<Vec<_>>();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let ((output, receipt), _, _) = self.database.published_write(
-            priority,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let output = operation(transaction, revision)?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(revision, resources, item_ids);
-                Ok((
-                    (output, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
+        let (output, receipt) = self.publish(priority, |transaction, revision, snapshot| {
+            let output = operation(transaction, revision)?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(revision, resources, item_ids);
+            Ok((
+                (output, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok((output, receipt))
     }
 
@@ -754,91 +747,75 @@ impl Library {
         root_id: RootId,
         viewed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let (receipt, _, _) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let exists = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM library_root WHERE root_id = ?1)",
-                    [root_id.0],
-                    |row| row.get::<_, bool>(0),
-                )?;
-                if !exists {
-                    return Err(LibraryError::NotFound(format!("root {root_id}")));
-                }
-                transaction.execute(
-                    "INSERT INTO recent_view (root_id, viewed_at_ms)
-                     VALUES (
-                         ?1,
-                         MAX(
-                             ?2,
-                             COALESCE((SELECT MAX(viewed_at_ms) + 1 FROM recent_view), ?2)
-                         )
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let exists = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM library_root WHERE root_id = ?1)",
+                [root_id.0],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                return Err(LibraryError::NotFound(format!("root {root_id}")));
+            }
+            transaction.execute(
+                "INSERT INTO recent_view (root_id, viewed_at_ms)
+                 VALUES (
+                     ?1,
+                     MAX(
+                         ?2,
+                         COALESCE((SELECT MAX(viewed_at_ms) + 1 FROM recent_view), ?2)
                      )
-                     ON CONFLICT(root_id) DO UPDATE SET viewed_at_ms = excluded.viewed_at_ms",
-                    rusqlite::params![root_id.0, viewed_at_ms],
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["recently-viewed".into(), "navigation".into()],
-                    vec![root_id],
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
+                 )
+                 ON CONFLICT(root_id) DO UPDATE SET viewed_at_ms = excluded.viewed_at_ms",
+                rusqlite::params![root_id.0, viewed_at_ms],
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["recently-viewed".into(), "navigation".into()],
+                vec![root_id],
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
     pub fn clear_recent_views(&self) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = load_recent_views(transaction)?;
-                transaction.execute("DELETE FROM recent_view", [])?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["recently-viewed".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (!before.is_empty()).then(|| {
-                            HistoryEntry::for_command(
-                                "items.clear_recent_views",
-                                "Clear recently viewed",
-                                SemanticChange::RecentViews {
-                                    before: Arc::new(before),
-                                    after: Arc::new(Vec::new()),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = load_recent_views(transaction)?;
+            transaction.execute("DELETE FROM recent_view", [])?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["recently-viewed".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!before.is_empty()).then(|| {
+                        HistoryEntry::for_command(
+                            "items.clear_recent_views",
+                            "Clear recently viewed",
+                            SemanticChange::RecentViews {
+                                before: Arc::new(before),
+                                after: Arc::new(Vec::new()),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -1123,82 +1100,73 @@ impl Library {
         let view = input.view;
         crate::smart::validate_view(&view)?;
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((smart_folder_id, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                crate::smart::validate_capacity(transaction)?;
-                validate_smart_parent(transaction, parent_id, None)?;
-                let smart_folder_id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
-                let display_order = transaction.query_row(
-                    "SELECT COALESCE(MAX(display_order) + 1, 0)
-                     FROM smart_folder_definition WHERE parent_id IS ?1",
-                    [parent_id.map(|id| id.0)],
-                    |row| row.get::<_, i64>(0),
-                )?;
-                transaction.execute(
-                    "INSERT INTO smart_folder_definition
-                         (smart_folder_id, stable_key, parent_id, name, icon, color, notes,
-                          view_query_json, display_order)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    rusqlite::params![
-                        smart_folder_id.0,
-                        uuid::Uuid::new_v4().to_string(),
-                        parent_id.map(|id| id.0),
-                        name,
-                        icon,
-                        color,
-                        notes,
-                        serde_json::to_string(&view)?,
-                        display_order
-                    ],
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "smart_folder.create",
-                    None,
-                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
-                    changed_at_ms,
-                )?;
-                let mut next = (*snapshot).clone();
-                crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
-                next.revision = revision;
-                let after = load_smart_folder_definition(transaction, smart_folder_id)?
-                    .ok_or_else(|| {
-                        LibraryError::InvalidState(format!(
-                            "new smart folder {} disappeared before publication",
-                            smart_folder_id.0
-                        ))
-                    })?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["smart-folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    (smart_folder_id, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "smart_folders.create",
-                            "Create smart folder",
-                            SemanticChange::SmartFolderDefinition {
-                                smart_folder_id,
-                                before: None,
-                                after: Some(Box::new(after)),
-                            },
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let (smart_folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            crate::smart::validate_capacity(transaction)?;
+            validate_smart_parent(transaction, parent_id, None)?;
+            let smart_folder_id = SmartFolderId(LibraryDatabase::allocate_id(transaction)?);
+            let display_order = transaction.query_row(
+                "SELECT COALESCE(MAX(display_order) + 1, 0)
+                 FROM smart_folder_definition WHERE parent_id IS ?1",
+                [parent_id.map(|id| id.0)],
+                |row| row.get::<_, i64>(0),
+            )?;
+            transaction.execute(
+                "INSERT INTO smart_folder_definition
+                     (smart_folder_id, stable_key, parent_id, name, icon, color, notes,
+                      view_query_json, display_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    smart_folder_id.0,
+                    uuid::Uuid::new_v4().to_string(),
+                    parent_id.map(|id| id.0),
+                    name,
+                    icon,
+                    color,
+                    notes,
+                    serde_json::to_string(&view)?,
+                    display_order
+                ],
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "smart_folder.create",
+                None,
+                serde_json::json!({"smart_folder_id": smart_folder_id.0}),
+                changed_at_ms,
+            )?;
+            let mut next = (*snapshot).clone();
+            crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
+            next.revision = revision;
+            let after = load_smart_folder_definition(transaction, smart_folder_id)?
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "new smart folder {} disappeared before publication",
+                        smart_folder_id.0
+                    ))
+                })?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["smart-folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                (smart_folder_id, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "smart_folders.create",
+                        "Create smart folder",
+                        SemanticChange::SmartFolderDefinition {
+                            smart_folder_id,
+                            before: None,
+                            after: Some(Box::new(after)),
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok((smart_folder_id, receipt))
     }
 
@@ -1215,87 +1183,78 @@ impl Library {
         let view = input.view;
         crate::smart::validate_view(&view)?;
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                validate_smart_parent(transaction, parent_id, Some(smart_folder_id))?;
-                let before = load_smart_folder_definition(transaction, smart_folder_id)?
-                    .ok_or_else(|| {
-                        LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
-                    })?;
-                let query_changed = before.parent_id != parent_id || before.view != view;
-                if transaction.execute(
-                    "UPDATE smart_folder_definition
-                     SET parent_id = ?2, name = ?3, icon = ?4, color = ?5, notes = ?6,
-                         view_query_json = ?7
-                     WHERE smart_folder_id = ?1",
-                    rusqlite::params![
-                        smart_folder_id.0,
-                        parent_id.map(|id| id.0),
-                        name,
-                        icon,
-                        color,
-                        notes,
-                        serde_json::to_string(&view)?
-                    ],
-                )? == 0
-                {
-                    return Err(LibraryError::NotFound(format!(
-                        "smart folder {}",
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            validate_smart_parent(transaction, parent_id, Some(smart_folder_id))?;
+            let before = load_smart_folder_definition(transaction, smart_folder_id)?
+                .ok_or_else(|| {
+                    LibraryError::NotFound(format!("smart folder {smart_folder_id}"))
+                })?;
+            let query_changed = before.parent_id != parent_id || before.view != view;
+            if transaction.execute(
+                "UPDATE smart_folder_definition
+                 SET parent_id = ?2, name = ?3, icon = ?4, color = ?5, notes = ?6,
+                     view_query_json = ?7
+                 WHERE smart_folder_id = ?1",
+                rusqlite::params![
+                    smart_folder_id.0,
+                    parent_id.map(|id| id.0),
+                    name,
+                    icon,
+                    color,
+                    notes,
+                    serde_json::to_string(&view)?
+                ],
+            )? == 0
+            {
+                return Err(LibraryError::NotFound(format!(
+                    "smart folder {}",
+                    smart_folder_id.0
+                )));
+            }
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "smart_folder.update",
+                None,
+                serde_json::json!({"smart_folder_id": smart_folder_id.0}),
+                changed_at_ms,
+            )?;
+            let mut next = (*snapshot).clone();
+            if query_changed {
+                crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
+            }
+            next.revision = revision;
+            let after = load_smart_folder_definition(transaction, smart_folder_id)?
+                .ok_or_else(|| {
+                    LibraryError::InvalidState(format!(
+                        "smart folder {} disappeared during update",
                         smart_folder_id.0
-                    )));
-                }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "smart_folder.update",
-                    None,
-                    serde_json::json!({"smart_folder_id": smart_folder_id.0}),
-                    changed_at_ms,
-                )?;
-                let mut next = (*snapshot).clone();
-                if query_changed {
-                    crate::smart::refresh_subtree(transaction, &mut next, smart_folder_id)?;
-                }
-                next.revision = revision;
-                let after = load_smart_folder_definition(transaction, smart_folder_id)?
-                    .ok_or_else(|| {
-                        LibraryError::InvalidState(format!(
-                            "smart folder {} disappeared during update",
-                            smart_folder_id.0
-                        ))
-                    })?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["smart-folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != after).then(|| {
-                            HistoryEntry::for_command(
-                                "smart_folders.update",
-                                "Update smart folder",
-                                SemanticChange::SmartFolderDefinition {
-                                    smart_folder_id,
-                                    before: Some(Box::new(before)),
-                                    after: Some(Box::new(after)),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                    ))
+                })?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["smart-folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != after).then(|| {
+                        HistoryEntry::for_command(
+                            "smart_folders.update",
+                            "Update smart folder",
+                            SemanticChange::SmartFolderDefinition {
+                                smart_folder_id,
+                                before: Some(Box::new(before)),
+                                after: Some(Box::new(after)),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -1304,74 +1263,65 @@ impl Library {
         smart_folder_id: SmartFolderId,
     ) -> Result<SmartFolderDeleteResult> {
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (result, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut definitions = load_smart_folder_subtree(transaction, smart_folder_id)?;
-                let fallback_smart_folder_id = definitions
-                    .iter()
-                    .find(|(definition, _)| definition.smart_folder_id == smart_folder_id)
-                    .and_then(|(definition, _)| definition.parent_id);
-                definitions.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
-                let mut next = (*snapshot).clone();
-                let mut changes = Vec::with_capacity(definitions.len());
-                for (definition, _) in &definitions {
-                    transaction.execute(
-                        "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
-                        [definition.smart_folder_id.0],
-                    )?;
-                    crate::smart::remove(&mut next, definition.smart_folder_id);
-                    changes.push(SemanticChange::SmartFolderDefinition {
-                        smart_folder_id: definition.smart_folder_id,
-                        before: Some(Box::new(definition.clone())),
-                        after: None,
-                    });
-                }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "smart_folder.delete",
-                    None,
-                    serde_json::json!({
-                        "smart_folder_ids": definitions.iter()
-                            .map(|(definition, _)| definition.smart_folder_id.0)
-                            .collect::<Vec<_>>()
-                    }),
-                    changed_at_ms,
+        let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut definitions = load_smart_folder_subtree(transaction, smart_folder_id)?;
+            let fallback_smart_folder_id = definitions
+                .iter()
+                .find(|(definition, _)| definition.smart_folder_id == smart_folder_id)
+                .and_then(|(definition, _)| definition.parent_id);
+            definitions.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+            let mut next = (*snapshot).clone();
+            let mut changes = Vec::with_capacity(definitions.len());
+            for (definition, _) in &definitions {
+                transaction.execute(
+                    "DELETE FROM smart_folder_definition WHERE smart_folder_id = ?1",
+                    [definition.smart_folder_id.0],
                 )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["smart-folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    SmartFolderDeleteResult {
-                        deleted_smart_folder_ids: definitions
-                            .iter()
-                            .map(|(definition, _)| definition.smart_folder_id)
-                            .collect(),
-                        fallback_smart_folder_id,
-                        receipt: receipt.clone(),
-                    },
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "smart_folders.delete",
-                            "Delete smart folder",
-                            SemanticChange::Compound(changes),
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                crate::smart::remove(&mut next, definition.smart_folder_id);
+                changes.push(SemanticChange::SmartFolderDefinition {
+                    smart_folder_id: definition.smart_folder_id,
+                    before: Some(Box::new(definition.clone())),
+                    after: None,
+                });
+            }
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "smart_folder.delete",
+                None,
+                serde_json::json!({
+                    "smart_folder_ids": definitions.iter()
+                        .map(|(definition, _)| definition.smart_folder_id.0)
+                        .collect::<Vec<_>>()
+                }),
+                changed_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["smart-folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                SmartFolderDeleteResult {
+                    deleted_smart_folder_ids: definitions
+                        .iter()
+                        .map(|(definition, _)| definition.smart_folder_id)
+                        .collect(),
+                    fallback_smart_folder_id,
+                    receipt: receipt.clone(),
+                },
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "smart_folders.delete",
+                        "Delete smart folder",
+                        SemanticChange::Compound(changes),
+                    )),
+                },
+            ))
+        })?;
         Ok(result)
     }
 
@@ -1386,104 +1336,95 @@ impl Library {
                 "smart-folder reorder contains duplicate IDs".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                validate_smart_parent(transaction, parent_id, None)?;
-                let mut statement = transaction.prepare(
-                    "SELECT smart_folder_id FROM smart_folder_definition
-                     WHERE parent_id IS ?1 ORDER BY display_order, smart_folder_id",
-                )?;
-                let current = statement
-                    .query_map([parent_id.map(|id| id.0)], |row| {
-                        row.get::<_, u32>(0).map(SmartFolderId)
-                    })?
-                    .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
-                if current.iter().map(|id| id.0).collect::<BTreeSet<_>>()
-                    != requested.iter().copied().collect::<BTreeSet<_>>()
-                    || current.len() != requested.len()
-                {
-                    return Err(LibraryError::InvalidInput(
-                        "smart-folder reorder must contain every sibling exactly once".into(),
-                    ));
-                }
-                let before = current
-                    .iter()
-                    .map(|id| {
-                        load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "smart folder {} disappeared during reorder",
-                                id.0
-                            ))
-                        })
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            validate_smart_parent(transaction, parent_id, None)?;
+            let mut statement = transaction.prepare(
+                "SELECT smart_folder_id FROM smart_folder_definition
+                 WHERE parent_id IS ?1 ORDER BY display_order, smart_folder_id",
+            )?;
+            let current = statement
+                .query_map([parent_id.map(|id| id.0)], |row| {
+                    row.get::<_, u32>(0).map(SmartFolderId)
+                })?
+                .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+            if current.iter().map(|id| id.0).collect::<BTreeSet<_>>()
+                != requested.iter().copied().collect::<BTreeSet<_>>()
+                || current.len() != requested.len()
+            {
+                return Err(LibraryError::InvalidInput(
+                    "smart-folder reorder must contain every sibling exactly once".into(),
+                ));
+            }
+            let before = current
+                .iter()
+                .map(|id| {
+                    load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "smart folder {} disappeared during reorder",
+                            id.0
+                        ))
                     })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut update = transaction.prepare_cached(
-                    "UPDATE smart_folder_definition SET display_order = ?2
-                     WHERE smart_folder_id = ?1",
-                )?;
-                for (display_order, id) in smart_folder_ids.iter().enumerate() {
-                    update.execute(rusqlite::params![id.0, display_order as i64])?;
-                }
-                let mut after_by_id = HashMap::new();
-                for id in smart_folder_ids {
-                    let after =
-                        load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "smart folder {} disappeared during reorder",
-                                id.0
-                            ))
-                        })?;
-                    after_by_id.insert(*id, after);
-                }
-                let changes = before
-                    .into_iter()
-                    .filter_map(|before| {
-                        let after = after_by_id.remove(&before.smart_folder_id)?;
-                        (before != after).then_some(SemanticChange::SmartFolderDefinition {
-                            smart_folder_id: before.smart_folder_id,
-                            before: Some(Box::new(before)),
-                            after: Some(Box::new(after)),
-                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut update = transaction.prepare_cached(
+                "UPDATE smart_folder_definition SET display_order = ?2
+                 WHERE smart_folder_id = ?1",
+            )?;
+            for (display_order, id) in smart_folder_ids.iter().enumerate() {
+                update.execute(rusqlite::params![id.0, display_order as i64])?;
+            }
+            let mut after_by_id = HashMap::new();
+            for id in smart_folder_ids {
+                let after =
+                    load_smart_folder_definition(transaction, *id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "smart folder {} disappeared during reorder",
+                            id.0
+                        ))
+                    })?;
+                after_by_id.insert(*id, after);
+            }
+            let changes = before
+                .into_iter()
+                .filter_map(|before| {
+                    let after = after_by_id.remove(&before.smart_folder_id)?;
+                    (before != after).then_some(SemanticChange::SmartFolderDefinition {
+                        smart_folder_id: before.smart_folder_id,
+                        before: Some(Box::new(before)),
+                        after: Some(Box::new(after)),
                     })
-                    .collect::<Vec<_>>();
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "smart_folder.reorder",
-                    None,
-                    serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["smart-folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (!changes.is_empty()).then(|| {
-                            HistoryEntry::for_command(
-                                "smart_folders.reorder",
-                                "Reorder smart folders",
-                                SemanticChange::Compound(changes),
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                })
+                .collect::<Vec<_>>();
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "smart_folder.reorder",
+                None,
+                serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["smart-folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!changes.is_empty()).then(|| {
+                        HistoryEntry::for_command(
+                            "smart_folders.reorder",
+                            "Reorder smart folders",
+                            SemanticChange::Compound(changes),
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -1530,104 +1471,97 @@ impl Library {
                 ingest::MAX_INGEST_BATCH
             )));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let (outputs, _, _) = self.database.published_write(
-            WorkPriority::CanonicalIngest,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut next = (*snapshot).clone();
-                let mut root_ids = Vec::with_capacity(inputs.len());
-                let mut created_root_ids = Vec::with_capacity(inputs.len());
-                let mut resources = BTreeSet::new();
-                let mut bitmap_keys = HashSet::new();
-                let mut folder_ids = HashSet::new();
-                let mut affected = RoaringBitmap::new();
-                for input in inputs {
-                    let output = ingest::insert_one(
-                        transaction,
-                        revision,
-                        next,
-                        input,
-                        true,
-                        reuse_identity,
-                    )?;
-                    next = output.snapshot;
-                    root_ids.push(output.root_id);
-                    if output.created_root {
-                        created_root_ids.push(output.root_id);
-                        if let Some(attempt_id) = input
-                            .source_identity
-                            .as_ref()
-                            .and_then(|source| source.source_attempt_id)
-                        {
-                            record_source_attempt_root(
-                                transaction,
-                                attempt_id,
-                                output.root_id,
-                                true,
-                            )?;
-                            resources.insert("subscriptions".to_owned());
-                        }
-                    }
-                    resources.extend(output.resources);
-                    bitmap_keys.extend(output.bitmap_keys);
-                    folder_ids.extend(output.folder_ids);
-                    affected |= &output.affected_roots;
-                }
-                ingest::persist_touched(
+        let outputs = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            let mut next = (*snapshot).clone();
+            let mut root_ids = Vec::with_capacity(inputs.len());
+            let mut created_root_ids = Vec::with_capacity(inputs.len());
+            let mut resources = BTreeSet::new();
+            let mut bitmap_keys = HashSet::new();
+            let mut folder_ids = HashSet::new();
+            let mut affected = RoaringBitmap::new();
+            for input in inputs {
+                let output = ingest::insert_one(
                     transaction,
                     revision,
-                    &next,
-                    bitmap_keys,
-                    folder_ids,
-                    affected.iter().map(RootId),
+                    next,
+                    input,
+                    true,
+                    reuse_identity,
                 )?;
-                crate::smart::settle_affected(transaction, &mut next, &affected)?;
-                if auto_tag && !created_root_ids.is_empty() {
-                    ingest::enqueue_ai_tag_roots(
-                        transaction,
-                        created_root_ids.iter().copied(),
-                        inputs
-                            .iter()
-                            .map(|input| input.imported_at_ms)
-                            .max()
-                            .unwrap_or_else(now_ms),
-                    )?;
-                    resources.insert("tasks".to_owned());
+                next = output.snapshot;
+                root_ids.push(output.root_id);
+                if output.created_root {
+                    created_root_ids.push(output.root_id);
+                    if let Some(attempt_id) = input
+                        .source_identity
+                        .as_ref()
+                        .and_then(|source| source.source_attempt_id)
+                    {
+                        record_source_attempt_root(
+                            transaction,
+                            attempt_id,
+                            output.root_id,
+                            true,
+                        )?;
+                        resources.insert("subscriptions".to_owned());
+                    }
                 }
-                insert_cloud_journal(
+                resources.extend(output.resources);
+                bitmap_keys.extend(output.bitmap_keys);
+                folder_ids.extend(output.folder_ids);
+                affected |= &output.affected_roots;
+            }
+            ingest::persist_touched(
+                transaction,
+                revision,
+                &next,
+                bitmap_keys,
+                folder_ids,
+                affected.iter().map(RootId),
+            )?;
+            crate::smart::settle_affected(transaction, &mut next, &affected)?;
+            if auto_tag && !created_root_ids.is_empty() {
+                ingest::enqueue_ai_tag_roots(
                     transaction,
-                    revision,
-                    "root.ingest",
-                    Some(&affected),
-                    serde_json::json!({"count": root_ids.len()}),
+                    created_root_ids.iter().copied(),
                     inputs
                         .iter()
                         .map(|input| input.imported_at_ms)
                         .max()
                         .unwrap_or_else(now_ms),
                 )?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    affected.iter().map(RootId),
-                );
-                let outputs = root_ids
-                    .into_iter()
-                    .map(|root_id| (root_id, receipt.clone()))
-                    .collect::<Vec<_>>();
-                Ok((
-                    outputs,
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
+                resources.insert("tasks".to_owned());
+            }
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "root.ingest",
+                Some(&affected),
+                serde_json::json!({"count": root_ids.len()}),
+                inputs
+                    .iter()
+                    .map(|input| input.imported_at_ms)
+                    .max()
+                    .unwrap_or_else(now_ms),
+            )?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                affected.iter().map(RootId),
+            );
+            let outputs = root_ids
+                .into_iter()
+                .map(|root_id| (root_id, receipt.clone()))
+                .collect::<Vec<_>>();
+            Ok((
+                outputs,
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok(outputs)
     }
 
@@ -1661,176 +1595,167 @@ impl Library {
                 "collection cover index is outside the member list".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let ((collection_id, receipt), _, ()) = self.database.published_write(
-            WorkPriority::CanonicalIngest,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut next = (*snapshot).clone();
-                let mut root_ids = Vec::with_capacity(input.members.len() + 1);
-                let mut created_root_ids = Vec::with_capacity(input.members.len());
-                let mut requested_cover = input.existing_root_id;
-                if let Some(existing_root_id) = input.existing_root_id {
-                    if !next
+        let (collection_id, receipt) = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            let mut next = (*snapshot).clone();
+            let mut root_ids = Vec::with_capacity(input.members.len() + 1);
+            let mut created_root_ids = Vec::with_capacity(input.members.len());
+            let mut requested_cover = input.existing_root_id;
+            if let Some(existing_root_id) = input.existing_root_id {
+                if !next
+                    .root_kinds
+                    .get(&RootKind::Collection)
+                    .is_some_and(|roots| roots.contains(existing_root_id.0))
+                    && !next
                         .root_kinds
-                        .get(&RootKind::Collection)
+                        .get(&RootKind::Media)
                         .is_some_and(|roots| roots.contains(existing_root_id.0))
-                        && !next
-                            .root_kinds
-                            .get(&RootKind::Media)
-                            .is_some_and(|roots| roots.contains(existing_root_id.0))
-                    {
-                        return Err(LibraryError::NotFound(format!(
-                            "existing source root {existing_root_id}"
-                        )));
-                    }
-                    root_ids.push(existing_root_id);
+                {
+                    return Err(LibraryError::NotFound(format!(
+                        "existing source root {existing_root_id}"
+                    )));
                 }
-                let mut resources = BTreeSet::new();
-                let mut bitmap_keys = HashSet::new();
-                let mut folder_ids = HashSet::new();
-                let mut ingest_affected = RoaringBitmap::new();
-                for (index, member) in input.members.iter().enumerate() {
-                    let output = ingest::insert_one(
+                root_ids.push(existing_root_id);
+            }
+            let mut resources = BTreeSet::new();
+            let mut bitmap_keys = HashSet::new();
+            let mut folder_ids = HashSet::new();
+            let mut ingest_affected = RoaringBitmap::new();
+            for (index, member) in input.members.iter().enumerate() {
+                let output = ingest::insert_one(
+                    transaction,
+                    revision,
+                    next,
+                    member,
+                    false,
+                    reuse_identity,
+                )?;
+                next = output.snapshot;
+                root_ids.push(output.root_id);
+                if input.existing_root_id.is_none() && index == input.cover_index {
+                    requested_cover = Some(output.root_id);
+                }
+                if output.created_root {
+                    created_root_ids.push(output.root_id);
+                }
+                resources.extend(output.resources);
+                bitmap_keys.extend(output.bitmap_keys);
+                folder_ids.extend(output.folder_ids);
+                ingest_affected |= &output.affected_roots;
+            }
+            let ordered_roots = root_ids
+                .iter()
+                .copied()
+                .fold(Vec::new(), |mut roots, root| {
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                    roots
+                });
+            let existing_collections = ordered_roots
+                .iter()
+                .copied()
+                .filter(|root| {
+                    next.root_kinds
+                        .get(&RootKind::Collection)
+                        .is_some_and(|collections| collections.contains(root.0))
+                })
+                .collect::<Vec<_>>();
+            if existing_collections.len() > 1 {
+                return Err(LibraryError::InvalidState(
+                    "one source collection resolved to multiple existing collections".into(),
+                ));
+            }
+            let winning_collection_id = existing_collections.first().copied();
+            let preserve_singleton_collection = !reuse_identity && ordered_roots.len() == 1;
+            let creates_collection = (ordered_roots.len() >= 2
+                || preserve_singleton_collection)
+                && winning_collection_id.is_none();
+            let (published_root, mut affected) =
+                if ordered_roots.len() >= 2 || preserve_singleton_collection {
+                    let output = crate::group::organize(
                         transaction,
                         revision,
                         next,
-                        member,
-                        false,
-                        reuse_identity,
+                        &GroupRequest {
+                            target: SelectionTarget::Explicit {
+                                root_ids: ordered_roots.clone(),
+                            },
+                            cover_root_id: requested_cover.unwrap_or(ordered_roots[0]),
+                            winning_collection_id,
+                            // Existing collection titles are collection-owned. A later
+                            // member refresh must not replace one with a member/source name.
+                            name: winning_collection_id
+                                .is_none()
+                                .then(|| input.name.clone())
+                                .flatten(),
+                            notes: input.members[input.cover_index].notes.clone(),
+                            modified_at_ms: input.modified_at_ms,
+                        },
+                        true,
                     )?;
                     next = output.snapshot;
-                    root_ids.push(output.root_id);
-                    if input.existing_root_id.is_none() && index == input.cover_index {
-                        requested_cover = Some(output.root_id);
-                    }
-                    if output.created_root {
-                        created_root_ids.push(output.root_id);
-                    }
-                    resources.extend(output.resources);
-                    bitmap_keys.extend(output.bitmap_keys);
-                    folder_ids.extend(output.folder_ids);
-                    ingest_affected |= &output.affected_roots;
-                }
-                let ordered_roots = root_ids
-                    .iter()
-                    .copied()
-                    .fold(Vec::new(), |mut roots, root| {
-                        if !roots.contains(&root) {
-                            roots.push(root);
-                        }
-                        roots
-                    });
-                let existing_collections = ordered_roots
-                    .iter()
-                    .copied()
-                    .filter(|root| {
-                        next.root_kinds
-                            .get(&RootKind::Collection)
-                            .is_some_and(|collections| collections.contains(root.0))
-                    })
-                    .collect::<Vec<_>>();
-                if existing_collections.len() > 1 {
-                    return Err(LibraryError::InvalidState(
-                        "one source collection resolved to multiple existing collections".into(),
-                    ));
-                }
-                let winning_collection_id = existing_collections.first().copied();
-                let preserve_singleton_collection = !reuse_identity && ordered_roots.len() == 1;
-                let creates_collection = (ordered_roots.len() >= 2
-                    || preserve_singleton_collection)
-                    && winning_collection_id.is_none();
-                let (published_root, mut affected) =
-                    if ordered_roots.len() >= 2 || preserve_singleton_collection {
-                        let output = crate::group::organize(
-                            transaction,
-                            revision,
-                            next,
-                            &GroupRequest {
-                                target: SelectionTarget::Explicit {
-                                    root_ids: ordered_roots.clone(),
-                                },
-                                cover_root_id: requested_cover.unwrap_or(ordered_roots[0]),
-                                winning_collection_id,
-                                // Existing collection titles are collection-owned. A later
-                                // member refresh must not replace one with a member/source name.
-                                name: winning_collection_id
-                                    .is_none()
-                                    .then(|| input.name.clone())
-                                    .flatten(),
-                                notes: input.members[input.cover_index].notes.clone(),
-                                modified_at_ms: input.modified_at_ms,
-                            },
-                            true,
-                        )?;
-                        next = output.snapshot;
-                        resources.insert("collections".to_owned());
-                        (output.collection_id, output.affected)
-                    } else {
-                        let published_root = ordered_roots[0];
-                        (
-                            published_root,
-                            root_ids
-                                .iter()
-                                .map(|root| root.0)
-                                .collect::<RoaringBitmap>(),
-                        )
-                    };
-                affected |= &ingest_affected;
-                ingest::persist_touched(
+                    resources.insert("collections".to_owned());
+                    (output.collection_id, output.affected)
+                } else {
+                    let published_root = ordered_roots[0];
+                    (
+                        published_root,
+                        root_ids
+                            .iter()
+                            .map(|root| root.0)
+                            .collect::<RoaringBitmap>(),
+                    )
+                };
+            affected |= &ingest_affected;
+            ingest::persist_touched(
+                transaction,
+                revision,
+                &next,
+                bitmap_keys,
+                folder_ids,
+                affected.iter().map(RootId),
+            )?;
+            crate::smart::settle_affected(transaction, &mut next, &affected)?;
+            if auto_tag && !created_root_ids.is_empty() {
+                ingest::enqueue_ai_tag_roots(
                     transaction,
-                    revision,
-                    &next,
-                    bitmap_keys,
-                    folder_ids,
-                    affected.iter().map(RootId),
-                )?;
-                crate::smart::settle_affected(transaction, &mut next, &affected)?;
-                if auto_tag && !created_root_ids.is_empty() {
-                    ingest::enqueue_ai_tag_roots(
-                        transaction,
-                        std::iter::once(published_root),
-                        input.modified_at_ms,
-                    )?;
-                    resources.insert("tasks".to_owned());
-                }
-                if !created_root_ids.is_empty() || creates_collection {
-                    for attempt_id in input
-                        .members
-                        .iter()
-                        .filter_map(|member| member.source_identity.as_ref())
-                        .filter_map(|source| source.source_attempt_id)
-                        .collect::<BTreeSet<_>>()
-                    {
-                        record_source_attempt_root(
-                            transaction,
-                            attempt_id,
-                            published_root,
-                            creates_collection || created_root_ids.contains(&published_root),
-                        )?;
-                        resources.insert("subscriptions".to_owned());
-                    }
-                }
-                resources.extend(["tags".to_owned(), "folders".to_owned()]);
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
                     std::iter::once(published_root),
-                );
-                Ok((
-                    (published_root, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
-        )?;
+                    input.modified_at_ms,
+                )?;
+                resources.insert("tasks".to_owned());
+            }
+            if !created_root_ids.is_empty() || creates_collection {
+                for attempt_id in input
+                    .members
+                    .iter()
+                    .filter_map(|member| member.source_identity.as_ref())
+                    .filter_map(|source| source.source_attempt_id)
+                    .collect::<BTreeSet<_>>()
+                {
+                    record_source_attempt_root(
+                        transaction,
+                        attempt_id,
+                        published_root,
+                        creates_collection || created_root_ids.contains(&published_root),
+                    )?;
+                    resources.insert("subscriptions".to_owned());
+                }
+            }
+            resources.extend(["tags".to_owned(), "folders".to_owned()]);
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                std::iter::once(published_root),
+            );
+            Ok((
+                (published_root, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok((collection_id, receipt))
     }
 
@@ -1982,56 +1907,47 @@ impl Library {
         detected_at_ms: i64,
     ) -> Result<crate::DuplicateScanResult> {
         let pairs = pairs.to_vec();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let (result, _, ()) = self.database.published_write(
-            WorkPriority::Maintenance,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let affected = crate::duplicate::replace_detected(
-                    transaction,
-                    &snapshot,
-                    &pairs,
-                    detected_at_ms,
-                )?;
-                let candidate_count = transaction.query_row(
-                    "SELECT COUNT(*) FROM duplicate_pair WHERE status = 1",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )? as usize;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "duplicate.scan",
-                    (!affected.is_empty()).then_some(&affected),
-                    serde_json::json!({"candidate_count": candidate_count}),
-                    detected_at_ms,
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["duplicates".into()],
-                    affected.iter().map(RootId),
-                );
-                let result = crate::DuplicateScanResult {
-                    candidate_count,
-                    affected_item_ids: receipt.item_ids.clone(),
-                    receipt: receipt.clone(),
-                };
-                Ok((
-                    result,
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
-        )?;
+        let result = self.publish(WorkPriority::Maintenance, |transaction, revision, snapshot| {
+            let affected = crate::duplicate::replace_detected(
+                transaction,
+                &snapshot,
+                &pairs,
+                detected_at_ms,
+            )?;
+            let candidate_count = transaction.query_row(
+                "SELECT COUNT(*) FROM duplicate_pair WHERE status = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "duplicate.scan",
+                (!affected.is_empty()).then_some(&affected),
+                serde_json::json!({"candidate_count": candidate_count}),
+                detected_at_ms,
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["duplicates".into()],
+                affected.iter().map(RootId),
+            );
+            let result = crate::DuplicateScanResult {
+                candidate_count,
+                affected_item_ids: receipt.item_ids.clone(),
+                receipt: receipt.clone(),
+            };
+            Ok((
+                result,
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok(result)
     }
 
@@ -2249,241 +2165,232 @@ impl Library {
             ));
         }
         let update = update.clone();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
-            WorkPriority::Maintenance,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let (
+        let receipt = self.publish(WorkPriority::Maintenance, |transaction, revision, snapshot| {
+            let (
+                file_id,
+                mut mime,
+                mut width,
+                mut height,
+                mut duration_ms,
+                mut frame_count,
+                mut perceptual_hash,
+                mut palette,
+            ) = transaction
+                .query_row(
+                    "SELECT file.file_id, file.mime, file.width, file.height,
+                            file.duration_ms, file.frame_count, file.perceptual_hash,
+                            file.palette_json
+                     FROM media_item media
+                     JOIN media_file file ON file.file_id = media.file_id
+                     WHERE media.media_id = ?1",
+                    [media_id.0],
+                    |row| {
+                        Ok((
+                            row.get::<_, u32>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<u32>>(2)?,
+                            row.get::<_, Option<u32>>(3)?,
+                            row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                            row.get::<_, Option<u32>>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            serde_json::from_str::<Vec<crate::model::LabColor>>(&row.get::<_, String>(7)?).unwrap_or_default(),
+                        ))
+                    },
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("media {media_id}"))
+                    }
+                    error => error.into(),
+                })?;
+            let before = (
+                mime.clone(),
+                width,
+                height,
+                duration_ms,
+                frame_count,
+                palette.clone(),
+            );
+            if let Some(value) = update.mime {
+                if value.trim().is_empty() {
+                    return Err(LibraryError::InvalidInput("MIME is empty".into()));
+                }
+                mime = value;
+            }
+            if let Some(value) = update.width {
+                width = value;
+            }
+            if let Some(value) = update.height {
+                height = value;
+            }
+            if let Some(value) = update.duration_ms {
+                duration_ms = value;
+            }
+            if let Some(value) = update.frame_count {
+                frame_count = value;
+            }
+            if let Some(value) = update.perceptual_hash {
+                perceptual_hash = value;
+            }
+            if let Some(value) = update.palette {
+                palette = value;
+            }
+            if let Some(content) = content {
+                if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
+                }
+                let actual_hash: String = transaction.query_row(
+                    "SELECT content_hash FROM media_file WHERE file_id = ?1", [file_id], |row| row.get(0),
+                )?;
+                if actual_hash != content.expected_hash {
+                    return Err(LibraryError::InvalidState("Media changed during repair".into()));
+                }
+                // Remote bytes belong to the old hash. Never mark repaired bytes as uploaded.
+                transaction.execute("DELETE FROM cloud_blob_state WHERE file_hash = ?1", [&actual_hash])?;
+                transaction.execute(
+                    "UPDATE media_file SET content_hash = ?2, file_path = ?3, size_bytes = ?4 WHERE file_id = ?1",
+                    rusqlite::params![file_id, content.content_hash, content.file_path,
+                        i64::try_from(content.size_bytes).map_err(|_| LibraryError::InvalidInput("File size exceeds SQLite range".into()))?],
+                )?;
+                transaction.execute(
+                    "UPDATE work_item SET file_hash = ?2 WHERE file_id = ?1",
+                    rusqlite::params![file_id, content.content_hash],
+                )?;
+            }
+            transaction.execute(
+                "UPDATE media_file
+                 SET mime = ?2, width = ?3, height = ?4, duration_ms = ?5,
+                     frame_count = ?6, perceptual_hash = ?7, palette_json = ?8
+                 WHERE file_id = ?1",
+                rusqlite::params![
                     file_id,
-                    mut mime,
-                    mut width,
-                    mut height,
-                    mut duration_ms,
-                    mut frame_count,
-                    mut perceptual_hash,
-                    mut palette,
-                ) = transaction
-                    .query_row(
-                        "SELECT file.file_id, file.mime, file.width, file.height,
-                                file.duration_ms, file.frame_count, file.perceptual_hash,
-                                file.palette_json
-                         FROM media_item media
-                         JOIN media_file file ON file.file_id = media.file_id
-                         WHERE media.media_id = ?1",
-                        [media_id.0],
-                        |row| {
-                            Ok((
-                                row.get::<_, u32>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, Option<u32>>(2)?,
-                                row.get::<_, Option<u32>>(3)?,
-                                row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
-                                row.get::<_, Option<u32>>(5)?,
-                                row.get::<_, Option<String>>(6)?,
-                                serde_json::from_str::<Vec<crate::model::LabColor>>(&row.get::<_, String>(7)?).unwrap_or_default(),
-                            ))
-                        },
-                    )
-                    .map_err(|error| match error {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            LibraryError::NotFound(format!("media {media_id}"))
-                        }
-                        error => error.into(),
-                    })?;
-                let before = (
-                    mime.clone(),
+                    mime,
                     width,
                     height,
-                    duration_ms,
+                    duration_ms.map(i64::try_from).transpose().map_err(|_| {
+                        LibraryError::InvalidInput("duration exceeds SQLite range".into())
+                    })?,
                     frame_count,
-                    palette.clone(),
-                );
-                if let Some(value) = update.mime {
-                    if value.trim().is_empty() {
-                        return Err(LibraryError::InvalidInput("MIME is empty".into()));
-                    }
-                    mime = value;
-                }
-                if let Some(value) = update.width {
-                    width = value;
-                }
-                if let Some(value) = update.height {
-                    height = value;
-                }
-                if let Some(value) = update.duration_ms {
-                    duration_ms = value;
-                }
-                if let Some(value) = update.frame_count {
-                    frame_count = value;
-                }
-                if let Some(value) = update.perceptual_hash {
-                    perceptual_hash = value;
-                }
-                if let Some(value) = update.palette {
-                    palette = value;
-                }
-                if let Some(content) = content {
-                    if content.content_hash.len() != 64 || !content.content_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                        return Err(LibraryError::InvalidInput("Invalid repaired content hash".into()));
-                    }
-                    let actual_hash: String = transaction.query_row(
-                        "SELECT content_hash FROM media_file WHERE file_id = ?1", [file_id], |row| row.get(0),
-                    )?;
-                    if actual_hash != content.expected_hash {
-                        return Err(LibraryError::InvalidState("Media changed during repair".into()));
-                    }
-                    // Remote bytes belong to the old hash. Never mark repaired bytes as uploaded.
-                    transaction.execute("DELETE FROM cloud_blob_state WHERE file_hash = ?1", [&actual_hash])?;
-                    transaction.execute(
-                        "UPDATE media_file SET content_hash = ?2, file_path = ?3, size_bytes = ?4 WHERE file_id = ?1",
-                        rusqlite::params![file_id, content.content_hash, content.file_path,
-                            i64::try_from(content.size_bytes).map_err(|_| LibraryError::InvalidInput("File size exceeds SQLite range".into()))?],
-                    )?;
-                    transaction.execute(
-                        "UPDATE work_item SET file_hash = ?2 WHERE file_id = ?1",
-                        rusqlite::params![file_id, content.content_hash],
-                    )?;
-                }
-                transaction.execute(
-                    "UPDATE media_file
-                     SET mime = ?2, width = ?3, height = ?4, duration_ms = ?5,
-                         frame_count = ?6, perceptual_hash = ?7, palette_json = ?8
-                     WHERE file_id = ?1",
-                    rusqlite::params![
-                        file_id,
-                        mime,
-                        width,
-                        height,
-                        duration_ms.map(i64::try_from).transpose().map_err(|_| {
-                            LibraryError::InvalidInput("duration exceeds SQLite range".into())
-                        })?,
-                        frame_count,
-                        perceptual_hash,
-                        serde_json::to_string(&palette)?
-                    ],
-                )?;
-                // Derivative work fills in one fact at a time. A perceptual
-                // hash is read only by the duplicate scan, and a palette only
-                // by the colour index; neither needs the MIME, image or size
-                // projections rebuilt.
-                let shape_changed = content.is_some()
-                    || (&before.0, before.1, before.2, before.3, before.4)
-                        != (&mime, width, height, duration_ms, frame_count);
-                let palette_changed = before.5 != palette;
-                let mut next = (*snapshot).clone();
-                let affected = {
-                    let media_ids = transaction
-                        .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?
-                        .query_map([file_id], |row| row.get::<_, u32>(0))?
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    let mut roots = RoaringBitmap::new();
-                    for media_id in media_ids {
-                        if shape_changed {
-                            let image_media = Arc::make_mut(&mut next.image_media);
-                            if mime.starts_with("image/") {
-                                image_media.insert(media_id);
-                            } else {
-                                image_media.remove(media_id);
-                            }
-                        }
-                        if let Some(owner) = snapshot.media_owner.get(media_id) {
-                            roots.insert(owner.0);
+                    perceptual_hash,
+                    serde_json::to_string(&palette)?
+                ],
+            )?;
+            // Derivative work fills in one fact at a time. A perceptual
+            // hash is read only by the duplicate scan, and a palette only
+            // by the colour index; neither needs the MIME, image or size
+            // projections rebuilt.
+            let shape_changed = content.is_some()
+                || (&before.0, before.1, before.2, before.3, before.4)
+                    != (&mime, width, height, duration_ms, frame_count);
+            let palette_changed = before.5 != palette;
+            let mut next = (*snapshot).clone();
+            let affected = {
+                let media_ids = transaction
+                    .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?
+                    .query_map([file_id], |row| row.get::<_, u32>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut roots = RoaringBitmap::new();
+                for media_id in media_ids {
+                    if shape_changed {
+                        let image_media = Arc::make_mut(&mut next.image_media);
+                        if mime.starts_with("image/") {
+                            image_media.insert(media_id);
+                        } else {
+                            image_media.remove(media_id);
                         }
                     }
-                    roots
-                };
-                for root_id in affected.iter().filter(|_| shape_changed || palette_changed) {
-                    if !shape_changed {
-                        crate::group::refresh_cover_projection(
-                            transaction,
-                            &mut next,
-                            RootId(root_id),
-                        )?;
-                        continue;
+                    if let Some(owner) = snapshot.media_owner.get(media_id) {
+                        roots.insert(owner.0);
                     }
-                    if content.is_some() {
-                        let members = next.collection_orders.get(&RootId(root_id))
-                            .map(|members| members.iter().map(|member| member.0).collect::<Vec<_>>())
-                            .unwrap_or_else(|| vec![root_id]);
-                        let total: i64 = transaction.query_row(
-                            "SELECT SUM(file.size_bytes) FROM media_item media JOIN media_file file ON file.file_id = media.file_id WHERE media.media_id IN (SELECT value FROM json_each(?1))",
-                            [serde_json::to_string(&members)?], |row| row.get(0),
-                        )?;
-                        transaction.execute("UPDATE library_root SET total_size_bytes = ?2 WHERE root_id = ?1", rusqlite::params![root_id, total])?;
-                        Arc::make_mut(&mut next.total_bytes).insert(root_id, total as u64);
-                    }
-                    let has_image = next.collection_orders.get(&RootId(root_id)).map_or_else(
-                        || next.image_media.contains(root_id),
-                        |members| {
-                            members
-                                .iter()
-                                .any(|media_id| next.image_media.contains(media_id.0))
-                        },
-                    );
-                    if has_image {
-                        Arc::make_mut(&mut next.roots_with_images).insert(root_id);
-                    } else {
-                        Arc::make_mut(&mut next.roots_with_images).remove(root_id);
-                    }
+                }
+                roots
+            };
+            for root_id in affected.iter().filter(|_| shape_changed || palette_changed) {
+                if !shape_changed {
                     crate::group::refresh_cover_projection(
                         transaction,
                         &mut next,
                         RootId(root_id),
                     )?;
-                    crate::group::refresh_root_mime_projection(
-                        transaction,
-                        &mut next,
-                        RootId(root_id),
-                    )?;
+                    continue;
                 }
-                if shape_changed || palette_changed {
-                    crate::smart::settle_affected_for(
-                        transaction,
-                        &mut next,
-                        &affected,
-                        if content.is_some() { &[crate::predicate::DependencyChange::All] }
-                        else { &[crate::predicate::DependencyChange::CoverFacts] },
+                if content.is_some() {
+                    let members = next.collection_orders.get(&RootId(root_id))
+                        .map(|members| members.iter().map(|member| member.0).collect::<Vec<_>>())
+                        .unwrap_or_else(|| vec![root_id]);
+                    let total: i64 = transaction.query_row(
+                        "SELECT SUM(file.size_bytes) FROM media_item media JOIN media_file file ON file.file_id = media.file_id WHERE media.media_id IN (SELECT value FROM json_each(?1))",
+                        [serde_json::to_string(&members)?], |row| row.get(0),
                     )?;
+                    transaction.execute("UPDATE library_root SET total_size_bytes = ?2 WHERE root_id = ?1", rusqlite::params![root_id, total])?;
+                    Arc::make_mut(&mut next.total_bytes).insert(root_id, total as u64);
                 }
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, 'media.facts', ?2, ?3, ?4)",
-                    rusqlite::params![
-                        revision as i64,
-                        crate::bitmap::encode(&affected)?,
-                        serde_json::json!({"media_id": media_id.0, "file_id": file_id}).to_string(),
-                        changed_at_ms
-                    ],
-                )?;
-                next.revision = revision;
-                let resources: Vec<String> = if shape_changed || palette_changed {
-                    vec!["media".into(), "roots".into(), "smart-folders".into()]
-                } else {
-                    // Nothing a view shows changed; the duplicate scan that
-                    // reads the hash publishes its own result.
-                    Vec::new()
-                };
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    affected.iter().map(RootId),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
+                let has_image = next.collection_orders.get(&RootId(root_id)).map_or_else(
+                    || next.image_media.contains(root_id),
+                    |members| {
+                        members
+                            .iter()
+                            .any(|media_id| next.image_media.contains(media_id.0))
                     },
-                ))
-            },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
-        )?;
+                );
+                if has_image {
+                    Arc::make_mut(&mut next.roots_with_images).insert(root_id);
+                } else {
+                    Arc::make_mut(&mut next.roots_with_images).remove(root_id);
+                }
+                crate::group::refresh_cover_projection(
+                    transaction,
+                    &mut next,
+                    RootId(root_id),
+                )?;
+                crate::group::refresh_root_mime_projection(
+                    transaction,
+                    &mut next,
+                    RootId(root_id),
+                )?;
+            }
+            if shape_changed || palette_changed {
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &affected,
+                    if content.is_some() { &[crate::predicate::DependencyChange::All] }
+                    else { &[crate::predicate::DependencyChange::CoverFacts] },
+                )?;
+            }
+            transaction.execute(
+                "INSERT INTO cloud_journal
+                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                 VALUES (?1, 'media.facts', ?2, ?3, ?4)",
+                rusqlite::params![
+                    revision as i64,
+                    crate::bitmap::encode(&affected)?,
+                    serde_json::json!({"media_id": media_id.0, "file_id": file_id}).to_string(),
+                    changed_at_ms
+                ],
+            )?;
+            next.revision = revision;
+            let resources: Vec<String> = if shape_changed || palette_changed {
+                vec!["media".into(), "roots".into(), "smart-folders".into()]
+            } else {
+                // Nothing a view shows changed; the duplicate scan that
+                // reads the hash publishes its own result.
+                Vec::new()
+            };
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                affected.iter().map(RootId),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -2540,149 +2447,140 @@ impl Library {
             ));
         }
         let target = target.clone();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                let mut next = (*snapshot).clone();
-                let mut changes = Vec::new();
-                let mut resources = BTreeSet::from(["roots".to_string()]);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let mut next = (*snapshot).clone();
+            let mut changes = Vec::new();
+            let mut resources = BTreeSet::from(["roots".to_string()]);
 
-                if let Some(rating) = rating {
-                    for value in Rating::ALL {
-                        let key = BitmapKey {
-                            domain: BitmapDomain::Rating,
-                            key_id: value.bitmap_key(),
-                        };
-                        let before = projection_bitmap(&next, key);
-                        let mut after = before.clone();
-                        if value == rating {
-                            after |= &selection;
-                        } else {
-                            after -= &selection;
-                        }
-                        if before == after {
-                            continue;
-                        }
-                        set_projection_bitmap(&mut next, key, after.clone());
-                        bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
-                        changes.push(SemanticChange::Bitmap {
-                            key,
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        });
-                    }
-                    resources.insert("ratings".into());
-                }
-
-                if notes.is_some() || source_urls.is_some() {
-                    let before = load_root_text(transaction, &selection)?;
+            if let Some(rating) = rating {
+                for value in Rating::ALL {
+                    let key = BitmapKey {
+                        domain: BitmapDomain::Rating,
+                        key_id: value.bitmap_key(),
+                    };
+                    let before = projection_bitmap(&next, key);
                     let mut after = before.clone();
-                    for state in &mut after {
-                        if let Some(notes) = &notes {
-                            state.notes.clone_from(notes);
-                        }
-                        if let Some(source_urls) = &source_urls {
-                            state.source_urls.clone_from(source_urls);
-                        }
-                        state.modified_at_ms = modified_at_ms;
+                    if value == rating {
+                        after |= &selection;
+                    } else {
+                        after -= &selection;
                     }
-                    if before != after {
-                        let mut update = transaction.prepare_cached(
-                            "UPDATE library_root
-                             SET notes = ?2, source_urls_json = ?3, modified_at_ms = ?4
-                             WHERE root_id = ?1",
-                        )?;
-                        for state in &after {
-                            update.execute(rusqlite::params![
-                                state.root_id.0,
-                                state.notes,
-                                serde_json::to_string(&state.source_urls)?,
-                                state.modified_at_ms,
-                            ])?;
-                            Arc::make_mut(&mut next.modified_at)
-                                .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
-                            if state.notes.is_some() {
-                                Arc::make_mut(&mut next.notes_present).insert(state.root_id.0);
-                            } else {
-                                Arc::make_mut(&mut next.notes_present).remove(state.root_id.0);
-                            }
-                            if state.source_urls.is_empty() {
-                                Arc::make_mut(&mut next.urls_present).remove(state.root_id.0);
-                            } else {
-                                Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
-                            }
-                        }
-                        drop(update);
-                        crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;
-                        changes.push(SemanticChange::RootText {
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        });
-                        resources.insert("search".into());
+                    if before == after {
+                        continue;
                     }
+                    set_projection_bitmap(&mut next, key, after.clone());
+                    bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
+                    changes.push(SemanticChange::Bitmap {
+                        key,
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
                 }
+                resources.insert("ratings".into());
+            }
 
-                if changes.is_empty() {
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
+            if notes.is_some() || source_urls.is_some() {
+                let before = load_root_text(transaction, &selection)?;
+                let mut after = before.clone();
+                for state in &mut after {
+                    if let Some(notes) = &notes {
+                        state.notes.clone_from(notes);
+                    }
+                    if let Some(source_urls) = &source_urls {
+                        state.source_urls.clone_from(source_urls);
+                    }
+                    state.modified_at_ms = modified_at_ms;
                 }
-                let mut smart_changes = Vec::new();
-                if rating.is_some() {
-                    smart_changes.push(crate::predicate::DependencyChange::Rating);
+                if before != after {
+                    let mut update = transaction.prepare_cached(
+                        "UPDATE library_root
+                         SET notes = ?2, source_urls_json = ?3, modified_at_ms = ?4
+                         WHERE root_id = ?1",
+                    )?;
+                    for state in &after {
+                        update.execute(rusqlite::params![
+                            state.root_id.0,
+                            state.notes,
+                            serde_json::to_string(&state.source_urls)?,
+                            state.modified_at_ms,
+                        ])?;
+                        Arc::make_mut(&mut next.modified_at)
+                            .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
+                        if state.notes.is_some() {
+                            Arc::make_mut(&mut next.notes_present).insert(state.root_id.0);
+                        } else {
+                            Arc::make_mut(&mut next.notes_present).remove(state.root_id.0);
+                        }
+                        if state.source_urls.is_empty() {
+                            Arc::make_mut(&mut next.urls_present).remove(state.root_id.0);
+                        } else {
+                            Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
+                        }
+                    }
+                    drop(update);
+                    crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;
+                    changes.push(SemanticChange::RootText {
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
+                    resources.insert("search".into());
                 }
-                if notes.is_some() || source_urls.is_some() {
-                    smart_changes.push(crate::predicate::DependencyChange::RootText);
-                }
-                crate::smart::settle_affected_for(transaction, &mut next, &selection, &smart_changes)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "root.metadata.patch",
-                    Some(&selection),
-                    serde_json::json!({
-                        "rating": rating.map(|value| value.bitmap_key()),
-                        "notes": notes.is_some(),
-                        "source_urls": source_urls.is_some(),
-                    }),
-                    modified_at_ms,
-                )?;
-                resources.insert("smart-folders".into());
+            }
+
+            if changes.is_empty() {
                 next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    selection.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    "items.patch_metadata",
-                    "Change metadata",
-                    SemanticChange::Compound(changes),
-                );
-                Ok((
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(history),
+                        history: None,
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            }
+            let mut smart_changes = Vec::new();
+            if rating.is_some() {
+                smart_changes.push(crate::predicate::DependencyChange::Rating);
+            }
+            if notes.is_some() || source_urls.is_some() {
+                smart_changes.push(crate::predicate::DependencyChange::RootText);
+            }
+            crate::smart::settle_affected_for(transaction, &mut next, &selection, &smart_changes)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "root.metadata.patch",
+                Some(&selection),
+                serde_json::json!({
+                    "rating": rating.map(|value| value.bitmap_key()),
+                    "notes": notes.is_some(),
+                    "source_urls": source_urls.is_some(),
+                }),
+                modified_at_ms,
+            )?;
+            resources.insert("smart-folders".into());
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                selection.iter().map(RootId),
+            );
+            let history = HistoryEntry::for_command(
+                "items.patch_metadata",
+                "Change metadata",
+                SemanticChange::Compound(changes),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(history),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -2719,120 +2617,111 @@ impl Library {
             .keys()
             .map(|root_id| root_id.0)
             .collect::<RoaringBitmap>();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let loaded = load_root_text(transaction, &requested)?;
-                if loaded.len() != names.len() {
-                    return Err(LibraryError::NotFound(
-                        "one or more roots to rename do not exist".into(),
-                    ));
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let loaded = load_root_text(transaction, &requested)?;
+            if loaded.len() != names.len() {
+                return Err(LibraryError::NotFound(
+                    "one or more roots to rename do not exist".into(),
+                ));
+            }
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            let mut changed = RoaringBitmap::new();
+            for state in loaded {
+                let name = names
+                    .get(&state.root_id)
+                    .expect("loaded roots are present in the rename map");
+                if state.name == *name {
+                    continue;
                 }
-                let mut before = Vec::new();
-                let mut after = Vec::new();
-                let mut changed = RoaringBitmap::new();
-                for state in loaded {
-                    let name = names
-                        .get(&state.root_id)
-                        .expect("loaded roots are present in the rename map");
-                    if state.name == *name {
-                        continue;
-                    }
-                    let mut next_state = state.clone();
-                    next_state.name.clone_from(name);
-                    next_state.modified_at_ms = modified_at_ms;
-                    changed.insert(state.root_id.0);
-                    before.push(state);
-                    after.push(next_state);
-                }
-                let mut next = (*snapshot).clone();
-                if changed.is_empty() {
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                let mut root_update = transaction.prepare_cached(
-                    "UPDATE library_root SET name = ?2, modified_at_ms = ?3 WHERE root_id = ?1",
-                )?;
-                let mut media_update = transaction.prepare_cached(
-                    "UPDATE media_item SET media_name = ?2
-                     WHERE media_id = ?1 AND EXISTS(
-                         SELECT 1 FROM library_item WHERE local_id = ?1 AND item_kind = 1
-                     )",
-                )?;
-                for state in &after {
-                    root_update.execute(rusqlite::params![
-                        state.root_id.0,
-                        state.name,
-                        state.modified_at_ms
-                    ])?;
-                    media_update.execute(rusqlite::params![state.root_id.0, state.name])?;
-                    Arc::make_mut(&mut next.modified_at)
-                        .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
-                }
-                drop(root_update);
-                drop(media_update);
-                crate::fts::mark_dirty(transaction, &changed, 1, modified_at_ms)?;
-                Arc::make_mut(&mut next.name_index).refresh(transaction, &changed)?;
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &changed,
-                    &[crate::predicate::DependencyChange::RootText],
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "root.rename",
-                    Some(&changed),
-                    serde_json::json!({"count": changed.len()}),
-                    modified_at_ms,
-                )?;
+                let mut next_state = state.clone();
+                next_state.name.clone_from(name);
+                next_state.modified_at_ms = modified_at_ms;
+                changed.insert(state.root_id.0);
+                before.push(state);
+                after.push(next_state);
+            }
+            let mut next = (*snapshot).clone();
+            if changed.is_empty() {
                 next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["roots".into(), "search".into(), "smart-folders".into()],
-                    changed.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    if changed.len() == 1 {
-                        "items.rename"
-                    } else {
-                        "items.rename_many"
-                    },
-                    if changed.len() == 1 {
-                        "Rename item"
-                    } else {
-                        "Rename items"
-                    },
-                    SemanticChange::RootText {
-                        before: Arc::new(before),
-                        after: Arc::new(after),
-                    },
-                );
-                Ok((
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(history),
+                        history: None,
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            }
+            let mut root_update = transaction.prepare_cached(
+                "UPDATE library_root SET name = ?2, modified_at_ms = ?3 WHERE root_id = ?1",
+            )?;
+            let mut media_update = transaction.prepare_cached(
+                "UPDATE media_item SET media_name = ?2
+                 WHERE media_id = ?1 AND EXISTS(
+                     SELECT 1 FROM library_item WHERE local_id = ?1 AND item_kind = 1
+                 )",
+            )?;
+            for state in &after {
+                root_update.execute(rusqlite::params![
+                    state.root_id.0,
+                    state.name,
+                    state.modified_at_ms
+                ])?;
+                media_update.execute(rusqlite::params![state.root_id.0, state.name])?;
+                Arc::make_mut(&mut next.modified_at)
+                    .insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
+            }
+            drop(root_update);
+            drop(media_update);
+            crate::fts::mark_dirty(transaction, &changed, 1, modified_at_ms)?;
+            Arc::make_mut(&mut next.name_index).refresh(transaction, &changed)?;
+            crate::smart::settle_affected_for(
+                transaction,
+                &mut next,
+                &changed,
+                &[crate::predicate::DependencyChange::RootText],
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "root.rename",
+                Some(&changed),
+                serde_json::json!({"count": changed.len()}),
+                modified_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["roots".into(), "search".into(), "smart-folders".into()],
+                changed.iter().map(RootId),
+            );
+            let history = HistoryEntry::for_command(
+                if changed.len() == 1 {
+                    "items.rename"
+                } else {
+                    "items.rename_many"
+                },
+                if changed.len() == 1 {
+                    "Rename item"
+                } else {
+                    "Rename items"
+                },
+                SemanticChange::RootText {
+                    before: Arc::new(before),
+                    after: Arc::new(after),
+                },
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(history),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -3045,65 +2934,56 @@ impl Library {
     pub fn rename_tag(&self, tag_id: crate::TagId, name: &str) -> Result<MutationReceipt> {
         let name = ingest::canonical_tag_name(name)?;
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let old_name = snapshot
-                    .tag_ids_by_name
-                    .iter()
-                    .find_map(|(name, id)| (*id == tag_id).then_some(name.clone()))
-                    .ok_or_else(|| LibraryError::NotFound(format!("tag {}", tag_id.0)))?;
-                if snapshot
-                    .tag_ids_by_name
-                    .get(&name)
-                    .is_some_and(|existing| *existing != tag_id)
-                {
-                    return Err(LibraryError::InvalidInput(format!(
-                        "tag {name} already exists"
-                    )));
-                }
-                let mut next = (*snapshot).clone();
-                rename_tag_definition(transaction, &mut next, tag_id, &name)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "tag.rename",
-                    None,
-                    serde_json::json!({"tag_id": tag_id.0, "name": name}),
-                    changed_at_ms,
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["tags".into(), "navigation".into(), "smart-folders".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (old_name != name).then(|| {
-                            HistoryEntry::for_command(
-                                "tags.rename_or_merge",
-                                "Rename tag",
-                                SemanticChange::TagName {
-                                    tag_id,
-                                    before: old_name,
-                                    after: name.clone(),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let old_name = snapshot
+                .tag_ids_by_name
+                .iter()
+                .find_map(|(name, id)| (*id == tag_id).then_some(name.clone()))
+                .ok_or_else(|| LibraryError::NotFound(format!("tag {}", tag_id.0)))?;
+            if snapshot
+                .tag_ids_by_name
+                .get(&name)
+                .is_some_and(|existing| *existing != tag_id)
+            {
+                return Err(LibraryError::InvalidInput(format!(
+                    "tag {name} already exists"
+                )));
+            }
+            let mut next = (*snapshot).clone();
+            rename_tag_definition(transaction, &mut next, tag_id, &name)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "tag.rename",
+                None,
+                serde_json::json!({"tag_id": tag_id.0, "name": name}),
+                changed_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["tags".into(), "navigation".into(), "smart-folders".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (old_name != name).then(|| {
+                        HistoryEntry::for_command(
+                            "tags.rename_or_merge",
+                            "Rename tag",
+                            SemanticChange::TagName {
+                                tag_id,
+                                before: old_name,
+                                after: name.clone(),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -3121,52 +3001,43 @@ impl Library {
                 "tag namespace cannot contain a colon".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = load_namespace_name(transaction, namespace_id)?;
-                let mut next = (*snapshot).clone();
-                apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "tag.namespace.rename",
-                    None,
-                    serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
-                    now_ms(),
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["tags".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != name).then(|| {
-                            HistoryEntry::for_command(
-                                "tags.group.rename",
-                                "Rename tag namespace",
-                                SemanticChange::TagNamespaceName {
-                                    namespace_id,
-                                    before,
-                                    after: name.clone(),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = load_namespace_name(transaction, namespace_id)?;
+            let mut next = (*snapshot).clone();
+            apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "tag.namespace.rename",
+                None,
+                serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
+                now_ms(),
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["tags".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != name).then(|| {
+                        HistoryEntry::for_command(
+                            "tags.group.rename",
+                            "Rename tag namespace",
+                            SemanticChange::TagNamespaceName {
+                                namespace_id,
+                                before,
+                                after: name.clone(),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -3182,71 +3053,62 @@ impl Library {
                 "tag namespace cannot contain a colon".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let duplicate = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM tag_namespace WHERE display_name = ?1)",
-                    [&name],
-                    |row| row.get::<_, bool>(0),
-                )?;
-                if duplicate {
-                    return Err(LibraryError::InvalidInput(format!(
-                        "tag namespace {name} already exists"
-                    )));
-                }
-                let namespace_id = TagNamespaceId(LibraryDatabase::allocate_id(transaction)?);
-                let state = TagNamespaceDefinitionState {
-                    namespace_id,
-                    stable_key: uuid::Uuid::new_v4().to_string(),
-                    display_name: name.clone(),
-                };
-                transaction.execute(
-                    "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
-                     VALUES (?1, ?2, ?3)",
-                    rusqlite::params![state.namespace_id.0, state.stable_key, state.display_name,],
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "tag.namespace.create",
-                    None,
-                    serde_json::json!({
-                        "namespace_id": namespace_id.0,
-                        "name": name,
-                    }),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["tags".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "tags.group.create",
-                            "Create tag namespace",
-                            SemanticChange::TagNamespaceDefinition {
-                                before: None,
-                                after: Some(state),
-                            },
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let duplicate = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tag_namespace WHERE display_name = ?1)",
+                [&name],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if duplicate {
+                return Err(LibraryError::InvalidInput(format!(
+                    "tag namespace {name} already exists"
+                )));
+            }
+            let namespace_id = TagNamespaceId(LibraryDatabase::allocate_id(transaction)?);
+            let state = TagNamespaceDefinitionState {
+                namespace_id,
+                stable_key: uuid::Uuid::new_v4().to_string(),
+                display_name: name.clone(),
+            };
+            transaction.execute(
+                "INSERT INTO tag_namespace(namespace_id, stable_key, display_name)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![state.namespace_id.0, state.stable_key, state.display_name,],
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "tag.namespace.create",
+                None,
+                serde_json::json!({
+                    "namespace_id": namespace_id.0,
+                    "name": name,
+                }),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["tags".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "tags.group.create",
+                        "Create tag namespace",
+                        SemanticChange::TagNamespaceDefinition {
+                            before: None,
+                            after: Some(state),
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -3265,60 +3127,53 @@ impl Library {
                 "at least one tag definition is required".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let ((tag_ids, receipt), _, _) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut next = (*snapshot).clone();
-                let mut tag_ids = Vec::with_capacity(names.len());
-                let mut created = Vec::new();
-                for name in &names {
-                    let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
-                        tag_id
-                    } else {
-                        let tag_id = ingest::ensure_tag(transaction, name)?;
-                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
-                        Arc::make_mut(&mut next.tags)
-                            .entry(tag_id)
-                            .or_insert_with(|| RoaringBitmap::new().into());
-                        created.push(name.clone());
-                        tag_id
-                    };
-                    tag_ids.push(tag_id);
-                }
-                if !created.is_empty() {
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        "tag.definitions.ensure",
-                        None,
-                        serde_json::json!({"names": created}),
-                        now_ms(),
-                    )?;
-                }
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
+        let (tag_ids, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut next = (*snapshot).clone();
+            let mut tag_ids = Vec::with_capacity(names.len());
+            let mut created = Vec::new();
+            for name in &names {
+                let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                    tag_id
+                } else {
+                    let tag_id = ingest::ensure_tag(transaction, name)?;
+                    Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                    Arc::make_mut(&mut next.tags)
+                        .entry(tag_id)
+                        .or_insert_with(|| RoaringBitmap::new().into());
+                    created.push(name.clone());
+                    tag_id
+                };
+                tag_ids.push(tag_id);
+            }
+            if !created.is_empty() {
+                insert_cloud_journal(
+                    transaction,
                     revision,
-                    if created.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec!["tags".into(), "navigation".into()]
-                    },
-                    Vec::new(),
-                );
-                Ok((
-                    (tag_ids, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
+                    "tag.definitions.ensure",
+                    None,
+                    serde_json::json!({"names": created}),
+                    now_ms(),
+                )?;
+            }
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                if created.is_empty() {
+                    Vec::new()
+                } else {
+                    vec!["tags".into(), "navigation".into()]
+                },
+                Vec::new(),
+            );
+            Ok((
+                (tag_ids, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok((tag_ids, receipt))
     }
 
@@ -3341,178 +3196,169 @@ impl Library {
         if load_namespace_name_for_library(self, namespace_id)? == name {
             return self.rename_tag_namespace(namespace_id, &name);
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                use rusqlite::OptionalExtension;
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            use rusqlite::OptionalExtension;
 
-                let source_state = load_namespace_definition(transaction, namespace_id)?
-                    .ok_or_else(|| {
-                        LibraryError::NotFound(format!("tag namespace {}", namespace_id.0))
-                    })?;
-                if source_state.display_name.is_empty() {
-                    return Err(LibraryError::InvalidInput(
-                        "the unnamespaced tag group cannot be renamed".into(),
-                    ));
-                }
-                let target_id = transaction
-                    .query_row(
-                        "SELECT namespace_id FROM tag_namespace
-                         WHERE display_name = ?1 AND namespace_id != ?2",
-                        rusqlite::params![name, namespace_id.0],
-                        |row| row.get::<_, u32>(0).map(TagNamespaceId),
-                    )
-                    .optional()?;
-                let Some(target_id) = target_id else {
-                    let mut next = (*snapshot).clone();
-                    apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        "tag.namespace.rename",
-                        None,
-                        serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
-                        now_ms(),
-                    )?;
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(
-                        revision,
-                        vec!["tags".into(), "navigation".into()],
-                        Vec::new(),
-                    );
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: Some(HistoryEntry::for_command(
-                                "tags.group.rename",
-                                "Rename tag namespace",
-                                SemanticChange::TagNamespaceName {
-                                    namespace_id,
-                                    before: source_state.display_name,
-                                    after: name.clone(),
-                                },
-                            )),
-                        },
-                    ));
-                };
-
-                let source_tags = transaction
-                    .prepare(
-                        "SELECT tag_id, subname FROM tag_definition
-                         WHERE namespace_id = ?1 ORDER BY tag_id",
-                    )?
-                    .query_map([namespace_id.0], |row| {
-                        Ok((crate::TagId(row.get(0)?), row.get::<_, String>(1)?))
-                    })?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+            let source_state = load_namespace_definition(transaction, namespace_id)?
+                .ok_or_else(|| {
+                    LibraryError::NotFound(format!("tag namespace {}", namespace_id.0))
+                })?;
+            if source_state.display_name.is_empty() {
+                return Err(LibraryError::InvalidInput(
+                    "the unnamespaced tag group cannot be renamed".into(),
+                ));
+            }
+            let target_id = transaction
+                .query_row(
+                    "SELECT namespace_id FROM tag_namespace
+                     WHERE display_name = ?1 AND namespace_id != ?2",
+                    rusqlite::params![name, namespace_id.0],
+                    |row| row.get::<_, u32>(0).map(TagNamespaceId),
+                )
+                .optional()?;
+            let Some(target_id) = target_id else {
                 let mut next = (*snapshot).clone();
-                let mut affected = RoaringBitmap::new();
-                let mut changes = Vec::new();
-                let mut smart_changes = Vec::new();
-                for (source_tag_id, subname) in source_tags {
-                    let destination = transaction
-                        .query_row(
-                            "SELECT tag_id FROM tag_definition
-                             WHERE namespace_id = ?1 AND subname = ?2",
-                            rusqlite::params![target_id.0, subname],
-                            |row| row.get::<_, u32>(0).map(crate::TagId),
-                        )
-                        .optional()?;
-                    if let Some(destination) = destination {
-                        let (members, tag_changes) = remove_tag_in_transaction(
-                            transaction,
-                            &mut next,
-                            source_tag_id,
-                            Some(destination),
-                            revision,
-                        )?;
-                        affected |= members;
-                        changes.extend(tag_changes);
-                        smart_changes.push(crate::predicate::DependencyChange::Tag(source_tag_id));
-                        smart_changes.push(crate::predicate::DependencyChange::Tag(destination));
-                    } else {
-                        let before = next
-                            .tag_ids_by_name
-                            .iter()
-                            .find_map(|(name, id)| (*id == source_tag_id).then_some(name.clone()))
-                            .ok_or_else(|| {
-                                LibraryError::InvalidState(format!(
-                                    "tag {} has no projection name",
-                                    source_tag_id.0
-                                ))
-                            })?;
-                        let after = if name.is_empty() {
-                            subname.clone()
-                        } else {
-                            format!("{name}:{subname}")
-                        };
-                        transaction.execute(
-                            "UPDATE tag_definition SET namespace_id = ?2 WHERE tag_id = ?1",
-                            rusqlite::params![source_tag_id.0, target_id.0],
-                        )?;
-                        let names = Arc::make_mut(&mut next.tag_ids_by_name);
-                        names.remove(&before);
-                        names.insert(after.clone(), source_tag_id);
-                        changes.push(SemanticChange::TagName {
-                            tag_id: source_tag_id,
-                            before,
-                            after,
-                        });
-                    }
-                }
-                transaction.execute(
-                    "DELETE FROM tag_namespace WHERE namespace_id = ?1",
-                    [namespace_id.0],
-                )?;
-                crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
-                changes.push(SemanticChange::TagNamespaceDefinition {
-                    before: Some(source_state),
-                    after: None,
-                });
+                apply_namespace_name(transaction, &mut next, namespace_id, &name)?;
                 insert_cloud_journal(
                     transaction,
                     revision,
-                    "tag.namespace.merge",
-                    Some(&affected),
-                    serde_json::json!({
-                        "source_namespace_id": namespace_id.0,
-                        "destination_namespace_id": target_id.0,
-                    }),
+                    "tag.namespace.rename",
+                    None,
+                    serde_json::json!({"namespace_id": namespace_id.0, "name": name}),
                     now_ms(),
                 )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec![
-                        "roots".into(),
-                        "tags".into(),
-                        "navigation".into(),
-                        "smart-folders".into(),
-                    ],
-                    affected.iter().map(RootId),
+                    vec!["tags".into(), "navigation".into()],
+                    Vec::new(),
                 );
-                Ok((
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
                         history: Some(HistoryEntry::for_command(
                             "tags.group.rename",
-                            "Merge tag namespaces",
-                            SemanticChange::Compound(changes),
+                            "Rename tag namespace",
+                            SemanticChange::TagNamespaceName {
+                                namespace_id,
+                                before: source_state.display_name,
+                                after: name.clone(),
+                            },
                         )),
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            };
+
+            let source_tags = transaction
+                .prepare(
+                    "SELECT tag_id, subname FROM tag_definition
+                     WHERE namespace_id = ?1 ORDER BY tag_id",
+                )?
+                .query_map([namespace_id.0], |row| {
+                    Ok((crate::TagId(row.get(0)?), row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut next = (*snapshot).clone();
+            let mut affected = RoaringBitmap::new();
+            let mut changes = Vec::new();
+            let mut smart_changes = Vec::new();
+            for (source_tag_id, subname) in source_tags {
+                let destination = transaction
+                    .query_row(
+                        "SELECT tag_id FROM tag_definition
+                         WHERE namespace_id = ?1 AND subname = ?2",
+                        rusqlite::params![target_id.0, subname],
+                        |row| row.get::<_, u32>(0).map(crate::TagId),
+                    )
+                    .optional()?;
+                if let Some(destination) = destination {
+                    let (members, tag_changes) = remove_tag_in_transaction(
+                        transaction,
+                        &mut next,
+                        source_tag_id,
+                        Some(destination),
+                        revision,
+                    )?;
+                    affected |= members;
+                    changes.extend(tag_changes);
+                    smart_changes.push(crate::predicate::DependencyChange::Tag(source_tag_id));
+                    smart_changes.push(crate::predicate::DependencyChange::Tag(destination));
+                } else {
+                    let before = next
+                        .tag_ids_by_name
+                        .iter()
+                        .find_map(|(name, id)| (*id == source_tag_id).then_some(name.clone()))
+                        .ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "tag {} has no projection name",
+                                source_tag_id.0
+                            ))
+                        })?;
+                    let after = if name.is_empty() {
+                        subname.clone()
+                    } else {
+                        format!("{name}:{subname}")
+                    };
+                    transaction.execute(
+                        "UPDATE tag_definition SET namespace_id = ?2 WHERE tag_id = ?1",
+                        rusqlite::params![source_tag_id.0, target_id.0],
+                    )?;
+                    let names = Arc::make_mut(&mut next.tag_ids_by_name);
+                    names.remove(&before);
+                    names.insert(after.clone(), source_tag_id);
+                    changes.push(SemanticChange::TagName {
+                        tag_id: source_tag_id,
+                        before,
+                        after,
+                    });
+                }
+            }
+            transaction.execute(
+                "DELETE FROM tag_namespace WHERE namespace_id = ?1",
+                [namespace_id.0],
+            )?;
+            crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
+            changes.push(SemanticChange::TagNamespaceDefinition {
+                before: Some(source_state),
+                after: None,
+            });
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "tag.namespace.merge",
+                Some(&affected),
+                serde_json::json!({
+                    "source_namespace_id": namespace_id.0,
+                    "destination_namespace_id": target_id.0,
+                }),
+                now_ms(),
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "roots".into(),
+                    "tags".into(),
+                    "navigation".into(),
+                    "smart-folders".into(),
+                ],
+                affected.iter().map(RootId),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "tags.group.rename",
+                        "Merge tag namespaces",
+                        SemanticChange::Compound(changes),
+                    )),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -3557,72 +3403,63 @@ impl Library {
     }
 
     pub fn delete_unused_tags(&self) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let tag_ids = transaction
-                    .prepare("SELECT tag_id FROM tag_definition ORDER BY tag_id")?
-                    .query_map([], |row| row.get::<_, u32>(0).map(crate::TagId))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let unused = tag_ids
-                    .into_iter()
-                    .filter(|tag_id| snapshot.tags.get(tag_id).is_none_or(|roots| roots.is_empty()))
-                    .collect::<Vec<_>>();
-                let mut next = (*snapshot).clone();
-                let mut changes = Vec::new();
-                for tag_id in &unused {
-                    let (_, tag_changes) = remove_tag_in_transaction(
-                        transaction,
-                        &mut next,
-                        *tag_id,
-                        None,
-                        revision,
-                    )?;
-                    changes.extend(tag_changes);
-                }
-                let settings_changed =
-                    if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
-                        changes.push(change);
-                        true
-                    } else {
-                        false
-                    };
-                insert_cloud_journal(
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let tag_ids = transaction
+                .prepare("SELECT tag_id FROM tag_definition ORDER BY tag_id")?
+                .query_map([], |row| row.get::<_, u32>(0).map(crate::TagId))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let unused = tag_ids
+                .into_iter()
+                .filter(|tag_id| snapshot.tags.get(tag_id).is_none_or(|roots| roots.is_empty()))
+                .collect::<Vec<_>>();
+            let mut next = (*snapshot).clone();
+            let mut changes = Vec::new();
+            for tag_id in &unused {
+                let (_, tag_changes) = remove_tag_in_transaction(
                     transaction,
-                    revision,
-                    "tag.delete_unused",
+                    &mut next,
+                    *tag_id,
                     None,
-                    serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
-                    now_ms(),
-                )?;
-                next.revision = revision;
-                let mut resources =
-                    vec!["tags".into(), "navigation".into(), "smart-folders".into()];
-                if settings_changed {
-                    resources.push("settings".into());
-                }
-                let receipt = PublicationCoordinator::receipt(
                     revision,
-                    resources,
-                    Vec::new(),
-                );
-                Ok((receipt.clone(), PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: (!changes.is_empty()).then(|| HistoryEntry::for_command(
-                        "tags.delete_unused",
-                        "Delete unused tags",
-                        SemanticChange::Compound(changes),
-                    )),
-                }))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                )?;
+                changes.extend(tag_changes);
+            }
+            let settings_changed =
+                if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
+                    changes.push(change);
+                    true
+                } else {
+                    false
+                };
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "tag.delete_unused",
+                None,
+                serde_json::json!({"tag_ids": unused.iter().map(|id| id.0).collect::<Vec<_>>() }),
+                now_ms(),
+            )?;
+            next.revision = revision;
+            let mut resources =
+                vec!["tags".into(), "navigation".into(), "smart-folders".into()];
+            if settings_changed {
+                resources.push("settings".into());
+            }
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                Vec::new(),
+            );
+            Ok((receipt.clone(), PublishedDelta {
+                snapshot: next,
+                receipt,
+                history: (!changes.is_empty()).then(|| HistoryEntry::for_command(
+                    "tags.delete_unused",
+                    "Delete unused tags",
+                    SemanticChange::Compound(changes),
+                )),
+            }))
+        })?;
         Ok(receipt)
     }
 
@@ -3650,200 +3487,182 @@ impl Library {
         }
         let name = name.trim().to_owned();
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((folder_id, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                validate_folder_parent(transaction, parent_id, None)?;
-                let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
-                let display_order = transaction.query_row(
-                    "SELECT COALESCE(MAX(display_order) + 1, 0)
-                     FROM folder_definition WHERE parent_id IS ?1",
-                    [parent_id.map(|id| id.0)],
-                    |row| row.get::<_, i64>(0),
-                )?;
-                transaction.execute(
-                    "INSERT INTO folder_definition
-                         (folder_id, stable_key, parent_id, name, display_order)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![
-                        folder_id.0,
-                        stable_key,
-                        parent_id.map(|id| id.0),
-                        name,
-                        display_order
-                    ],
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.create",
-                    None,
-                    serde_json::json!({
-                        "folder_id": folder_id.0,
-                        "parent_id": parent_id.map(|id| id.0),
-                        "name": name,
-                    }),
-                    changed_at_ms,
-                )?;
-                let mut next = (*snapshot).clone();
-                Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
-                Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
-                next.revision = revision;
-                let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
-                    LibraryError::InvalidState(format!(
-                        "new folder {} disappeared before publication",
-                        folder_id.0
-                    ))
-                })?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    (folder_id, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "folders.create",
-                            "Create folder",
-                            SemanticChange::FolderDefinition {
-                                folder_id,
-                                before: None,
-                                after: Some(Box::new(after)),
-                            },
-                        )),
-                    },
+        let (folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            validate_folder_parent(transaction, parent_id, None)?;
+            let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
+            let display_order = transaction.query_row(
+                "SELECT COALESCE(MAX(display_order) + 1, 0)
+                 FROM folder_definition WHERE parent_id IS ?1",
+                [parent_id.map(|id| id.0)],
+                |row| row.get::<_, i64>(0),
+            )?;
+            transaction.execute(
+                "INSERT INTO folder_definition
+                     (folder_id, stable_key, parent_id, name, display_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    folder_id.0,
+                    stable_key,
+                    parent_id.map(|id| id.0),
+                    name,
+                    display_order
+                ],
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.create",
+                None,
+                serde_json::json!({
+                    "folder_id": folder_id.0,
+                    "parent_id": parent_id.map(|id| id.0),
+                    "name": name,
+                }),
+                changed_at_ms,
+            )?;
+            let mut next = (*snapshot).clone();
+            Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
+            Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
+            next.revision = revision;
+            let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                LibraryError::InvalidState(format!(
+                    "new folder {} disappeared before publication",
+                    folder_id.0
                 ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            })?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                (folder_id, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "folders.create",
+                        "Create folder",
+                        SemanticChange::FolderDefinition {
+                            folder_id,
+                            before: None,
+                            after: Some(Box::new(after)),
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok((folder_id, receipt))
     }
 
     pub fn duplicate_folder(&self, source_id: FolderId) -> Result<(FolderId, MutationReceipt)> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((duplicate_id, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let source = load_folder_definition(transaction, source_id)?
-                    .ok_or_else(|| LibraryError::NotFound(format!("folder {source_id}")))?;
-                let duplicate_name = unique_folder_copy_name(
-                    transaction,
-                    source.parent_id,
-                    &format!("{} copy", source.name),
+        let (duplicate_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let source = load_folder_definition(transaction, source_id)?
+                .ok_or_else(|| LibraryError::NotFound(format!("folder {source_id}")))?;
+            let duplicate_name = unique_folder_copy_name(
+                transaction,
+                source.parent_id,
+                &format!("{} copy", source.name),
+            )?;
+            let root_display_order = transaction.query_row(
+                "SELECT COALESCE(MAX(display_order) + 1, 0)
+                 FROM folder_definition WHERE parent_id IS ?1",
+                [source.parent_id.map(|id| id.0)],
+                |row| row.get::<_, i64>(0),
+            )?;
+            let rows = load_folder_clone_rows(transaction, source_id)?;
+            validate_folder_nesting(
+                transaction,
+                source.parent_id,
+                folder_subtree_height(transaction, source_id)?,
+            )?;
+            let mut replacements = HashMap::<FolderId, FolderId>::new();
+            let mut changes = Vec::with_capacity(rows.len());
+            let mut next = (*snapshot).clone();
+            let mut duplicate_id = None;
+            for row in rows {
+                let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
+                let parent_id = if row.folder_id == source_id {
+                    source.parent_id
+                } else {
+                    row.parent_id.and_then(|id| replacements.get(&id).copied())
+                };
+                let name = if row.folder_id == source_id {
+                    duplicate_name.clone()
+                } else {
+                    row.name.clone()
+                };
+                let display_order = if row.folder_id == source_id {
+                    root_display_order
+                } else {
+                    row.display_order
+                };
+                transaction.execute(
+                    "INSERT INTO folder_definition
+                         (folder_id, stable_key, parent_id, name, icon, color, notes,
+                          auto_tag_ids, display_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        folder_id.0,
+                        uuid::Uuid::new_v4().to_string(),
+                        parent_id.map(|id| id.0),
+                        name,
+                        row.icon,
+                        row.color,
+                        row.notes,
+                        row.auto_tag_ids,
+                        display_order,
+                    ],
                 )?;
-                let root_display_order = transaction.query_row(
-                    "SELECT COALESCE(MAX(display_order) + 1, 0)
-                     FROM folder_definition WHERE parent_id IS ?1",
-                    [source.parent_id.map(|id| id.0)],
-                    |row| row.get::<_, i64>(0),
-                )?;
-                let rows = load_folder_clone_rows(transaction, source_id)?;
-                validate_folder_nesting(
-                    transaction,
-                    source.parent_id,
-                    folder_subtree_height(transaction, source_id)?,
-                )?;
-                let mut replacements = HashMap::<FolderId, FolderId>::new();
-                let mut changes = Vec::with_capacity(rows.len());
-                let mut next = (*snapshot).clone();
-                let mut duplicate_id = None;
-                for row in rows {
-                    let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
-                    let parent_id = if row.folder_id == source_id {
-                        source.parent_id
-                    } else {
-                        row.parent_id.and_then(|id| replacements.get(&id).copied())
-                    };
-                    let name = if row.folder_id == source_id {
-                        duplicate_name.clone()
-                    } else {
-                        row.name.clone()
-                    };
-                    let display_order = if row.folder_id == source_id {
-                        root_display_order
-                    } else {
-                        row.display_order
-                    };
-                    transaction.execute(
-                        "INSERT INTO folder_definition
-                             (folder_id, stable_key, parent_id, name, icon, color, notes,
-                              auto_tag_ids, display_order)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                        rusqlite::params![
-                            folder_id.0,
-                            uuid::Uuid::new_v4().to_string(),
-                            parent_id.map(|id| id.0),
-                            name,
-                            row.icon,
-                            row.color,
-                            row.notes,
-                            row.auto_tag_ids,
-                            display_order,
-                        ],
-                    )?;
-                    let after =
-                        load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "duplicated folder {} disappeared",
-                                folder_id.0
-                            ))
-                        })?;
-                    changes.push(SemanticChange::FolderDefinition {
-                        folder_id,
-                        before: None,
-                        after: Some(Box::new(after)),
-                    });
-                    replacements.insert(row.folder_id, folder_id);
-                    Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
-                    Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
-                    if row.folder_id == source_id {
-                        duplicate_id = Some(folder_id);
-                    }
+                let after =
+                    load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "duplicated folder {} disappeared",
+                            folder_id.0
+                        ))
+                    })?;
+                changes.push(SemanticChange::FolderDefinition {
+                    folder_id,
+                    before: None,
+                    after: Some(Box::new(after)),
+                });
+                replacements.insert(row.folder_id, folder_id);
+                Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(Vec::new()));
+                Arc::make_mut(&mut next.folders).insert(folder_id, RoaringBitmap::new().into());
+                if row.folder_id == source_id {
+                    duplicate_id = Some(folder_id);
                 }
-                let duplicate_id = duplicate_id.ok_or_else(|| {
-                    LibraryError::InvalidState("folder clone produced no root".into())
-                })?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.duplicate",
-                    None,
-                    serde_json::json!({"source_id": source_id.0, "folder_id": duplicate_id.0}),
-                    now_ms(),
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    (duplicate_id, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "folders.duplicate",
-                            "Duplicate folder",
-                            SemanticChange::Compound(changes),
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            }
+            let duplicate_id = duplicate_id.ok_or_else(|| {
+                LibraryError::InvalidState("folder clone produced no root".into())
+            })?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.duplicate",
+                None,
+                serde_json::json!({"source_id": source_id.0, "folder_id": duplicate_id.0}),
+                now_ms(),
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                (duplicate_id, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "folders.duplicate",
+                        "Duplicate folder",
+                        SemanticChange::Compound(changes),
+                    )),
+                },
+            ))
+        })?;
         Ok((duplicate_id, receipt))
     }
 
@@ -4059,101 +3878,92 @@ impl Library {
                 "folder reorder contains duplicate IDs".into(),
             ));
         }
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                validate_folder_parent(transaction, parent_id, None)?;
-                let current = load_folder_children(transaction, parent_id)?;
-                let current_set = current
-                    .iter()
-                    .map(|folder| folder.0)
-                    .collect::<BTreeSet<_>>();
-                let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
-                if current_set != requested_set || current.len() != requested.len() {
-                    return Err(LibraryError::InvalidInput(
-                        "folder reorder must contain every sibling exactly once".into(),
-                    ));
-                }
-                let before = current
-                    .iter()
-                    .map(|folder_id| {
-                        load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "folder {} disappeared during reorder",
-                                folder_id.0
-                            ))
-                        })
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            validate_folder_parent(transaction, parent_id, None)?;
+            let current = load_folder_children(transaction, parent_id)?;
+            let current_set = current
+                .iter()
+                .map(|folder| folder.0)
+                .collect::<BTreeSet<_>>();
+            let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
+            if current_set != requested_set || current.len() != requested.len() {
+                return Err(LibraryError::InvalidInput(
+                    "folder reorder must contain every sibling exactly once".into(),
+                ));
+            }
+            let before = current
+                .iter()
+                .map(|folder_id| {
+                    load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "folder {} disappeared during reorder",
+                            folder_id.0
+                        ))
                     })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut update = transaction.prepare_cached(
-                    "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
-                )?;
-                for (display_order, folder_id) in folder_ids.iter().enumerate() {
-                    update.execute(rusqlite::params![folder_id.0, display_order as i64])?;
-                }
-                let after = folder_ids
-                    .iter()
-                    .map(|folder_id| {
-                        load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
-                            LibraryError::InvalidState(format!(
-                                "folder {} disappeared during reorder",
-                                folder_id.0
-                            ))
-                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut update = transaction.prepare_cached(
+                "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
+            )?;
+            for (display_order, folder_id) in folder_ids.iter().enumerate() {
+                update.execute(rusqlite::params![folder_id.0, display_order as i64])?;
+            }
+            let after = folder_ids
+                .iter()
+                .map(|folder_id| {
+                    load_folder_definition(transaction, *folder_id)?.ok_or_else(|| {
+                        LibraryError::InvalidState(format!(
+                            "folder {} disappeared during reorder",
+                            folder_id.0
+                        ))
                     })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut after_by_id = after
-                    .into_iter()
-                    .map(|state| (state.folder_id, state))
-                    .collect::<HashMap<_, _>>();
-                let changes = before
-                    .into_iter()
-                    .filter_map(|before| {
-                        let after = after_by_id.remove(&before.folder_id)?;
-                        (before != after).then_some(SemanticChange::FolderDefinition {
-                            folder_id: before.folder_id,
-                            before: Some(Box::new(before)),
-                            after: Some(Box::new(after)),
-                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut after_by_id = after
+                .into_iter()
+                .map(|state| (state.folder_id, state))
+                .collect::<HashMap<_, _>>();
+            let changes = before
+                .into_iter()
+                .filter_map(|before| {
+                    let after = after_by_id.remove(&before.folder_id)?;
+                    (before != after).then_some(SemanticChange::FolderDefinition {
+                        folder_id: before.folder_id,
+                        before: Some(Box::new(before)),
+                        after: Some(Box::new(after)),
                     })
-                    .collect::<Vec<_>>();
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.reorder",
-                    None,
-                    serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (!changes.is_empty()).then(|| {
-                            HistoryEntry::for_command(
-                                "folders.reorder",
-                                "Reorder folders",
-                                SemanticChange::Compound(changes),
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                })
+                .collect::<Vec<_>>();
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.reorder",
+                None,
+                serde_json::json!({"parent_id": parent_id.map(|id| id.0)}),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!changes.is_empty()).then(|| {
+                        HistoryEntry::for_command(
+                            "folders.reorder",
+                            "Reorder folders",
+                            SemanticChange::Compound(changes),
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -4163,108 +3973,99 @@ impl Library {
         descending: bool,
         recursive: bool,
     ) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                require_folder(transaction, folder_id)?;
-                let parent_ids = if recursive {
-                    load_folder_subtree(transaction, &[folder_id])?
-                        .into_iter()
-                        .map(|(id, _)| id)
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![folder_id]
-                };
-                let mut changes = Vec::new();
-                let mut update = transaction.prepare_cached(
-                    "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
-                )?;
-                for parent_id in parent_ids {
-                    let children = load_folder_children(transaction, Some(parent_id))?;
-                    let mut states = children
-                        .iter()
-                        .map(|id| {
-                            load_folder_definition(transaction, *id)?.ok_or_else(|| {
-                                LibraryError::InvalidState(format!(
-                                    "folder {} disappeared during sort",
-                                    id.0
-                                ))
-                            })
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            require_folder(transaction, folder_id)?;
+            let parent_ids = if recursive {
+                load_folder_subtree(transaction, &[folder_id])?
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![folder_id]
+            };
+            let mut changes = Vec::new();
+            let mut update = transaction.prepare_cached(
+                "UPDATE folder_definition SET display_order = ?2 WHERE folder_id = ?1",
+            )?;
+            for parent_id in parent_ids {
+                let children = load_folder_children(transaction, Some(parent_id))?;
+                let mut states = children
+                    .iter()
+                    .map(|id| {
+                        load_folder_definition(transaction, *id)?.ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "folder {} disappeared during sort",
+                                id.0
+                            ))
                         })
-                        .collect::<Result<Vec<_>>>()?;
-                    states.sort_by(|left, right| {
-                        let ordering = left
-                            .name
-                            .to_lowercase()
-                            .cmp(&right.name.to_lowercase())
-                            .then_with(|| left.folder_id.cmp(&right.folder_id));
-                        if descending {
-                            ordering.reverse()
-                        } else {
-                            ordering
-                        }
-                    });
-                    for (display_order, before) in states.into_iter().enumerate() {
-                        if before.display_order == display_order as i64 {
-                            continue;
-                        }
-                        update
-                            .execute(rusqlite::params![before.folder_id.0, display_order as i64])?;
-                        let after = load_folder_definition(transaction, before.folder_id)?
-                            .ok_or_else(|| {
-                                LibraryError::InvalidState(format!(
-                                    "folder {} disappeared during sort",
-                                    before.folder_id.0
-                                ))
-                            })?;
-                        changes.push(SemanticChange::FolderDefinition {
-                            folder_id: before.folder_id,
-                            before: Some(Box::new(before)),
-                            after: Some(Box::new(after)),
-                        });
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                states.sort_by(|left, right| {
+                    let ordering = left
+                        .name
+                        .to_lowercase()
+                        .cmp(&right.name.to_lowercase())
+                        .then_with(|| left.folder_id.cmp(&right.folder_id));
+                    if descending {
+                        ordering.reverse()
+                    } else {
+                        ordering
                     }
+                });
+                for (display_order, before) in states.into_iter().enumerate() {
+                    if before.display_order == display_order as i64 {
+                        continue;
+                    }
+                    update
+                        .execute(rusqlite::params![before.folder_id.0, display_order as i64])?;
+                    let after = load_folder_definition(transaction, before.folder_id)?
+                        .ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "folder {} disappeared during sort",
+                                before.folder_id.0
+                            ))
+                        })?;
+                    changes.push(SemanticChange::FolderDefinition {
+                        folder_id: before.folder_id,
+                        before: Some(Box::new(before)),
+                        after: Some(Box::new(after)),
+                    });
                 }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.sort_tree",
-                    None,
-                    serde_json::json!({
-                        "folder_id": folder_id.0,
-                        "descending": descending,
-                        "recursive": recursive,
+            }
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.sort_tree",
+                None,
+                serde_json::json!({
+                    "folder_id": folder_id.0,
+                    "descending": descending,
+                    "recursive": recursive,
+                }),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (!changes.is_empty()).then(|| {
+                        HistoryEntry::for_command(
+                            "folders.sort_tree",
+                            "Sort folders",
+                            SemanticChange::Compound(changes),
+                        )
                     }),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (!changes.is_empty()).then(|| {
-                            HistoryEntry::for_command(
-                                "folders.sort_tree",
-                                "Sort folders",
-                                SemanticChange::Compound(changes),
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -4274,93 +4075,84 @@ impl Library {
         root_ids: &[RootId],
     ) -> Result<MutationReceipt> {
         let values = root_ids.iter().map(|root_id| root_id.0).collect::<Vec<_>>();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                require_folder(transaction, folder_id)?;
-                let before = snapshot
-                    .folder_orders
-                    .get(&folder_id)
-                    .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                let requested = values.iter().copied().collect::<BTreeSet<_>>();
-                if requested.len() != values.len()
-                    || !requested.is_subset(&before.iter().copied().collect())
-                {
-                    return Err(LibraryError::InvalidInput(
-                        "folder item reorder must contain distinct existing members".into(),
-                    ));
-                }
-                // A grid window sends only its loaded members. Permute their
-                // canonical slots, leaving unloaded/filtered members in place.
-                let mut replacements = values.iter();
-                let values = before
-                    .iter()
-                    .map(|id| {
-                        if requested.contains(id) {
-                            *replacements.next().expect("validated permutation")
-                        } else {
-                            *id
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                ordering::replace(
-                    transaction,
-                    revision,
-                    OrderOwnerKind::Folder,
-                    folder_id.0,
-                    &values,
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.items.reorder",
-                    None,
-                    serde_json::json!({"folder_id": folder_id.0}),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                Arc::make_mut(&mut next.folder_orders).insert(
-                    folder_id,
-                    Arc::new(values.iter().copied().map(RootId).collect()),
-                );
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), format!("folder:{}", folder_id.0)],
-                    if values.len() <= 256 {
-                        values.iter().copied().map(RootId).collect()
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            require_folder(transaction, folder_id)?;
+            let before = snapshot
+                .folder_orders
+                .get(&folder_id)
+                .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let requested = values.iter().copied().collect::<BTreeSet<_>>();
+            if requested.len() != values.len()
+                || !requested.is_subset(&before.iter().copied().collect())
+            {
+                return Err(LibraryError::InvalidInput(
+                    "folder item reorder must contain distinct existing members".into(),
+                ));
+            }
+            // A grid window sends only its loaded members. Permute their
+            // canonical slots, leaving unloaded/filtered members in place.
+            let mut replacements = values.iter();
+            let values = before
+                .iter()
+                .map(|id| {
+                    if requested.contains(id) {
+                        *replacements.next().expect("validated permutation")
                     } else {
-                        Vec::new()
-                    },
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != values).then(|| {
-                            HistoryEntry::for_command(
-                                "folders.sort_items",
-                                "Reorder folder items",
-                                SemanticChange::Order {
-                                    owner_kind: OrderOwnerKind::Folder,
-                                    owner_id: folder_id.0,
-                                    before: Arc::new(before),
-                                    after: Arc::new(values.clone()),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                        *id
+                    }
+                })
+                .collect::<Vec<_>>();
+            ordering::replace(
+                transaction,
+                revision,
+                OrderOwnerKind::Folder,
+                folder_id.0,
+                &values,
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.items.reorder",
+                None,
+                serde_json::json!({"folder_id": folder_id.0}),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            Arc::make_mut(&mut next.folder_orders).insert(
+                folder_id,
+                Arc::new(values.iter().copied().map(RootId).collect()),
+            );
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), format!("folder:{}", folder_id.0)],
+                if values.len() <= 256 {
+                    values.iter().copied().map(RootId).collect()
+                } else {
+                    Vec::new()
+                },
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != values).then(|| {
+                        HistoryEntry::for_command(
+                            "folders.sort_items",
+                            "Reorder folder items",
+                            SemanticChange::Order {
+                                owner_kind: OrderOwnerKind::Folder,
+                                owner_id: folder_id.0,
+                                before: Arc::new(before),
+                                after: Arc::new(values.clone()),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -4433,152 +4225,143 @@ impl Library {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (result, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let subtree = load_folder_subtree(transaction, &requested)?;
-                let present = subtree
+        let result = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let subtree = load_folder_subtree(transaction, &requested)?;
+            let present = subtree
+                .iter()
+                .map(|(folder_id, _)| *folder_id)
+                .collect::<BTreeSet<_>>();
+            if requested
+                .iter()
+                .any(|folder_id| !present.contains(folder_id))
+            {
+                return Err(LibraryError::NotFound(
+                    "one or more selected folders do not exist".into(),
+                ));
+            }
+            let definitions = subtree
+                .iter()
+                .map(|(folder_id, depth)| {
+                    load_folder_definition(transaction, *folder_id)?
+                        .map(|definition| (definition, *depth))
+                        .ok_or_else(|| {
+                            LibraryError::InvalidState(format!(
+                                "folder {} disappeared during deletion",
+                                folder_id.0
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let fallback_folder_id = if requested.len() == 1 {
+                let mut parent = definitions
                     .iter()
-                    .map(|(folder_id, _)| *folder_id)
-                    .collect::<BTreeSet<_>>();
-                if requested
-                    .iter()
-                    .any(|folder_id| !present.contains(folder_id))
-                {
-                    return Err(LibraryError::NotFound(
-                        "one or more selected folders do not exist".into(),
-                    ));
-                }
-                let definitions = subtree
-                    .iter()
-                    .map(|(folder_id, depth)| {
-                        load_folder_definition(transaction, *folder_id)?
-                            .map(|definition| (definition, *depth))
-                            .ok_or_else(|| {
-                                LibraryError::InvalidState(format!(
-                                    "folder {} disappeared during deletion",
-                                    folder_id.0
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let fallback_folder_id = if requested.len() == 1 {
-                    let mut parent = definitions
+                    .find(|(definition, _)| definition.folder_id == requested[0])
+                    .and_then(|(definition, _)| definition.parent_id);
+                while parent.is_some_and(|folder_id| present.contains(&folder_id)) {
+                    parent = definitions
                         .iter()
-                        .find(|(definition, _)| definition.folder_id == requested[0])
+                        .find(|(definition, _)| Some(definition.folder_id) == parent)
                         .and_then(|(definition, _)| definition.parent_id);
-                    while parent.is_some_and(|folder_id| present.contains(&folder_id)) {
-                        parent = definitions
-                            .iter()
-                            .find(|(definition, _)| Some(definition.folder_id) == parent)
-                            .and_then(|(definition, _)| definition.parent_id);
-                    }
-                    parent
-                } else {
-                    None
-                };
-
-                let mut next = (*snapshot).clone();
-                let mut affected = RoaringBitmap::new();
-                let mut history_changes = Vec::new();
-                for (definition, _) in &definitions {
-                    let before = next
-                        .folder_orders
-                        .get(&definition.folder_id)
-                        .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if !before.is_empty() {
-                        history_changes.push(SemanticChange::Order {
-                            owner_kind: OrderOwnerKind::Folder,
-                            owner_id: definition.folder_id.0,
-                            before: Arc::new(before.clone()),
-                            after: Arc::new(Vec::new()),
-                        });
-                    }
-                    let members = before.iter().copied().collect::<RoaringBitmap>();
-                    affected |= &members;
-                    let counts = Arc::make_mut(&mut next.folder_count);
-                    for root_id in &members {
-                        let current = counts.value(root_id).unwrap_or(0);
-                        counts.insert(root_id, current.saturating_sub(1));
-                    }
-                    ordering::delete(transaction, OrderOwnerKind::Folder, definition.folder_id.0)?;
-                    Arc::make_mut(&mut next.folder_orders).remove(&definition.folder_id);
-                    Arc::make_mut(&mut next.folders).remove(&definition.folder_id);
                 }
+                parent
+            } else {
+                None
+            };
 
-                let mut child_first = definitions.clone();
-                child_first.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
-                for (definition, _) in &child_first {
-                    transaction.execute(
-                        "DELETE FROM folder_definition WHERE folder_id = ?1",
-                        [definition.folder_id.0],
-                    )?;
-                    history_changes.push(SemanticChange::FolderDefinition {
-                        folder_id: definition.folder_id,
-                        before: Some(Box::new(definition.clone())),
-                        after: None,
+            let mut next = (*snapshot).clone();
+            let mut affected = RoaringBitmap::new();
+            let mut history_changes = Vec::new();
+            for (definition, _) in &definitions {
+                let before = next
+                    .folder_orders
+                    .get(&definition.folder_id)
+                    .map(|order| order.iter().map(|root| root.0).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if !before.is_empty() {
+                    history_changes.push(SemanticChange::Order {
+                        owner_kind: OrderOwnerKind::Folder,
+                        owner_id: definition.folder_id.0,
+                        before: Arc::new(before.clone()),
+                        after: Arc::new(Vec::new()),
                     });
                 }
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &affected,
-                    &[crate::predicate::DependencyChange::Folders],
+                let members = before.iter().copied().collect::<RoaringBitmap>();
+                affected |= &members;
+                let counts = Arc::make_mut(&mut next.folder_count);
+                for root_id in &members {
+                    let current = counts.value(root_id).unwrap_or(0);
+                    counts.insert(root_id, current.saturating_sub(1));
+                }
+                ordering::delete(transaction, OrderOwnerKind::Folder, definition.folder_id.0)?;
+                Arc::make_mut(&mut next.folder_orders).remove(&definition.folder_id);
+                Arc::make_mut(&mut next.folders).remove(&definition.folder_id);
+            }
+
+            let mut child_first = definitions.clone();
+            child_first.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
+            for (definition, _) in &child_first {
+                transaction.execute(
+                    "DELETE FROM folder_definition WHERE folder_id = ?1",
+                    [definition.folder_id.0],
                 )?;
-                next.revision = revision;
-                let deleted_folder_ids = definitions
-                    .iter()
-                    .map(|(definition, _)| definition.folder_id)
-                    .collect::<Vec<_>>();
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.delete",
-                    None,
-                    serde_json::json!({
-                        "folder_ids": deleted_folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
-                    }),
-                    now_ms(),
-                )?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec![
-                        "folders".into(),
-                        "navigation".into(),
-                        "sidebar".into(),
-                        "smart-folders".into(),
-                    ],
-                    if affected.len() <= 256 {
-                        affected.iter().map(RootId).collect()
-                    } else {
-                        Vec::new()
-                    },
-                );
-                Ok((
-                    FolderDeleteResult {
-                        deleted_folder_ids,
-                        fallback_folder_id,
-                        receipt: receipt.clone(),
-                    },
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "folders.delete",
-                            "Delete folders",
-                            SemanticChange::Compound(history_changes),
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                history_changes.push(SemanticChange::FolderDefinition {
+                    folder_id: definition.folder_id,
+                    before: Some(Box::new(definition.clone())),
+                    after: None,
+                });
+            }
+            crate::smart::settle_affected_for(
+                transaction,
+                &mut next,
+                &affected,
+                &[crate::predicate::DependencyChange::Folders],
+            )?;
+            next.revision = revision;
+            let deleted_folder_ids = definitions
+                .iter()
+                .map(|(definition, _)| definition.folder_id)
+                .collect::<Vec<_>>();
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.delete",
+                None,
+                serde_json::json!({
+                    "folder_ids": deleted_folder_ids.iter().map(|id| id.0).collect::<Vec<_>>()
+                }),
+                now_ms(),
+            )?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "folders".into(),
+                    "navigation".into(),
+                    "sidebar".into(),
+                    "smart-folders".into(),
+                ],
+                if affected.len() <= 256 {
+                    affected.iter().map(RootId).collect()
+                } else {
+                    Vec::new()
+                },
+            );
+            Ok((
+                FolderDeleteResult {
+                    deleted_folder_ids,
+                    fallback_folder_id,
+                    receipt: receipt.clone(),
+                },
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "folders.delete",
+                        "Delete folders",
+                        SemanticChange::Compound(history_changes),
+                    )),
+                },
+            ))
+        })?;
         Ok(result)
     }
 
@@ -4592,122 +4375,104 @@ impl Library {
     where
         F: FnOnce(&rusqlite::Transaction<'_>) -> Result<()>,
     {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = load_folder_definition(transaction, folder_id)?
-                    .ok_or_else(|| LibraryError::NotFound(format!("folder {folder_id}")))?;
-                update(transaction)?;
-                let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
-                    LibraryError::InvalidState(format!(
-                        "folder {} disappeared during update",
-                        folder_id.0
-                    ))
-                })?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.update",
-                    None,
-                    serde_json::json!({"folder_id": folder_id.0}),
-                    now_ms(),
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != after).then(|| {
-                            HistoryEntry::for_command(
-                                command,
-                                label,
-                                SemanticChange::FolderDefinition {
-                                    folder_id,
-                                    before: Some(Box::new(before)),
-                                    after: Some(Box::new(after)),
-                                },
-                            )
-                        }),
-                    },
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = load_folder_definition(transaction, folder_id)?
+                .ok_or_else(|| LibraryError::NotFound(format!("folder {folder_id}")))?;
+            update(transaction)?;
+            let after = load_folder_definition(transaction, folder_id)?.ok_or_else(|| {
+                LibraryError::InvalidState(format!(
+                    "folder {} disappeared during update",
+                    folder_id.0
                 ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            })?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.update",
+                None,
+                serde_json::json!({"folder_id": folder_id.0}),
+                now_ms(),
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != after).then(|| {
+                        HistoryEntry::for_command(
+                            command,
+                            label,
+                            SemanticChange::FolderDefinition {
+                                folder_id,
+                                before: Some(Box::new(before)),
+                                after: Some(Box::new(after)),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
     pub fn rename_folder(&self, folder_id: FolderId, name: &str) -> Result<MutationReceipt> {
         let name = required_name("folder", name)?;
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = transaction
-                    .query_row(
-                        "SELECT name FROM folder_definition WHERE folder_id = ?1",
-                        [folder_id.0],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(|error| match error {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            LibraryError::NotFound(format!("folder {}", folder_id.0))
-                        }
-                        error => error.into(),
-                    })?;
-                rename_folder_definition(transaction, folder_id, &name)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "folder.rename",
-                    None,
-                    serde_json::json!({"folder_id": folder_id.0, "name": name}),
-                    changed_at_ms,
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["folders".into(), "navigation".into()],
-                    Vec::new(),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != name).then(|| {
-                            HistoryEntry::for_command(
-                                "folders.rename",
-                                "Rename folder",
-                                SemanticChange::FolderName {
-                                    folder_id,
-                                    before,
-                                    after: name.clone(),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = transaction
+                .query_row(
+                    "SELECT name FROM folder_definition WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("folder {}", folder_id.0))
+                    }
+                    error => error.into(),
+                })?;
+            rename_folder_definition(transaction, folder_id, &name)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                "folder.rename",
+                None,
+                serde_json::json!({"folder_id": folder_id.0, "name": name}),
+                changed_at_ms,
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["folders".into(), "navigation".into()],
+                Vec::new(),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != name).then(|| {
+                        HistoryEntry::for_command(
+                            "folders.rename",
+                            "Rename folder",
+                            SemanticChange::FolderName {
+                                folder_id,
+                                before,
+                                after: name.clone(),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -4721,64 +4486,55 @@ impl Library {
             .into_iter()
             .map(|tag_id| tag_id.0)
             .collect::<RoaringBitmap>();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = ingest::folder_auto_tags(transaction, folder_id)?;
-                for tag_id in &after {
-                    let exists = transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)",
-                        [tag_id],
-                        |row| row.get::<_, bool>(0),
-                    )?;
-                    if !exists {
-                        return Err(LibraryError::NotFound(format!("tag {tag_id}")));
-                    }
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = ingest::folder_auto_tags(transaction, folder_id)?;
+            for tag_id in &after {
+                let exists = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tag_definition WHERE tag_id = ?1)",
+                    [tag_id],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !exists {
+                    return Err(LibraryError::NotFound(format!("tag {tag_id}")));
                 }
-                transaction.execute(
-                    "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
-                    rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
-                )?;
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, 'folder.auto_tags', NULL, ?2, ?3)",
-                    rusqlite::params![
-                        revision as i64,
-                        serde_json::json!({"folder_id": folder_id.0}).to_string(),
-                        changed_at_ms
-                    ],
-                )?;
-                let mut next = (*snapshot).clone();
-                next.revision = revision;
-                let receipt =
-                    PublicationCoordinator::receipt(revision, vec!["folders".into()], Vec::new());
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: (before != after).then(|| {
-                            HistoryEntry::for_command(
-                                "folders.set_auto_tags",
-                                "Change folder auto-tags",
-                                SemanticChange::FolderAutoTags {
-                                    folder_id,
-                                    before: Arc::new(before),
-                                    after: Arc::new(after.clone()),
-                                },
-                            )
-                        }),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            }
+            transaction.execute(
+                "UPDATE folder_definition SET auto_tag_ids = ?2 WHERE folder_id = ?1",
+                rusqlite::params![folder_id.0, ingest::encode_folder_auto_tags(&after)?],
+            )?;
+            transaction.execute(
+                "INSERT INTO cloud_journal
+                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                 VALUES (?1, 'folder.auto_tags', NULL, ?2, ?3)",
+                rusqlite::params![
+                    revision as i64,
+                    serde_json::json!({"folder_id": folder_id.0}).to_string(),
+                    changed_at_ms
+                ],
+            )?;
+            let mut next = (*snapshot).clone();
+            next.revision = revision;
+            let receipt =
+                PublicationCoordinator::receipt(revision, vec!["folders".into()], Vec::new());
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: (before != after).then(|| {
+                        HistoryEntry::for_command(
+                            "folders.set_auto_tags",
+                            "Change folder auto-tags",
+                            SemanticChange::FolderAutoTags {
+                                folder_id,
+                                before: Arc::new(before),
+                                after: Arc::new(after.clone()),
+                            },
+                        )
+                    }),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -4824,56 +4580,47 @@ impl Library {
         request: &GroupRequest,
     ) -> Result<(RootId, MutationReceipt)> {
         let request = request.clone();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((collection_id, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let selected = crate::selection::resolve(transaction, &snapshot, &request.target)?;
-                let before = capture_structure(transaction, &snapshot, &selected)?;
-                let output = crate::group::organize(
-                    transaction,
-                    revision,
-                    (*snapshot).clone(),
-                    &request,
-                    false,
-                )?;
-                let mut next = output.snapshot;
-                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-                let after = capture_structure(transaction, &next, &output.affected)?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec![
-                        "roots".into(),
-                        "collections".into(),
-                        "tags".into(),
-                        "folders".into(),
-                        "sidebar".into(),
-                    ],
-                    output.affected.iter().map(RootId),
-                );
-                Ok((
-                    (output.collection_id, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "collections.organize",
-                            "Organize collection",
-                            SemanticChange::Structure {
-                                affected: Arc::new(output.affected),
-                                before,
-                                after,
-                            },
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let (collection_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let selected = crate::selection::resolve(transaction, &snapshot, &request.target)?;
+            let before = capture_structure(transaction, &snapshot, &selected)?;
+            let output = crate::group::organize(
+                transaction,
+                revision,
+                (*snapshot).clone(),
+                &request,
+                false,
+            )?;
+            let mut next = output.snapshot;
+            crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected)?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "roots".into(),
+                    "collections".into(),
+                    "tags".into(),
+                    "folders".into(),
+                    "sidebar".into(),
+                ],
+                output.affected.iter().map(RootId),
+            );
+            Ok((
+                (output.collection_id, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "collections.organize",
+                        "Organize collection",
+                        SemanticChange::Structure {
+                            affected: Arc::new(output.affected),
+                            before,
+                            after,
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok((collection_id, receipt))
     }
 
@@ -4882,67 +4629,58 @@ impl Library {
         collection_id: RootId,
         modified_at_ms: i64,
     ) -> Result<(Vec<RootId>, MutationReceipt)> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((roots, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut affected = snapshot
-                    .collection_orders
-                    .get(&collection_id)
-                    .ok_or_else(|| {
-                        LibraryError::InvalidInput(format!(
-                            "root {collection_id} is not a collection"
-                        ))
-                    })?
-                    .iter()
-                    .map(|media| media.0)
-                    .collect::<RoaringBitmap>();
-                affected.insert(collection_id.0);
-                let before = capture_structure(transaction, &snapshot, &affected)?;
-                let output = crate::group::ungroup(
-                    transaction,
-                    revision,
-                    (*snapshot).clone(),
-                    collection_id,
-                    modified_at_ms,
-                )?;
-                let mut next = output.snapshot;
-                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-                let after = capture_structure(transaction, &next, &output.affected)?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec![
-                        "roots".into(),
-                        "collections".into(),
-                        "tags".into(),
-                        "folders".into(),
-                        "sidebar".into(),
-                    ],
-                    output.affected.iter().map(RootId),
-                );
-                Ok((
-                    (output.roots, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "collections.ungroup",
-                            "Ungroup collection",
-                            SemanticChange::Structure {
-                                affected: Arc::new(output.affected),
-                                before,
-                                after,
-                            },
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let (roots, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut affected = snapshot
+                .collection_orders
+                .get(&collection_id)
+                .ok_or_else(|| {
+                    LibraryError::InvalidInput(format!(
+                        "root {collection_id} is not a collection"
+                    ))
+                })?
+                .iter()
+                .map(|media| media.0)
+                .collect::<RoaringBitmap>();
+            affected.insert(collection_id.0);
+            let before = capture_structure(transaction, &snapshot, &affected)?;
+            let output = crate::group::ungroup(
+                transaction,
+                revision,
+                (*snapshot).clone(),
+                collection_id,
+                modified_at_ms,
+            )?;
+            let mut next = output.snapshot;
+            crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected)?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "roots".into(),
+                    "collections".into(),
+                    "tags".into(),
+                    "folders".into(),
+                    "sidebar".into(),
+                ],
+                output.affected.iter().map(RootId),
+            );
+            Ok((
+                (output.roots, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "collections.ungroup",
+                        "Ungroup collection",
+                        SemanticChange::Structure {
+                            affected: Arc::new(output.affected),
+                            before,
+                            after,
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok((roots, receipt))
     }
 
@@ -4967,63 +4705,54 @@ impl Library {
         target_lifecycle: Option<Lifecycle>,
         modified_at_ms: i64,
     ) -> Result<(Vec<RootId>, MutationReceipt)> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let ((root_ids, receipt), _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut affected = media_ids
-                    .iter()
-                    .map(|media_id| media_id.0)
-                    .collect::<RoaringBitmap>();
-                affected.insert(collection_id.0);
-                let before = capture_structure(transaction, &snapshot, &affected)?;
-                let output = crate::group::detach_many(
-                    transaction,
-                    revision,
-                    (*snapshot).clone(),
-                    collection_id,
-                    &media_ids,
-                    target_lifecycle,
-                    modified_at_ms,
-                )?;
-                let mut next = output.snapshot;
-                crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-                let after = capture_structure(transaction, &next, &output.affected)?;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec![
-                        "roots".into(),
-                        "collections".into(),
-                        "tags".into(),
-                        "folders".into(),
-                        "sidebar".into(),
-                        "search".into(),
-                    ],
-                    output.affected.iter().map(RootId),
-                );
-                Ok((
-                    (output.root_ids, receipt.clone()),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "collections.detach",
-                            "Detach collection member",
-                            SemanticChange::Structure {
-                                affected: Arc::new(output.affected),
-                                before,
-                                after,
-                            },
-                        )),
-                    },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+        let (root_ids, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut affected = media_ids
+                .iter()
+                .map(|media_id| media_id.0)
+                .collect::<RoaringBitmap>();
+            affected.insert(collection_id.0);
+            let before = capture_structure(transaction, &snapshot, &affected)?;
+            let output = crate::group::detach_many(
+                transaction,
+                revision,
+                (*snapshot).clone(),
+                collection_id,
+                &media_ids,
+                target_lifecycle,
+                modified_at_ms,
+            )?;
+            let mut next = output.snapshot;
+            crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected)?;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "roots".into(),
+                    "collections".into(),
+                    "tags".into(),
+                    "folders".into(),
+                    "sidebar".into(),
+                    "search".into(),
+                ],
+                output.affected.iter().map(RootId),
+            );
+            Ok((
+                (output.root_ids, receipt.clone()),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        "collections.detach",
+                        "Detach collection member",
+                        SemanticChange::Structure {
+                            affected: Arc::new(output.affected),
+                            before,
+                            after,
+                        },
+                    )),
+                },
+            ))
+        })?;
         Ok((root_ids, receipt))
     }
 
@@ -5033,87 +4762,78 @@ impl Library {
         ordered_media_ids: Vec<MediaId>,
         changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let before = snapshot
-                    .collection_orders
-                    .get(&collection_id)
-                    .ok_or_else(|| {
-                        LibraryError::InvalidInput(format!(
-                            "root {collection_id} is not a collection"
-                        ))
-                    })?
-                    .iter()
-                    .map(|media| media.0)
-                    .collect::<Vec<_>>();
-                let after = ordered_media_ids
-                    .iter()
-                    .map(|media| media.0)
-                    .collect::<Vec<_>>();
-                let before_members = before.iter().copied().collect::<RoaringBitmap>();
-                let after_members = after.iter().copied().collect::<RoaringBitmap>();
-                if before.len() != after.len() || before_members != after_members {
-                    return Err(LibraryError::InvalidInput(
-                        "collection order must contain every member exactly once".into(),
-                    ));
-                }
-                let mut next = (*snapshot).clone();
-                let history_entry = if before == after {
-                    None
-                } else {
-                    ordering::replace(
-                        transaction,
-                        revision,
-                        OrderOwnerKind::Collection,
-                        collection_id.0,
-                        &after,
-                    )?;
-                    Arc::make_mut(&mut next.collection_orders)
-                        .insert(collection_id, Arc::new(ordered_media_ids.clone()));
-                    transaction.execute(
-                        "INSERT INTO cloud_journal
-                             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                         VALUES (?1, 'collection.reorder', ?2, '{}', ?3)",
-                        rusqlite::params![
-                            revision as i64,
-                            crate::bitmap::encode(&[collection_id.0].into_iter().collect())?,
-                            changed_at_ms
-                        ],
-                    )?;
-                    Some(HistoryEntry::for_command(
-                        "collections.reorder",
-                        "Reorder collection",
-                        SemanticChange::Order {
-                            owner_kind: OrderOwnerKind::Collection,
-                            owner_id: collection_id.0,
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        },
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let before = snapshot
+                .collection_orders
+                .get(&collection_id)
+                .ok_or_else(|| {
+                    LibraryError::InvalidInput(format!(
+                        "root {collection_id} is not a collection"
                     ))
-                };
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
+                })?
+                .iter()
+                .map(|media| media.0)
+                .collect::<Vec<_>>();
+            let after = ordered_media_ids
+                .iter()
+                .map(|media| media.0)
+                .collect::<Vec<_>>();
+            let before_members = before.iter().copied().collect::<RoaringBitmap>();
+            let after_members = after.iter().copied().collect::<RoaringBitmap>();
+            if before.len() != after.len() || before_members != after_members {
+                return Err(LibraryError::InvalidInput(
+                    "collection order must contain every member exactly once".into(),
+                ));
+            }
+            let mut next = (*snapshot).clone();
+            let history_entry = if before == after {
+                None
+            } else {
+                ordering::replace(
+                    transaction,
                     revision,
-                    vec!["roots".into(), "collections".into()],
-                    [collection_id],
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: history_entry,
+                    OrderOwnerKind::Collection,
+                    collection_id.0,
+                    &after,
+                )?;
+                Arc::make_mut(&mut next.collection_orders)
+                    .insert(collection_id, Arc::new(ordered_media_ids.clone()));
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, 'collection.reorder', ?2, '{}', ?3)",
+                    rusqlite::params![
+                        revision as i64,
+                        crate::bitmap::encode(&[collection_id.0].into_iter().collect())?,
+                        changed_at_ms
+                    ],
+                )?;
+                Some(HistoryEntry::for_command(
+                    "collections.reorder",
+                    "Reorder collection",
+                    SemanticChange::Order {
+                        owner_kind: OrderOwnerKind::Collection,
+                        owner_id: collection_id.0,
+                        before: Arc::new(before),
+                        after: Arc::new(after),
                     },
                 ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            };
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["roots".into(), "collections".into()],
+                [collection_id],
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: history_entry,
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -5123,78 +4843,69 @@ impl Library {
         cover_media_id: MediaId,
         changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let (before, before_notes) = transaction
-                    .query_row(
-                        "SELECT cover_media_id, notes FROM library_root WHERE root_id = ?1",
-                        [collection_id.0],
-                        |row| Ok((MediaId(row.get(0)?), row.get::<_, Option<String>>(1)?)),
-                    )
-                    .map_err(|error| match error {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            LibraryError::NotFound(format!("collection {collection_id}"))
-                        }
-                        error => error.into(),
-                    })?;
-                let mut next = (*snapshot).clone();
-                let history_entry = if before == cover_media_id {
-                    None
-                } else {
-                    crate::group::set_cover(transaction, &mut next, collection_id, cover_media_id)?;
-                    let affected = [collection_id.0].into_iter().collect();
-                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
-                    let after_notes = transaction.query_row(
-                        "SELECT notes FROM library_root WHERE root_id = ?1",
-                        [collection_id.0],
-                        |row| row.get::<_, Option<String>>(0),
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO cloud_journal
-                             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                         VALUES (?1, 'collection.cover', ?2, ?3, ?4)",
-                        rusqlite::params![
-                            revision as i64,
-                            crate::bitmap::encode(&affected)?,
-                            serde_json::json!({"cover_media_id": cover_media_id.0}).to_string(),
-                            changed_at_ms
-                        ],
-                    )?;
-                    Some(HistoryEntry::for_command(
-                        "collections.set_cover",
-                        "Set collection cover",
-                        SemanticChange::CollectionCover {
-                            root_id: collection_id,
-                            before,
-                            after: cover_media_id,
-                            before_notes,
-                            after_notes,
-                        },
-                    ))
-                };
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["roots".into(), "collections".into(), "smart-folders".into()],
-                    [collection_id],
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: history_entry,
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let (before, before_notes) = transaction
+                .query_row(
+                    "SELECT cover_media_id, notes FROM library_root WHERE root_id = ?1",
+                    [collection_id.0],
+                    |row| Ok((MediaId(row.get(0)?), row.get::<_, Option<String>>(1)?)),
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        LibraryError::NotFound(format!("collection {collection_id}"))
+                    }
+                    error => error.into(),
+                })?;
+            let mut next = (*snapshot).clone();
+            let history_entry = if before == cover_media_id {
+                None
+            } else {
+                crate::group::set_cover(transaction, &mut next, collection_id, cover_media_id)?;
+                let affected = [collection_id.0].into_iter().collect();
+                crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                let after_notes = transaction.query_row(
+                    "SELECT notes FROM library_root WHERE root_id = ?1",
+                    [collection_id.0],
+                    |row| row.get::<_, Option<String>>(0),
+                )?;
+                transaction.execute(
+                    "INSERT INTO cloud_journal
+                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                     VALUES (?1, 'collection.cover', ?2, ?3, ?4)",
+                    rusqlite::params![
+                        revision as i64,
+                        crate::bitmap::encode(&affected)?,
+                        serde_json::json!({"cover_media_id": cover_media_id.0}).to_string(),
+                        changed_at_ms
+                    ],
+                )?;
+                Some(HistoryEntry::for_command(
+                    "collections.set_cover",
+                    "Set collection cover",
+                    SemanticChange::CollectionCover {
+                        root_id: collection_id,
+                        before,
+                        after: cover_media_id,
+                        before_notes,
+                        after_notes,
                     },
                 ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+            };
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["roots".into(), "collections".into(), "smart-folders".into()],
+                [collection_id],
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: history_entry,
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -5205,295 +4916,286 @@ impl Library {
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         let target = target.clone();
         let protected_cleanup_files = self.history.protected_cleanup_files();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let ((receipt, cleanup), _, ()) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let roots = crate::selection::resolve(transaction, &snapshot, &target)?;
-                if roots.is_empty() {
-                    return Err(LibraryError::InvalidInput(
-                        "permanent deletion requires at least one root".into(),
-                    ));
-                }
-                if !roots.is_subset(snapshot.lifecycle(Lifecycle::Trash)) {
-                    return Err(LibraryError::InvalidInput(
-                        "only Trash roots can be permanently deleted".into(),
-                    ));
-                }
+        let (receipt, cleanup) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let roots = crate::selection::resolve(transaction, &snapshot, &target)?;
+            if roots.is_empty() {
+                return Err(LibraryError::InvalidInput(
+                    "permanent deletion requires at least one root".into(),
+                ));
+            }
+            if !roots.is_subset(snapshot.lifecycle(Lifecycle::Trash)) {
+                return Err(LibraryError::InvalidInput(
+                    "only Trash roots can be permanently deleted".into(),
+                ));
+            }
 
-                let mut media_ids = RoaringBitmap::new();
-                let mut collection_ids = Vec::new();
-                for root_id in &roots {
-                    let root_id = RootId(root_id);
-                    if let Some(members) = snapshot.collection_orders.get(&root_id) {
-                        collection_ids.push(root_id);
-                        media_ids.extend(members.iter().map(|media| media.0));
-                    } else {
-                        media_ids.insert(root_id.0);
-                    }
+            let mut media_ids = RoaringBitmap::new();
+            let mut collection_ids = Vec::new();
+            for root_id in &roots {
+                let root_id = RootId(root_id);
+                if let Some(members) = snapshot.collection_orders.get(&root_id) {
+                    collection_ids.push(root_id);
+                    media_ids.extend(members.iter().map(|media| media.0));
+                } else {
+                    media_ids.insert(root_id.0);
                 }
-                let mut item_ids = roots.clone();
-                item_ids |= &media_ids;
-                stage_delete_ids(transaction, "delete_root", &roots)?;
-                stage_delete_ids(transaction, "delete_media", &media_ids)?;
-                stage_delete_ids(transaction, "delete_item", &item_ids)?;
+            }
+            let mut item_ids = roots.clone();
+            item_ids |= &media_ids;
+            stage_delete_ids(transaction, "delete_root", &roots)?;
+            stage_delete_ids(transaction, "delete_media", &media_ids)?;
+            stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
-                let mut files = std::collections::HashMap::new();
-                {
-                    let mut statement = transaction.prepare_cached(
-                        "SELECT file.file_id, file.content_hash, file.file_path,
-                                CASE WHEN cloud.remote_present = 1
-                                     THEN cloud.remote_extension ELSE NULL END
-                         FROM media_item media
-                         JOIN media_file file ON file.file_id = media.file_id
-                         LEFT JOIN cloud_blob_state cloud
-                           ON cloud.file_hash = file.content_hash
-                         WHERE media.media_id = ?1",
-                    )?;
-                    for media_id in &media_ids {
-                        let (file_id, content_hash, file_path, remote_extension) = statement
-                            .query_row([media_id], |row| {
-                                Ok((
-                                    row.get::<_, u32>(0)?,
-                                    row.get::<_, String>(1)?,
-                                    row.get::<_, String>(2)?,
-                                    row.get::<_, Option<String>>(3)?,
-                                ))
-                            })?;
-                        files
-                            .entry(file_id)
-                            .or_insert((content_hash, file_path, remote_extension));
-                    }
-                }
-                transaction.execute(
-                    "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
-                     SELECT item.stable_key, ?1, ?2
-                     FROM library_item item JOIN temp.delete_item selected
-                         ON selected.local_id = item.local_id
-                     ON CONFLICT(stable_key) DO UPDATE SET
-                         revision = excluded.revision,
-                         deleted_at_ms = excluded.deleted_at_ms",
-                    rusqlite::params![revision as i64, deleted_at_ms],
+            let mut files = std::collections::HashMap::new();
+            {
+                let mut statement = transaction.prepare_cached(
+                    "SELECT file.file_id, file.content_hash, file.file_path,
+                            CASE WHEN cloud.remote_present = 1
+                                 THEN cloud.remote_extension ELSE NULL END
+                     FROM media_item media
+                     JOIN media_file file ON file.file_id = media.file_id
+                     LEFT JOIN cloud_blob_state cloud
+                       ON cloud.file_hash = file.content_hash
+                     WHERE media.media_id = ?1",
                 )?;
-                transaction.execute(
-                    "DELETE FROM root_fts WHERE rowid IN
-                         (SELECT local_id FROM temp.delete_root)",
-                    [],
-                )?;
-                transaction.execute(
-                    "DELETE FROM library_root WHERE root_id IN
-                         (SELECT local_id FROM temp.delete_root)",
-                    [],
-                )?;
-                for collection_id in &collection_ids {
-                    ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
-                }
-                transaction.execute(
-                    "DELETE FROM media_item WHERE media_id IN
-                         (SELECT local_id FROM temp.delete_media)",
-                    [],
-                )?;
-                transaction.execute(
-                    "DELETE FROM library_item WHERE local_id IN
-                         (SELECT local_id FROM temp.delete_item)",
-                    [],
-                )?;
-
-                let mut cleanup = Vec::new();
-                let (device_id, retention_json) = transaction.query_row(
-                    "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
-                    [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )?;
-                let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
-                    .ok()
-                    .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
-                    .unwrap_or(7)
-                    .clamp(0, 3_650);
-                let deleted_at =
-                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
-                        .ok_or_else(|| {
-                            LibraryError::InvalidInput("deletion timestamp is outside range".into())
+                for media_id in &media_ids {
+                    let (file_id, content_hash, file_path, remote_extension) = statement
+                        .query_row([media_id], |row| {
+                            Ok((
+                                row.get::<_, u32>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                            ))
                         })?;
-                let purge_after = deleted_at + chrono::Duration::days(retention_days);
+                    files
+                        .entry(file_id)
+                        .or_insert((content_hash, file_path, remote_extension));
+                }
+            }
+            transaction.execute(
+                "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
+                 SELECT item.stable_key, ?1, ?2
+                 FROM library_item item JOIN temp.delete_item selected
+                     ON selected.local_id = item.local_id
+                 ON CONFLICT(stable_key) DO UPDATE SET
+                     revision = excluded.revision,
+                     deleted_at_ms = excluded.deleted_at_ms",
+                rusqlite::params![revision as i64, deleted_at_ms],
+            )?;
+            transaction.execute(
+                "DELETE FROM root_fts WHERE rowid IN
+                     (SELECT local_id FROM temp.delete_root)",
+                [],
+            )?;
+            transaction.execute(
+                "DELETE FROM library_root WHERE root_id IN
+                     (SELECT local_id FROM temp.delete_root)",
+                [],
+            )?;
+            for collection_id in &collection_ids {
+                ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
+            }
+            transaction.execute(
+                "DELETE FROM media_item WHERE media_id IN
+                     (SELECT local_id FROM temp.delete_media)",
+                [],
+            )?;
+            transaction.execute(
+                "DELETE FROM library_item WHERE local_id IN
+                     (SELECT local_id FROM temp.delete_item)",
+                [],
+            )?;
 
-                for (file_id, (content_hash, file_path, remote_extension)) in files {
-                    let referenced = transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
-                        [file_id],
-                        |row| row.get::<_, bool>(0),
-                    )?;
-                    if !referenced {
-                        if let Some(remote_extension) = remote_extension {
-                            transaction.execute(
-                                "INSERT INTO cloud_tombstone
-                                     (object_kind, object_key, mutation_id, hlc_physical_ms,
-                                      hlc_logical, device_id, causal_frontier_json,
-                                      deleted_at, purge_after)
-                                 VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
-                                 ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                                     mutation_id = excluded.mutation_id,
-                                     hlc_physical_ms = excluded.hlc_physical_ms,
-                                     hlc_logical = excluded.hlc_logical,
-                                     device_id = excluded.device_id,
-                                     causal_frontier_json = excluded.causal_frontier_json,
-                                     deleted_at = excluded.deleted_at,
-                                     purge_after = excluded.purge_after",
-                                rusqlite::params![
-                                    format!("{content_hash}.{remote_extension}"),
-                                    uuid::Uuid::new_v4().to_string(),
-                                    deleted_at_ms,
-                                    device_id,
-                                    deleted_at.to_rfc3339(),
-                                    purge_after.to_rfc3339(),
-                                ],
-                            )?;
-                        }
+            let mut cleanup = Vec::new();
+            let (device_id, retention_json) = transaction.query_row(
+                "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
+                .ok()
+                .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
+                .unwrap_or(7)
+                .clamp(0, 3_650);
+            let deleted_at =
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
+                    .ok_or_else(|| {
+                        LibraryError::InvalidInput("deletion timestamp is outside range".into())
+                    })?;
+            let purge_after = deleted_at + chrono::Duration::days(retention_days);
+
+            for (file_id, (content_hash, file_path, remote_extension)) in files {
+                let referenced = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
+                    [file_id],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if !referenced {
+                    if let Some(remote_extension) = remote_extension {
                         transaction.execute(
-                            "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
-                             VALUES (?1, ?2, ?3)
-                             ON CONFLICT(file_id) DO NOTHING",
-                            rusqlite::params![file_id, file_path, revision as i64],
+                            "INSERT INTO cloud_tombstone
+                                 (object_kind, object_key, mutation_id, hlc_physical_ms,
+                                  hlc_logical, device_id, causal_frontier_json,
+                                  deleted_at, purge_after)
+                             VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
+                             ON CONFLICT(object_kind, object_key) DO UPDATE SET
+                                 mutation_id = excluded.mutation_id,
+                                 hlc_physical_ms = excluded.hlc_physical_ms,
+                                 hlc_logical = excluded.hlc_logical,
+                                 device_id = excluded.device_id,
+                                 causal_frontier_json = excluded.causal_frontier_json,
+                                 deleted_at = excluded.deleted_at,
+                                 purge_after = excluded.purge_after",
+                            rusqlite::params![
+                                format!("{content_hash}.{remote_extension}"),
+                                uuid::Uuid::new_v4().to_string(),
+                                deleted_at_ms,
+                                device_id,
+                                deleted_at.to_rfc3339(),
+                                purge_after.to_rfc3339(),
+                            ],
                         )?;
-                        let file_id = crate::FileId(file_id);
-                        if !protected_cleanup_files.contains(&file_id) {
-                            cleanup.push(crate::PendingBlobCleanup {
-                                file_id,
-                                content_hash,
-                                file_path,
-                            });
-                        }
+                    }
+                    transaction.execute(
+                        "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(file_id) DO NOTHING",
+                        rusqlite::params![file_id, file_path, revision as i64],
+                    )?;
+                    let file_id = crate::FileId(file_id);
+                    if !protected_cleanup_files.contains(&file_id) {
+                        cleanup.push(crate::PendingBlobCleanup {
+                            file_id,
+                            content_hash,
+                            file_path,
+                        });
                     }
                 }
+            }
 
-                let mut next = (*snapshot).clone();
-                for lifecycle in Lifecycle::ALL {
-                    let values = Arc::make_mut(&mut next.lifecycle)
-                        .entry(lifecycle)
-                        .or_default();
-                    if !(&*values & &roots).is_empty() {
-                        *values -= &roots;
-                        bitmap::replace_changed(
-                            transaction,
-                            revision,
-                            BitmapKey {
-                                domain: BitmapDomain::Lifecycle,
-                                key_id: lifecycle.bitmap_key(),
-                            },
-                            values,
-                            &roots,
-                        )?;
-                    }
-                }
-                for rating in Rating::ALL {
-                    let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
-                    if !(&*values & &roots).is_empty() {
-                        *values -= &roots;
-                        bitmap::replace_changed(
-                            transaction,
-                            revision,
-                            BitmapKey {
-                                domain: BitmapDomain::Rating,
-                                key_id: rating.bitmap_key(),
-                            },
-                            values,
-                            &roots,
-                        )?;
-                    }
-                }
-                let changed_tags = next
-                    .tags
-                    .iter()
-                    .filter_map(|(tag_id, members)| {
-                        (!((members & &roots).is_empty())).then_some(*tag_id)
-                    })
-                    .collect::<Vec<_>>();
-                for tag_id in changed_tags {
-                    let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
-                    *members -= &roots;
+            let mut next = (*snapshot).clone();
+            for lifecycle in Lifecycle::ALL {
+                let values = Arc::make_mut(&mut next.lifecycle)
+                    .entry(lifecycle)
+                    .or_default();
+                if !(&*values & &roots).is_empty() {
+                    *values -= &roots;
                     bitmap::replace_changed(
                         transaction,
                         revision,
                         BitmapKey {
-                            domain: BitmapDomain::Tag,
-                            key_id: tag_id.0,
+                            domain: BitmapDomain::Lifecycle,
+                            key_id: lifecycle.bitmap_key(),
                         },
-                        members,
+                        values,
                         &roots,
                     )?;
                 }
-                let changed_folders = next
-                    .folder_orders
-                    .iter()
-                    .filter_map(|(folder_id, order)| {
-                        order
-                            .iter()
-                            .any(|root| roots.contains(root.0))
-                            .then_some(*folder_id)
-                    })
-                    .collect::<Vec<_>>();
-                for folder_id in changed_folders {
-                    let mut order = next.folder_orders[&folder_id].as_ref().clone();
-                    order.retain(|root| !roots.contains(root.0));
-                    ordering::replace(
+            }
+            for rating in Rating::ALL {
+                let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
+                if !(&*values & &roots).is_empty() {
+                    *values -= &roots;
+                    bitmap::replace_changed(
                         transaction,
                         revision,
-                        OrderOwnerKind::Folder,
-                        folder_id.0,
-                        &order.iter().map(|root| root.0).collect::<Vec<_>>(),
+                        BitmapKey {
+                            domain: BitmapDomain::Rating,
+                            key_id: rating.bitmap_key(),
+                        },
+                        values,
+                        &roots,
                     )?;
-                    Arc::make_mut(&mut next.folder_orders)
-                        .insert(folder_id, Arc::new(order.clone()));
-                    Arc::make_mut(&mut next.folders)
-                        .insert(folder_id, order.iter().map(|root| root.0).collect());
                 }
-                for collection_id in &collection_ids {
-                    Arc::make_mut(&mut next.collection_orders).remove(collection_id);
-                }
-                for media_id in &media_ids {
-                    Arc::make_mut(&mut next.media_owner).remove(media_id);
-                    Arc::make_mut(&mut next.image_media).remove(media_id);
-                }
-                crate::group::remove_root_projections(&mut next, &roots);
-                crate::smart::settle_affected(transaction, &mut next, &roots)?;
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
-                    rusqlite::params![
-                        revision as i64,
-                        crate::bitmap::encode(&roots)?,
-                        deleted_at_ms
-                    ],
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
+            }
+            let changed_tags = next
+                .tags
+                .iter()
+                .filter_map(|(tag_id, members)| {
+                    (!((members & &roots).is_empty())).then_some(*tag_id)
+                })
+                .collect::<Vec<_>>();
+            for tag_id in changed_tags {
+                let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
+                *members -= &roots;
+                bitmap::replace_changed(
+                    transaction,
                     revision,
-                    vec![
-                        "roots".into(),
-                        "sidebar".into(),
-                        "tags".into(),
-                        "folders".into(),
-                        "collections".into(),
-                        "search".into(),
-                    ],
-                    roots.iter().map(RootId),
-                );
-                Ok((
-                    (receipt.clone(), cleanup),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
+                    BitmapKey {
+                        domain: BitmapDomain::Tag,
+                        key_id: tag_id.0,
                     },
-                ))
-            },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
-        )?;
+                    members,
+                    &roots,
+                )?;
+            }
+            let changed_folders = next
+                .folder_orders
+                .iter()
+                .filter_map(|(folder_id, order)| {
+                    order
+                        .iter()
+                        .any(|root| roots.contains(root.0))
+                        .then_some(*folder_id)
+                })
+                .collect::<Vec<_>>();
+            for folder_id in changed_folders {
+                let mut order = next.folder_orders[&folder_id].as_ref().clone();
+                order.retain(|root| !roots.contains(root.0));
+                ordering::replace(
+                    transaction,
+                    revision,
+                    OrderOwnerKind::Folder,
+                    folder_id.0,
+                    &order.iter().map(|root| root.0).collect::<Vec<_>>(),
+                )?;
+                Arc::make_mut(&mut next.folder_orders)
+                    .insert(folder_id, Arc::new(order.clone()));
+                Arc::make_mut(&mut next.folders)
+                    .insert(folder_id, order.iter().map(|root| root.0).collect());
+            }
+            for collection_id in &collection_ids {
+                Arc::make_mut(&mut next.collection_orders).remove(collection_id);
+            }
+            for media_id in &media_ids {
+                Arc::make_mut(&mut next.media_owner).remove(media_id);
+                Arc::make_mut(&mut next.image_media).remove(media_id);
+            }
+            crate::group::remove_root_projections(&mut next, &roots);
+            crate::smart::settle_affected(transaction, &mut next, &roots)?;
+            transaction.execute(
+                "INSERT INTO cloud_journal
+                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                 VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
+                rusqlite::params![
+                    revision as i64,
+                    crate::bitmap::encode(&roots)?,
+                    deleted_at_ms
+                ],
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec![
+                    "roots".into(),
+                    "sidebar".into(),
+                    "tags".into(),
+                    "folders".into(),
+                    "collections".into(),
+                    "search".into(),
+                ],
+                roots.iter().map(RootId),
+            );
+            Ok((
+                (receipt.clone(), cleanup),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
         Ok((receipt, cleanup))
     }
 
@@ -5503,101 +5205,92 @@ impl Library {
         destination: Option<crate::TagId>,
         changed_at_ms: i64,
     ) -> Result<MutationReceipt> {
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut next = (*snapshot).clone();
-                let (source_members, mut history_changes) = remove_tag_in_transaction(
-                    transaction,
-                    &mut next,
-                    source,
-                    destination,
-                    revision,
-                )?;
-                // Members moved to the destination (or lost a tag): folders on
-                // either tag, and Exact-mode folders, must see the new membership.
-                let mut smart_changes = vec![crate::predicate::DependencyChange::Tag(source)];
-                smart_changes.extend(destination.map(crate::predicate::DependencyChange::Tag));
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &source_members,
-                    &smart_changes,
-                )?;
-                let settings_changed = if destination.is_none() {
-                    if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
-                        history_changes.push(change);
-                        true
-                    } else {
-                        false
-                    }
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut next = (*snapshot).clone();
+            let (source_members, mut history_changes) = remove_tag_in_transaction(
+                transaction,
+                &mut next,
+                source,
+                destination,
+                revision,
+            )?;
+            // Members moved to the destination (or lost a tag): folders on
+            // either tag, and Exact-mode folders, must see the new membership.
+            let mut smart_changes = vec![crate::predicate::DependencyChange::Tag(source)];
+            smart_changes.extend(destination.map(crate::predicate::DependencyChange::Tag));
+            crate::smart::settle_affected_for(
+                transaction,
+                &mut next,
+                &source_members,
+                &smart_changes,
+            )?;
+            let settings_changed = if destination.is_none() {
+                if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
+                    history_changes.push(change);
+                    true
                 } else {
                     false
-                };
-                transaction.execute(
-                    "INSERT INTO cloud_journal
-                         (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![
-                        revision as i64,
-                        if destination.is_some() {
-                            "tag.merge"
-                        } else {
-                            "tag.delete"
-                        },
-                        crate::bitmap::encode(&source_members)?,
-                        serde_json::json!({
-                            "source_tag_id": source.0,
-                            "destination_tag_id": destination.map(|tag| tag.0),
-                        })
-                        .to_string(),
-                        changed_at_ms
-                    ],
-                )?;
-                next.revision = revision;
-                let mut resources = vec![
-                    "roots".into(),
-                    "tags".into(),
-                    "navigation".into(),
-                    "smart-folders".into(),
-                ];
-                if settings_changed {
-                    resources.push("settings".into());
                 }
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    source_members.iter().map(RootId),
-                );
-                let label = if destination.is_some() {
-                    "Merge tags"
-                } else {
-                    "Delete tag"
-                };
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: Some(HistoryEntry::for_command(
-                            if destination.is_some() {
-                                "tags.rename_or_merge"
-                            } else {
-                                "tags.delete"
-                            },
-                            label,
-                            SemanticChange::Compound(history_changes),
-                        )),
+            } else {
+                false
+            };
+            transaction.execute(
+                "INSERT INTO cloud_journal
+                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    revision as i64,
+                    if destination.is_some() {
+                        "tag.merge"
+                    } else {
+                        "tag.delete"
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                    crate::bitmap::encode(&source_members)?,
+                    serde_json::json!({
+                        "source_tag_id": source.0,
+                        "destination_tag_id": destination.map(|tag| tag.0),
+                    })
+                    .to_string(),
+                    changed_at_ms
+                ],
+            )?;
+            next.revision = revision;
+            let mut resources = vec![
+                "roots".into(),
+                "tags".into(),
+                "navigation".into(),
+                "smart-folders".into(),
+            ];
+            if settings_changed {
+                resources.push("settings".into());
+            }
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                source_members.iter().map(RootId),
+            );
+            let label = if destination.is_some() {
+                "Merge tags"
+            } else {
+                "Delete tag"
+            };
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(HistoryEntry::for_command(
+                        if destination.is_some() {
+                            "tags.rename_or_merge"
+                        } else {
+                            "tags.delete"
+                        },
+                        label,
+                        SemanticChange::Compound(history_changes),
+                    )),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -5609,141 +5302,132 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let target = target.clone();
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                let mut next = (*snapshot).clone();
-                if selection.is_empty() {
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                let mut affected = RoaringBitmap::new();
-                let mut changes = Vec::new();
-                let mut tag_ids = Vec::new();
-                for name in &names {
-                    let tag_id = if add {
-                        if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
-                            tag_id
-                        } else {
-                            let tag_id = ingest::ensure_tag(transaction, name)?;
-                            Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
-                            tag_id
-                        }
-                    } else if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
-                        tag_id
-                    } else {
-                        continue;
-                    };
-                    let before = next
-                        .tags
-                        .get(&tag_id)
-                        .map(|members| members.to_bitmap())
-                        .unwrap_or_default();
-                    let mut after = before.clone();
-                    if add {
-                        after |= &selection;
-                    } else {
-                        after -= &selection;
-                    }
-                    let changed = &before ^ &after;
-                    if changed.is_empty() {
-                        continue;
-                    }
-                    Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
-                    bitmap::replace_changed(
-                        transaction,
-                        revision,
-                        BitmapKey {
-                            domain: BitmapDomain::Tag,
-                            key_id: tag_id.0,
-                        },
-                        &after,
-                        &changed,
-                    )?;
-                    let counts = Arc::make_mut(&mut next.tag_count);
-                    for root_id in &changed {
-                        let current = counts.value(root_id).unwrap_or(0);
-                        counts.insert(
-                            root_id,
-                            if after.contains(root_id) {
-                                current + 1
-                            } else {
-                                current.saturating_sub(1)
-                            },
-                        );
-                    }
-                    affected |= &changed;
-                    tag_ids.push(tag_id.0);
-                    changes.push(SemanticChange::Bitmap {
-                        key: BitmapKey {
-                            domain: BitmapDomain::Tag,
-                            key_id: tag_id.0,
-                        },
-                        before: Arc::new(before),
-                        after: Arc::new(after),
-                    });
-                }
-                if changes.is_empty() {
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    next.revision = revision;
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                let smart_changes = tag_ids
-                    .iter()
-                    .map(|tag_id| crate::predicate::DependencyChange::Tag(crate::TagId(*tag_id)))
-                    .collect::<Vec<_>>();
-                crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    if add { "tag.add" } else { "tag.remove" },
-                    Some(&affected),
-                    serde_json::json!({"tag_ids": tag_ids}),
-                    changed_at_ms,
-                )?;
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let mut next = (*snapshot).clone();
+            if selection.is_empty() {
                 next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["roots".into(), "tags".into(), "sidebar".into()],
-                    affected.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    "items.apply_tags",
-                    if add { "Add tags" } else { "Remove tags" },
-                    SemanticChange::Compound(changes),
-                );
-                Ok((
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(history),
+                        history: None,
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            }
+            let mut affected = RoaringBitmap::new();
+            let mut changes = Vec::new();
+            let mut tag_ids = Vec::new();
+            for name in &names {
+                let tag_id = if add {
+                    if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                        tag_id
+                    } else {
+                        let tag_id = ingest::ensure_tag(transaction, name)?;
+                        Arc::make_mut(&mut next.tag_ids_by_name).insert(name.clone(), tag_id);
+                        tag_id
+                    }
+                } else if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
+                    tag_id
+                } else {
+                    continue;
+                };
+                let before = next
+                    .tags
+                    .get(&tag_id)
+                    .map(|members| members.to_bitmap())
+                    .unwrap_or_default();
+                let mut after = before.clone();
+                if add {
+                    after |= &selection;
+                } else {
+                    after -= &selection;
+                }
+                let changed = &before ^ &after;
+                if changed.is_empty() {
+                    continue;
+                }
+                Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
+                bitmap::replace_changed(
+                    transaction,
+                    revision,
+                    BitmapKey {
+                        domain: BitmapDomain::Tag,
+                        key_id: tag_id.0,
+                    },
+                    &after,
+                    &changed,
+                )?;
+                let counts = Arc::make_mut(&mut next.tag_count);
+                for root_id in &changed {
+                    let current = counts.value(root_id).unwrap_or(0);
+                    counts.insert(
+                        root_id,
+                        if after.contains(root_id) {
+                            current + 1
+                        } else {
+                            current.saturating_sub(1)
+                        },
+                    );
+                }
+                affected |= &changed;
+                tag_ids.push(tag_id.0);
+                changes.push(SemanticChange::Bitmap {
+                    key: BitmapKey {
+                        domain: BitmapDomain::Tag,
+                        key_id: tag_id.0,
+                    },
+                    before: Arc::new(before),
+                    after: Arc::new(after),
+                });
+            }
+            if changes.is_empty() {
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                next.revision = revision;
+                return Ok((
+                    receipt.clone(),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: None,
+                    },
+                ));
+            }
+            let smart_changes = tag_ids
+                .iter()
+                .map(|tag_id| crate::predicate::DependencyChange::Tag(crate::TagId(*tag_id)))
+                .collect::<Vec<_>>();
+            crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                if add { "tag.add" } else { "tag.remove" },
+                Some(&affected),
+                serde_json::json!({"tag_ids": tag_ids}),
+                changed_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["roots".into(), "tags".into(), "sidebar".into()],
+                affected.iter().map(RootId),
+            );
+            let history = HistoryEntry::for_command(
+                "items.apply_tags",
+                if add { "Add tags" } else { "Remove tags" },
+                SemanticChange::Compound(changes),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(history),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -5760,111 +5444,102 @@ impl Library {
             TextMutation::Notes(_) => "root.notes",
             TextMutation::SourceUrls(_) => "root.source_urls",
         };
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                let mut before = load_root_text(transaction, &selection)?;
-                let mut after = before.clone();
-                for state in &mut after {
-                    match &mutation {
-                        TextMutation::Notes(notes) => state.notes.clone_from(notes),
-                        TextMutation::SourceUrls(urls) => state.source_urls.clone_from(urls),
-                    }
-                    state.modified_at_ms = modified_at_ms;
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let mut before = load_root_text(transaction, &selection)?;
+            let mut after = before.clone();
+            for state in &mut after {
+                match &mutation {
+                    TextMutation::Notes(notes) => state.notes.clone_from(notes),
+                    TextMutation::SourceUrls(urls) => state.source_urls.clone_from(urls),
                 }
-                if before == after {
-                    let mut next = (*snapshot).clone();
-                    next.revision = revision;
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                let mut update = transaction.prepare_cached(
-                    "UPDATE library_root
-                     SET name = ?2, notes = ?3, source_urls_json = ?4, modified_at_ms = ?5
-                     WHERE root_id = ?1",
-                )?;
-                for state in &after {
-                    update.execute(rusqlite::params![
-                        state.root_id.0,
-                        state.name,
-                        state.notes,
-                        serde_json::to_string(&state.source_urls)?,
-                        state.modified_at_ms
-                    ])?;
-                }
-                drop(update);
-                crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;
+                state.modified_at_ms = modified_at_ms;
+            }
+            if before == after {
                 let mut next = (*snapshot).clone();
-                {
-                    let index = Arc::make_mut(&mut next.modified_at);
-                    for state in &after {
-                        index.insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
-                    }
-                }
-                for state in &after {
-                    if state.notes.is_some() {
-                        Arc::make_mut(&mut next.notes_present).insert(state.root_id.0);
-                    } else {
-                        Arc::make_mut(&mut next.notes_present).remove(state.root_id.0);
-                    }
-                    if state.source_urls.is_empty() {
-                        Arc::make_mut(&mut next.urls_present).remove(state.root_id.0);
-                    } else {
-                        Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
-                    }
-                }
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &selection,
-                    &[crate::predicate::DependencyChange::RootText],
-                )?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    operation_kind,
-                    Some(&selection),
-                    serde_json::json!({}),
-                    modified_at_ms,
-                )?;
                 next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    vec!["roots".into(), "search".into(), "smart-folders".into()],
-                    selection.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    command,
-                    label,
-                    SemanticChange::RootText {
-                        before: Arc::new(std::mem::take(&mut before)),
-                        after: Arc::new(after),
-                    },
-                );
-                Ok((
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(history),
+                        history: None,
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            }
+            let mut update = transaction.prepare_cached(
+                "UPDATE library_root
+                 SET name = ?2, notes = ?3, source_urls_json = ?4, modified_at_ms = ?5
+                 WHERE root_id = ?1",
+            )?;
+            for state in &after {
+                update.execute(rusqlite::params![
+                    state.root_id.0,
+                    state.name,
+                    state.notes,
+                    serde_json::to_string(&state.source_urls)?,
+                    state.modified_at_ms
+                ])?;
+            }
+            drop(update);
+            crate::fts::mark_dirty(transaction, &selection, 1, modified_at_ms)?;
+            let mut next = (*snapshot).clone();
+            {
+                let index = Arc::make_mut(&mut next.modified_at);
+                for state in &after {
+                    index.insert(state.root_id.0, state.modified_at_ms.max(0) as u64);
+                }
+            }
+            for state in &after {
+                if state.notes.is_some() {
+                    Arc::make_mut(&mut next.notes_present).insert(state.root_id.0);
+                } else {
+                    Arc::make_mut(&mut next.notes_present).remove(state.root_id.0);
+                }
+                if state.source_urls.is_empty() {
+                    Arc::make_mut(&mut next.urls_present).remove(state.root_id.0);
+                } else {
+                    Arc::make_mut(&mut next.urls_present).insert(state.root_id.0);
+                }
+            }
+            crate::smart::settle_affected_for(
+                transaction,
+                &mut next,
+                &selection,
+                &[crate::predicate::DependencyChange::RootText],
+            )?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                operation_kind,
+                Some(&selection),
+                serde_json::json!({}),
+                modified_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                vec!["roots".into(), "search".into(), "smart-folders".into()],
+                selection.iter().map(RootId),
+            );
+            let history = HistoryEntry::for_command(
+                command,
+                label,
+                SemanticChange::RootText {
+                    before: Arc::new(std::mem::take(&mut before)),
+                    after: Arc::new(after),
+                },
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(history),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -5876,169 +5551,160 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let target = target.clone();
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let exists = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1)",
-                    [folder_id.0],
-                    |row| row.get::<_, bool>(0),
-                )?;
-                if !exists {
-                    return Err(LibraryError::NotFound(format!("folder {}", folder_id.0)));
-                }
-                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                let mut next = (*snapshot).clone();
-                let before = next
-                    .folder_orders
-                    .get(&folder_id)
-                    .cloned()
-                    .unwrap_or_else(|| Arc::new(Vec::new()));
-                let mut after = before.as_ref().clone();
-                if add {
-                    let existing = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                    after.extend((&selection - &existing).iter().map(RootId));
-                } else {
-                    after.retain(|root| !selection.contains(root.0));
-                }
-                if before.as_ref() == &after {
-                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
-                    next.revision = revision;
-                    return Ok((
-                        receipt.clone(),
-                        PublishedDelta {
-                            snapshot: next,
-                            receipt,
-                            history: None,
-                        },
-                    ));
-                }
-                ordering::replace(
-                    transaction,
-                    revision,
-                    OrderOwnerKind::Folder,
-                    folder_id.0,
-                    &after.iter().map(|root| root.0).collect::<Vec<_>>(),
-                )?;
-                let after_bitmap = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                let before_bitmap = before.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                let changed = &before_bitmap ^ &after_bitmap;
-                let added = &after_bitmap - &before_bitmap;
-                Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(after.clone()));
-                Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone().into());
-                let counts = Arc::make_mut(&mut next.folder_count);
-                for root_id in &changed {
-                    let current = counts.value(root_id).unwrap_or(0);
-                    counts.insert(
-                        root_id,
-                        if after_bitmap.contains(root_id) {
-                            current + 1
-                        } else {
-                            current.saturating_sub(1)
-                        },
-                    );
-                }
-                let mut history_changes = vec![SemanticChange::Order {
-                    owner_kind: OrderOwnerKind::Folder,
-                    owner_id: folder_id.0,
-                    before: Arc::new(before.iter().map(|root| root.0).collect()),
-                    after: Arc::new(after.iter().map(|root| root.0).collect()),
-                }];
-                let mut auto_tagged = false;
-                if add && !added.is_empty() {
-                    for tag_id in ingest::folder_auto_tags(transaction, folder_id)? {
-                        let tag_id = crate::TagId(tag_id);
-                        let before = next
-                            .tags
-                            .get(&tag_id)
-                            .map(|members| members.to_bitmap())
-                            .unwrap_or_default();
-                        let mut after = before.clone();
-                        after |= &added;
-                        let tag_changed = &before ^ &after;
-                        if tag_changed.is_empty() {
-                            continue;
-                        }
-                        bitmap::replace_changed(
-                            transaction,
-                            revision,
-                            BitmapKey {
-                                domain: BitmapDomain::Tag,
-                                key_id: tag_id.0,
-                            },
-                            &after,
-                            &tag_changed,
-                        )?;
-                        Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
-                        let counts = Arc::make_mut(&mut next.tag_count);
-                        for root_id in &tag_changed {
-                            let current = counts.value(root_id).unwrap_or(0);
-                            counts.insert(root_id, current + 1);
-                        }
-                        history_changes.push(SemanticChange::Bitmap {
-                            key: BitmapKey {
-                                domain: BitmapDomain::Tag,
-                                key_id: tag_id.0,
-                            },
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        });
-                        auto_tagged = true;
-                    }
-                }
-                if auto_tagged {
-                    crate::smart::settle_affected(transaction, &mut next, &changed)?;
-                } else {
-                    crate::smart::settle_affected_for(
-                        transaction,
-                        &mut next,
-                        &changed,
-                        &[crate::predicate::DependencyChange::Folder(folder_id)],
-                    )?;
-                }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    if add { "folder.add" } else { "folder.remove" },
-                    Some(&changed),
-                    serde_json::json!({"folder_id": folder_id.0}),
-                    changed_at_ms,
-                )?;
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let exists = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM folder_definition WHERE folder_id = ?1)",
+                [folder_id.0],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                return Err(LibraryError::NotFound(format!("folder {}", folder_id.0)));
+            }
+            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let mut next = (*snapshot).clone();
+            let before = next
+                .folder_orders
+                .get(&folder_id)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(Vec::new()));
+            let mut after = before.as_ref().clone();
+            if add {
+                let existing = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
+                after.extend((&selection - &existing).iter().map(RootId));
+            } else {
+                after.retain(|root| !selection.contains(root.0));
+            }
+            if before.as_ref() == &after {
+                let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
                 next.revision = revision;
-                let mut resources = vec!["roots".into(), "folders".into(), "sidebar".into()];
-                if auto_tagged {
-                    resources.push("tags".into());
-                }
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    changed.iter().map(RootId),
-                );
-                let history = HistoryEntry::for_command(
-                    "items.set_folder",
-                    if add {
-                        "Add to folder"
-                    } else {
-                        "Remove from folder"
-                    },
-                    SemanticChange::Compound(history_changes),
-                );
-                Ok((
+                return Ok((
                     receipt.clone(),
                     PublishedDelta {
                         snapshot: next,
                         receipt,
-                        history: Some(history),
+                        history: None,
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                ));
+            }
+            ordering::replace(
+                transaction,
+                revision,
+                OrderOwnerKind::Folder,
+                folder_id.0,
+                &after.iter().map(|root| root.0).collect::<Vec<_>>(),
+            )?;
+            let after_bitmap = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
+            let before_bitmap = before.iter().map(|root| root.0).collect::<RoaringBitmap>();
+            let changed = &before_bitmap ^ &after_bitmap;
+            let added = &after_bitmap - &before_bitmap;
+            Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(after.clone()));
+            Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone().into());
+            let counts = Arc::make_mut(&mut next.folder_count);
+            for root_id in &changed {
+                let current = counts.value(root_id).unwrap_or(0);
+                counts.insert(
+                    root_id,
+                    if after_bitmap.contains(root_id) {
+                        current + 1
+                    } else {
+                        current.saturating_sub(1)
+                    },
+                );
+            }
+            let mut history_changes = vec![SemanticChange::Order {
+                owner_kind: OrderOwnerKind::Folder,
+                owner_id: folder_id.0,
+                before: Arc::new(before.iter().map(|root| root.0).collect()),
+                after: Arc::new(after.iter().map(|root| root.0).collect()),
+            }];
+            let mut auto_tagged = false;
+            if add && !added.is_empty() {
+                for tag_id in ingest::folder_auto_tags(transaction, folder_id)? {
+                    let tag_id = crate::TagId(tag_id);
+                    let before = next
+                        .tags
+                        .get(&tag_id)
+                        .map(|members| members.to_bitmap())
+                        .unwrap_or_default();
+                    let mut after = before.clone();
+                    after |= &added;
+                    let tag_changed = &before ^ &after;
+                    if tag_changed.is_empty() {
+                        continue;
+                    }
+                    bitmap::replace_changed(
+                        transaction,
+                        revision,
+                        BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
+                        },
+                        &after,
+                        &tag_changed,
+                    )?;
+                    Arc::make_mut(&mut next.tags).insert(tag_id, after.clone().into());
+                    let counts = Arc::make_mut(&mut next.tag_count);
+                    for root_id in &tag_changed {
+                        let current = counts.value(root_id).unwrap_or(0);
+                        counts.insert(root_id, current + 1);
+                    }
+                    history_changes.push(SemanticChange::Bitmap {
+                        key: BitmapKey {
+                            domain: BitmapDomain::Tag,
+                            key_id: tag_id.0,
+                        },
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
+                    auto_tagged = true;
+                }
+            }
+            if auto_tagged {
+                crate::smart::settle_affected(transaction, &mut next, &changed)?;
+            } else {
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &changed,
+                    &[crate::predicate::DependencyChange::Folder(folder_id)],
+                )?;
+            }
+            insert_cloud_journal(
+                transaction,
+                revision,
+                if add { "folder.add" } else { "folder.remove" },
+                Some(&changed),
+                serde_json::json!({"folder_id": folder_id.0}),
+                changed_at_ms,
+            )?;
+            next.revision = revision;
+            let mut resources = vec!["roots".into(), "folders".into(), "sidebar".into()];
+            if auto_tagged {
+                resources.push("tags".into());
+            }
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                changed.iter().map(RootId),
+            );
+            let history = HistoryEntry::for_command(
+                "items.set_folder",
+                if add {
+                    "Add to folder"
+                } else {
+                    "Remove from folder"
+                },
+                SemanticChange::Compound(history_changes),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: Some(history),
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
@@ -6056,147 +5722,152 @@ impl Library {
     ) -> Result<MutationReceipt> {
         let target = target.clone();
         let changed_at_ms = now_ms();
-        let projections = self.projections.clone();
-        let publication = self.publication.clone();
-        let history = self.history.clone();
-        let (receipt, _, history_entry) = self.database.published_write(
-            priority,
-            |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
-                let mut next = (*snapshot).clone();
-                let mut changes = Vec::new();
-                for key_id in &partition_keys {
-                    let key = BitmapKey {
-                        domain,
-                        key_id: *key_id,
-                    };
-                    let before = projection_bitmap(&next, key);
-                    let mut after = before.clone();
-                    if *key_id == destination {
-                        after |= &selection;
-                    } else {
-                        after -= &selection;
-                    }
-                    if before != after {
-                        set_projection_bitmap(&mut next, key, after.clone());
-                        bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
-                        changes.push(SemanticChange::Bitmap {
-                            key,
-                            before: Arc::new(before),
-                            after: Arc::new(after),
-                        });
-                    }
-                }
-                let smart_change = match domain {
-                    BitmapDomain::Lifecycle => crate::predicate::DependencyChange::Lifecycle,
-                    BitmapDomain::Rating => crate::predicate::DependencyChange::Rating,
-                    BitmapDomain::Tag => {
-                        crate::predicate::DependencyChange::Tag(crate::TagId(destination))
-                    }
+        let receipt = self.publish(priority, |transaction, revision, snapshot| {
+            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let mut next = (*snapshot).clone();
+            let mut changes = Vec::new();
+            for key_id in &partition_keys {
+                let key = BitmapKey {
+                    domain,
+                    key_id: *key_id,
                 };
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &selection,
-                    &[smart_change],
-                )?;
-                if !changes.is_empty() {
-                    insert_cloud_journal(
-                        transaction,
-                        revision,
-                        match domain {
-                            BitmapDomain::Lifecycle => "root.lifecycle",
-                            BitmapDomain::Rating => "root.rating",
-                            BitmapDomain::Tag => "tag.partition",
-                        },
-                        Some(&selection),
-                        serde_json::json!({"destination": destination}),
-                        changed_at_ms,
-                    )?;
+                let before = projection_bitmap(&next, key);
+                let mut after = before.clone();
+                if *key_id == destination {
+                    after |= &selection;
+                } else {
+                    after -= &selection;
                 }
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
+                if before != after {
+                    set_projection_bitmap(&mut next, key, after.clone());
+                    bitmap::replace_changed(transaction, revision, key, &after, &(&before ^ &after))?;
+                    changes.push(SemanticChange::Bitmap {
+                        key,
+                        before: Arc::new(before),
+                        after: Arc::new(after),
+                    });
+                }
+            }
+            let smart_change = match domain {
+                BitmapDomain::Lifecycle => crate::predicate::DependencyChange::Lifecycle,
+                BitmapDomain::Rating => crate::predicate::DependencyChange::Rating,
+                BitmapDomain::Tag => {
+                    crate::predicate::DependencyChange::Tag(crate::TagId(destination))
+                }
+            };
+            crate::smart::settle_affected_for(
+                transaction,
+                &mut next,
+                &selection,
+                &[smart_change],
+            )?;
+            if !changes.is_empty() {
+                insert_cloud_journal(
+                    transaction,
                     revision,
-                    resources.clone(),
-                    selection.iter().map(RootId),
-                );
-                let history = (!changes.is_empty()).then(|| {
-                    HistoryEntry::for_command(command, label, SemanticChange::Compound(changes))
-                });
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history,
+                    match domain {
+                        BitmapDomain::Lifecycle => "root.lifecycle",
+                        BitmapDomain::Rating => "root.rating",
+                        BitmapDomain::Tag => "tag.partition",
                     },
-                ))
-            },
-            move |_, delta| publish_delta(&projections, &publication, delta),
-        )?;
-        push_history(&history, history_entry);
+                    Some(&selection),
+                    serde_json::json!({"destination": destination}),
+                    changed_at_ms,
+                )?;
+            }
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources.clone(),
+                selection.iter().map(RootId),
+            );
+            let history = (!changes.is_empty()).then(|| {
+                HistoryEntry::for_command(command, label, SemanticChange::Compound(changes))
+            });
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history,
+                },
+            ))
+        })?;
         Ok(receipt)
     }
 
     fn replay_history(&self, entry: &HistoryEntry, use_after: bool) -> Result<MutationReceipt> {
         let change = entry.change.clone();
         let changed_at_ms = now_ms();
+        let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            let mut next = (*snapshot).clone();
+            let mut affected = RoaringBitmap::new();
+            let mut resources = BTreeSet::new();
+            apply_semantic_change(
+                transaction,
+                revision,
+                &mut next,
+                &change,
+                use_after,
+                &mut affected,
+                &mut resources,
+            )?;
+            // Re-check only the smart folders the replayed change can
+            // affect, exactly as the original edit did.
+            let mut changes = Vec::new();
+            history_dependencies(&change, &mut changes);
+            crate::smart::settle_affected_for(transaction, &mut next, &affected, &changes)?;
+            insert_cloud_journal(
+                transaction,
+                revision,
+                if use_after {
+                    "history.redo"
+                } else {
+                    "history.undo"
+                },
+                (!affected.is_empty()).then_some(&affected),
+                serde_json::json!({"label": entry.label}),
+                changed_at_ms,
+            )?;
+            next.revision = revision;
+            let receipt = PublicationCoordinator::receipt(
+                revision,
+                resources,
+                affected.iter().map(RootId),
+            );
+            Ok((
+                receipt.clone(),
+                PublishedDelta {
+                    snapshot: next,
+                    receipt,
+                    history: None,
+                },
+            ))
+        })?;
+        Ok(receipt)
+    }
+
+    /// Run one canonical write, publish its projection delta and, when the
+    /// write is undoable, record its history entry.
+    fn publish<T>(
+        &self,
+        priority: WorkPriority,
+        operation: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            u64,
+            Arc<ProjectionSnapshot>,
+        ) -> Result<(T, PublishedDelta)>,
+    ) -> Result<T> {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (receipt, _, ()) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
+        let (output, _, history_entry) = self.database.published_write(
+            priority,
             |revision| self.capture_revision(revision),
-            |transaction, _, revision, snapshot| {
-                let mut next = (*snapshot).clone();
-                let mut affected = RoaringBitmap::new();
-                let mut resources = BTreeSet::new();
-                apply_semantic_change(
-                    transaction,
-                    revision,
-                    &mut next,
-                    &change,
-                    use_after,
-                    &mut affected,
-                    &mut resources,
-                )?;
-                // Re-check only the smart folders the replayed change can
-                // affect, exactly as the original edit did.
-                let mut changes = Vec::new();
-                history_dependencies(&change, &mut changes);
-                crate::smart::settle_affected_for(transaction, &mut next, &affected, &changes)?;
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    if use_after {
-                        "history.redo"
-                    } else {
-                        "history.undo"
-                    },
-                    (!affected.is_empty()).then_some(&affected),
-                    serde_json::json!({"label": entry.label}),
-                    changed_at_ms,
-                )?;
-                next.revision = revision;
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    affected.iter().map(RootId),
-                );
-                Ok((
-                    receipt.clone(),
-                    PublishedDelta {
-                        snapshot: next,
-                        receipt,
-                        history: None,
-                    },
-                ))
-            },
-            move |_, delta| {
-                publish_delta(&projections, &publication, delta);
-            },
+            |transaction, _, revision, snapshot| operation(transaction, revision, snapshot),
+            move |_, delta| publish_delta(&projections, &publication, delta),
         )?;
-        Ok(receipt)
+        push_history(&self.history, history_entry);
+        Ok(output)
     }
 
     fn capture_revision(&self, revision: u64) -> Result<Arc<ProjectionSnapshot>> {
