@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
+const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
 const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
 const RESIDENT_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
 const ROWID_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-summary-page-rowids";
@@ -111,7 +112,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            SOURCE_ROOTS_PREDECESSOR
+            WATCH_LIFECYCLE_PREDECESSOR
+                | SOURCE_ROOTS_PREDECESSOR
                 | RESIDENT_PREDECESSOR
                 | ROWID_PREDECESSOR
                 | KEYS_PREDECESSOR
@@ -184,6 +186,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 DRAWING_PREDECESSOR,
@@ -229,7 +232,13 @@ pub fn migrate_for_open(
             // and repair lifecycle. The resident model rebuilds all of it from
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
-            if fingerprint != RESIDENT_PREDECESSOR && fingerprint != SOURCE_ROOTS_PREDECESSOR {
+            if ![
+                RESIDENT_PREDECESSOR,
+                SOURCE_ROOTS_PREDECESSOR,
+                WATCH_LIFECYCLE_PREDECESSOR,
+            ]
+            .contains(&fingerprint.as_str())
+            {
                 connection.execute_batch(
                     "DROP TABLE IF EXISTS browsing_summary_page;
              DROP TABLE IF EXISTS browsing_page;
@@ -255,6 +264,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 TEXT_PREDECESSOR,
@@ -316,6 +326,11 @@ pub fn migrate_for_open(
                 )?;
             }
             require_columns(connection, "source_attempt_root", &["created_root"])?;
+            // Orders move from one blob per owner to fixed-size chunks; the
+            // ids and their order are unchanged, so checkpoints stay valid.
+            if !has_table(connection, "ordered_membership_chunk")? {
+                crate::ordering::migrate_single_blob_orders(connection)?;
+            }
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -378,6 +393,17 @@ fn migration_backup_path(database_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite");
     database_path.with_file_name(format!("{file_name}.pre-migration-{timestamp}.backup"))
+}
+
+fn has_table(connection: &Connection, table: &str) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -605,8 +631,65 @@ mod tests {
         let connection = Connection::open(&path).unwrap();
         super::validate(&connection).unwrap();
         assert_eq!(
-            count(&connection, "SELECT watch_lifecycle FROM folder_definition WHERE folder_id = 3"),
+            count(
+                &connection,
+                "SELECT watch_lifecycle FROM folder_definition WHERE folder_id = 3"
+            ),
             2
+        );
+    }
+
+    #[test]
+    fn single_blob_orders_are_split_into_chunks_without_changing_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        // The predecessor kept each order as one blob: a u32 count, then ids.
+        let ids = (1..=2_500_u32).rev().collect::<Vec<_>>();
+        let mut payload = (ids.len() as u32).to_le_bytes().to_vec();
+        ids.iter()
+            .for_each(|id| payload.extend_from_slice(&id.to_le_bytes()));
+        connection
+            .execute_batch(
+                "DROP TABLE ordered_membership_chunk;
+                 CREATE TABLE ordered_membership (
+                     owner_kind INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+                     revision INTEGER NOT NULL, cardinality INTEGER NOT NULL,
+                     format_version INTEGER NOT NULL, checksum BLOB NOT NULL,
+                     payload BLOB NOT NULL, PRIMARY KEY(owner_kind, owner_id)
+                 ) WITHOUT ROWID, STRICT;",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO ordered_membership VALUES (2, 9, 1, ?1, 1, ?2, ?3)",
+                rusqlite::params![
+                    ids.len() as i64,
+                    crate::bitmap::checksum(&payload).as_slice(),
+                    payload
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::WATCH_LIFECYCLE_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(
+            crate::ordering::load(&connection, crate::ordering::OrderOwnerKind::Folder, 9)
+                .unwrap()
+                .unwrap(),
+            ids
+        );
+        assert_eq!(
+            count(&connection, "SELECT COUNT(*) FROM ordered_membership_chunk"),
+            3
         );
     }
 
