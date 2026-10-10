@@ -175,8 +175,11 @@ pub(crate) enum DependencyChange {
 }
 
 pub(crate) fn depends_on(expression: &FilterExpr, change: DependencyChange) -> bool {
-    if matches!(change, DependencyChange::All | DependencyChange::Lifecycle) {
-        return true;
+    match change {
+        DependencyChange::All => return true,
+        // Results span every lifecycle; scopes intersect with Active on read.
+        DependencyChange::Lifecycle => return false,
+        _ => {}
     }
     match expression {
         FilterExpr::All(children) | FilterExpr::Any(children) => {
@@ -561,7 +564,8 @@ mod tests {
         assert!(!depends_on(&expression, DependencyChange::Tag(other_tag)));
         assert!(!depends_on(&expression, DependencyChange::Folder(folder)));
         assert!(depends_on(&expression, DependencyChange::CoverFacts));
-        assert!(depends_on(&expression, DependencyChange::Lifecycle));
+        // Results span every lifecycle, so moving roots between lifecycles re-checks nothing.
+        assert!(!depends_on(&expression, DependencyChange::Lifecycle));
     }
 
     #[test]

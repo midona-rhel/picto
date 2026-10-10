@@ -7,7 +7,7 @@ use crate::projection::{DateIndex, NumericIndex, ProjectionSnapshot, ShardedIdMa
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v11-signed-dates";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v12-smart-results-all-lifecycles";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {

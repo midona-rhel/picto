@@ -37,6 +37,24 @@ struct SavedDefinition {
 static SMART_FOLDER_POOL: OnceLock<std::result::Result<rayon::ThreadPool, String>> =
     OnceLock::new();
 
+/// Smart-folder results cover roots in every lifecycle; a smart folder scope
+/// shows them intersected with Active. Moving roots between Inbox, Active and
+/// Trash therefore re-evaluates no smart folder, however many there are.
+fn live_roots(snapshot: &ProjectionSnapshot) -> RoaringBitmap {
+    snapshot.lifecycle.values().fold(RoaringBitmap::new(), |mut all, ids| {
+        all |= &**ids;
+        all
+    })
+}
+
+/// The `affected` roots that still exist (deleted roots drop out of results).
+fn live_within(snapshot: &ProjectionSnapshot, affected: &RoaringBitmap) -> RoaringBitmap {
+    snapshot.lifecycle.values().fold(RoaringBitmap::new(), |mut live, ids| {
+        live |= &**ids & affected;
+        live
+    })
+}
+
 pub(crate) fn load(connection: &Connection, snapshot: &mut ProjectionSnapshot) -> Result<()> {
     refresh_all(connection, snapshot)
 }
@@ -99,7 +117,7 @@ pub(crate) fn settle_affected_for(
     if changed_local_ids.is_empty() {
         return Ok(());
     }
-    let active_affected = SharedBitmap::from(snapshot.active() & affected);
+    let active_affected = SharedBitmap::from(live_within(snapshot, affected));
     let local_replacements = evaluate_local_results(
         snapshot,
         &definitions,
@@ -284,7 +302,7 @@ pub(crate) fn refresh_all(
         .iter()
         .filter_map(|(id, definition)| definition.parent_id.is_none().then_some(*id))
         .collect::<Vec<_>>();
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let local_results =
         evaluate_local_results(snapshot, &definitions, definitions.keys().copied(), &active)?;
     let results = compose_trees(snapshot, &definitions, roots, &local_results)?;
@@ -313,7 +331,7 @@ pub(crate) fn refresh_subtree(
         .map(|(id, definition)| (*id, definition.view.clone()))
         .collect::<HashMap<_, _>>();
     let effective_queries = compile_effective_queries(&definitions)?;
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let replacement_local =
         evaluate_local_results(snapshot, &definitions, [smart_folder_id.0], &active)?;
     let mut local_results = (*snapshot.smart_local_results).clone();
@@ -416,7 +434,7 @@ fn compose_trees(
             children.entry(parent_id.0).or_default().push(*id);
         }
     }
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let mut pending = Vec::with_capacity(roots.len());
     for root in roots {
         let definition = &definitions[&root];
@@ -576,7 +594,7 @@ pub fn list(
         let count = snapshot
             .smart_results
             .get(&smart_folder_id.0)
-            .map_or(0, |values| values.len());
+            .map_or(0, |values| values.intersection_len(snapshot.active()));
         Ok(SmartFolderRecord {
             smart_folder_id,
             name,

@@ -182,6 +182,7 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
         library.settle_fts(usize::MAX).unwrap();
 
         let snapshot = library.projections().snapshot();
+        let counts = library.counts().unwrap();
         for (index, (id, effective)) in folders.iter().enumerate() {
             let stored = matching_roots(
                 &snapshot,
@@ -198,6 +199,12 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
             assert_eq!(
                 stored, fresh,
                 "smart folder '{}' diverged from its rules after step {step}",
+                rules[index].0
+            );
+            assert_eq!(
+                counts.smart_folders.get(id).copied(),
+                Some(stored.len() as u64),
+                "smart folder '{}' count diverged after step {step}",
                 rules[index].0
             );
         }

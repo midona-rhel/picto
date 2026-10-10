@@ -528,7 +528,9 @@ pub fn scope_counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
     let smart_folders = snapshot
         .smart_results
         .iter()
-        .map(|(smart_folder_id, roots)| (SmartFolderId(*smart_folder_id), roots.len()))
+        .map(|(smart_folder_id, roots)| {
+            (SmartFolderId(*smart_folder_id), roots.intersection_len(active))
+        })
         .collect();
     LibraryCounts {
         all: active.len(),
