@@ -111,6 +111,9 @@ function preferenceSortField(value: string | null): SortField {
     case 'random':
     case 'folder_order':
       return value;
+    // Older builds saved the File Size choice as 'size', which the backend rejects.
+    case 'size':
+      return 'total_size';
     default:
       return 'imported_at';
   }

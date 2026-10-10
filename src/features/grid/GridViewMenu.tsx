@@ -46,7 +46,7 @@ const SORT_OPTIONS: CmSelectOption[] = [
   { value: 'imported_at', label: t("Date Added") },
   { value: 'captured_at', label: t("Date Created") },
   { value: 'name', label: t("Name") },
-  { value: 'size', label: t("File Size") },
+  { value: 'total_size', label: t("File Size") },
   { value: 'rating', label: t("Rating") },
   { value: 'random', label: t("Random") },
 ];
