@@ -182,7 +182,14 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
         library.settle_fts(usize::MAX).unwrap();
 
         let snapshot = library.projections().snapshot();
-        let counts = library.counts().unwrap();
+        // The sidebar's counts go through the library's cached path.
+        let counts = library
+            .sidebar_counts()
+            .unwrap()
+            .smart_folders
+            .into_iter()
+            .map(|entry| (entry.smart_folder_id, entry.count))
+            .collect::<std::collections::HashMap<_, _>>();
         for (index, (id, effective)) in folders.iter().enumerate() {
             let stored = matching_roots(
                 &snapshot,
@@ -202,7 +209,7 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
                 rules[index].0
             );
             assert_eq!(
-                counts.smart_folders.get(id).copied(),
+                counts.get(id).copied(),
                 Some(stored.len() as u64),
                 "smart folder '{}' count diverged after step {step}",
                 rules[index].0

@@ -97,6 +97,7 @@ pub struct Library {
     history: Arc<SessionHistory>,
     match_cache: Arc<crate::query::MatchCache>,
     order_cache: Arc<crate::query::OrderCache>,
+    smart_counts: Arc<crate::smart::SmartCountCache>,
     window_requests: crate::query_request::WindowRequests,
 }
 
@@ -189,6 +190,7 @@ impl Library {
             publication: Arc::new(PublicationCoordinator::default()),
             history: Arc::new(SessionHistory::default()),
             match_cache: Arc::new(crate::query::MatchCache::default()),
+            smart_counts: Arc::new(crate::smart::SmartCountCache::default()),
             order_cache: Arc::new(crate::query::OrderCache::default()),
             window_requests: crate::query_request::WindowRequests::default(),
         })
@@ -575,7 +577,7 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                let counts = crate::query::scope_counts(&snapshot);
+                let counts = crate::query::scope_counts(&snapshot, &self.smart_counts);
                 let recently_viewed = crate::query::matching_roots(
                     &snapshot,
                     &crate::query::RootQuery {

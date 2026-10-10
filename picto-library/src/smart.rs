@@ -37,6 +37,40 @@ struct SavedDefinition {
 static SMART_FOLDER_POOL: OnceLock<std::result::Result<rayon::ThreadPool, String>> =
     OnceLock::new();
 
+/// Remembers each folder's Active count for as long as neither its result nor
+/// the Active partition changed. Counting is one intersection per folder, so
+/// with hundreds of folders the sidebar would otherwise pay for all of them
+/// after every edit. Entries hold the bitmaps they were computed from, so an
+/// allocation is never reused while its count is cached.
+#[derive(Default)]
+pub struct SmartCountCache(parking_lot::Mutex<HashMap<u32, (SharedBitmap, SharedBitmap, u64)>>);
+
+impl SmartCountCache {
+    pub(crate) fn active_count(&self, snapshot: &ProjectionSnapshot, smart_folder_id: u32) -> u64 {
+        let Some(results) = snapshot.smart_results.get(&smart_folder_id) else {
+            return 0;
+        };
+        let active = snapshot
+            .lifecycle
+            .get(&crate::model::Lifecycle::Active)
+            .expect("every snapshot contains the active partition");
+        let mut entries = self.0.lock();
+        if let Some((cached_results, cached_active, count)) = entries.get(&smart_folder_id) {
+            if cached_results.allocation_id() == results.allocation_id()
+                && cached_active.allocation_id() == active.allocation_id()
+            {
+                return *count;
+            }
+        }
+        let count = results.intersection_len(active);
+        entries.insert(smart_folder_id, (results.clone(), active.clone(), count));
+        if entries.len() > MAX_SMART_FOLDERS * 2 {
+            entries.retain(|id, _| snapshot.smart_results.contains_key(id));
+        }
+        count
+    }
+}
+
 /// Smart-folder results cover roots in every lifecycle; a smart folder scope
 /// shows them intersected with Active. Moving roots between Inbox, Active and
 /// Trash therefore re-evaluates no smart folder, however many there are.
@@ -568,6 +602,7 @@ fn resolve_effective(
 pub fn list(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
+    counts: &SmartCountCache,
 ) -> Result<Vec<SmartFolderRecord>> {
     let mut statement = connection.prepare(
         "SELECT smart_folder_id, name, parent_id, icon, color, notes,
@@ -591,10 +626,7 @@ pub fn list(
     rows.map(|row| {
         let (smart_folder_id, name, parent_id, icon, color, notes, json, display_order) = row?;
         let view = serde_json::from_str(&json)?;
-        let count = snapshot
-            .smart_results
-            .get(&smart_folder_id.0)
-            .map_or(0, |values| values.intersection_len(snapshot.active()));
+        let count = counts.active_count(snapshot, smart_folder_id.0);
         Ok(SmartFolderRecord {
             smart_folder_id,
             name,

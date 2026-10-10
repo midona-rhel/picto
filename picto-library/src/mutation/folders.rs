@@ -18,7 +18,7 @@ impl Library {
             |connection, snapshot| {
                 Ok((
                     list_folders(connection, &snapshot)?,
-                    crate::smart::list(connection, &snapshot)?,
+                    crate::smart::list(connection, &snapshot, &self.smart_counts)?,
                     snapshot.revision,
                 ))
             },

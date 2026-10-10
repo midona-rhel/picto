@@ -505,7 +505,7 @@ pub struct LibraryCounts {
 }
 
 pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
-    let mut counts = scope_counts(snapshot);
+    let mut counts = scope_counts(snapshot, &crate::smart::SmartCountCache::default());
     let active = snapshot.active();
     counts.tags = snapshot
         .tags
@@ -517,7 +517,10 @@ pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
 
 /// Counts for every scope except per-tag counts, which cost one intersection
 /// per tag in the library and are not shown in the sidebar.
-pub fn scope_counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
+pub fn scope_counts(
+    snapshot: &ProjectionSnapshot,
+    smart_counts: &crate::smart::SmartCountCache,
+) -> LibraryCounts {
     let active = snapshot.active();
     let tags = Default::default();
     let folders = snapshot
@@ -527,10 +530,8 @@ pub fn scope_counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
         .collect();
     let smart_folders = snapshot
         .smart_results
-        .iter()
-        .map(|(smart_folder_id, roots)| {
-            (SmartFolderId(*smart_folder_id), roots.intersection_len(active))
-        })
+        .keys()
+        .map(|id| (SmartFolderId(*id), smart_counts.active_count(snapshot, *id)))
         .collect();
     LibraryCounts {
         all: active.len(),

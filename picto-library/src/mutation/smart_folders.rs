@@ -7,7 +7,7 @@ impl Library {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::smart::list(connection, &snapshot),
+            |connection, snapshot| crate::smart::list(connection, &snapshot, &self.smart_counts),
         )
     }
 
