@@ -1,7 +1,7 @@
 # Agent rules
 
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md). Track work as GitHub issues, not
-  new PBI files; `docs/pbis/` is legacy and is being migrated to issues.
+  PBI files.
 - Branch from `dev`, named by purpose (`feature/`, `bug/`, `perf/`,
   `refactor/`, `ui/`, `docs/`, `test/`, `chore/`, `deps/`) plus the issue
   number. Never commit to `dev` or `main` directly, and never open a pull
