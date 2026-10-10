@@ -626,7 +626,7 @@ impl NumericShard {
         self.slices
             .iter()
             .enumerate()
-            .map(|(bit, slice)| (slice & selection).len() as u128 * (1u128 << bit))
+            .map(|(bit, slice)| slice.intersection_len(selection) as u128 * (1u128 << bit))
             .sum()
     }
 
@@ -645,22 +645,23 @@ impl NumericShard {
         if value == 0 {
             return RoaringBitmap::new();
         }
+        // Walk the bits from the top, keeping the members still equal to
+        // `value` so far; no slice is copied, and the walk stops as soon as
+        // nothing is left equal.
+        let empty = RoaringBitmap::new();
         let mut equal = base.clone();
         let mut less = RoaringBitmap::new();
         let highest = self.slices.len().max(64 - value.leading_zeros() as usize);
         for bit in (0..highest).rev() {
-            let ones = self
-                .slices
-                .get(bit)
-                .cloned()
-                .unwrap_or_else(RoaringBitmap::new);
-            let mut zeros = equal.clone();
-            zeros -= &ones;
+            if equal.is_empty() {
+                break;
+            }
+            let ones = self.slices.get(bit).unwrap_or(&empty);
             if bit < 64 && value & (1u64 << bit) != 0 {
-                less |= &zeros;
-                equal &= &ones;
+                less |= &equal - ones;
+                equal &= ones;
             } else {
-                equal = zeros;
+                equal -= ones;
             }
         }
         less
