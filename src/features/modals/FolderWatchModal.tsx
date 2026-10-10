@@ -11,9 +11,9 @@ import { analyzeFolderTree } from '../../platform/folderApi';
 import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
 import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
 import { t } from '../../i18n';
+import type { WatchImportStatus } from '../../state/modals';
 
-const STATUS_OPTIONS = [
-  { value: 'inherit', label: t("Inherit") },
+const STATUS_OPTIONS: Array<{ value: WatchImportStatus; label: string }> = [
   { value: 'inbox', label: t("Inbox") },
   { value: 'active', label: t("Active") },
 ];
@@ -22,7 +22,7 @@ export interface FolderWatchConfig {
   watchPath: string;
   enabled: boolean;
   subfolders: boolean;
-  importStatusMode: string;
+  importStatus: WatchImportStatus;
 }
 
 export interface FolderWatchModalProps {
@@ -40,7 +40,7 @@ export function FolderWatchModal({
   const [watchPath, setWatchPath] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [subfolders, setSubfolders] = useState(false);
-  const [importStatusMode, setImportStatusMode] = useState('inherit');
+  const [importStatus, setImportStatus] = useState<WatchImportStatus>('inbox');
   const [analysis, setAnalysis] = useState<FolderTreeAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -51,7 +51,7 @@ export function FolderWatchModal({
       setWatchPath(initial?.watchPath ?? '');
       setEnabled(initial?.enabled ?? true);
       setSubfolders(initial?.subfolders ?? false);
-      setImportStatusMode(initial?.importStatusMode ?? 'inherit');
+      setImportStatus(initial?.importStatus ?? 'inbox');
       setAnalysis(null);
       setAnalysisError(null);
     }
@@ -107,7 +107,7 @@ export function FolderWatchModal({
           <button
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
-            onClick={() => onSave({ watchPath, enabled, subfolders, importStatusMode })}
+            onClick={() => onSave({ watchPath, enabled, subfolders, importStatus })}
             disabled={!watchPath || analyzing || analysisError != null}
             type="button"
           >
@@ -147,7 +147,7 @@ export function FolderWatchModal({
 
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>{t("Import Status")}</label>
-          <CmSelect value={importStatusMode} options={STATUS_OPTIONS} onChange={setImportStatusMode} width={160} />
+          <CmSelect value={importStatus} options={STATUS_OPTIONS} onChange={(value) => setImportStatus(value as WatchImportStatus)} width={160} />
         </div>
 
         <p className={modalStyles.helpText}>

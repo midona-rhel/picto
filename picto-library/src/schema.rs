@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
+const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
 const RESIDENT_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
 const ROWID_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-summary-page-rowids";
 const KEYS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-06-persisted-name-keys";
@@ -110,7 +111,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            RESIDENT_PREDECESSOR
+            SOURCE_ROOTS_PREDECESSOR
+                | RESIDENT_PREDECESSOR
                 | ROWID_PREDECESSOR
                 | KEYS_PREDECESSOR
                 | NODE_PREDECESSOR
@@ -182,6 +184,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 DRAWING_PREDECESSOR,
                 TEXT_PREDECESSOR,
@@ -226,7 +229,7 @@ pub fn migrate_for_open(
             // and repair lifecycle. The resident model rebuilds all of it from
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
-            if fingerprint != RESIDENT_PREDECESSOR {
+            if fingerprint != RESIDENT_PREDECESSOR && fingerprint != SOURCE_ROOTS_PREDECESSOR {
                 connection.execute_batch(
                     "DROP TABLE IF EXISTS browsing_summary_page;
              DROP TABLE IF EXISTS browsing_page;
@@ -252,6 +255,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 TEXT_PREDECESSOR,
                 NAME_PREDECESSOR,
@@ -300,9 +304,17 @@ pub fn migrate_for_open(
             )?;
             // Older attempts do not prove grid-root creation; never infer it
             // from retained files or backfill speculative notification counts.
-            connection.execute_batch(
-                "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
-            )?;
+            if !has_column(connection, "source_attempt_root", "created_root")? {
+                connection.execute_batch(
+                    "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
+                )?;
+            }
+            // Watched folders kept importing into the Inbox; that stays the default.
+            if !has_column(connection, "folder_definition", "watch_lifecycle")? {
+                connection.execute_batch(
+                    "ALTER TABLE folder_definition ADD COLUMN watch_lifecycle INTEGER NOT NULL DEFAULT 2 CHECK (watch_lifecycle IN (1, 2));"
+                )?;
+            }
             require_columns(connection, "source_attempt_root", &["created_root"])?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
@@ -366,6 +378,16 @@ fn migration_backup_path(database_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite");
     database_path.with_file_name(format!("{file_name}.pre-migration-{timestamp}.backup"))
+}
+
+fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let found = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == column);
+    Ok(found)
 }
 
 fn require_columns(connection: &Connection, table: &str, required: &[&str]) -> Result<()> {
@@ -556,6 +578,36 @@ mod tests {
             super::RESIDENT_PREDECESSOR
         );
         assert_eq!(count(&backup, "SELECT COUNT(*) FROM pragma_table_info('source_attempt_root') WHERE name='created_root'"), 0);
+    }
+
+    #[test]
+    fn source_roots_migration_keeps_existing_watches_importing_into_the_inbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE folder_definition DROP COLUMN watch_lifecycle;
+                 INSERT INTO folder_definition
+                     (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
+                 VALUES (3, 'watched', 'Watched', '/watched', 1, 0);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::SOURCE_ROOTS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(
+            count(&connection, "SELECT watch_lifecycle FROM folder_definition WHERE folder_id = 3"),
+            2
+        );
     }
 
     #[test]

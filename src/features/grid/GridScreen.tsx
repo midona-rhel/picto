@@ -69,7 +69,7 @@ import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntr
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor } from '../../state/portals';
-import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
+import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchInitial, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
 import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
@@ -1149,7 +1149,7 @@ export function GridScreen({
               }));
             },
             onAttachWatch: () => {
-              store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
+              store.set(folderWatchModalAtom, { open: true, folderId, initial: folderWatchInitial(folder.meta) });
             },
             onRemoveWatch: watchEnabled ? () => {
               store.set(confirmModalAtom, {

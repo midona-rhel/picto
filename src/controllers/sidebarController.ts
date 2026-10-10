@@ -80,6 +80,7 @@ function folderNodes(
       watch_path: folder.watch_path,
       watch_enabled: folder.watch_enabled,
       watch_subfolders: folder.watch_subfolders,
+      watch_lifecycle: folder.watch_lifecycle,
     },
   }));
 }

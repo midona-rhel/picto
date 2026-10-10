@@ -524,6 +524,7 @@ impl LibraryApplication {
                 input.folder_id,
                 &path.to_string_lossy(),
                 input.include_subfolders,
+                input.lifecycle,
             )
             .map_err(|error| error.to_string())
     }

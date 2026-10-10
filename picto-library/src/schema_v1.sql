@@ -91,6 +91,8 @@ CREATE TABLE folder_definition (
     watch_path TEXT UNIQUE,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
     watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),
+    -- Status of files imported by the watcher: 1 = Active, 2 = Inbox.
+    watch_lifecycle INTEGER NOT NULL DEFAULT 2 CHECK (watch_lifecycle IN (1, 2)),
     display_order INTEGER NOT NULL
 ) STRICT;
 
