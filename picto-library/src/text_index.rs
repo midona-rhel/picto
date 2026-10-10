@@ -147,7 +147,11 @@ impl TextShard {
         }
         let text = self.text.as_bytes();
         let needle = finder.needle().len();
-        let mut from = 0;
+        let Some(first_in_scope) = universe.range(first.id..=last.id).next() else {
+            return result;
+        };
+        let mut from =
+            self.rows[self.rows.partition_point(|row| row.id < first_in_scope)].bounds[0] as usize;
         while let Some(offset) = finder.find(&text[from..]) {
             let start = from + offset;
             let index = self
@@ -155,9 +159,26 @@ impl TextShard {
                 .partition_point(|row| row.bounds[0] as usize <= start)
                 .saturating_sub(1);
             let row = &self.rows[index];
-            let row_end = row.bounds[4] as usize;
+            // Resume at the next row in scope: rows outside it, and the rest
+            // of a row already decided, are never searched again.
+            let next_in_scope = |index: usize| {
+                // Usually the following row is in scope; otherwise jump.
+                let following = self.rows.get(index + 1)?;
+                if universe.contains(following.id) {
+                    return Some(following.bounds[0] as usize);
+                }
+                universe
+                    .range(following.id..=last.id)
+                    .next()
+                    .map(|id| self.rows.partition_point(|row| row.id < id))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.bounds[0] as usize)
+            };
             if !universe.contains(row.id) || removed.contains(row.id) {
-                from = row_end.max(start + 1);
+                match next_in_scope(index) {
+                    Some(next) => from = next.max(start + 1),
+                    None => break,
+                }
                 continue;
             }
             let hit = fields.clone().any(|field| {
@@ -166,7 +187,10 @@ impl TextShard {
             });
             if hit {
                 result.insert(row.id);
-                from = row_end.max(start + 1);
+                match next_in_scope(index) {
+                    Some(next) => from = next.max(start + 1),
+                    None => break,
+                }
             } else {
                 // A match across two fields, or in a field not searched: a
                 // later one in this row may still count.
@@ -296,6 +320,11 @@ impl TextIndex {
         let reused = self.narrowed_universe(field, &query, universe);
         let universe = reused.as_ref().unwrap_or(universe);
         let result = self.scan(field, &query, universe)?;
+        // Remember only selective searches: narrowing a result that is most
+        // of the scope saves nothing and copying it costs.
+        if result.len() * 4 > universe.len() {
+            return Ok(result);
+        }
         let mut recent = RECENT.lock();
         recent.retain(|entry| entry.generation == self.generation);
         recent.push(Recent {
