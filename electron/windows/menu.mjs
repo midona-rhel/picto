@@ -146,7 +146,7 @@ export function createMenuManager({
         submenu: [
           {
             label: 'Library Manager…',
-            accelerator: 'CmdOrCtrl+L',
+            accelerator: 'CmdOrCtrl+Shift+L', // Mod+L belongs to the log window
             click: () => openLibraryManager(),
           },
           { type: 'separator' },
