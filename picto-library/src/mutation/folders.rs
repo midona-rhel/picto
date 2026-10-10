@@ -1169,14 +1169,25 @@ impl Library {
                 .get(&folder_id)
                 .cloned()
                 .unwrap_or_else(|| Arc::new(Vec::new()));
+            // The resident membership bitmap answers what changes; the order
+            // is only rebuilt when something does.
+            let before_bitmap = next
+                .folders
+                .get(&folder_id)
+                .map(|members| members.to_bitmap())
+                .unwrap_or_default();
+            let changed = if add {
+                &selection - &before_bitmap
+            } else {
+                &selection & &before_bitmap
+            };
             let mut after = before.as_ref().clone();
             if add {
-                let existing = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
-                after.extend((&selection - &existing).iter().map(RootId));
-            } else {
-                after.retain(|root| !selection.contains(root.0));
+                after.extend(changed.iter().map(RootId));
+            } else if !changed.is_empty() {
+                after.retain(|root| !changed.contains(root.0));
             }
-            if before.as_ref() == &after {
+            if changed.is_empty() {
                 let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
                 next.revision = revision;
                 return Ok((
@@ -1195,10 +1206,12 @@ impl Library {
                 folder_id.0,
                 &after.iter().map(|root| root.0).collect::<Vec<_>>(),
             )?;
-            let after_bitmap = after.iter().map(|root| root.0).collect::<RoaringBitmap>();
-            let before_bitmap = before.iter().map(|root| root.0).collect::<RoaringBitmap>();
-            let changed = &before_bitmap ^ &after_bitmap;
-            let added = &after_bitmap - &before_bitmap;
+            let after_bitmap = if add {
+                &before_bitmap | &changed
+            } else {
+                &before_bitmap - &changed
+            };
+            let added = if add { changed.clone() } else { RoaringBitmap::new() };
             Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(after.clone()));
             Arc::make_mut(&mut next.folders).insert(folder_id, after_bitmap.clone().into());
             let counts = Arc::make_mut(&mut next.folder_count);

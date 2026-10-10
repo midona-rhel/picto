@@ -1123,9 +1123,14 @@ fn settle_folders(
             folder_id.0,
             &after.iter().map(|root| root.0).collect::<Vec<_>>(),
         )?;
-        Arc::make_mut(&mut snapshot.folder_orders).insert(folder_id, Arc::new(after.clone()));
-        Arc::make_mut(&mut snapshot.folders)
-            .insert(folder_id, after.iter().map(|root| root.0).collect());
+        Arc::make_mut(&mut snapshot.folder_orders).insert(folder_id, Arc::new(after));
+        // Same members minus the grouped roots plus the collection: bitmap
+        // operations instead of re-inserting every member of a large folder.
+        let members = Arc::make_mut(&mut snapshot.folders)
+            .get_mut(&folder_id)
+            .expect("folder bitmap exists for a folder that holds a grouped root");
+        members.subtract(selected);
+        members.insert(collection_id.0);
         count += 1;
     }
     Ok(count)

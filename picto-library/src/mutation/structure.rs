@@ -374,28 +374,29 @@ impl Library {
             stage_delete_ids(transaction, "delete_media", &media_ids)?;
             stage_delete_ids(transaction, "delete_item", &item_ids)?;
 
+            // One set-based read of the deleted media's files.
             let mut files = std::collections::HashMap::new();
             {
                 let mut statement = transaction.prepare_cached(
                     "SELECT file.file_id, file.content_hash, file.file_path,
                             CASE WHEN cloud.remote_present = 1
                                  THEN cloud.remote_extension ELSE NULL END
-                     FROM media_item media
+                     FROM temp.delete_media selected
+                     JOIN media_item media ON media.media_id = selected.local_id
                      JOIN media_file file ON file.file_id = media.file_id
                      LEFT JOIN cloud_blob_state cloud
-                       ON cloud.file_hash = file.content_hash
-                     WHERE media.media_id = ?1",
+                       ON cloud.file_hash = file.content_hash",
                 )?;
-                for media_id in &media_ids {
-                    let (file_id, content_hash, file_path, remote_extension) = statement
-                        .query_row([media_id], |row| {
-                            Ok((
-                                row.get::<_, u32>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, String>(2)?,
-                                row.get::<_, Option<String>>(3)?,
-                            ))
-                        })?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (file_id, content_hash, file_path, remote_extension) = row?;
                     files
                         .entry(file_id)
                         .or_insert((content_hash, file_path, remote_extension));
@@ -453,13 +454,18 @@ impl Library {
                     })?;
             let purge_after = deleted_at + chrono::Duration::days(retention_days);
 
-            for (file_id, (content_hash, file_path, remote_extension)) in files {
-                let referenced = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM media_item WHERE file_id = ?1)",
-                    [file_id],
-                    |row| row.get::<_, bool>(0),
+            // Files another media item still uses survive; one query finds them.
+            let still_referenced = {
+                let ids = serde_json::to_string(&files.keys().collect::<Vec<_>>())?;
+                let mut statement = transaction.prepare_cached(
+                    "SELECT DISTINCT media.file_id FROM media_item media
+                     WHERE media.file_id IN (SELECT value FROM json_each(?1))",
                 )?;
-                if !referenced {
+                let rows = statement.query_map([ids], |row| row.get::<_, u32>(0))?;
+                rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
+            };
+            for (file_id, (content_hash, file_path, remote_extension)) in files {
+                if !still_referenced.contains(&file_id) {
                     if let Some(remote_extension) = remote_extension {
                         transaction.execute(
                             "INSERT INTO cloud_tombstone
@@ -558,14 +564,13 @@ impl Library {
                     &roots,
                 )?;
             }
+            // Folder bitmaps say which orders hold a deleted root; scanning
+            // every order instead walked every membership in the library.
             let changed_folders = next
-                .folder_orders
+                .folders
                 .iter()
-                .filter_map(|(folder_id, order)| {
-                    order
-                        .iter()
-                        .any(|root| roots.contains(root.0))
-                        .then_some(*folder_id)
+                .filter_map(|(folder_id, members)| {
+                    (!members.is_disjoint(&roots)).then_some(*folder_id)
                 })
                 .collect::<Vec<_>>();
             for folder_id in changed_folders {
@@ -578,10 +583,10 @@ impl Library {
                     folder_id.0,
                     &order.iter().map(|root| root.0).collect::<Vec<_>>(),
                 )?;
-                Arc::make_mut(&mut next.folder_orders)
-                    .insert(folder_id, Arc::new(order.clone()));
-                Arc::make_mut(&mut next.folders)
-                    .insert(folder_id, order.iter().map(|root| root.0).collect());
+                Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(order));
+                if let Some(members) = Arc::make_mut(&mut next.folders).get_mut(&folder_id) {
+                    members.subtract(&roots);
+                }
             }
             for collection_id in &collection_ids {
                 Arc::make_mut(&mut next.collection_orders).remove(collection_id);
@@ -831,9 +836,9 @@ pub(super) fn restore_structure_orders(
     replacement: &StructuralState,
 ) -> Result<()> {
     let folders = current
-        .folder_orders
+        .folders
         .iter()
-        .filter(|(_, ids)| ids.iter().any(|id| affected.contains(id.0)))
+        .filter(|(_, members)| !members.is_disjoint(affected))
         .map(|(id, _)| *id)
         .chain(replacement.folders.keys().copied())
         .collect::<BTreeSet<_>>();
