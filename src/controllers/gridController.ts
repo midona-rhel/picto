@@ -184,8 +184,11 @@ class GridSessionController {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private searchInFlight: Promise<void> | null = null;
   private searchQueued = false;
-  private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingPreferencePatch: ViewPrefsPatch = {};
+  /** Debounced preference patches, each bound to the scope it was made in. */
+  private readonly pendingPreferences = new Map<string, {
+    patch: ViewPrefsPatch;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private scopeKey = '';
   private navigationRequest = 0;
   private queryVersion = 0;
@@ -374,6 +377,7 @@ class GridSessionController {
   }
 
   deactivate(): void {
+    this.flushPreferences();
     this.pendingNavigationVersion = null;
     if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
@@ -443,15 +447,37 @@ class GridSessionController {
   }
 
   saveViewPref(patch: ViewPrefsPatch): void {
-    if (!this.scopeKey) return;
-    this.pendingPreferencePatch = { ...this.pendingPreferencePatch, ...patch };
-    if (this.preferenceTimer) clearTimeout(this.preferenceTimer);
-    this.preferenceTimer = setTimeout(() => {
-      this.preferenceTimer = null;
-      const pending = this.pendingPreferencePatch;
-      this.pendingPreferencePatch = {};
-      void setViewPrefs(this.scopeKey, pending).catch(() => {});
-    }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
+    const scopeKey = this.scopeKey;
+    if (!scopeKey) return;
+    const pending = this.pendingPreferences.get(scopeKey);
+    if (pending) clearTimeout(pending.timer);
+    this.pendingPreferences.set(scopeKey, {
+      patch: { ...pending?.patch, ...patch },
+      timer: setTimeout(() => this.writePreferences(scopeKey), VIEW_PREFS_SAVE_DEBOUNCE_MS),
+    });
+  }
+
+  /** Write every pending preference patch now, each to its own scope. */
+  flushPreferences(): void {
+    for (const scopeKey of [...this.pendingPreferences.keys()]) this.writePreferences(scopeKey);
+  }
+
+  /**
+   * Drop unsaved preference patches. Called when the library is switching, so
+   * a patch can never reach the library that opens next.
+   */
+  discardPendingPreferences(): void {
+    for (const { timer } of this.pendingPreferences.values()) clearTimeout(timer);
+    this.pendingPreferences.clear();
+  }
+
+  private writePreferences(scopeKey: string): void {
+    const pending = this.pendingPreferences.get(scopeKey);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingPreferences.delete(scopeKey);
+    void setViewPrefs(scopeKey, pending.patch)
+      .catch(error => console.warn('Could not save grid view preferences', scopeKey, error));
   }
 
   async loadFirstPage(options?: { preserveItems?: boolean; generation?: number; restoreProgress?: number }): Promise<void> {
