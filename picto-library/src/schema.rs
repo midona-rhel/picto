@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
+const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
 const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
 const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
 const RESIDENT_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
@@ -112,7 +113,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            WATCH_LIFECYCLE_PREDECESSOR
+            CHUNKED_ORDERS_PREDECESSOR
+                | WATCH_LIFECYCLE_PREDECESSOR
                 | SOURCE_ROOTS_PREDECESSOR
                 | RESIDENT_PREDECESSOR
                 | ROWID_PREDECESSOR
@@ -186,6 +188,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
@@ -236,6 +239,7 @@ pub fn migrate_for_open(
                 RESIDENT_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
+                CHUNKED_ORDERS_PREDECESSOR,
             ]
             .contains(&fingerprint.as_str())
             {
@@ -264,6 +268,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
@@ -331,6 +336,15 @@ pub fn migrate_for_open(
             if !has_table(connection, "ordered_membership_chunk")? {
                 crate::ordering::migrate_single_blob_orders(connection)?;
             }
+            // The per-field CRDT design was replaced by snapshot sync; nothing
+            // ever wrote these tables.
+            connection.execute_batch(
+                "DROP INDEX IF EXISTS idx_cloud_outbox_pending;
+                 DROP TABLE IF EXISTS cloud_outbox;
+                 DROP TABLE IF EXISTS cloud_applied_mutation;
+                 DROP TABLE IF EXISTS cloud_field_clock;
+                 DROP TABLE IF EXISTS cloud_membership_clock;",
+            )?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],

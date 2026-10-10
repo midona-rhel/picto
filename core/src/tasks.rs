@@ -72,9 +72,8 @@ pub fn snapshot_library(
             )?;
             let cloud = connection.query_row(
                 "SELECT
-                     (SELECT COUNT(*) FROM cloud_outbox WHERE published_at IS NULL)
-                       + (SELECT COUNT(*) FROM cloud_blob_state
-                          WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
+                     (SELECT COUNT(*) FROM cloud_blob_state
+                      WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
                      (SELECT COUNT(*) FROM cloud_state
                       WHERE singleton = 1 AND state = 'reconciling')
                        + (SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'downloading'),

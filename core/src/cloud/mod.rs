@@ -84,9 +84,7 @@ pub fn status_library(application: &LibraryApplication) -> Result<CloudSyncStatu
                     "SELECT state, phase, blocking, completed_units, total_units,
                             message, last_sync_at,
                             (SELECT COUNT(*) FROM cloud_journal
-                             WHERE expanded_at_ms IS NULL) +
-                            (SELECT COUNT(*) FROM cloud_outbox
-                             WHERE published_at IS NULL),
+                             WHERE expanded_at_ms IS NULL),
                             (SELECT COUNT(*) FROM cloud_blob_state
                              WHERE state IN ('queued', 'downloading')
                                 OR (state = 'available' AND remote_present = 0)),
