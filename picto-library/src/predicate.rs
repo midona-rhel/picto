@@ -465,20 +465,24 @@ fn color_matches(
     delta_e: f32,
     universe: &RoaringBitmap,
 ) -> Result<RoaringBitmap> {
+    // Half the diagonal of an 8-unit Lab cell (6.93), rounded up.
     let cell_radius = 7.0_f32;
     let mut candidates = RoaringBitmap::new();
+    let mut result = RoaringBitmap::new();
     for (cell, roots) in snapshot.color_cells.iter() {
         crate::query_request::check()?;
         let (l, a, b) = cell_center(*cell);
         let distance =
             ((l - requested.l).powi(2) + (a - requested.a).powi(2) + (b - requested.b).powi(2))
                 .sqrt();
-        if distance <= delta_e + cell_radius {
-            candidates |= roots;
+        if distance + cell_radius <= delta_e {
+            // Every color in this cell is within range: no per-root check.
+            result |= &**roots & universe;
+        } else if distance <= delta_e + cell_radius {
+            candidates |= &**roots & universe;
         }
     }
-    candidates &= universe;
-    let mut result = RoaringBitmap::new();
+    candidates -= &result;
     for (index, root_id) in candidates.iter().enumerate() {
         if index % 64 == 0 {
             crate::query_request::check()?;
