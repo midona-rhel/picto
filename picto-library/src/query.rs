@@ -885,8 +885,12 @@ pub(crate) fn ordered_ids_cached(
     match_cache: &MatchCache,
     order_cache: &OrderCache,
 ) -> Result<Arc<OrderedResult>> {
-    let matches = cached_matches(snapshot, query, media, Some(match_cache))?;
-    cached_complete_order(snapshot, query, &matches.ids, Some((order_cache, &match_cache.metrics)))
+    let key = QueryKey::ordered(snapshot, query);
+    if let Some(ordered) = order_cache.get(&key, query) {
+        return Ok(ordered);
+    }
+    let matches = matching_roots_cached(snapshot, query, media, Some(match_cache))?;
+    cached_complete_order(snapshot, query, &matches, Some((order_cache, &match_cache.metrics)))
 }
 
 pub(crate) fn matching_roots_cached(
@@ -895,8 +899,11 @@ pub(crate) fn matching_roots_cached(
     media: &MediaMatches,
     cache: Option<&MatchCache>,
 ) -> Result<RoaringBitmap> {
-    match cache {
-        Some(cache) => Ok((*cached_matches(snapshot, query, media, Some(cache))?.ids).clone()),
+    // Reuse what the grid already computed; on a miss evaluate plainly, so a
+    // write never pays for the view's size totals it does not need.
+    let key = QueryKey::matches(snapshot, query);
+    match cache.and_then(|cache| cache.get(&key, &query.scope, &query.view.filter)) {
+        Some(hit) => Ok((*hit.ids).clone()),
         None => matching_roots(snapshot, query, media),
     }
 }
