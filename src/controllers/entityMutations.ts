@@ -1,6 +1,8 @@
 /**
  * Entity mutation helpers — thin wrappers that build EntityTarget from a hash
- * and call the canonical API. After mutation, re-fetches inspector data.
+ * and call the canonical API. The inspector re-reads itself from the
+ * `library/changed` event the mutation publishes (see inspectorSettle), so these
+ * helpers never reload it directly; doing both loaded every edit twice.
  *
  * No optimistic updates — wait for backend confirmation + re-fetch.
  */
@@ -17,7 +19,6 @@ import {
   setItemLifecycle,
 } from '../platform/entityApi';
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
-import { loadInspectorData } from './inspectorController';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
 import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 import type { CollectionNoteDraft, EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
@@ -32,13 +33,6 @@ function singleTarget(itemId: number): EntityTarget {
   return { kind: 'explicit', root_ids: [itemId] };
 }
 
-function maybeReloadSingleItem(target: EntityTarget): void {
-  const itemIds = target.kind === 'explicit' ? target.root_ids : [];
-  if (itemIds.length === 1) {
-    void loadInspectorData(itemIds[0]);
-  }
-}
-
 /** A successful mutation removed or relocated the grid selection as a unit. */
 export function settleSelectionAfterMutation(): void {
   store.set(clearSelectionAtom);
@@ -47,13 +41,11 @@ export function settleSelectionAfterMutation(): void {
 export async function setTargetRating(target: EntityTarget, rating: number): Promise<void> {
   await patchMediaEntities(target, { rating: ratingName(rating) });
   await announceUndoableMutation('items.patch_metadata');
-  maybeReloadSingleItem(target);
 }
 
 export async function setItemName(itemId: number, name: string): Promise<void> {
   await renameItem(itemId, name);
   await announceUndoableMutation('items.rename');
-  void loadInspectorData(itemId);
 }
 
 export async function setItemNames(renames: Array<{ root_id: number; name: string }>): Promise<void> {
@@ -64,13 +56,11 @@ export async function setItemNames(renames: Array<{ root_id: number; name: strin
 export async function setTargetNotes(target: EntityTarget, notes: string): Promise<void> {
   await patchMediaEntities(target, { notes: notes.trim() || null });
   await announceUndoableMutation('items.patch_metadata');
-  maybeReloadSingleItem(target);
 }
 
 export async function setTargetSourceUrls(target: EntityTarget, urls: string[]): Promise<void> {
   await patchMediaEntities(target, { source_urls: urls });
   await announceUndoableMutation('items.patch_metadata');
-  maybeReloadSingleItem(target);
 }
 
 export async function addTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
@@ -78,14 +68,12 @@ export async function addTargetTags(target: EntityTarget, tags: string[]): Promi
   await applyEntityTags(target, 'add', tags);
   await announceUndoableMutation('items.apply_tags');
   recordRecentItems('picto-recent-tags', tags);
-  maybeReloadSingleItem(target);
 }
 
 export async function removeTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'remove', tags);
   await announceUndoableMutation('items.apply_tags');
-  maybeReloadSingleItem(target);
 }
 
 export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecycle): Promise<void> {
@@ -120,7 +108,6 @@ export async function updateTargetFolderMembership(
   await updateFolderMembership(target, folderId, operation);
   await announceUndoableMutation('items.set_folder');
   if (operation === 'add') recordRecentFolderUse([folderId]);
-  maybeReloadSingleItem(target);
 }
 
 export async function getTargetSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
@@ -145,7 +132,6 @@ export async function removeItemTags(itemId: number, tags: string[]): Promise<vo
 
 export async function removeItemFromFolder(itemId: number, folderId: number): Promise<void> {
   await removeEntitiesFromFolder(folderId, singleTarget(itemId));
-  void loadInspectorData(itemId);
 }
 
 export async function setItemSourceUrls(itemId: number, urls: string[]): Promise<void> {

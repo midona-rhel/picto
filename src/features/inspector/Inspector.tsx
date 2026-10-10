@@ -454,7 +454,16 @@ function useSelectionSummary() {
   const summary = result?.summary ?? null;
   const needsSummary = Boolean(!pinned && target && selectionCount >= 2);
 
+  const targetRef = useRef(target);
+  targetRef.current = target;
   useEffect(() => libraryInvalidation.register('library', (payload) => {
+    // An explicit selection only changes when the event names one of its items
+    // (or is broad). Unrelated edits elsewhere no longer re-summarize it.
+    const current = targetRef.current;
+    if (current?.kind === 'explicit' && payload.item_ids.length > 0) {
+      const selected = new Set(current.root_ids);
+      if (!payload.item_ids.some((id) => selected.has(id))) return;
+    }
     setRefreshRevision(payload.revision);
   }), []);
 
