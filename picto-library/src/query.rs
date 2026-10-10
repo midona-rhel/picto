@@ -117,11 +117,11 @@ pub struct RootWindow {
     pub head_items: Vec<RootSummary>,
 }
 
-struct OrderedResult {
+pub(crate) struct OrderedResult {
     revision: u64,
     key: QueryKey,
     query: RootQuery,
-    ids: Vec<RootId>,
+    pub(crate) ids: Vec<RootId>,
 }
 
 /// Up to eight compact orders, capped at three million IDs (12 MB). This lets
@@ -874,6 +874,19 @@ pub fn matching_roots(
         snapshot.text_index.search(field, value, candidates)
     };
     predicate::evaluate(&query.view.filter, &universe, snapshot, &mut text)
+}
+
+/// The complete order of a query through both caches, so resolving a
+/// shift-click range and then acting on it orders the view once.
+pub(crate) fn ordered_ids_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    match_cache: &MatchCache,
+    order_cache: &OrderCache,
+) -> Result<Arc<OrderedResult>> {
+    let matches = cached_matches(snapshot, query, media, Some(match_cache))?;
+    cached_complete_order(snapshot, query, &matches.ids, Some((order_cache, &match_cache.metrics)))
 }
 
 pub(crate) fn matching_roots_cached(

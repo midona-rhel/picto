@@ -972,7 +972,7 @@ impl Library {
         let target = target.clone();
         let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
             if selection.is_empty() {
                 next.revision = revision;

@@ -700,7 +700,7 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                let selection = crate::selection::resolve_with(connection, &snapshot, target, Some(&self.match_cache))?;
+                let selection = crate::selection::resolve_with(connection, &snapshot, target, Some((&self.match_cache, &self.order_cache)))?;
                 crate::selection::summarize(connection, &snapshot, target, &selection)
             },
         )
@@ -1274,7 +1274,7 @@ impl Library {
         }
         let target = target.clone();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
             let mut changes = Vec::new();
             let mut resources = BTreeSet::from(["roots".to_string()]);
@@ -1595,7 +1595,7 @@ impl Library {
             TextMutation::SourceUrls(_) => "root.source_urls",
         };
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut before = load_root_text(transaction, &selection)?;
             let mut after = before.clone();
             for state in &mut after {
@@ -1708,7 +1708,7 @@ impl Library {
         let target = target.clone();
         let changed_at_ms = now_ms();
         let receipt = self.publish(priority, |transaction, revision, snapshot| {
-            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             let mut next = (*snapshot).clone();
             let mut changes = Vec::new();
             for key_id in &partition_keys {

@@ -68,8 +68,9 @@ pub(crate) fn resolve_with(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
     target: &SelectionTarget,
-    cache: Option<&query::MatchCache>,
+    caches: Option<(&query::MatchCache, &query::OrderCache)>,
 ) -> Result<RoaringBitmap> {
+    let cache = caches.map(|(matches, _)| matches);
     Ok(match target {
         // Check only the listed roots instead of unioning every root kind.
         SelectionTarget::Explicit { root_ids } => root_ids
@@ -95,7 +96,18 @@ pub(crate) fn resolve_with(
             focus_root_id,
         } => {
             let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
-            let ordered = query::all_ordered_ids(snapshot, query, &media)?;
+            let cached;
+            let computed;
+            let ordered: &[RootId] = match caches {
+                Some((matches, orders)) => {
+                    cached = query::ordered_ids_cached(snapshot, query, &media, matches, orders)?;
+                    &cached.ids
+                }
+                None => {
+                    computed = query::all_ordered_ids(snapshot, query, &media)?;
+                    &computed
+                }
+            };
             let anchor = ordered
                 .iter()
                 .position(|id| id == anchor_root_id)

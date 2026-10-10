@@ -9,7 +9,7 @@ impl Library {
     ) -> Result<(RootId, MutationReceipt)> {
         let request = request.clone();
         let (collection_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let selected = crate::selection::resolve_with(transaction, &snapshot, &request.target, Some(&self.match_cache))?;
+            let selected = crate::selection::resolve_with(transaction, &snapshot, &request.target, Some((&self.match_cache, &self.order_cache)))?;
             let before = capture_structure(transaction, &snapshot, &selected)?;
             let output = crate::group::organize(
                 transaction,
@@ -345,7 +345,7 @@ impl Library {
         let target = target.clone();
         let protected_cleanup_files = self.history.protected_cleanup_files();
         let (receipt, cleanup) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let roots = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
+            let roots = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             if roots.is_empty() {
                 return Err(LibraryError::InvalidInput(
                     "permanent deletion requires at least one root".into(),
