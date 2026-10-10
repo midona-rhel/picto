@@ -2202,6 +2202,30 @@ fn ai_tag_assignments_union_member_predictions_onto_one_collection_root() {
 }
 
 #[test]
+fn background_ai_tags_stay_out_of_undo_and_do_not_block_it() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (mine, _) = library.ingest(&imported("undo-mine", Lifecycle::Active, &[])).unwrap();
+    let (imported_later, _) = library.ingest(&imported("undo-auto", Lifecycle::Active, &[])).unwrap();
+    library
+        .apply_tags(&SelectionTarget::Explicit { root_ids: vec![mine] }, &["shared".into()], true)
+        .unwrap();
+    // Auto-tagging writes the same tag on another root while the user's edit
+    // is still the newest undo entry.
+    library
+        .add_automatic_tag_assignments(&[RootTagAssignment {
+            root_id: imported_later,
+            tags: vec!["shared".into()],
+        }])
+        .unwrap();
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, mine), 0, "undo reverts the user's edit");
+    assert_eq!(root_tag_count(&library, imported_later), 1, "and leaves the AI tag alone");
+    assert!(library.undo().unwrap().is_none(), "the AI tag never entered the history");
+}
+
+#[test]
 fn cloud_reads_compact_semantic_journal_without_advancing_library_revision() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

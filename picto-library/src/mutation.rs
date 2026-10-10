@@ -2299,7 +2299,7 @@ impl Library {
                                 row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
                                 row.get::<_, Option<u32>>(5)?,
                                 row.get::<_, Option<String>>(6)?,
-                                serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                                serde_json::from_str::<Vec<crate::model::LabColor>>(&row.get::<_, String>(7)?).unwrap_or_default(),
                             ))
                         },
                     )
@@ -2309,6 +2309,14 @@ impl Library {
                         }
                         error => error.into(),
                     })?;
+                let before = (
+                    mime.clone(),
+                    width,
+                    height,
+                    duration_ms,
+                    frame_count,
+                    palette.clone(),
+                );
                 if let Some(value) = update.mime {
                     if value.trim().is_empty() {
                         return Err(LibraryError::InvalidInput("MIME is empty".into()));
@@ -2373,19 +2381,29 @@ impl Library {
                         serde_json::to_string(&palette)?
                     ],
                 )?;
+                // Derivative work fills in one fact at a time. A perceptual
+                // hash is read only by the duplicate scan, and a palette only
+                // by the colour index; neither needs the MIME, image or size
+                // projections rebuilt.
+                let shape_changed = content.is_some()
+                    || (&before.0, before.1, before.2, before.3, before.4)
+                        != (&mime, width, height, duration_ms, frame_count);
+                let palette_changed = before.5 != palette;
                 let mut next = (*snapshot).clone();
                 let affected = {
                     let media_ids = transaction
                         .prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?
                         .query_map([file_id], |row| row.get::<_, u32>(0))?
                         .collect::<std::result::Result<Vec<_>, _>>()?;
-                    let image_media = Arc::make_mut(&mut next.image_media);
                     let mut roots = RoaringBitmap::new();
                     for media_id in media_ids {
-                        if mime.starts_with("image/") {
-                            image_media.insert(media_id);
-                        } else {
-                            image_media.remove(media_id);
+                        if shape_changed {
+                            let image_media = Arc::make_mut(&mut next.image_media);
+                            if mime.starts_with("image/") {
+                                image_media.insert(media_id);
+                            } else {
+                                image_media.remove(media_id);
+                            }
                         }
                         if let Some(owner) = snapshot.media_owner.get(media_id) {
                             roots.insert(owner.0);
@@ -2393,7 +2411,15 @@ impl Library {
                     }
                     roots
                 };
-                for root_id in &affected {
+                for root_id in affected.iter().filter(|_| shape_changed || palette_changed) {
+                    if !shape_changed {
+                        crate::group::refresh_cover_projection(
+                            transaction,
+                            &mut next,
+                            RootId(root_id),
+                        )?;
+                        continue;
+                    }
                     if content.is_some() {
                         let members = next.collection_orders.get(&RootId(root_id))
                             .map(|members| members.iter().map(|member| member.0).collect::<Vec<_>>())
@@ -2429,13 +2455,15 @@ impl Library {
                         RootId(root_id),
                     )?;
                 }
-                crate::smart::settle_affected_for(
-                    transaction,
-                    &mut next,
-                    &affected,
-                    if content.is_some() { &[crate::predicate::DependencyChange::All] }
-                    else { &[crate::predicate::DependencyChange::CoverFacts] },
-                )?;
+                if shape_changed || palette_changed {
+                    crate::smart::settle_affected_for(
+                        transaction,
+                        &mut next,
+                        &affected,
+                        if content.is_some() { &[crate::predicate::DependencyChange::All] }
+                        else { &[crate::predicate::DependencyChange::CoverFacts] },
+                    )?;
+                }
                 transaction.execute(
                     "INSERT INTO cloud_journal
                          (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
@@ -2448,9 +2476,16 @@ impl Library {
                     ],
                 )?;
                 next.revision = revision;
+                let resources: Vec<String> = if shape_changed || palette_changed {
+                    vec!["media".into(), "roots".into(), "smart-folders".into()]
+                } else {
+                    // Nothing a view shows changed; the duplicate scan that
+                    // reads the hash publishes its own result.
+                    Vec::new()
+                };
                 let receipt = PublicationCoordinator::receipt(
                     revision,
-                    vec!["media".into(), "roots".into(), "smart-folders".into()],
+                    resources,
                     affected.iter().map(RootId),
                 );
                 Ok((
@@ -2855,9 +2890,28 @@ impl Library {
     /// Apply independently predicted tag sets to visible roots in one exact
     /// publication. Collections are one root, so callers union all member
     /// predictions into one assignment before entering the library kernel.
+    /// Tags the user asked for (manual AI tagging); undoable.
     pub fn add_tag_assignments(
         &self,
         assignments: &[RootTagAssignment],
+    ) -> Result<MutationReceipt> {
+        self.assign_tags(assignments, true)
+    }
+
+    /// Tags written by background work (auto-tag on import). They never enter
+    /// the undo stack, so Undo keeps meaning "undo my last edit", and roots
+    /// deleted while inference ran are skipped instead of failing the batch.
+    pub fn add_automatic_tag_assignments(
+        &self,
+        assignments: &[RootTagAssignment],
+    ) -> Result<MutationReceipt> {
+        self.assign_tags(assignments, false)
+    }
+
+    fn assign_tags(
+        &self,
+        assignments: &[RootTagAssignment],
+        user_requested: bool,
     ) -> Result<MutationReceipt> {
         if assignments.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -2887,14 +2941,24 @@ impl Library {
         let publication = self.publication.clone();
         let history = self.history.clone();
         let (receipt, _, history_entry) = self.database.published_write(
-            WorkPriority::ForegroundMutation,
+            if user_requested {
+                WorkPriority::ForegroundMutation
+            } else {
+                WorkPriority::CanonicalIngest
+            },
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
                 // Check only the requested roots instead of unioning every root.
-                if let Some(root_id) = requested_roots.iter().find(|root_id| {
-                    !snapshot.root_kinds.values().any(|members| members.contains(*root_id))
-                }) {
-                    return Err(LibraryError::NotFound(format!("root {root_id}")));
+                let missing = requested_roots
+                    .iter()
+                    .filter(|root_id| {
+                        !snapshot.root_kinds.values().any(|members| members.contains(*root_id))
+                    })
+                    .collect::<RoaringBitmap>();
+                if user_requested {
+                    if let Some(root_id) = missing.min() {
+                        return Err(LibraryError::NotFound(format!("root {root_id}")));
+                    }
                 }
 
                 let mut next = (*snapshot).clone();
@@ -2915,7 +2979,7 @@ impl Library {
                         .map(|members| members.to_bitmap())
                         .unwrap_or_default();
                     let mut after = before.clone();
-                    after |= requested;
+                    after |= &(requested - &missing);
                     let changed = &after - &before;
                     if changed.is_empty() {
                         continue;
@@ -2972,7 +3036,7 @@ impl Library {
                     },
                     affected.iter().map(RootId),
                 );
-                let history = (!changes.is_empty()).then(|| {
+                let history = (user_requested && !changes.is_empty()).then(|| {
                     HistoryEntry::for_command(
                         "items.apply_ai_tags",
                         "Apply AI tags",
@@ -6111,7 +6175,11 @@ impl Library {
                     &mut affected,
                     &mut resources,
                 )?;
-                crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                // Re-check only the smart folders the replayed change can
+                // affect, exactly as the original edit did.
+                let mut changes = Vec::new();
+                history_dependencies(&change, &mut changes);
+                crate::smart::settle_affected_for(transaction, &mut next, &affected, &changes)?;
                 insert_cloud_journal(
                     transaction,
                     revision,
@@ -6155,6 +6223,36 @@ impl Library {
             )));
         }
         Ok(snapshot)
+    }
+}
+
+fn history_dependencies(
+    change: &SemanticChange,
+    out: &mut Vec<crate::predicate::DependencyChange>,
+) {
+    use crate::predicate::DependencyChange;
+    let dependency = match change {
+        SemanticChange::Compound(changes) => {
+            for change in changes {
+                history_dependencies(change, out);
+            }
+            return;
+        }
+        SemanticChange::Bitmap { key, .. } => match key.domain {
+            BitmapDomain::Tag => DependencyChange::Tag(crate::TagId(key.key_id)),
+            BitmapDomain::Lifecycle => DependencyChange::Lifecycle,
+            BitmapDomain::Rating => DependencyChange::Rating,
+        },
+        SemanticChange::Order {
+            owner_kind: crate::ordering::OrderOwnerKind::Folder,
+            owner_id,
+            ..
+        } => DependencyChange::Folder(crate::FolderId(*owner_id)),
+        SemanticChange::RootText { .. } => DependencyChange::RootText,
+        _ => DependencyChange::All,
+    };
+    if !out.contains(&dependency) {
+        out.push(dependency);
     }
 }
 
@@ -6217,16 +6315,21 @@ fn apply_semantic_change(
             } else {
                 (after.as_ref(), before.as_ref())
             };
+            // Replay only the roots this entry changed. Edits to other roots
+            // since then (background AI tags, imports, another selection) do
+            // not block undo; a later change to these same roots does.
+            let changed = expected ^ replacement;
             let current = projection_bitmap(snapshot, *key);
-            if &current != expected {
+            if (&current & &changed) != (expected & &changed) {
                 return Err(LibraryError::InvalidState(format!(
                     "cannot replay history because {:?}/{} changed",
                     key.domain, key.key_id
                 )));
             }
-            bitmap::replace(transaction, revision, *key, replacement)?;
-            set_projection_bitmap(snapshot, *key, replacement.clone());
-            let changed = expected ^ replacement;
+            let mut next = &current - &changed;
+            next |= &(replacement & &changed);
+            bitmap::replace(transaction, revision, *key, &next)?;
+            set_projection_bitmap(snapshot, *key, next);
             *affected |= &changed;
             resources.insert("roots".into());
             match key.domain {

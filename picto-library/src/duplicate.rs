@@ -138,31 +138,37 @@ pub(crate) fn replace_detected(
             .or_insert(distance);
     }
 
+    // Diff against the stored detections: a rescan that finds what it found
+    // last time writes nothing, keeps each pair's first detection time, and
+    // names only the roots whose pairs appeared, moved or vanished.
+    let existing = {
+        let mut statement = transaction.prepare(
+            "SELECT file_id_a, file_id_b, distance FROM duplicate_pair WHERE status = ?1",
+        )?;
+        let rows = statement.query_map([STATUS_DETECTED], |row| {
+            Ok(((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?), row.get::<_, u32>(2)?))
+        })?;
+        rows.collect::<std::result::Result<std::collections::HashMap<_, _>, _>>()?
+    };
     let mut affected = RoaringBitmap::new();
+    for (&(file_id_a, file_id_b), _) in existing
+        .iter()
+        .filter(|(pair, _)| !normalized.contains_key(*pair))
     {
-        let mut statement = transaction
-            .prepare("SELECT file_id_a, file_id_b FROM duplicate_pair WHERE status = ?1")?;
-        let existing = statement
-            .query_map([STATUS_DETECTED], |row| {
-                Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (file_id_a, file_id_b) in existing {
-            affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
-        }
+        transaction.execute(
+            "DELETE FROM duplicate_pair WHERE file_id_a = ?1 AND file_id_b = ?2",
+            params![file_id_a, file_id_b],
+        )?;
+        affected |= &affected_roots(transaction, snapshot, FileId(file_id_a), FileId(file_id_b))?;
     }
-    transaction.execute(
-        "DELETE FROM duplicate_pair WHERE status = ?1",
-        [STATUS_DETECTED],
-    )?;
-
     for ((file_id_a, file_id_b), distance) in normalized {
+        if existing.get(&(file_id_a, file_id_b)) == Some(&distance) {
+            continue;
+        }
         let file_id_a = FileId(file_id_a);
         let file_id_b = FileId(file_id_b);
-        let _ = record_detected(transaction, file_id_a, file_id_b, distance, detected_at_ms)?;
-        if load_pair(transaction, file_id_a, file_id_b)?
-            .is_some_and(|pair| pair.status == DuplicateStatus::Detected)
-        {
+        // A pair the user already decided stays decided.
+        if record_detected(transaction, file_id_a, file_id_b, distance, detected_at_ms)?.is_some() {
             affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
         }
     }

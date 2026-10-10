@@ -335,15 +335,21 @@ pub async fn drain_auto_tag_work(
     }
     let settings = application.application_settings()?.value;
     let enabled = setting_bool(&settings, "aiTaggerAutoOnImport").unwrap_or(false);
+    // Inference runs per item; the tags of the whole claim are written in one
+    // publication, outside the undo history.
     let mut completed = Vec::new();
+    let mut assignments = Vec::new();
     for item in work {
         let result = match item.root_id {
             Some(root_id) if enabled => auto_tag_root(application, root_id, &settings).await,
-            Some(_) => Ok(()),
+            Some(_) => Ok(None),
             None => Err(format!("AI-tag work {} has no root", item.work_id)),
         };
         match result {
-            Ok(()) => completed.push(item.work_id),
+            Ok(assignment) => {
+                completed.push((item.work_id, item.attempt_count));
+                assignments.extend(assignment);
+            }
             Err(error) => {
                 application
                     .library()
@@ -352,6 +358,21 @@ pub async fn drain_auto_tag_work(
             }
         }
     }
+    if !assignments.is_empty() {
+        if let Err(error) = application
+            .library()
+            .add_automatic_tag_assignments(&assignments)
+        {
+            for (work_id, attempt_count) in &completed {
+                application
+                    .library()
+                    .retry_media_work(*work_id, *attempt_count, &error.to_string(), &now)
+                    .map_err(|failure| failure.to_string())?;
+            }
+            return Ok(0);
+        }
+    }
+    let completed = completed.into_iter().map(|(work_id, _)| work_id).collect::<Vec<_>>();
     application
         .library()
         .complete_media_work(&completed)
@@ -363,7 +384,7 @@ async fn auto_tag_root(
     application: &crate::library_application::LibraryApplication,
     root_id: picto_library::RootId,
     settings: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<Option<picto_library::RootTagAssignment>, String> {
     let models = configured_models(settings);
     if models.is_empty() {
         return Err("Auto-tagging is enabled but no AI model is enabled".into());
@@ -381,7 +402,7 @@ async fn auto_tag_root(
         .into_iter()
         .collect::<Vec<_>>();
     if files.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let predictions = predict_files_cached(
         application,
@@ -399,13 +420,9 @@ async fn auto_tag_root(
         .into_iter()
         .collect::<Vec<_>>();
     if tags.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    application
-        .library()
-        .add_tag_assignments(&[picto_library::RootTagAssignment { root_id, tags }])
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(Some(picto_library::RootTagAssignment { root_id, tags }))
 }
 
 pub async fn unload_library_sessions(application: &crate::library_application::LibraryApplication) {
