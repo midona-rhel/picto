@@ -35,6 +35,9 @@ only issue-owned changes.
 - Fill in the template; start with `Closes #<issue>`.
 - CI runs `verify` (renderer typecheck/tests, localization, command parity,
   Rust clippy `-D warnings` and tests). It must be green before merge.
+- Every pull request gets an automated review (`code-review` workflow)
+  against the review guidelines in [AGENTS.md](AGENTS.md); mention `@claude`
+  in a comment to ask it a follow-up. It advises; a person still approves.
 - Review the actual diff before asking for review. For a refactor, report net
   production lines and name the superseded code you deleted.
 - Schema changes need a migration with backup, a reopen test, and the

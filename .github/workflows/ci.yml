@@ -3,9 +3,9 @@ name: CI
 # Every pull request is verified before review, not only release branches.
 # Release branches keep their own gate (alpha-gate.yml), which calls the same
 # verify workflow and additionally packages and smokes all three platforms.
+# Stacked pull requests (based on another work branch) are verified too.
 on:
   pull_request:
-    branches: [dev, main]
   push:
     branches: [dev]
   merge_group:
