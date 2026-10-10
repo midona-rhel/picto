@@ -261,8 +261,18 @@ export function LibraryManager() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     const updateCloud = () => { if (!disposed) void refreshCloudStatus(); };
-    const updateStatistics = () => { if (!disposed) void refreshLibraryStatistics(); };
-    const interval = window.setInterval(updateCloud, 1_500);
+    // Statistics follow change events, coalesced to one read per second.
+    let statisticsTimer: number | undefined;
+    const updateStatistics = () => {
+      if (disposed || statisticsTimer !== undefined) return;
+      statisticsTimer = window.setTimeout(() => {
+        statisticsTimer = undefined;
+        if (!disposed) void refreshLibraryStatistics();
+      }, 1_000);
+    };
+    // Cloud state follows `cloud`/`tasks` events; the slow poll only catches
+    // provider-side progress that publishes nothing.
+    const interval = window.setInterval(updateCloud, 15_000);
     void listen<LibraryChanged>('library/changed', ({ payload }) => {
       if (payload.resources.includes('cloud') || payload.resources.includes('tasks')) updateCloud();
       if (payload.resources.some((resource) => ['library', 'sidebar', 'tags', 'folders', 'smart_folders', 'subscriptions'].includes(resource))) updateStatistics();
@@ -273,6 +283,7 @@ export function LibraryManager() {
     return () => {
       disposed = true;
       window.clearInterval(interval);
+      window.clearTimeout(statisticsTimer);
       unlisten?.();
     };
   }, [refreshCloudStatus, refreshLibraryStatistics]);
