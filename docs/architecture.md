@@ -54,7 +54,13 @@ changing byte totals does not invalidate unrelated text membership.
 Text filters and text-based smart folders share one matching contract: the trimmed, lowercased
 literal of at least three characters is a byte substring of the requested lowercased fields.
 Selections of up to 4,096 roots look each root's settled text up directly; larger selections
-scan the resident text shards, in parallel above 32 shards. There is no admission budget, no
+scan the resident text shards, in parallel above 32 shards. A shard scan runs one vectorized
+substring search (`memchr::memmem`) over the shard's text and maps each hit to its row and field,
+resuming at the next row in scope; shards with no root in scope are skipped, and a shard with
+under 3% of its rows in scope looks those rows up instead. A query that contains a recent
+selective query (typing one more letter) searches only that query's matches. FTS settlement takes
+the oldest 256 dirty roots per batch through an index, so its cost does not grow with the
+backlog. There is no admission budget, no
 trigram candidate probe and no SQL fallback; a common term over a million items is a visible
 resident scan, not a hidden slower path. Every byte of the settled text is ordinary, including an
 embedded NUL: text after it stays searchable and a query containing one matches the fields that
