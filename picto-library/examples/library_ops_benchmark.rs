@@ -23,7 +23,8 @@ const BASE_MS: u64 = 1_700_000_000_000;
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
-    let smart_total = arg(3, 100).clamp(10, picto_library::smart::MAX_SMART_FOLDERS);
+    // Leave room for the folders the smart-folder benches create.
+    let smart_total = arg(3, 100).clamp(10, picto_library::smart::MAX_SMART_FOLDERS - 20);
     let at = |n: usize| n * roots / 1_000_000;
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("audit.sqlite");
