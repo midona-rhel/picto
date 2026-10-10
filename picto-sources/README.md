@@ -5,13 +5,14 @@ does not own authentication, SQLite, canonical media ingest, thumbnails, or UI p
 
 ## One Execution Path
 
-Every provider is assembled from the same layers:
+The one-post settlement rule, post-limit accounting, and multi-file post behavior are defined once
+in [`docs/architecture.md`](../docs/architecture.md#subscriptions). This crate implements its source
+side. Every provider is assembled from the same layers:
 
 1. `NativeSourceAdapter` validates a query and maps one bounded source page into `SourcePost`
    values.
-2. `SourceSession` exposes one post and refuses to advance until that exact post is settled.
-3. `PartitionedSourceSession` applies the same rule across independent feeds under one settled-post
-   budget.
+2. `SourceSession` exposes one post at a time (see the settlement rule linked above).
+3. `PartitionedSourceSession` runs independent feeds under one query-level budget.
 4. `PostDownloader` downloads only the active post, optionally in parallel within that post, and
    reports every completed file.
 5. `picto_core::native_source_import` probes and hashes downloads and creates the sole canonical

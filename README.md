@@ -5,11 +5,27 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
 
 ## What Picto Does
 
-- **Subscribe** — follow Pixiv searches and users plus Gelbooru and Danbooru searches. Picto downloads new posts on a schedule or on demand.
-- **Organize** — folders, smart folders, tags (with namespaces), star ratings, and color-based search. Drag and drop between folders, bulk-tag selections, and auto-tag with AI.
-- **Browse** — waterfall, justified, and grid layouts. Full-screen media view with zoom/pan. Strip view for reading comics and image sequences. Duplicate detection with visual similarity matching.
-- **Import** — drag files or folders into the app, or point Picto at a directory to watch for new content.
-- **Own the library** — media and metadata remain in user-owned folders. Optional folder sync uses desktop software such as Google Drive or Dropbox as transport; Picto has no cloud account service.
+- **Subscribe** — follow searches, artists and accounts on the sources below. Picto downloads new
+  posts on a schedule or on demand.
+- **Organize** — folders, smart folders, tags (with namespaces), star ratings, and color-based
+  search. Drag and drop between folders, bulk-tag selections, and auto-tag with local AI models.
+- **Browse** — waterfall, justified, and grid layouts. Full-screen media view with zoom/pan. Comic
+  archives open in a paged viewer. Duplicate detection with a side-by-side comparison view and
+  Smart Merge.
+- **Import** — drag files or folders into the app, point Picto at a directory to watch for new
+  content, or import and export Picto Packs.
+- **Own the library** — media and metadata remain in user-owned folders. Cloud sync
+  (**experimental**) uses the Google Drive or Dropbox desktop folder as transport; Picto has no
+  cloud account service.
+
+### Subscription sources
+
+| Group | Sources |
+|---|---|
+| Boorus and tag search | Danbooru, e621, Gelbooru, Idol Complex, Konachan, Rule34.xxx, Safebooru, Sankaku, Yande.re |
+| Artists and accounts | Baraag, DeviantArt, Fur Affinity, Hentai Foundry, Newgrounds, Pixiv (search and users), Twitter / X |
+| Creator platforms | OnlyFans, Patreon, pixivFANBOX, SubscribeStar |
+| Galleries and archives | E-Hentai / ExHentai galleries (via **Add Gallery**), Pawchive |
 
 ## Documentation
 

@@ -17,13 +17,8 @@ media occurrences, and visible roots have separate identities. Attached collecti
 their root's lifecycle and folder placement. `All` contains active roots only; Inbox and Trash are
 separate lifecycle scopes.
 
-Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. Source
-adapters normalize posts into ordered media items. A multi-media post is promoted to a collection
-when its second distinct item arrives, without delaying the first item.
-
-Subscriptions persist definitions, runs, source posts, source items, retries, and progress. Direct
-site sessions are captured in a Picto-owned browser and secrets remain in the operating-system
-credential store.
+Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. See
+[Subscriptions](#subscriptions) for how source posts become standalone items or collections.
 
 ## Application boundaries
 
@@ -145,9 +140,62 @@ the cooldown is three times the previous refresh duration (capped at one second)
 background work to progress without imposing a fixed two-second stale-view interval on edits.
 The displayed grid remains intact during refresh, and navigation retains its existing fades.
 
-## Pre-release integration seams
+## Subscriptions
 
-Cloud Sync must consume committed revisions and application operations; it must not write SQLite,
-blob files, or Roaring projections behind the core. Tutorials may observe stable navigation and
-command identifiers, but may not fork production components or synthesize host input. Both are
-release gates until their own behavior, persistence, accessibility, and packaged smoke tests pass.
+Subscriptions persist definitions, runs, source posts, source items, retries, and progress in
+SQLite. Direct site sessions are captured in a Picto-owned browser and secrets remain in the
+operating-system credential store.
+
+Every source uses one native Rust path; there is no Python runtime, gallery-dl, OF-Scraper, or
+sidecar in production or packaging:
+
+`query -> provider adapter -> shared HTTP runtime -> one exposed post -> current-post downloads ->
+canonical ingest -> settlement acknowledgement -> next post`
+
+Provider adapters (`picto-sources/src/providers/`) own only endpoint selection, bounded
+pagination and cursor decoding, response parsing, and media descriptors. The shared runtime owns
+scheduling, HTTP pacing and retries, downloads, staging, ingest, counters, and settlement. One
+provider's headers, authentication, or parsing must not affect another. The product site registry
+(`core/src/subscriptions/sites.rs`) and the native registry are tested for exact equality.
+
+### One-post settlement
+
+For each query, in order:
+
+1. Expose the next source post and record it as traversed.
+2. If it has no usable media, settle it as skipped.
+3. Download every usable file of that post (files within the post may download concurrently;
+   media of later posts is never prefetched).
+4. Ingest the post canonically, then settle it as added.
+5. Only after settlement is acknowledged, expose the next post.
+
+An adapter may fetch a bounded metadata page when its API paginates, but the session refuses to
+expose another post until the current one settles.
+
+- **Limit.** `Posts per run` caps settled posts per query per run: both added and skipped posts
+  count toward it (`SourcePostOutcome::counts_as_settled_post`). A failed or interrupted post does
+  not settle and does not advance the cursor. Partitioned feeds (for example OnlyFans) share one
+  query-level budget with independent cursors.
+- **Multi-file posts.** With **Group multi-media posts** on (the default, per query), the files of
+  one post are buffered until the post completes and ingested as one collection. With it off
+  (**Keep post media separate**), each file becomes its own standalone item. A single-file post is
+  always a standalone item. E-Hentai/ExHentai galleries are one post and always one collection.
+- **Duplicates.** Exact content hashes reuse existing media facts instead of creating another
+  standalone root.
+- **ZIP attachments** go through the shared bounded extractor and become members of the current
+  post (1 GiB archive and expanded total, 512 MiB per entry).
+- **Runs.** A subscription has at most one active run. Staging is scoped to the run and removed
+  after settlement, failure, startup recovery, or reset. Restart resumes from the last settled
+  post; stable source identity and content hashes keep a repeated post idempotent.
+
+Progress counters: posts traversed (metadata inspected), posts added (complete media set reached
+the library), posts skipped (settled without a new visible item). A post is never reported as
+added before canonical ingest succeeds.
+
+When a source breaks, follow
+[`SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](./SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).
+
+## Cloud sync
+
+Cloud sync (experimental) consumes committed revisions and application operations; it does not
+write SQLite, blob files, or Roaring projections behind the core.

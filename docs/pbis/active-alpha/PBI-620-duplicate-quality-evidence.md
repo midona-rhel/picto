@@ -20,9 +20,6 @@ pixels or difference evidence.
 - Difference view and Smart Merge consume the same native comparison result.
 - Equal-size, missing-size, and unsupported ambiguous cases return `NeedsChoice` without mutation.
 
-The research basis, decision ladder, corpus, and staged implementation are defined in
-[`../../DUPLICATE_QUALITY_RESEARCH.md`](../../DUPLICATE_QUALITY_RESEARCH.md).
-
 ## Acceptance
 
 1. The reported same-resolution 675 KB and 1,020 KB PNG pair selects the 1,020 KB file through the

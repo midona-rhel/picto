@@ -2,73 +2,75 @@
 
 [← User Guide](README.md)
 
-Tags are the primary way to describe and categorize your files in Picto. Tags use a **namespace:subtag** format that helps organize them into meaningful groups.
+Tags describe your media. A tag is written `group:name`, for example `creator:jane_doe` or
+`character:alice`. A tag without a group (`sunset`) belongs to **General**.
 
-## Tag Format
+## Tag groups
 
-Tags follow the pattern `namespace:subtag`:
+Groups (namespaces) sort and color tags in the inspector, tag pickers and the tag manager. These
+groups have built-in colors and order:
 
-- `creator:john_doe` — The artist or creator
-- `character:some_character` — A character depicted
-- `series:my_series` — A series or franchise
-- `meta:wallpaper` — Meta information about the file
-
-Tags without a namespace are stored as unnamespaced (just the subtag part).
-
-## Applying Tags
-
-There are several ways to tag files:
-
-### Quick Tag (T key)
-
-1. Select one or more files in the grid
-2. Press `T` to open the tag selector
-3. Search and select tags to apply
-4. Close the selector — tags are applied immediately
-
-### Inspector Panel
-
-Click the tags section in the [inspector panel](interface-overview.md#inspector-panel) to add or remove tags for the selected file.
-
-### Context Menu
-
-Right-click a file or selection and choose **Add Tags**.
-
-### Copy and Paste Tags
-
-- `Ctrl+Shift+C` — Copy tags from the selected file(s)
-- `Ctrl+Shift+V` — Paste copied tags onto the current selection
-
-This is useful for applying the same set of tags to multiple files.
-
-## Tag Manager
-
-The tag manager provides a full view of all tags in your library. Access it by clicking **Tags** in the sidebar.
-
-Features:
-- **Browse** all tags with namespace grouping
-- **Search** by tag name
-- **Rename** tags (`Ctrl+R`) — all files with that tag are updated
-- **Delete** tags — removes the tag from all files
-- **Merge** tags — combine two tags into one, updating all files
-
-## Namespaces
-
-Namespaces group related tags. Each namespace gets a distinct color in the UI:
-
-| Namespace | Purpose |
-|-----------|---------|
+| Group | Use for |
+|---|---|
 | `creator` | Artists, photographers, authors |
-| `studio` | Production studios |
 | `series` | Franchises, shows, games |
-| `character` | Characters depicted |
-| `person` | Real people |
+| `character` | Characters shown |
 | `species` | Species or creature types |
-| `meta` | Meta tags (wallpaper, screenshot, etc.) |
-| `system` | System-managed tags |
+| `rating` | Content rating |
+| General | Everything else |
 
-Tags are sorted by namespace in the inspector: creator → studio → series → character → person → species → meta → system → unnamespaced.
+You can create more groups in the tag manager. Custom groups sort after the built-in ones.
 
-## Batch Tagging
+To show tags without their group prefix, turn on **Settings → General → Hide group prefixes**. The
+group itself does not change.
 
-Select multiple files with `Ctrl+click`, `Shift+click`, or `Ctrl+A`, then press `T` to tag them all at once. Tags are applied to every selected file.
+## Tag media
+
+1. Select one or more items in the grid.
+2. Press `T`, or right-click and choose **Add Tags**.
+3. Search, then click a tag (or press `Enter` on it) to check or uncheck it. `Tab` switches between
+   All, the tag groups, Selected and Recent.
+4. Click **Apply**.
+
+With several items selected, checked tags are added to every item, and unchecking a tag that is
+already on the selection removes it from every item.
+
+Other ways to tag:
+
+- **Inspector** — add or remove tags for the selected item. Type a name that does not exist yet and
+  choose **Create "…"** to make a new tag.
+- **Copy Tags / Paste Tags** — right-click an item and choose **Copy Tags** (or **Copy Shared
+  Tags** for a multi-selection), then right-click the target items and choose **Paste Tags**.
+- **Folder auto-tags** — see [Folders](folders.md#auto-tags).
+- **AI suggestions** — see [AI Tagging](ai-tagging.md).
+
+## Tag manager
+
+Click **Tags** in the sidebar. The left rail shows **All**, **General**, **Starred** and your
+**Groups**. Use the search box (`Mod+F`) to find a tag.
+
+Right-click a tag for:
+
+| Action | What it does |
+|---|---|
+| Filter Items with This Tag | Shows the items that have the tag |
+| Add to Starred / Remove from Starred | Starred tags appear under **Starred** here and in the tag pickers |
+| Move to Group… / Add to Group… / Remove from this Group | Changes the tag's group |
+| Copy Tag | Copies the tag name |
+| Edit Tag | Opens the editor: rename, merge or delete |
+| Merge Into… | Moves every use of this tag to an existing tag, then removes this tag |
+| Delete Tag | Removes the tag from the library; the media stays |
+
+Renaming a tag updates every item that uses it. Rename, merge and delete can be undone with
+`Mod+Z`.
+
+### Manage groups
+
+- **Create** — click **+** next to **Groups** and enter a name.
+- **Rename**, **color** or **delete** — right-click the group. Deleting a group moves its tags to
+  General; no tags or assignments are deleted.
+
+### Delete unused tags
+
+**Delete Unused** at the bottom of the rail removes tags that no item uses. Tags used only by Inbox
+or Trash items are kept.

@@ -2,57 +2,54 @@
 
 [← User Guide](README.md)
 
-## Installation
+## Install
 
-Download the latest release for your platform from the [releases page](https://github.com/midona-rhel/picto/releases):
+Download the latest release from the [releases page](https://github.com/midona-rhel/picto/releases).
 
-- **Windows** — Run the `.exe` installer (NSIS) or extract the `.zip`
-- **macOS** — Open the `.dmg` and drag Picto to Applications
-- **Linux** — Run the `.AppImage` directly, or install the `.deb` package
+| Platform | Package |
+|----------|---------|
+| Windows | `.exe` installer |
+| macOS | `.dmg` (drag Picto to Applications) |
+| Linux | `.AppImage` (make it executable and run it) |
 
-Picto bundles FFmpeg and its native subscription providers automatically — no extra dependencies
-needed.
+FFmpeg is bundled. Nothing else needs to be installed.
 
-## First Launch
+## Create your first library
 
-When you launch Picto for the first time, you'll need a **library** — a folder where Picto stores your database, thumbnails, and settings.
+A library is a folder on disk (`<name>.library`) that holds Picto's database and a copy of every
+imported file.
 
-1. Click **Create New Library**
-2. Choose a name and a location on disk
-3. Picto creates the library folder and opens it
+1. On first launch Picto shows **Open a library to start**. Click **Choose Library…**.
+2. In the Library Manager, click **New Library…** and enter a name.
+3. Click **Choose Location…** and pick the folder that will contain the library.
 
-You can also open an existing library if you've used Picto before, or if someone shared a library folder with you.
+Picto creates the library and opens it. On later launches it reopens the last library you used.
+See [Library Management](library-management.md) for switching, renaming, and moving libraries.
 
-See [Library Management](library-management.md) for details on switching between libraries.
+## Import some files
 
-## Your First Import
+- Drag files or a folder onto the grid.
+- **File → Import Files…** (`Mod+I`) or **File → Import Folder…** (`Mod+Shift+I`).
+- Copy files or an image and press `Mod+V` in the grid.
 
-With your library open, import some files:
+Picto copies files into the library. Your originals are not changed.
 
-- **Drag and drop** — Drag image or video files directly onto the grid area
-- **File picker** — Press `Ctrl+I` (`Cmd+I` on Mac) to open the file picker
-- **Folder import** — Import an entire folder, optionally preserving its structure
+Files imported while the **Inbox** view is open go to the Inbox for review. Files imported
+anywhere else go straight into the library. See [Importing Files](importing-files.md).
 
-Imported files are copied into the library's content-addressed blob store. The originals on disk are not modified.
+## Find your way around
 
-By default, new imports go to the **Inbox** — a staging area where you can review them before organizing. You can change this in [Settings](settings.md) to import directly as active.
+- **Sidebar** (left): views, Quick Access, smart folders, folders.
+- **Grid** (center): thumbnails of the current view.
+- **Inspector** (right): name, notes, tags, folders, rating, and properties of the selection.
+- **Title bar** (top): back/forward, view options, filters, search.
 
-## Orientation
+`Mod+Alt+1` toggles the sidebar, `Mod+Alt+2` the inspector, `Tab` both.
+See [Interface Overview](interface-overview.md).
 
-The Picto interface has four main areas:
+## Next steps
 
-- **Sidebar** (left) — Navigate between views, folders, smart folders, and system scopes
-- **Grid** (center) — Browse your images as thumbnails with multiple layout modes
-- **Inspector** (right) — View and edit metadata, tags, ratings, and notes for selected files
-- **Toolbar** (top) — Navigation controls, search, view options, sorting, and filtering
-
-Toggle the sidebar with `Ctrl+Alt+1`, the inspector with `Ctrl+Alt+2`, or both with `Tab`.
-
-See [Interface Overview](interface-overview.md) for a detailed walkthrough.
-
-## Next Steps
-
-- [Import more files](importing-files.md) or set up [watched folders](folders.md#watched-folders)
-- [Organize with tags](tags.md) and [folders](folders.md)
-- Set up [subscriptions](subscriptions.md) for automated downloads
-- Explore [keyboard shortcuts](keyboard-shortcuts.md) to work faster
+- Organize with [tags](tags.md), [folders](folders.md), and [smart folders](smart-folders.md)
+- Group related media into [collections](collections.md)
+- Download automatically with [subscriptions](subscriptions.md)
+- Learn the keyboard shortcuts in **Settings → Shortcuts**

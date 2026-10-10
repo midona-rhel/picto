@@ -70,8 +70,8 @@ The full procedure and its gates live in
 - **Delete what you supersede** in the same PR. No parallel old and new paths
   behind flags.
 - **Tests protect user-visible behavior and data-safety invariants**, not
-  internal mechanisms. See the testing section of
-  [docs/RESIDENT_BROWSING_MODEL.md](docs/RESIDENT_BROWSING_MODEL.md).
+  internal mechanisms: a different correct implementation should still pass,
+  and the expected result must not come from the code under test.
 - **Durable concepts get one normative doc home**; others link to it.
   `docs/architecture.md` describes the shipped system, not plans.
 

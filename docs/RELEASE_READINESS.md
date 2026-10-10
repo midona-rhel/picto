@@ -19,8 +19,8 @@ native addons, and downloaded native tools must not imply otherwise.
    plays a VP9 WebM through Picto's media protocol, closes the native library, and removes its
    temporary data without native-module errors. Import, subscription, and thumbnail behavior remains covered by
    focused integration tests rather than being overstated as part of this smoke test.
-5. Cloud Sync and Tutorials pass their separately owned persistence, accessibility, packaged-build,
-   and restart-recovery gates.
+5. Cloud Sync (experimental) passes its separately owned persistence, packaged-build, and
+   restart-recovery checks.
 
 ## Repository hygiene
 
@@ -35,17 +35,16 @@ native addons, and downloaded native tools must not imply otherwise.
 
 ## Publication gates
 
-- Cloud Sync and Tutorials retain separately owned packaged-build and restart-recovery gates.
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
   generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
-- Public Apple Developer ID signing and notarization are not part of the `0.6.10-alpha` gate. The
-  macOS alpha packages are signed with the project's private self-signed certificate so packaged
+- Public Apple Developer ID signing and notarization are not part of the alpha gate. The macOS
+  alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity.
-- Pull requests to release branches run verification. Release-branch pushes run verification and
-  all three platform package/smoke jobs in parallel. Manual runs can also exercise those gates.
-  Tags only publish the exact artifacts from a successful release-branch push for the same commit;
-  they never rebuild. A normal push to `main` does not trigger this release workflow.
+- Pull requests to `release/**` branches run verification. Release-branch pushes run verification
+  and all three platform package/smoke jobs in parallel; manual runs can also exercise them. Tags
+  only publish the exact artifacts from a successful release-branch push for the same commit; they
+  never rebuild. Branch and pull-request rules are in [CONTRIBUTING](../CONTRIBUTING.md).
 - Every subscription provider is implemented by the native Rust source crate. Release packages
   contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
 - TypeScript, the production build, the complete frontend and Rust test suites, command parity,

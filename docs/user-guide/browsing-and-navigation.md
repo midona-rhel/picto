@@ -2,102 +2,120 @@
 
 [← User Guide](README.md)
 
-## System Views
+## Views
 
-The sidebar provides built-in views that filter your library by status or organizational state:
+| View | Shows | Shortcut |
+|------|-------|----------|
+| All | Every active item | `Mod+1` |
+| Inbox | Items waiting for review ([Importing](importing-files.md#reviewing-the-inbox)) | `Mod+2` |
+| Recently Viewed | Items you opened, newest first. Right-click → **Clear Recently Viewed** to empty it. | — |
+| Uncategorized | Active items that are in no folder | — |
+| Untagged | Active items with no tags | `Mod+3` |
+| Tags | The tag manager ([Tags](tags.md)) | — |
+| Random | All active items in a new random order each time you open it | — |
+| Subscriptions | [Subscriptions](subscriptions.md) | `Mod+Shift+S` |
+| Duplicates | [Duplicate review](duplicates.md) | — |
+| Trash | Trashed items. Right-click → **Empty Trash** or **Restore All**. | `Mod+4` |
 
-| View | Description | Shortcut |
-|------|-------------|----------|
-| All Active | Your accepted library (status = active) | `Ctrl+1` |
-| Inbox | Newly imported files awaiting review | `Ctrl+2` |
-| Untagged | Active files with no tags | `Ctrl+3` |
-| Trash | Deleted files | `Ctrl+4` |
-| Uncategorized | Active files not in any folder | — |
-| Duplicates | Duplicate detection interface | — |
+Folders and smart folders are views too. Use **Back** and **Forward** (`Alt+Left` / `Alt+Right`)
+to return to views you visited.
 
-Click any sidebar item to navigate to that view. The grid updates to show only files in that scope.
+### Quick Access
 
-## Grid Layout Modes
+Right-click a folder or smart folder → **Add to Quick Access** to pin it in the **Quick Access**
+section at the top of the sidebar. **Remove from Quick Access** unpins it.
 
-Switch between three layout modes using the toolbar or keyboard:
+## Layout and sorting
 
-| Mode | Shortcut | Description |
-|------|----------|-------------|
-| Grid | `Alt+1` | Fixed-size uniform tiles |
-| Waterfall | `Alt+2` | Masonry layout with varied heights (default) |
-| Justified | `Alt+3` | Rows fill the full width |
+Click **View options** in the title bar (or right-click empty grid space).
 
-## Thumbnail Size
+**Layout**: Waterfall, Grid, or Justified.
 
-Adjust thumbnail size with the toolbar +/- buttons. The size ranges from 100px to 600px (default 250px).
+**Sort by**: Date Added, Date Created, Name, File Size, Rating, or Random, with an ascending /
+descending toggle (not shown for Random). Folders and Recently Viewed keep their own order and do not
+show sort options; right-click a folder → **Sort by** to reorder its contents instead.
 
-## Sorting
+**Display** toggles: Show Name, Show Resolution, Show Extension, Show File Type, Show Item Count,
+Compact, Fit Thumbnails (Grid layout only), Show Subfolder Content (folders only), Show Sidebar,
+Show Inspector.
 
-Sort files by clicking the sort dropdown in the toolbar:
+These choices are saved per view. Defaults for every view, and **Reset all views**, are in
+**Settings → Controls → Grid Defaults**.
 
-- **Date Added** — When the file was imported (default)
-- **File Size** — Largest or smallest first
-- **File Name** — Alphabetical
-- **Resolution** — By pixel dimensions
-- **Rating** — By star rating
+The slider in the title bar sets the tile size. Settings can make the mouse wheel change the tile
+size instead of scrolling.
 
-Toggle ascending/descending order with the sort direction button.
+## Search
 
-## Filtering
+Type in **Search** (`Mod+F`) to search the current view. It matches names, notes, source URLs, and
+source text, and needs at least three characters.
 
-Click the filter button in the toolbar to show the filter bar. Available filters:
+## Filters
 
-- **Rating** — Minimum star rating (1-5)
-- **File Type** — Filter by images, videos, GIFs, audio, or other
-- **Color** — Find files with a dominant color (hex value + accuracy slider)
-- **Search** — Full-text search across file names and metadata
+Click **Filter library** to open the filter bar. Each field opens its own picker:
 
-Active filters appear as pills in the filter bar. Click the X on any pill to remove it, or clear all at once.
+| Filter | Options |
+|--------|---------|
+| Color | A color and a sensitivity |
+| Tags | Tags to include or exclude; Match any, Match all, or Match exactly |
+| Folders | Folders to include or exclude; Match any, Match all, or Match exactly |
+| Rating | One or more of 5…1 stars and Unrated |
+| Type | Media families (Images, Videos, Audio, …) and individual formats present in the view. Right-click a type to exclude it. |
+| Date Imported / Date Modified | Today, Yesterday, Last 7 / 30 / 90 / 365 Days, or a custom range |
+| Resolution | Minimum and maximum width and height |
+| Duration | Minimum and maximum, in seconds, minutes, or hours |
+| File Size | Minimum and maximum, in KB or MB |
+
+The bar shows Color, Tags, Folders, Rating, and Type by default. Click **Add filter** (+) to add or
+remove fields.
+
+To clear one filter, click its **×** or right-click it. **Clear filters** clears them all.
+
+**Saved filters** (disk icon): type a name and click **Save** to store the current filters. Click a
+saved filter to apply it; right-click it to delete it.
+
+**Lock filters** (lock icon): keeps the current filters when you move to another view.
 
 ## Selection
 
 | Action | How |
 |--------|-----|
-| Select one | Click a thumbnail |
-| Toggle selection | `Ctrl`+click |
-| Range select | `Shift`+click (selects from last clicked to current) |
-| Marquee select | Click and drag on empty grid area |
-| Select all | `Ctrl+A` |
+| Select | Click |
+| Add or remove from selection | `Mod`+click |
+| Select a range | `Shift`+click |
+| Marquee select | Drag on empty grid space |
+| Select all | `Mod+A` |
+| Clear selection | `Escape` |
 
-Selected files are highlighted. The inspector shows metadata for the selection.
-
-## Grid Navigation
-
-Navigate the grid without a mouse:
+## Keyboard navigation
 
 | Key | Action |
 |-----|--------|
-| `Arrow Left` or `A` | Move left |
-| `Arrow Right` or `D` | Move right |
-| `Arrow Up` or `W` | Move up |
-| `Arrow Down` or `S` | Move down |
-| `Home` | Jump to first file |
-| `End` | Jump to last file |
-| `Page Up` | Jump up one screenful |
-| `Page Down` | Jump down one screenful |
+| `Arrow` keys or `W` `A` `S` `D` | Move the selection |
+| `Home` / `End` | First / last item |
+| `Page Up` / `Page Down` | One screen up / down |
+| `Shift` + any of the above | Extend the selection |
+| `Enter` | Open in the media view |
+| `Space` | Quick Look (Settings can make Space scroll the page instead) |
 
-## History Navigation
+## Context menu
 
-Picto remembers your navigation history. Use `Alt+Left` and `Alt+Right` to go back and forward through views you've visited. Scroll position is restored automatically.
+Right-click an item for its actions. The menu adapts to the selection and view. It includes:
 
-## Context Menu
+- **Accept** / **Reject** (Inbox)
+- Open with Default App, Open With Other…, Reveal in Finder / Show in Explorer, Open in New Window
+- View options and **Grayscale** (`Mod+Alt+G`, grays out the grid)
+- Add to Folder (`Mod+Shift+J`), New Folder with Selection, **Group...**, Edit Group, Ungroup...
+  (see [Collections](collections.md))
+- Rename / Batch Rename (`Ctrl+R`)
+- Copy, Copy File Path (`Mod+Alt+C`), Copy Name, Copy as Link
+- Add Tags (`T`), Auto Tag (`Mod+Shift+A`)
+- Set Rating
+- **Export** → Export Originals..., Export As..., Export as Picto Pack... ([Exporting](exporting.md))
+- **Search by Image** (images only): TinEye, SauceNAO, Yandex Images, Sogou, Bing Visual Search
+- **More**: Set as Library Cover, Set as Folder Cover (in a folder), Find Items with This Media,
+  Regenerate Thumbnail
+- Remove from Folder (in a folder)
+- Move to Trash (`Mod+Backspace`); in Trash: Restore and Delete Permanently
 
-Right-click any file (or selection of files) for the context menu with all available actions:
-
-- Open with Default App, Open in New Window
-- Reveal in Folder (Finder/Explorer)
-- Copy File Path, Copy Image to Clipboard
-- Reverse Image Search (Google Lens, TinEye, Bing, Yandex, SauceNAO, Sogou)
-- Add Tags, Copy Tags, Paste Tags
-- Add to Folder, Remove from Folder
-- Rename, Batch Rename
-- Set Rating (0-5)
-- More (library/folder cover and thumbnail maintenance)
-- Delete
-
-See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference.
+The full reference is in **Settings → Shortcuts**.
