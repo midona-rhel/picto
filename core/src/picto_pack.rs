@@ -257,6 +257,7 @@ fn import_on_current_thread(
     let folder_ids = import_folders(application, &portable_folders)?;
     let mut imported_by_key = HashMap::<String, RootId>::new();
     let mut imported_media = 0;
+    let mut pending = Vec::<(&PackRoot, PreparedImport)>::new();
     for root in &manifest.roots {
         let folders = root
             .folder_keys
@@ -300,14 +301,21 @@ fn import_on_current_thread(
             });
             imported_media += 1;
         }
-        let (root_id, _) = match root.kind {
-            RootKind::Media => application.library().ingest(
-                members
-                    .first()
-                    .ok_or_else(|| "Media root has no media".to_string())?,
-            ),
+        match root.kind {
+            // Single-media roots are ingested together, one publication per
+            // batch instead of one per item.
+            RootKind::Media => {
+                let member = members
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "Media root has no media".to_string())?;
+                pending.push((root, member));
+                if pending.len() == picto_library::ingest::MAX_INGEST_BATCH {
+                    ingest_pack_media(application, &mut pending, &mut imported_by_key)?;
+                }
+            }
             RootKind::Collection => {
-                application
+                let (root_id, _) = application
                     .library()
                     .ingest_collection(&PreparedCollectionImport {
                         members,
@@ -316,12 +324,13 @@ fn import_on_current_thread(
                         name: Some(root.name.clone()),
                         modified_at_ms: root.modified_at_ms,
                     })
+                    .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
+                restore_root_metadata(application, root_id, root)?;
+                imported_by_key.insert(root.stable_key.clone(), root_id);
             }
         }
-        .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
-        restore_root_metadata(application, root_id, root)?;
-        imported_by_key.insert(root.stable_key.clone(), root_id);
     }
+    ingest_pack_media(application, &mut pending, &mut imported_by_key)?;
     restore_folder_metadata(
         application,
         &portable_folders,
@@ -688,39 +697,84 @@ fn import_folders(
     Ok(ids)
 }
 
+fn ingest_pack_media(
+    application: &LibraryApplication,
+    pending: &mut Vec<(&PackRoot, PreparedImport)>,
+    imported_by_key: &mut HashMap<String, RootId>,
+) -> Result<(), String> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let batch = std::mem::take(pending);
+    let inputs = batch.iter().map(|(_, input)| input.clone()).collect::<Vec<_>>();
+    let outputs = application
+        .library()
+        .ingest_batch(&inputs)
+        .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
+    for ((root, _), (root_id, _)) in batch.into_iter().zip(outputs) {
+        restore_root_metadata(application, root_id, root)?;
+        imported_by_key.insert(root.stable_key.clone(), root_id);
+    }
+    Ok(())
+}
+
+/// Make the library root match the pack. A fresh import already carries every
+/// field, so this normally writes nothing; it only corrects roots that
+/// existed before the import, one write per field that actually differs.
 fn restore_root_metadata(
     application: &LibraryApplication,
     root_id: RootId,
     root: &PackRoot,
 ) -> Result<(), String> {
+    let details = application
+        .library()
+        .details(root_id)
+        .map_err(|error| error.to_string())?;
     let target = SelectionTarget::Explicit {
         root_ids: vec![root_id],
     };
-    application
-        .library()
-        .rename_root(root_id, &root.name, root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_notes(&target, root.notes.clone(), root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_source_urls(&target, root.source_urls.clone(), root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_rating(&target, root.rating)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_lifecycle(&target, root.lifecycle)
-        .map_err(|error| error.to_string())?;
-    for tag in &root.tags {
+    if details.root.name != root.name {
         application
             .library()
-            .add_tag(&target, tag)
+            .rename_root(root_id, &root.name, root.modified_at_ms)
             .map_err(|error| error.to_string())?;
+    }
+    if details.root.notes != root.notes {
+        application
+            .library()
+            .set_notes(&target, root.notes.clone(), root.modified_at_ms)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.root.source_urls != root.source_urls {
+        application
+            .library()
+            .set_source_urls(&target, root.source_urls.clone(), root.modified_at_ms)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.rating != root.rating {
+        application
+            .library()
+            .set_rating(&target, root.rating)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.lifecycle != root.lifecycle {
+        application
+            .library()
+            .set_lifecycle(&target, root.lifecycle)
+            .map_err(|error| error.to_string())?;
+    }
+    let snapshot = application.library().projections().snapshot();
+    for tag in &root.tags {
+        let present = snapshot
+            .tag_ids_by_name
+            .get(tag)
+            .is_some_and(|tag_id| details.tag_ids.contains(tag_id));
+        if !present {
+            application
+                .library()
+                .add_tag(&target, tag)
+                .map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
