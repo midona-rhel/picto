@@ -222,6 +222,25 @@ pub enum SemanticChange {
 }
 
 impl SemanticChange {
+    /// Undo replays only the members an entry changed, so a bitmap entry keeps
+    /// just those: `before` holds the removed ids, `after` the added ones.
+    /// Tagging 10 items with a 200k-member tag stores 10 ids, not 400k.
+    pub(crate) fn keep_only_changed_members(&mut self) {
+        match self {
+            Self::Bitmap { before, after, .. } => {
+                let changed = before.as_ref() ^ after.as_ref();
+                if changed.len() != before.len() + after.len() {
+                    *before = Arc::new(before.as_ref() & &changed);
+                    *after = Arc::new(after.as_ref() & &changed);
+                }
+            }
+            Self::Compound(changes) => {
+                changes.iter_mut().for_each(Self::keep_only_changed_members);
+            }
+            _ => {}
+        }
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         match self {
             Self::AuxiliaryJson {
@@ -386,8 +405,9 @@ impl HistoryEntry {
     pub fn for_command(
         command: impl Into<String>,
         label: impl Into<String>,
-        change: SemanticChange,
+        mut change: SemanticChange,
     ) -> Self {
+        change.keep_only_changed_members();
         let estimated_bytes = change.estimated_bytes();
         Self {
             entry_id: 0,

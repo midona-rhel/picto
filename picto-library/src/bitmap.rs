@@ -214,6 +214,20 @@ pub fn replace(
     Ok(changed)
 }
 
+/// Persist `bitmap` when the caller knows which ids changed: only the shards
+/// holding those ids are encoded, hashed and compared.
+pub fn replace_changed(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    key: BitmapKey,
+    bitmap: &RoaringBitmap,
+    changed: &RoaringBitmap,
+) -> Result<usize> {
+    let mut high_bits = changed.iter().map(|id| (id >> 16) as u16).collect::<Vec<_>>();
+    high_bits.dedup();
+    replace_shards(transaction, revision, key, bitmap, high_bits)
+}
+
 pub fn replace_shards(
     transaction: &Transaction<'_>,
     revision: u64,
