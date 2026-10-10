@@ -184,18 +184,22 @@ pub(crate) fn depends_on(expression: &FilterExpr, change: DependencyChange) -> b
         }
         FilterExpr::Not(child) => depends_on(child, change),
         FilterExpr::Clause(clause) => match (clause, change) {
-            (FilterClause::Tags { tag_ids, .. }, DependencyChange::Tag(tag_id)) => {
-                tag_ids.contains(&tag_id)
+            // Exact mode also compares the root's total tag/folder count, so any
+            // assignment change can alter it.
+            (FilterClause::Tags { tag_ids, mode }, DependencyChange::Tag(tag_id)) => {
+                *mode == SetMatchMode::Exact || tag_ids.contains(&tag_id)
             }
-            (FilterClause::Folders { folder_ids, .. }, DependencyChange::Folder(folder_id)) => {
-                folder_ids.contains(&folder_id)
+            (FilterClause::Folders { folder_ids, mode }, DependencyChange::Folder(folder_id)) => {
+                *mode == SetMatchMode::Exact || folder_ids.contains(&folder_id)
             }
             (FilterClause::Folders { .. }, DependencyChange::Folders) => true,
             (FilterClause::Ratings { .. }, DependencyChange::Rating) => true,
+            // Name, notes and URL edits also stamp modified_at.
             (
                 FilterClause::NotesPresent { .. }
                 | FilterClause::SourceUrlsPresent { .. }
-                | FilterClause::Text { .. },
+                | FilterClause::Text { .. }
+                | FilterClause::ModifiedAt { .. },
                 DependencyChange::RootText,
             ) => true,
             (
@@ -321,7 +325,7 @@ fn evaluate_clause(
                 snapshot
                     .tags
                     .get(id)
-                    .map(|values| values.to_bitmap())
+                    .map(|values| universe & &**values)
                     .unwrap_or_default()
             }),
             *mode,
@@ -334,7 +338,7 @@ fn evaluate_clause(
                 snapshot
                     .folders
                     .get(id)
-                    .map(|values| values.to_bitmap())
+                    .map(|values| universe & &**values)
                     .unwrap_or_default()
             }),
             *mode,
@@ -346,7 +350,7 @@ fn evaluate_clause(
             ratings
                 .iter()
                 .fold(RoaringBitmap::new(), |mut values, rating| {
-                    values |= snapshot.rating(*rating);
+                    values |= universe & snapshot.rating(*rating);
                     values
                 })
         }
@@ -354,12 +358,12 @@ fn evaluate_clause(
             let mut matches = RoaringBitmap::new();
             for value in values {
                 if let Some(bitmap) = snapshot.mime.get(value) {
-                    matches |= bitmap;
+                    matches |= universe & &**bitmap;
                 }
             }
             for family in families {
                 if let Some(bitmap) = snapshot.mime_family.get(family) {
-                    matches |= bitmap;
+                    matches |= universe & &**bitmap;
                 }
             }
             matches
@@ -367,25 +371,25 @@ fn evaluate_clause(
         FilterClause::ImportedAt {
             minimum_ms,
             maximum_ms,
-        } => snapshot.imported_at.between(*minimum_ms, *maximum_ms),
+        } => snapshot.imported_at.between_within(*minimum_ms, *maximum_ms, universe),
         FilterClause::ModifiedAt {
             minimum_ms,
             maximum_ms,
-        } => snapshot.modified_at.between(*minimum_ms, *maximum_ms),
+        } => snapshot.modified_at.between_within(*minimum_ms, *maximum_ms, universe),
         FilterClause::CapturedAt {
             minimum_ms,
             maximum_ms,
-        } => snapshot.captured_at.between(*minimum_ms, *maximum_ms),
-        FilterClause::Width { minimum, maximum } => snapshot.width.between(*minimum, *maximum),
-        FilterClause::Height { minimum, maximum } => snapshot.height.between(*minimum, *maximum),
+        } => snapshot.captured_at.between_within(*minimum_ms, *maximum_ms, universe),
+        FilterClause::Width { minimum, maximum } => snapshot.width.between_within(*minimum, *maximum, universe),
+        FilterClause::Height { minimum, maximum } => snapshot.height.between_within(*minimum, *maximum, universe),
         FilterClause::Duration {
             minimum_ms,
             maximum_ms,
-        } => snapshot.duration.between(*minimum_ms, *maximum_ms),
+        } => snapshot.duration.between_within(*minimum_ms, *maximum_ms, universe),
         FilterClause::TotalSize {
             minimum_bytes,
             maximum_bytes,
-        } => snapshot.total_bytes.between(*minimum_bytes, *maximum_bytes),
+        } => snapshot.total_bytes.between_within(*minimum_bytes, *maximum_bytes, universe),
         FilterClause::NotesPresent { present } => {
             presence(universe, &snapshot.notes_present, *present)
         }
@@ -411,7 +415,7 @@ fn set_match(
     let values = values.collect::<Vec<_>>();
     if values.is_empty() {
         return if mode == SetMatchMode::Exact {
-            universe & &counts.between(Some(0), Some(0))
+            counts.between_within(Some(0), Some(0), universe)
         } else {
             universe.clone()
         };
@@ -433,7 +437,7 @@ fn set_match(
         }
     };
     if mode == SetMatchMode::Exact {
-        result &= counts.between(Some(requested_count), Some(requested_count));
+        result = counts.between_within(Some(requested_count), Some(requested_count), &result);
     }
     result
 }
@@ -444,7 +448,7 @@ fn presence(
     expected: bool,
 ) -> RoaringBitmap {
     if expected {
-        present_values.clone()
+        universe & present_values
     } else {
         let mut result = universe.clone();
         result -= present_values;

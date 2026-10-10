@@ -160,6 +160,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         urls_present: std::sync::Arc::new(data.urls_present),
         smart_local_results: std::sync::Arc::new(data.smart_local_results),
         smart_results: std::sync::Arc::new(data.smart_results),
+        smart_result_versions: std::sync::Arc::new(std::collections::HashMap::new()),
         smart_queries: std::sync::Arc::new(smart_queries),
         smart_effective_queries: std::sync::Arc::new(smart_effective_queries),
     })
