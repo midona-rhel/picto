@@ -10,17 +10,21 @@ impl Library {
         let request = request.clone();
         let (collection_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selected = crate::selection::resolve_with(transaction, &snapshot, &request.target, Some((&self.match_cache, &self.order_cache)))?;
-            let before = capture_structure(transaction, &snapshot, &selected)?;
+            let before = capture_structure(transaction, &snapshot, &selected, None)?;
+            // Grouping only moves the selection's tags onto the collection, so
+            // the tags found now are the only ones to settle and capture after.
+            let tags = captured_tags(&before);
             let output = crate::group::organize(
                 transaction,
                 revision,
                 (*snapshot).clone(),
                 &request,
                 false,
+                Some(&tags),
             )?;
             let mut next = output.snapshot;
             crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-            let after = capture_structure(transaction, &next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected, Some(&tags))?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec![
@@ -70,17 +74,20 @@ impl Library {
                 .map(|media| media.0)
                 .collect::<RoaringBitmap>();
             affected.insert(collection_id.0);
-            let before = capture_structure(transaction, &snapshot, &affected)?;
+            let before = capture_structure(transaction, &snapshot, &affected, None)?;
+            // Members inherit the collection's tags and gain no others.
+            let tags = captured_tags(&before);
             let output = crate::group::ungroup(
                 transaction,
                 revision,
                 (*snapshot).clone(),
                 collection_id,
                 modified_at_ms,
+                Some(&tags),
             )?;
             let mut next = output.snapshot;
             crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-            let after = capture_structure(transaction, &next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected, Some(&tags))?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec![
@@ -139,7 +146,9 @@ impl Library {
                 .map(|media_id| media_id.0)
                 .collect::<RoaringBitmap>();
             affected.insert(collection_id.0);
-            let before = capture_structure(transaction, &snapshot, &affected)?;
+            let before = capture_structure(transaction, &snapshot, &affected, None)?;
+            // Detached members inherit the collection's tags and gain no others.
+            let tags = captured_tags(&before);
             let output = crate::group::detach_many(
                 transaction,
                 revision,
@@ -148,10 +157,11 @@ impl Library {
                 &media_ids,
                 target_lifecycle,
                 modified_at_ms,
+                Some(&tags),
             )?;
             let mut next = output.snapshot;
             crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-            let after = capture_structure(transaction, &next, &output.affected)?;
+            let after = capture_structure(transaction, &next, &output.affected, Some(&tags))?;
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec![
@@ -706,7 +716,7 @@ pub(super) fn restore_structure(
                 .map(|members| (RootId(id), members.as_ref().clone()))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    if structural_memberships(snapshot, affected) != expected.memberships
+    if structural_memberships(snapshot, affected, None) != expected.memberships
         || current_collections != expected.collections
     {
         return Err(LibraryError::InvalidState(
@@ -811,7 +821,7 @@ pub(super) fn restore_structure_bitmaps(
     affected: &RoaringBitmap,
     replacement: &StructuralState,
 ) -> Result<()> {
-    let keys = structural_memberships(current, affected)
+    let keys = structural_memberships(current, affected, None)
         .keys()
         .chain(replacement.memberships.keys())
         .copied()
@@ -940,8 +950,10 @@ pub(super) fn capture_structure(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,
+    tags: Option<&[crate::TagId]>,
 ) -> Result<StructuralState> {
     let mut folders = std::collections::BTreeMap::new();
+    let dense = crate::bitmap::DenseIds::new(affected);
     for (folder, order) in snapshot.folder_orders.iter() {
         if snapshot.folders.get(folder).is_none_or(|members| members.is_disjoint(affected)) {
             continue;
@@ -949,7 +961,7 @@ pub(super) fn capture_structure(
         let mut next_unaffected = None;
         let mut positions = Vec::new();
         for (ordinal, root_id) in order.iter().enumerate().rev() {
-            if affected.contains(root_id.0) {
+            if dense.contains(root_id.0) {
                 positions.push(crate::history::StructuralFolderPosition {
                     root_id: *root_id,
                     previous: ordinal.checked_sub(1).map(|index| order[index]),
@@ -972,7 +984,7 @@ pub(super) fn capture_structure(
             snapshot,
             affected,
         )?),
-        memberships: structural_memberships(snapshot, affected),
+        memberships: structural_memberships(snapshot, affected, tags),
         folders,
         collections: affected
             .iter()
@@ -986,10 +998,49 @@ pub(super) fn capture_structure(
     })
 }
 
+/// Every lifecycle, rating and tag membership of `affected`. With `tags`, only
+/// those tags are checked: callers pass the tags captured before an operation
+/// that cannot add a root to any other tag. Without it every tag is checked,
+/// in parallel on large tag sets.
 pub(super) fn structural_memberships(
     snapshot: &ProjectionSnapshot,
     affected: &RoaringBitmap,
+    tags: Option<&[crate::TagId]>,
 ) -> HashMap<BitmapKey, RoaringBitmap> {
+    let membership = |key: BitmapKey, members: &RoaringBitmap| {
+        if members.is_disjoint(affected) {
+            return None;
+        }
+        Some((key, members & affected))
+    };
+    let tag_key = |tag_id: crate::TagId| BitmapKey {
+        domain: BitmapDomain::Tag,
+        key_id: tag_id.0,
+    };
+    let mut memberships = match tags {
+        Some(tags) => tags
+            .iter()
+            .filter_map(|tag_id| {
+                snapshot
+                    .tags
+                    .get(tag_id)
+                    .and_then(|members| membership(tag_key(*tag_id), members))
+            })
+            .collect::<HashMap<_, _>>(),
+        None => {
+            let entries = snapshot.tags.iter().collect::<Vec<_>>();
+            let scan = |(tag_id, members): &(&crate::TagId, &crate::projection::SharedBitmap)| {
+                membership(tag_key(**tag_id), members)
+            };
+            match crate::smart::smart_folder_pool() {
+                Ok(pool) if entries.len() >= 1_024 => {
+                    use rayon::prelude::*;
+                    pool.install(|| entries.par_iter().filter_map(scan).collect())
+                }
+                _ => entries.iter().filter_map(scan).collect(),
+            }
+        }
+    };
     let entries = snapshot
         .lifecycle
         .iter()
@@ -1011,23 +1062,18 @@ pub(super) fn structural_memberships(
                 ids,
             )
         }))
-        .chain(snapshot.tags.iter().map(|(value, ids)| {
-            (
-                BitmapKey {
-                    domain: BitmapDomain::Tag,
-                    key_id: value.0,
-                },
-                ids,
-            )
-        }));
-    entries
-        .filter_map(|(key, members)| {
-            if members.is_disjoint(affected) {
-                return None;
-            }
-            let ids = members & affected;
-            (!ids.is_empty()).then_some((key, ids))
-        })
+        ;
+    memberships.extend(entries.filter_map(|(key, members)| membership(key, members)));
+    memberships
+}
+
+/// The tags `state` found holding any of its roots.
+pub(super) fn captured_tags(state: &StructuralState) -> Vec<crate::TagId> {
+    state
+        .memberships
+        .keys()
+        .filter(|key| key.domain == BitmapDomain::Tag)
+        .map(|key| crate::TagId(key.key_id))
         .collect()
 }
 

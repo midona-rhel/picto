@@ -267,6 +267,7 @@ impl Library {
                             modified_at_ms: input.modified_at_ms,
                         },
                         true,
+                        None,
                     )?;
                     next = output.snapshot;
                     resources.insert("collections".to_owned());

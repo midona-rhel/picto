@@ -291,6 +291,31 @@ pub fn revision(transaction: &Transaction<'_>, key: BitmapKey) -> Result<Option<
         .map_err(Into::into)
 }
 
+/// Membership of a small id set, checked against long id lists such as folder
+/// orders: a dense bitset up to the largest id, so each check is one load
+/// instead of a roaring container search.
+pub(crate) struct DenseIds {
+    words: Vec<u64>,
+}
+
+impl DenseIds {
+    pub(crate) fn new(ids: &RoaringBitmap) -> Self {
+        let len = ids.max().map_or(0, |max| (max as usize >> 6) + 1);
+        let mut words = vec![0u64; len];
+        for id in ids {
+            words[id as usize >> 6] |= 1 << (id & 63);
+        }
+        Self { words }
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, id: u32) -> bool {
+        self.words
+            .get(id as usize >> 6)
+            .is_some_and(|word| word >> (id & 63) & 1 == 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

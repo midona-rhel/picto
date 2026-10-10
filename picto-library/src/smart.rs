@@ -449,7 +449,7 @@ fn evaluate_local_results(
     Ok(results)
 }
 
-fn smart_folder_pool() -> Result<&'static rayon::ThreadPool> {
+pub(crate) fn smart_folder_pool() -> Result<&'static rayon::ThreadPool> {
     let pool = SMART_FOLDER_POOL.get_or_init(|| {
         let threads = std::thread::available_parallelism()
             .map(|value| value.get().saturating_sub(1).max(1))

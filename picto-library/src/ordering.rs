@@ -45,8 +45,22 @@ fn decode_chunk(payload: &[u8], expected_checksum: &[u8], into: &mut Vec<u32>) -
 }
 
 fn require_unique(values: &[u32], invalid: impl FnOnce(String) -> LibraryError) -> Result<()> {
-    let mut unique = std::collections::HashSet::with_capacity(values.len());
-    if values.iter().any(|value| !unique.insert(*value)) {
+    // Every rewrite of a large folder order checks this, so the check is a
+    // dense bitset over the ids (local ids are compact) rather than a hash set.
+    let words = values.iter().max().map_or(0, |max| (*max as usize >> 6) + 1);
+    let duplicate = if words <= values.len().max(1 << 16) {
+        let mut seen = vec![0u64; words];
+        values.iter().any(|value| {
+            let (word, bit) = (*value as usize >> 6, 1u64 << (value & 63));
+            let present = seen[word] & bit != 0;
+            seen[word] |= bit;
+            present
+        })
+    } else {
+        let mut unique = std::collections::HashSet::with_capacity(values.len());
+        values.iter().any(|value| !unique.insert(*value))
+    };
+    if duplicate {
         return Err(invalid("ordered membership contains duplicate IDs".into()));
     }
     Ok(())
@@ -296,6 +310,17 @@ pub(crate) const ORDER_CHUNK_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ordered_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_ids_are_found_with_compact_and_sparse_ids() {
+        let invalid = |message: String| LibraryError::InvalidInput(message);
+        assert!(require_unique(&[], invalid).is_ok());
+        assert!(require_unique(&[5, 900_000, 63, 64], invalid).is_ok());
+        assert!(require_unique(&[5, 900_000, 63, 5], invalid).is_err());
+        // Ids far beyond the order's length take the hash-set path.
+        assert!(require_unique(&[u32::MAX, 1, u32::MAX - 1], invalid).is_ok());
+        assert!(require_unique(&[u32::MAX, 1, u32::MAX], invalid).is_err());
+    }
 
     #[test]
     fn an_append_rewrites_only_the_last_chunk_and_a_shrink_drops_the_tail() {
