@@ -1471,5 +1471,9 @@
   "Opening your library": "Opening your library",
   "Updating your library database": "Updating your library database",
   "Loading your library": "Loading your library",
-  "Starting library services": "Starting library services"
+  "Starting library services": "Starting library services",
+  "Library deleted.": "Library deleted.",
+  "Move…": "Move…",
+  "Locate…": "Locate…",
+  "Delete…": "Delete…"
 }

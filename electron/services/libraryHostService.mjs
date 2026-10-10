@@ -913,10 +913,14 @@ export function createLibraryHostService({
     const basename = path.basename(oldPath);
     const oldExists = await fs.access(oldPath).then(() => true, () => false);
 
+    // A library that still exists is moved into the chosen folder. A missing
+    // one is located: the chosen folder must already contain it.
     const picked = await dialog.showOpenDialog({
-      title: `Choose destination for "${name}"`,
+      title: oldExists ? `Choose destination for "${name}"` : `Locate "${name}"`,
       properties: ['openDirectory', 'createDirectory'],
-      message: `${basename} will be placed in the selected folder`,
+      message: oldExists
+        ? `${basename} will be placed in the selected folder`
+        : `Choose the folder that contains ${basename}`,
     });
     if (picked.canceled || picked.filePaths.length === 0) {
       return { action: 'cancelled' };
@@ -927,7 +931,17 @@ export function createLibraryHostService({
     if (newPath === oldPath) return { action: 'cancelled' };
 
     const destExists = await fs.access(newPath).then(() => true, () => false);
-    if (destExists) {
+    if (!oldExists) {
+      const isLibrary = await fs.access(path.join(newPath, 'library.sqlite')).then(() => true, () => false);
+      if (!isLibrary) {
+        await dialog.showMessageBox({
+          type: 'error',
+          title: 'Library Not Found',
+          message: `"${basename}" was not found in that folder.`,
+        });
+        return { action: 'cancelled' };
+      }
+    } else if (destExists) {
       await dialog.showMessageBox({
         type: 'error',
         title: 'Already Exists',

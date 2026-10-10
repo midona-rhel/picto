@@ -1471,5 +1471,9 @@
   "Opening your library": "Avataan kirjastoasi",
   "Updating your library database": "Päivitetään kirjastosi tietokantaa",
   "Loading your library": "Ladataan kirjastoasi",
-  "Starting library services": "Käynnistetään kirjastopalveluita"
+  "Starting library services": "Käynnistetään kirjastopalveluita",
+  "Library deleted.": "Kirjasto poistettu.",
+  "Move…": "Siirrä…",
+  "Locate…": "Etsi…",
+  "Delete…": "Poista…"
 }

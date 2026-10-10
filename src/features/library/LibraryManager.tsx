@@ -8,12 +8,14 @@ import {
   IconCloudOff,
   IconDotsVertical,
   IconFolderOpen,
+  IconFolderSymlink,
   IconPencil,
   IconPin,
   IconPlayerPause,
   IconPlayerPlay,
   IconPlus,
   IconRefresh,
+  IconTrash,
   IconX,
 } from '@tabler/icons-react';
 import { LibraryAvatar } from './LibraryAvatar';
@@ -513,6 +515,21 @@ export function LibraryManager() {
     void run(`remove:${path}`, () => pictoLibrary().remove(path));
   };
 
+  const moveLibrary = (path: string) =>
+    run(`move:${path}`, async () => {
+      const result = await pictoLibrary().relocate(path);
+      if (result?.action === 'relocated' && result.newPath) setSelectedPath(result.newPath);
+    });
+
+  const deleteLibrary = (path: string) =>
+    run(`delete:${path}`, async () => {
+      const result = await pictoLibrary().delete(path);
+      if (result?.deleted) {
+        setSelectedPath(null);
+        setMessage(t('Library deleted.'));
+      }
+    });
+
   const openLibraryMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!selectedEntry) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -533,6 +550,13 @@ export function LibraryManager() {
         icon: <IconFolderOpen size={15} />,
         disabled: !selectedEntry.exists,
         action: () => { void pictoShell().showInFolder(selectedEntry.path); },
+      },
+      {
+        // A missing library is located instead of moved.
+        label: selectedEntry.exists ? t("Move…") : t("Locate…"),
+        icon: <IconFolderSymlink size={15} />,
+        disabled: busy !== null,
+        action: () => { void moveLibrary(selectedEntry.path); },
       },
     ];
 
@@ -591,6 +615,14 @@ export function LibraryManager() {
         danger: true,
         disabled: selectedEntry.current,
         action: () => removeFromList(selectedEntry.path, selectedEntry.name),
+      },
+      {
+        // Electron asks for confirmation and refuses the open library.
+        label: t("Delete…"),
+        icon: <IconTrash size={15} />,
+        danger: true,
+        disabled: selectedEntry.current || !selectedEntry.exists || busy !== null,
+        action: () => { void deleteLibrary(selectedEntry.path); },
       },
     );
     libraryMenu.openAt({ x: rect.right, y: rect.bottom + 4 }, entries, { showSearch: false });
