@@ -1162,7 +1162,7 @@ impl Library {
             if !exists {
                 return Err(LibraryError::NotFound(format!("folder {}", folder_id.0)));
             }
-            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
             let mut next = (*snapshot).clone();
             let before = next
                 .folder_orders

@@ -82,24 +82,21 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                let mut rows = tag_definition_rows(connection, None)?;
-                rows.retain(|row| {
-                    namespace.is_none_or(|namespace| row.namespace == namespace)
+                let sorted = self.tag_list.sorted(connection, snapshot.revision)?;
+                let mut matching = sorted.iter().filter(|entry| {
+                    namespace.is_none_or(|namespace| entry.row.namespace == namespace)
                         && search
                             .as_ref()
-                            .is_none_or(|search| row.subname.to_lowercase().contains(search))
+                            .is_none_or(|search| entry.subname_key.contains(search.as_str()))
                 });
-                rows.sort_by_cached_key(|row| {
-                    (row.subname.to_lowercase(), row.namespace.to_lowercase(), row.tag_id.0)
-                });
-                let next = offset.saturating_add(limit);
-                let next = (rows.len() > next).then_some(next);
-                let page = rows
-                    .into_iter()
+                let page = matching
+                    .by_ref()
                     .skip(offset)
                     .take(limit)
-                    .map(|row| row.with_counts(&snapshot))
-                    .collect();
+                    .map(|entry| entry.row.clone().with_counts(&snapshot))
+                    .collect::<Vec<_>>();
+                let next = offset.saturating_add(limit);
+                let next = matching.next().is_some().then_some(next);
                 Ok((page, next, snapshot.revision))
             },
         )
@@ -975,7 +972,7 @@ impl Library {
         let target = target.clone();
         let changed_at_ms = now_ms();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let selection = crate::selection::resolve(transaction, &snapshot, &target)?;
+            let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some(&self.match_cache))?;
             let mut next = (*snapshot).clone();
             if selection.is_empty() {
                 next.revision = revision;
@@ -1441,6 +1438,40 @@ pub(super) fn tag_subname(name: &str) -> &str {
     name.split_once(':').map_or(name, |(_, subname)| subname)
 }
 
+/// Every tag definition, sorted the way the tag lists show them, with
+/// lowercased keys computed once. Rebuilt only after the library changes, so
+/// typing in a tag search filters a resident list instead of reading,
+/// lowercasing and sorting every definition on each keystroke.
+#[derive(Default)]
+pub(crate) struct TagListCache(parking_lot::Mutex<Option<(u64, Arc<Vec<SortedTag>>)>>);
+
+pub(super) struct SortedTag {
+    subname_key: String,
+    row: TagDefinitionRow,
+}
+
+impl TagListCache {
+    fn sorted(&self, connection: &rusqlite::Connection, revision: u64) -> Result<Arc<Vec<SortedTag>>> {
+        if let Some((cached, rows)) = self.0.lock().as_ref() {
+            if *cached == revision {
+                return Ok(rows.clone());
+            }
+        }
+        let mut rows = tag_definition_rows(connection, None)?
+            .into_iter()
+            .map(|row| (row.namespace.to_lowercase(), SortedTag { subname_key: row.subname.to_lowercase(), row }))
+            .collect::<Vec<_>>();
+        rows.sort_by(|(left_namespace, left), (right_namespace, right)| {
+            (&left.subname_key, left_namespace, left.row.tag_id.0)
+                .cmp(&(&right.subname_key, right_namespace, right.row.tag_id.0))
+        });
+        let rows = Arc::new(rows.into_iter().map(|(_, entry)| entry).collect::<Vec<_>>());
+        *self.0.lock() = Some((revision, rows.clone()));
+        Ok(rows)
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct TagDefinitionRow {
     tag_id: crate::TagId,
     namespace_id: TagNamespaceId,

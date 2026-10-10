@@ -58,6 +58,18 @@ pub fn resolve(
     snapshot: &ProjectionSnapshot,
     target: &SelectionTarget,
 ) -> Result<RoaringBitmap> {
+    resolve_with(connection, snapshot, target, None)
+}
+
+/// `resolve`, reusing the grid's match cache: a select-all over a search the
+/// grid just showed costs a cache lookup instead of evaluating it again inside
+/// the write transaction.
+pub(crate) fn resolve_with(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    target: &SelectionTarget,
+    cache: Option<&query::MatchCache>,
+) -> Result<RoaringBitmap> {
     Ok(match target {
         // Check only the listed roots instead of unioning every root kind.
         SelectionTarget::Explicit { root_ids } => root_ids
@@ -70,7 +82,7 @@ pub fn resolve(
             excluded_root_ids,
         } => {
             let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
-            let mut selected = query::matching_roots(snapshot, query, &media)?;
+            let mut selected = query::matching_roots_cached(snapshot, query, &media, cache)?;
             selected -= excluded_root_ids
                 .iter()
                 .map(|id| id.0)

@@ -876,6 +876,18 @@ pub fn matching_roots(
     predicate::evaluate(&query.view.filter, &universe, snapshot, &mut text)
 }
 
+pub(crate) fn matching_roots_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+) -> Result<RoaringBitmap> {
+    match cache {
+        Some(cache) => Ok((*cached_matches(snapshot, query, media, Some(cache))?.ids).clone()),
+        None => matching_roots(snapshot, query, media),
+    }
+}
+
 /// Returns MIME values for the complete query result, independent of paging.
 /// A collection contributes to every MIME represented by one of its members,
 /// matching the semantics of the MIME filter projection itself.
