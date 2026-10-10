@@ -79,6 +79,13 @@ cached complete order, and name, rating, random and folder-order cursors keep th
 The derived checkpoint implementation version distinguishes signed date keys from older
 clamped keys; incompatible derived checkpoints rebuild from canonical SQLite data.
 
+The renderer holds only a ~1,500-tile window, so a selection is never expanded from loaded tiles
+when it reaches beyond them. Select-all is a `query` target with exclusions. A shift-click whose
+anchor has left the window is a `range` target carrying both roots and their view positions;
+the backend reads that ordinal span straight from the resident order and trusts it only when
+the roots at both ends still match, otherwise it locates the two roots in the complete order.
+A shift-click inside the loaded window stays an explicit list.
+
 ### The resident library model
 
 One projection snapshot holds everything a grid read needs: lifecycle, rating, tag, folder,
@@ -152,7 +159,10 @@ per aggregate: tags, folders, smart folders, imports, duplicates, structure, und
 writer transaction, settles the delta, publishes the snapshot and records any history entry.
 
 Persistence follows the change, not the size of the thing changed. Bitmaps are stored in 64k-id
-shards and a write re-encodes only shards holding changed ids. Folder and collection orders are
+shards and a write re-encodes only shards holding ids that changed in that bitmap (grouping
+ten roots rewrites each tag's one or two shards, not every shard the selection spans). An edit
+leaves bitmaps that hold none of its roots shared with the previous snapshot rather than
+copying them. Folder and collection orders are
 stored as 1,024-id chunks (`ordered_membership_chunk`); an append rewrites one chunk. A history
 entry for a bitmap keeps only the members it changed, and replay checks and restores only those
 members: later edits to other roots never block an undo, while a later edit to the same roots
