@@ -36,8 +36,10 @@ fn decode_chunk(payload: &[u8], expected_checksum: &[u8], into: &mut Vec<u32>) -
     }
     into.extend(
         payload
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes)),
     );
     Ok(())
 }
@@ -274,8 +276,10 @@ fn decode_chunk_unchecked(payload: &[u8], into: &mut Vec<u32>) -> Result<()> {
     }
     into.extend(
         payload
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes)),
     );
     Ok(())
 }
