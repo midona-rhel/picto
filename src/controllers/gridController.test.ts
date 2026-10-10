@@ -412,6 +412,19 @@ describe('gridController pagination', () => {
     expect(prepared.session.totalCount).toBe(9000);
   });
 
+  it('asks for the saved spot directly when Back restores filters in the same scope', () => {
+    queryItemsMock.mockResolvedValue(page([item(1)], 1));
+    gridController.applyIntent({
+      type: 'filter',
+      filters: { ...store.get(gridSessionAtom).filters, text: 'back' },
+      restoreScroll: true,
+      restoreProgress: 1,
+    });
+    expect(queryItemsMock.mock.calls.at(-1)?.[1]).toMatchObject({ position: { kind: 'fraction', value: 1 } });
+    gridController.applyIntent({ type: 'filter', filters: { ...store.get(gridSessionAtom).filters, text: 'new' } });
+    expect(queryItemsMock.mock.calls.at(-1)?.[1]).toMatchObject({ position: { kind: 'ordinal', value: 0 } });
+  });
+
   it('does not allow an obsolete preparation to commit after a newer destination', async () => {
     queryItemsMock.mockResolvedValueOnce(page([item(7)], 1));
     const old = await gridController.prepareNavigation({ kind: 'folder', folder_id: 7 });

@@ -413,7 +413,7 @@ class GridSessionController {
 
   applyIntent(intent: GridIntent): void {
     if (intent.type === 'filter') {
-      this.setFiltersNow(intent.filters);
+      this.setFiltersNow(intent.filters, intent.restoreScroll ? intent.restoreProgress : undefined);
       return;
     }
     if (intent.type === 'sort') {
@@ -454,7 +454,9 @@ class GridSessionController {
     }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
   }
 
-  async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
+  async loadFirstPage(options?: { preserveItems?: boolean; generation?: number; restoreProgress?: number }): Promise<void> {
+    const restore = options?.restoreProgress;
+    const progress = restore != null && Number.isFinite(restore) ? Math.max(0, Math.min(1, restore)) : 0;
     this.cancelWindowRequest();
     const request = this.windowRequest;
     const queryVersion = this.queryVersion;
@@ -472,7 +474,9 @@ class GridSessionController {
     try {
       const query = store.get(currentGridQueryAtom);
       this.preparationRequest = request;
-      const result = await queryItemWindow(query, { position: { kind: 'ordinal', value: 0 }, limit: PAGE_SIZE }, {
+      const result = await queryItemWindow(query, progress > 0
+        ? { position: { kind: 'fraction', value: progress }, limit: GRID_WINDOW_SIZE }
+        : { position: { kind: 'ordinal', value: 0 }, limit: PAGE_SIZE }, {
         channel: this.windowChannel, generation: request,
       });
       if (request === this.preparationRequest) this.preparationRequest = null;
@@ -637,12 +641,12 @@ class GridSessionController {
     this.applyIntent({ type: 'sort', field: 'folder_order', direction: 'ascending' });
   }
 
-  private setFiltersNow(filters: QueryFilters): void {
+  private setFiltersNow(filters: QueryFilters, restoreProgress?: number): void {
     if (itemFiltersEqual(store.get(gridSessionAtom).filters, filters)) return;
     updateSession({ filters: cloneFilters(filters) });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
-    void this.loadFirstPage({ preserveItems: true });
+    void this.loadFirstPage({ preserveItems: true, restoreProgress });
   }
 
   private cancelSearch(): void {

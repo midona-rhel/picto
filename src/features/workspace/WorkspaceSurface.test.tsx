@@ -294,7 +294,7 @@ describe('workspace surface coordinator', () => {
     await act(async () => store.set(pendingGridIntentAtom, { type: 'filter', filters }));
 
     expect(store.get(gridTransitionPhaseAtom)).toBe('idle');
-    expect(gridController.applyIntent).toHaveBeenCalledWith({ type: 'filter', filters });
+    expect(gridController.applyIntent).toHaveBeenCalledWith(expect.objectContaining({ type: 'filter', filters }));
   });
 
   it('hands an in-place history filter its destination scroll position', async () => {

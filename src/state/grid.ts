@@ -56,7 +56,7 @@ export interface GridSessionSnapshot {
 }
 
 export type GridIntent =
-  | { type: 'filter'; filters: QueryFilters; restoreScroll?: boolean }
+  | { type: 'filter'; filters: QueryFilters; restoreScroll?: boolean; restoreProgress?: number }
   | { type: 'sort'; field: SortField; direction: SortDirection }
   | { type: 'view'; patch: Partial<GridViewPreferences> };
 
