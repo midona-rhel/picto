@@ -507,7 +507,7 @@ impl Library {
                 let values = Arc::make_mut(&mut next.lifecycle)
                     .entry(lifecycle)
                     .or_default();
-                if !(&*values & &roots).is_empty() {
+                if !values.is_disjoint(&roots) {
                     *values -= &roots;
                     bitmap::replace_changed(
                         transaction,
@@ -523,7 +523,7 @@ impl Library {
             }
             for rating in Rating::ALL {
                 let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
-                if !(&*values & &roots).is_empty() {
+                if !values.is_disjoint(&roots) {
                     *values -= &roots;
                     bitmap::replace_changed(
                         transaction,
@@ -541,7 +541,7 @@ impl Library {
                 .tags
                 .iter()
                 .filter_map(|(tag_id, members)| {
-                    (!((members & &roots).is_empty())).then_some(*tag_id)
+                    (!members.is_disjoint(&roots)).then_some(*tag_id)
                 })
                 .collect::<Vec<_>>();
             for tag_id in changed_tags {
@@ -936,6 +936,9 @@ pub(super) fn capture_structure(
 ) -> Result<StructuralState> {
     let mut folders = std::collections::BTreeMap::new();
     for (folder, order) in snapshot.folder_orders.iter() {
+        if snapshot.folders.get(folder).is_none_or(|members| members.is_disjoint(affected)) {
+            continue;
+        }
         let mut next_unaffected = None;
         let mut positions = Vec::new();
         for (ordinal, root_id) in order.iter().enumerate().rev() {
@@ -1012,6 +1015,9 @@ pub(super) fn structural_memberships(
         }));
     entries
         .filter_map(|(key, members)| {
+            if members.is_disjoint(affected) {
+                return None;
+            }
             let ids = members & affected;
             (!ids.is_empty()).then_some((key, ids))
         })
