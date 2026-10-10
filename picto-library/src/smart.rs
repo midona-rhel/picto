@@ -138,6 +138,15 @@ pub(crate) fn settle_affected_for(
     if affected.is_empty() || snapshot.smart_queries.is_empty() || changes.is_empty() {
         return Ok(());
     }
+    // Most edits concern no smart folder; decide that from the resident rules
+    // before reading and parsing every definition.
+    if !snapshot.smart_queries.values().any(|view| {
+        changes
+            .iter()
+            .any(|change| predicate::depends_on(&view.filter, *change))
+    }) {
+        return Ok(());
+    }
     let definitions = load_definitions(connection)?;
     let changed_local_ids = definitions
         .iter()
