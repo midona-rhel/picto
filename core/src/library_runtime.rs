@@ -375,7 +375,7 @@ fn start_ai_tag_worker(
     tokio::spawn(async move {
         loop {
             wake.mark_seen();
-            if let Err(error) = crate::ai_runtime::drain_auto_tag_work(&application, 1).await {
+            if let Err(error) = crate::ai_runtime::drain_auto_tag_work(&application, 8).await {
                 tracing::warn!(%error, "Canonical AI-tag worker failed");
             }
             if !wake.next(&cancel, Duration::from_millis(100), Duration::from_secs(3)).await {
