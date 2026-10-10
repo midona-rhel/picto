@@ -171,6 +171,22 @@ impl DateIndex {
         self.0.between(minimum, maximum)
     }
 
+    pub fn between_within(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        within: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        if minimum.is_some_and(|value| value > i64::MAX as u64) {
+            return RoaringBitmap::new();
+        }
+        let minimum = minimum
+            .filter(|&value| value > 0)
+            .map(|value| Self::key(value as i64));
+        let maximum = maximum.map(|value| Self::key(value.min(i64::MAX as u64) as i64));
+        self.0.between_within(minimum, maximum, within)
+    }
+
     pub(crate) fn ordered_window(
         &self,
         selection: &RoaringBitmap,
@@ -186,9 +202,9 @@ impl DateIndex {
         }
         // SQL's COALESCE(date, -1) ties missing dates with actual -1 values.
         // Select three disjoint ranges; never materialize a full matching order.
-        let below = selection & &index.between(None, Some(Self::key(-2)));
-        let equal = (selection & &index.between(Some(Self::key(-1)), Some(Self::key(-1)))) | absent;
-        let above = selection & &index.between(Some(Self::key(0)), None);
+        let below = index.between(None, Some(Self::key(-2)), selection & &index.present);
+        let equal = index.between(Some(Self::key(-1)), Some(Self::key(-1)), selection & &index.present) | absent;
+        let above = index.between(Some(Self::key(0)), None, selection & &index.present);
         let mut groups = [(below, false), (equal, true), (above, false)];
         if descending {
             groups.reverse();
@@ -337,7 +353,28 @@ impl NumericIndex {
     pub fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
         let mut result = RoaringBitmap::new();
         for shard in self.shards.values() {
-            result |= shard.between(minimum, maximum);
+            result |= shard.between(minimum, maximum, shard.present.clone());
+        }
+        result
+    }
+
+    /// `between` restricted to `within`. Work is proportional to the overlap,
+    /// so evaluating a filter over a few changed roots stays cheap.
+    pub fn between_within(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        within: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        let mut result = RoaringBitmap::new();
+        if within.is_empty() {
+            return result;
+        }
+        for shard in self.shards.values() {
+            let base = &shard.present & within;
+            if !base.is_empty() {
+                result |= shard.between(minimum, maximum, base);
+            }
         }
         result
     }
@@ -565,13 +602,18 @@ impl NumericShard {
         })
     }
 
-    fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
-        let mut result = self.present.clone();
+    fn between(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        base: RoaringBitmap,
+    ) -> RoaringBitmap {
+        let mut result = base;
         if let Some(minimum) = minimum {
-            result -= &self.less_than(minimum);
+            result -= &self.less_than(minimum, &result);
         }
         if let Some(exclusive) = maximum.and_then(|value| value.checked_add(1)) {
-            result &= self.less_than(exclusive);
+            result &= self.less_than(exclusive, &result);
         }
         result
     }
@@ -594,11 +636,12 @@ impl NumericShard {
             + self.slices.capacity() * std::mem::size_of::<RoaringBitmap>()
     }
 
-    fn less_than(&self, value: u64) -> RoaringBitmap {
+    /// Members of `base` (a subset of `present`) whose value is below `value`.
+    fn less_than(&self, value: u64, base: &RoaringBitmap) -> RoaringBitmap {
         if value == 0 {
             return RoaringBitmap::new();
         }
-        let mut equal = self.present.clone();
+        let mut equal = base.clone();
         let mut less = RoaringBitmap::new();
         let highest = self.slices.len().max(64 - value.leading_zeros() as usize);
         for bit in (0..highest).rev() {
@@ -663,6 +706,9 @@ pub struct ProjectionSnapshot {
     pub smart_local_results: Arc<HashMap<u32, SharedBitmap>>,
     /// Local results intersected with every ancestor result.
     pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
+    /// Session-local cache version of each smart folder's result. It moves only
+    /// when that folder's membership changes, so other folders stay cached.
+    pub smart_result_versions: Arc<HashMap<u32, u64>>,
     /// Definitions exactly as saved by each smart folder.
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
     /// Local definitions composed with every ancestor definition.
@@ -1319,6 +1365,7 @@ fn load(
         urls_present: Arc::new(urls_present),
         smart_local_results: Arc::new(HashMap::new()),
         smart_results: Arc::new(HashMap::new()),
+        smart_result_versions: Arc::new(HashMap::new()),
         smart_queries: Arc::new(HashMap::new()),
         smart_effective_queries: Arc::new(HashMap::new()),
     };

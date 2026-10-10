@@ -70,27 +70,35 @@ pub(crate) fn settle_affected(
         connection,
         snapshot,
         affected,
-        predicate::DependencyChange::All,
+        &[predicate::DependencyChange::All],
     )
 }
 
+/// Re-evaluate, over the `affected` roots only, the smart folders whose rules
+/// can observe any of `changes`. A folder's stored result, and its cache
+/// version, change only when its membership among those roots actually moved.
 pub(crate) fn settle_affected_for(
     connection: &Connection,
     snapshot: &mut ProjectionSnapshot,
     affected: &RoaringBitmap,
-    change: predicate::DependencyChange,
+    changes: &[predicate::DependencyChange],
 ) -> Result<()> {
-    if affected.is_empty() || snapshot.smart_queries.is_empty() {
+    if affected.is_empty() || snapshot.smart_queries.is_empty() || changes.is_empty() {
         return Ok(());
     }
     let definitions = load_definitions(connection)?;
     let changed_local_ids = definitions
         .iter()
         .filter_map(|(id, definition)| {
-            predicate::depends_on(&definition.view.filter, change).then_some(*id)
+            changes
+                .iter()
+                .any(|change| predicate::depends_on(&definition.view.filter, *change))
+                .then_some(*id)
         })
         .collect::<Vec<_>>();
-    let changed_local_set = changed_local_ids.iter().copied().collect::<HashSet<_>>();
+    if changed_local_ids.is_empty() {
+        return Ok(());
+    }
     let active_affected = SharedBitmap::from(snapshot.active() & affected);
     let local_replacements = evaluate_local_results(
         snapshot,
@@ -98,10 +106,22 @@ pub(crate) fn settle_affected_for(
         changed_local_ids.iter().copied(),
         &active_affected,
     )?;
-    let mut local_results = (*snapshot.smart_local_results).clone();
+    let mut local_changed = HashSet::new();
+    let mut local_results = None::<HashMap<u32, SharedBitmap>>;
     for (smart_folder_id, matches) in local_replacements {
-        let result = local_results.entry(smart_folder_id).or_default();
-        replace_affected(result, affected, &matches);
+        let current = snapshot.smart_local_results.get(&smart_folder_id);
+        if current.is_some_and(|current| (&**current & affected) == *matches) {
+            continue;
+        }
+        let results = local_results.get_or_insert_with(|| (*snapshot.smart_local_results).clone());
+        replace_affected(results.entry(smart_folder_id).or_default(), affected, &matches);
+        local_changed.insert(smart_folder_id);
+    }
+    if local_changed.is_empty() {
+        return Ok(());
+    }
+    if let Some(local_results) = local_results {
+        snapshot.smart_local_results = Arc::new(local_results);
     }
 
     let mut children = HashMap::<u32, Vec<u32>>::new();
@@ -116,10 +136,9 @@ pub(crate) fn settle_affected_for(
 
     let mut replacements = Vec::new();
     while let Some((smart_folder_id, universe, parent_changed)) = pending.pop() {
-        let local_changed = changed_local_set.contains(&smart_folder_id);
-        let changed = parent_changed || local_changed;
+        let changed = parent_changed || local_changed.contains(&smart_folder_id);
         let matches: SharedBitmap = if changed {
-            let local = &local_results[&smart_folder_id];
+            let local = &snapshot.smart_local_results[&smart_folder_id];
             if universe.is_subset(local) {
                 universe.clone()
             } else if local.is_subset(&universe) {
@@ -143,17 +162,35 @@ pub(crate) fn settle_affected_for(
             );
         }
         if changed {
-            replacements.push((smart_folder_id, matches));
+            let unchanged = snapshot
+                .smart_results
+                .get(&smart_folder_id)
+                .is_some_and(|current| (&**current & affected) == *matches);
+            if !unchanged {
+                replacements.push((smart_folder_id, matches));
+            }
         }
     }
-
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    bump_versions(snapshot, replacements.iter().map(|(id, _)| *id));
     let results = Arc::make_mut(&mut snapshot.smart_results);
     for (smart_folder_id, matches) in replacements {
         let result = results.entry(smart_folder_id).or_default();
         replace_affected(result, affected, &matches);
     }
-    snapshot.smart_local_results = Arc::new(local_results);
     Ok(())
+}
+
+/// Give each listed smart folder a cache version newer than any in use, so
+/// cached windows of exactly those folders are invalidated.
+fn bump_versions(snapshot: &mut ProjectionSnapshot, ids: impl IntoIterator<Item = u32>) {
+    let versions = Arc::make_mut(&mut snapshot.smart_result_versions);
+    let next = versions.values().max().copied().unwrap_or(0) + 1;
+    for id in ids {
+        versions.insert(id, next);
+    }
 }
 
 fn replace_affected(
@@ -176,6 +213,7 @@ pub(crate) fn remove(snapshot: &mut ProjectionSnapshot, smart_folder_id: SmartFo
     Arc::make_mut(&mut snapshot.smart_effective_queries).remove(&smart_folder_id.0);
     Arc::make_mut(&mut snapshot.smart_local_results).remove(&smart_folder_id.0);
     Arc::make_mut(&mut snapshot.smart_results).remove(&smart_folder_id.0);
+    Arc::make_mut(&mut snapshot.smart_result_versions).remove(&smart_folder_id.0);
 }
 
 pub(crate) fn rewrite_tag_references(
@@ -252,6 +290,7 @@ pub(crate) fn refresh_all(
     let results = compose_trees(snapshot, &definitions, roots, &local_results)?;
     snapshot.smart_queries = Arc::new(local_queries);
     snapshot.smart_effective_queries = Arc::new(effective_queries);
+    bump_versions(snapshot, results.keys().copied());
     snapshot.smart_local_results = Arc::new(local_results);
     snapshot.smart_results = Arc::new(results);
     Ok(())
@@ -286,6 +325,7 @@ pub(crate) fn refresh_subtree(
         vec![smart_folder_id.0],
         &local_results,
     )?;
+    bump_versions(snapshot, replacements.keys().copied());
     let mut results = (*snapshot.smart_results).clone();
     results.retain(|id, _| definitions.contains_key(id));
     results.extend(replacements);

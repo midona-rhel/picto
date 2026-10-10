@@ -261,40 +261,37 @@ pub(crate) fn count_visible_candidates(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
 ) -> Result<u64> {
-    let mut statement = connection.prepare(
-        "SELECT file_id_a, file_id_b FROM duplicate_pair
-         WHERE status = ?1 ORDER BY file_id_a, file_id_b",
+    // Two set-based reads instead of one or two queries per pair side.
+    let mut owned_files = std::collections::HashSet::new();
+    let mut statement = connection.prepare_cached(
+        "SELECT media.file_id, media.media_id FROM media_item media
+         WHERE media.file_id IN (
+             SELECT file_id_a FROM duplicate_pair WHERE status = ?1
+             UNION SELECT file_id_b FROM duplicate_pair WHERE status = ?1)",
+    )?;
+    let rows = statement.query_map([STATUS_DETECTED], |row| {
+        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+    })?;
+    for row in rows {
+        let (file_id, media_id) = row?;
+        if snapshot.media_owner.get(media_id).is_some() {
+            owned_files.insert(file_id);
+        }
+    }
+    let mut statement = connection.prepare_cached(
+        "SELECT file_id_a, file_id_b FROM duplicate_pair WHERE status = ?1",
     )?;
     let pairs = statement.query_map([STATUS_DETECTED], |row| {
-        Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
+        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
     })?;
     let mut count = 0_u64;
     for pair in pairs {
         let (left, right) = pair?;
-        if file_has_occurrence(connection, snapshot, left)?
-            && file_has_occurrence(connection, snapshot, right)?
-        {
+        if owned_files.contains(&left) && owned_files.contains(&right) {
             count += 1;
         }
     }
     Ok(count)
-}
-
-fn file_has_occurrence(
-    connection: &Connection,
-    snapshot: &ProjectionSnapshot,
-    file_id: FileId,
-) -> Result<bool> {
-    let mut statement =
-        connection.prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?;
-    let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
-    for media_id in rows {
-        let media_id = media_id?;
-        if snapshot.media_owner.get(media_id).is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn candidate_side(

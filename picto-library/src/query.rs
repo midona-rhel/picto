@@ -505,16 +505,25 @@ pub struct LibraryCounts {
 }
 
 pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
+    let mut counts = scope_counts(snapshot);
     let active = snapshot.active();
-    let tags = snapshot
+    counts.tags = snapshot
         .tags
         .iter()
-        .map(|(tag_id, roots)| (*tag_id, (roots & active).len()))
+        .map(|(tag_id, roots)| (*tag_id, roots.intersection_len(active)))
         .collect();
+    counts
+}
+
+/// Counts for every scope except per-tag counts, which cost one intersection
+/// per tag in the library and are not shown in the sidebar.
+pub fn scope_counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
+    let active = snapshot.active();
+    let tags = Default::default();
     let folders = snapshot
         .folders
         .iter()
-        .map(|(folder_id, roots)| (*folder_id, (roots & active).len()))
+        .map(|(folder_id, roots)| (*folder_id, roots.intersection_len(active)))
         .collect();
     let smart_folders = snapshot
         .smart_results
@@ -528,8 +537,8 @@ pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
         tags,
         folders,
         smart_folders,
-        untagged: (active & &snapshot.tag_count.between(Some(0), Some(0))).len(),
-        uncategorized: (active & &snapshot.folder_count.between(Some(0), Some(0))).len(),
+        untagged: snapshot.tag_count.between_within(Some(0), Some(0), active).len(),
+        uncategorized: snapshot.folder_count.between_within(Some(0), Some(0), active).len(),
         revision: snapshot.revision,
     }
 }

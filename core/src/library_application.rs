@@ -689,41 +689,14 @@ impl LibraryApplication {
             .transpose()
             .map_err(|_| "Invalid tag cursor".to_string())?
             .unwrap_or(0);
-        let search = search
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_lowercase);
         let limit = usize::try_from(limit.clamp(1, 500)).expect("positive tag limit");
-        let (tags, revision) = self
+        let (tags, next_offset, revision) = self
             .library
-            .tags_with_revision()
+            .tag_page(namespace, search, offset, limit)
             .map_err(|error| error.to_string())?;
-        let mut tags = tags
-            .into_iter()
-            .filter(|tag| namespace.is_none_or(|namespace| tag.namespace == namespace))
-            .filter(|tag| {
-                search
-                    .as_ref()
-                    .is_none_or(|search| tag.subname.to_lowercase().contains(search))
-            })
-            .collect::<Vec<_>>();
-        tags.sort_by(|left, right| {
-            left.subname
-                .to_lowercase()
-                .cmp(&right.subname.to_lowercase())
-                .then_with(|| {
-                    left.namespace
-                        .to_lowercase()
-                        .cmp(&right.namespace.to_lowercase())
-                })
-                .then_with(|| left.tag_id.0.cmp(&right.tag_id.0))
-        });
-        let next_offset = offset.saturating_add(limit);
-        let next_cursor = (tags.len() > next_offset).then(|| next_offset.to_string());
-        let tags = tags.into_iter().skip(offset).take(limit).collect();
         Ok(picto_library::TagPage {
             tags,
-            next_cursor,
+            next_cursor: next_offset.map(|offset| offset.to_string()),
             revision,
         })
     }
@@ -738,28 +711,15 @@ impl LibraryApplication {
         &self,
         tag_ids: &[picto_library::TagId],
     ) -> Result<Vec<picto_library::TagRecord>, String> {
-        let wanted = tag_ids
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
         self.library
-            .tags()
-            .map(|tags| {
-                tags.into_iter()
-                    .filter(|tag| wanted.contains(&tag.tag_id))
-                    .collect()
-            })
+            .tags_by_id(tag_ids)
             .map_err(|error| error.to_string())
     }
 
     pub fn unused_tag_count(&self) -> Result<u64, String> {
-        Ok(self
-            .library
-            .tags()
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .filter(|tag| tag.assignment_count == 0)
-            .count() as u64)
+        self.library
+            .unused_tag_count()
+            .map_err(|error| error.to_string())
     }
 
     pub fn rename_or_merge_tag(
@@ -863,6 +823,7 @@ impl LibraryApplication {
             "Change settings",
             "setting",
             "application",
+            true,
             patch,
         )
     }
@@ -873,11 +834,13 @@ impl LibraryApplication {
         patch: &serde_json::Value,
     ) -> Result<picto_library::MutationReceipt, String> {
         let scope = required_shell_value("View preference scope", scope)?;
+        // Sort, zoom and layout choices are not edits: keep them out of undo.
         self.patch_settings_value(
             "settings.view.patch",
             "Change view preferences",
             "view_pref",
             &scope,
+            false,
             patch,
         )
     }
@@ -927,28 +890,33 @@ impl LibraryApplication {
         label: &'static str,
         table: &'static str,
         key: &str,
+        undoable: bool,
         patch: &serde_json::Value,
     ) -> Result<picto_library::MutationReceipt, String> {
         require_json_object("Settings patch", patch)?;
-        let mut value = self.settings_value(table, key)?.value;
-        let target = value
-            .as_object_mut()
-            .ok_or_else(|| "Stored settings must be a JSON object".to_string())?;
-        for (name, replacement) in patch.as_object().expect("validated object") {
-            if replacement.is_null() {
-                target.remove(name);
-            } else {
-                target.insert(name.clone(), replacement.clone());
-            }
-        }
+        let patch = patch.as_object().expect("validated object").clone();
         self.library
-            .replace_auxiliary_json(
-                command,
-                label,
-                table,
-                key,
-                Some(serde_json::to_string(&value).map_err(|error| error.to_string())?),
-            )
+            .update_auxiliary_json(command, label, table, key, undoable, move |stored| {
+                let invalid = |message: String| picto_library::LibraryError::InvalidInput(message);
+                let mut value = match stored {
+                    Some(encoded) => serde_json::from_str::<serde_json::Value>(encoded)
+                        .map_err(|error| invalid(error.to_string()))?,
+                    None => serde_json::json!({}),
+                };
+                let target = value
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("Stored settings must be a JSON object".into()))?;
+                for (name, replacement) in patch {
+                    if replacement.is_null() {
+                        target.remove(&name);
+                    } else {
+                        target.insert(name, replacement);
+                    }
+                }
+                serde_json::to_string(&value)
+                    .map(Some)
+                    .map_err(|error| invalid(error.to_string()))
+            })
             .map_err(|error| error.to_string())
     }
 

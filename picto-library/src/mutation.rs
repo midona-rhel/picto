@@ -325,6 +325,22 @@ impl Library {
         key: &str,
         value: Option<String>,
     ) -> Result<MutationReceipt> {
+        self.update_auxiliary_json(command, label, table, key, true, move |_| Ok(value))
+    }
+
+    /// Read-modify-write of one auxiliary JSON value inside a single writer
+    /// transaction, so concurrent patches cannot overwrite each other.
+    /// `undoable` decides whether the change enters session history; view
+    /// preferences (sort, zoom, layout) are not edits and stay out of it.
+    pub fn update_auxiliary_json(
+        &self,
+        command: &'static str,
+        label: &'static str,
+        table: &'static str,
+        key: &str,
+        undoable: bool,
+        update: impl FnOnce(Option<&str>) -> Result<Option<String>>,
+    ) -> Result<MutationReceipt> {
         let (table, key_column) = auxiliary_json_spec(table)?;
         let key = key.to_owned();
         let projections = self.projections.clone();
@@ -342,6 +358,7 @@ impl Library {
                         |row| row.get::<_, String>(0),
                     )
                     .optional()?;
+                let value = update(before.as_deref())?;
                 if before == value {
                     return Ok(None);
                 }
@@ -377,7 +394,7 @@ impl Library {
                 Ok(Some((receipt.clone(), PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: Some(HistoryEntry::for_command(
+                    history: undoable.then(|| HistoryEntry::for_command(
                         command,
                         label,
                         SemanticChange::AuxiliaryJson {
@@ -569,7 +586,7 @@ impl Library {
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
-                let counts = crate::query::counts(&snapshot);
+                let counts = crate::query::scope_counts(&snapshot);
                 let recently_viewed = crate::query::matching_roots(
                     &snapshot,
                     &crate::query::RootQuery {
@@ -934,6 +951,84 @@ impl Library {
                     .collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(LibraryError::from)?;
                 Ok((tags, snapshot.revision))
+            },
+        )
+    }
+
+    /// One page of tags, filtered by namespace and subname substring and sorted
+    /// by subname, then namespace, then id (case-insensitive). Counts are
+    /// computed only for the returned page, not for every tag in the library.
+    pub fn tag_page(
+        &self,
+        namespace: Option<&str>,
+        search: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<TagRecord>, Option<usize>, u64)> {
+        let search = search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let mut rows = tag_definition_rows(connection, None)?;
+                rows.retain(|row| {
+                    namespace.is_none_or(|namespace| row.namespace == namespace)
+                        && search
+                            .as_ref()
+                            .is_none_or(|search| row.subname.to_lowercase().contains(search))
+                });
+                rows.sort_by_cached_key(|row| {
+                    (row.subname.to_lowercase(), row.namespace.to_lowercase(), row.tag_id.0)
+                });
+                let next = offset.saturating_add(limit);
+                let next = (rows.len() > next).then_some(next);
+                let page = rows
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|row| row.with_counts(&snapshot))
+                    .collect();
+                Ok((page, next, snapshot.revision))
+            },
+        )
+    }
+
+    /// The requested tags with counts; unknown ids are skipped.
+    pub fn tags_by_id(&self, tag_ids: &[crate::TagId]) -> Result<Vec<TagRecord>> {
+        if tag_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                Ok(tag_definition_rows(connection, Some(tag_ids))?
+                    .into_iter()
+                    .map(|row| row.with_counts(&snapshot))
+                    .collect())
+            },
+        )
+    }
+
+    /// Tags assigned to no root, active or not.
+    pub fn unused_tag_count(&self) -> Result<u64> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let mut statement = connection.prepare_cached("SELECT tag_id FROM tag_definition")?;
+                let ids = statement.query_map([], |row| row.get::<_, u32>(0))?;
+                let mut unused = 0;
+                for tag_id in ids {
+                    let tag_id = crate::TagId(tag_id?);
+                    if snapshot.tags.get(&tag_id).is_none_or(|members| members.is_empty()) {
+                        unused += 1;
+                    }
+                }
+                Ok(unused)
             },
         )
     }
@@ -1761,7 +1856,7 @@ impl Library {
                     transaction,
                     &mut next,
                     &settled,
-                    crate::predicate::DependencyChange::RootText,
+                    &[crate::predicate::DependencyChange::RootText],
                 )?;
                 next.revision = revision;
                 let receipt = PublicationCoordinator::receipt(
@@ -1793,6 +1888,22 @@ impl Library {
                 "cannot checkpoint database revision {revision} with projection revision {}",
                 snapshot.revision
             )));
+        }
+        // The checkpoint is a startup optimization; re-encoding an unchanged
+        // projection every few minutes costs seconds of CPU for nothing.
+        let stored = self.database.read(WorkPriority::Maintenance, |connection| {
+            use rusqlite::OptionalExtension;
+            connection
+                .query_row(
+                    "SELECT database_revision FROM projection_checkpoint WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        if stored == Some(revision as i64) {
+            return Ok(0);
         }
         let payload = crate::checkpoint::encode(&snapshot)?;
         let size = payload.len();
@@ -2307,8 +2418,8 @@ impl Library {
                     transaction,
                     &mut next,
                     &affected,
-                    if content.is_some() { crate::predicate::DependencyChange::All }
-                    else { crate::predicate::DependencyChange::CoverFacts },
+                    if content.is_some() { &[crate::predicate::DependencyChange::All] }
+                    else { &[crate::predicate::DependencyChange::CoverFacts] },
                 )?;
                 transaction.execute(
                     "INSERT INTO cloud_journal
@@ -2495,7 +2606,14 @@ impl Library {
                         },
                     ));
                 }
-                crate::smart::settle_affected(transaction, &mut next, &selection)?;
+                let mut smart_changes = Vec::new();
+                if rating.is_some() {
+                    smart_changes.push(crate::predicate::DependencyChange::Rating);
+                }
+                if notes.is_some() || source_urls.is_some() {
+                    smart_changes.push(crate::predicate::DependencyChange::RootText);
+                }
+                crate::smart::settle_affected_for(transaction, &mut next, &selection, &smart_changes)?;
                 insert_cloud_journal(
                     transaction,
                     revision,
@@ -2638,7 +2756,7 @@ impl Library {
                     transaction,
                     &mut next,
                     &changed,
-                    crate::predicate::DependencyChange::RootText,
+                    &[crate::predicate::DependencyChange::RootText],
                 )?;
                 insert_cloud_journal(
                     transaction,
@@ -2757,21 +2875,17 @@ impl Library {
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let every_root = snapshot.root_kinds.values().fold(
-                    RoaringBitmap::new(),
-                    |mut roots, members| {
-                        roots |= members;
-                        roots
-                    },
-                );
-                let missing = &requested_roots - &every_root;
-                if let Some(root_id) = missing.min() {
+                // Check only the requested roots instead of unioning every root.
+                if let Some(root_id) = requested_roots.iter().find(|root_id| {
+                    !snapshot.root_kinds.values().any(|members| members.contains(*root_id))
+                }) {
                     return Err(LibraryError::NotFound(format!("root {root_id}")));
                 }
 
                 let mut next = (*snapshot).clone();
                 let mut changes = Vec::with_capacity(roots_by_tag.len());
                 let mut affected = RoaringBitmap::new();
+                let mut smart_changes = Vec::new();
                 for (name, requested) in &roots_by_tag {
                     let tag_id = if let Some(tag_id) = next.tag_ids_by_name.get(name).copied() {
                         tag_id
@@ -2806,6 +2920,7 @@ impl Library {
                         counts.insert(root_id, counts.value(root_id).unwrap_or(0) + 1);
                     }
                     affected |= &changed;
+                    smart_changes.push(crate::predicate::DependencyChange::Tag(tag_id));
                     changes.push(SemanticChange::Bitmap {
                         key: BitmapKey {
                             domain: BitmapDomain::Tag,
@@ -2817,7 +2932,7 @@ impl Library {
                 }
 
                 if !affected.is_empty() {
-                    crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                    crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
                     insert_cloud_journal(
                         transaction,
                         revision,
@@ -3236,6 +3351,7 @@ impl Library {
                 let mut next = (*snapshot).clone();
                 let mut affected = RoaringBitmap::new();
                 let mut changes = Vec::new();
+                let mut smart_changes = Vec::new();
                 for (source_tag_id, subname) in source_tags {
                     let destination = transaction
                         .query_row(
@@ -3255,6 +3371,8 @@ impl Library {
                         )?;
                         affected |= members;
                         changes.extend(tag_changes);
+                        smart_changes.push(crate::predicate::DependencyChange::Tag(source_tag_id));
+                        smart_changes.push(crate::predicate::DependencyChange::Tag(destination));
                     } else {
                         let before = next
                             .tag_ids_by_name
@@ -3289,6 +3407,7 @@ impl Library {
                     "DELETE FROM tag_namespace WHERE namespace_id = ?1",
                     [namespace_id.0],
                 )?;
+                crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
                 changes.push(SemanticChange::TagNamespaceDefinition {
                     before: Some(source_state),
                     after: None,
@@ -4339,7 +4458,7 @@ impl Library {
                     transaction,
                     &mut next,
                     &affected,
-                    crate::predicate::DependencyChange::Folders,
+                    &[crate::predicate::DependencyChange::Folders],
                 )?;
                 next.revision = revision;
                 let deleted_folder_ids = definitions
@@ -5330,6 +5449,16 @@ impl Library {
                     destination,
                     revision,
                 )?;
+                // Members moved to the destination (or lost a tag): folders on
+                // either tag, and Exact-mode folders, must see the new membership.
+                let mut smart_changes = vec![crate::predicate::DependencyChange::Tag(source)];
+                smart_changes.extend(destination.map(crate::predicate::DependencyChange::Tag));
+                crate::smart::settle_affected_for(
+                    transaction,
+                    &mut next,
+                    &source_members,
+                    &smart_changes,
+                )?;
                 let settings_changed = if destination.is_none() {
                     if let Some(change) = prune_deleted_starred_tags(transaction, &next)? {
                         history_changes.push(change);
@@ -5509,7 +5638,11 @@ impl Library {
                         },
                     ));
                 }
-                crate::smart::settle_affected(transaction, &mut next, &affected)?;
+                let smart_changes = tag_ids
+                    .iter()
+                    .map(|tag_id| crate::predicate::DependencyChange::Tag(crate::TagId(*tag_id)))
+                    .collect::<Vec<_>>();
+                crate::smart::settle_affected_for(transaction, &mut next, &affected, &smart_changes)?;
                 insert_cloud_journal(
                     transaction,
                     revision,
@@ -5626,7 +5759,7 @@ impl Library {
                     transaction,
                     &mut next,
                     &selection,
-                    crate::predicate::DependencyChange::RootText,
+                    &[crate::predicate::DependencyChange::RootText],
                 )?;
                 insert_cloud_journal(
                     transaction,
@@ -5793,7 +5926,7 @@ impl Library {
                         transaction,
                         &mut next,
                         &changed,
-                        crate::predicate::DependencyChange::Folder(folder_id),
+                        &[crate::predicate::DependencyChange::Folder(folder_id)],
                     )?;
                 }
                 insert_cloud_journal(
@@ -5895,7 +6028,7 @@ impl Library {
                     transaction,
                     &mut next,
                     &selection,
-                    smart_change,
+                    &[smart_change],
                 )?;
                 if !changes.is_empty() {
                     insert_cloud_journal(
@@ -8253,4 +8386,61 @@ fn auxiliary_json_spec(table: &str) -> Result<(&'static str, &'static str)> {
             "unsupported auxiliary JSON table {table}"
         ))),
     }
+}
+
+struct TagDefinitionRow {
+    tag_id: crate::TagId,
+    namespace_id: TagNamespaceId,
+    namespace: String,
+    subname: String,
+}
+
+impl TagDefinitionRow {
+    fn with_counts(self, snapshot: &ProjectionSnapshot) -> TagRecord {
+        let members = snapshot.tags.get(&self.tag_id);
+        TagRecord {
+            tag_id: self.tag_id,
+            namespace_id: self.namespace_id,
+            namespace: self.namespace,
+            subname: self.subname,
+            active_count: members.map_or(0, |roots| roots.intersection_len(snapshot.active())),
+            assignment_count: members.map_or(0, |roots| roots.len()),
+        }
+    }
+}
+
+/// Tag definitions without counts; `only` restricts to the given ids.
+fn tag_definition_rows(
+    connection: &rusqlite::Connection,
+    only: Option<&[crate::TagId]>,
+) -> Result<Vec<TagDefinitionRow>> {
+    let base = "SELECT tag.tag_id, namespace.namespace_id, namespace.display_name, tag.subname
+         FROM tag_definition tag
+         JOIN tag_namespace namespace ON namespace.namespace_id = tag.namespace_id";
+    let map = |row: &rusqlite::Row<'_>| {
+        Ok(TagDefinitionRow {
+            tag_id: crate::TagId(row.get(0)?),
+            namespace_id: TagNamespaceId(row.get(1)?),
+            namespace: row.get(2)?,
+            subname: row.get(3)?,
+        })
+    };
+    let rows = match only {
+        None => connection
+            .prepare_cached(base)?
+            .query_map([], map)?
+            .collect::<std::result::Result<Vec<_>, _>>(),
+        Some(ids) => {
+            let ids = serde_json::to_string(&ids.iter().map(|id| id.0).collect::<Vec<_>>())?;
+            connection
+                .prepare_cached(&format!(
+                    "{base} WHERE tag.tag_id IN (SELECT value FROM json_each(?1))
+                     ORDER BY namespace.display_name COLLATE NOCASE,
+                              tag.subname COLLATE NOCASE, tag.tag_id"
+                ))?
+                .query_map([ids], map)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+        }
+    };
+    rows.map_err(LibraryError::from)
 }
