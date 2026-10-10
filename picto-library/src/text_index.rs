@@ -150,14 +150,18 @@ impl TextShard {
         let Some(first_in_scope) = universe.range(first.id..=last.id).next() else {
             return result;
         };
-        let mut from =
-            self.rows[self.rows.partition_point(|row| row.id < first_in_scope)].bounds[0] as usize;
+        let mut index = self.rows.partition_point(|row| row.id < first_in_scope);
+        let mut from = self.rows[index].bounds[0] as usize;
         while let Some(offset) = finder.find(&text[from..]) {
             let start = from + offset;
-            let index = self
-                .rows
-                .partition_point(|row| row.bounds[0] as usize <= start)
-                .saturating_sub(1);
+            // Hits only move forward, so walk the row cursor instead of
+            // searching for the row; a long gap falls back to a search.
+            if self.rows.get(index + 16).is_some_and(|row| row.bounds[0] as usize <= start) {
+                index = self.rows.partition_point(|row| row.bounds[0] as usize <= start) - 1;
+            }
+            while self.rows.get(index + 1).is_some_and(|row| row.bounds[0] as usize <= start) {
+                index += 1;
+            }
             let row = &self.rows[index];
             // Resume at the next row in scope: rows outside it, and the rest
             // of a row already decided, are never searched again.
