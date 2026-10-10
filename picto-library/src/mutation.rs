@@ -749,14 +749,6 @@ impl Library {
         )
     }
 
-    pub fn ordered_selection(&self, target: &SelectionTarget) -> Result<Vec<RootId>> {
-        self.database.read_consistent(
-            WorkPriority::VisibleRead,
-            |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::selection::resolve_ordered(connection, &snapshot, target),
-        )
-    }
-
     pub fn record_recent_view(
         &self,
         root_id: RootId,
@@ -1651,15 +1643,6 @@ impl Library {
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
         self.ingest_collection_with_identity_reuse(input, true, true)
-    }
-
-    /// Converter-only collection path. Source identities are copied, but are
-    /// not interpreted as retry keys while reconstructing legacy structure.
-    pub fn ingest_conversion_collection(
-        &self,
-        input: &PreparedCollectionImport,
-    ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with_identity_reuse(input, false, false)
     }
 
     fn ingest_collection_with_identity_reuse(
@@ -4813,10 +4796,6 @@ impl Library {
         folder_id: FolderId,
     ) -> Result<MutationReceipt> {
         self.folder_membership_mutation(target, folder_id, false)
-    }
-
-    pub fn remove_tag(&self, target: &SelectionTarget, name: &str) -> Result<MutationReceipt> {
-        self.apply_tags(target, &[name.to_owned()], false)
     }
 
     pub fn apply_tags(

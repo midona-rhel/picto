@@ -912,15 +912,6 @@ pub(crate) fn mime_facets_cached(
     })
 }
 
-pub fn page(
-    snapshot: &ProjectionSnapshot,
-    query: &RootQuery,
-    request: &PageRequest,
-    media: &MediaMatches,
-) -> Result<RootPage> {
-    page_inner(snapshot, query, request, media, None)
-}
-
 pub(crate) fn page_cached(
     snapshot: &ProjectionSnapshot,
     query: &RootQuery,
