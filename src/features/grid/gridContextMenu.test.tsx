@@ -546,7 +546,8 @@ describe('buildTileContextMenu', () => {
     );
 
     expect(entry).toBeDefined();
-    expect(entry!.shortcut).toBe('Shift+D');
+    // The Shift+D shortcut is deferred, so the menu does not advertise it.
+    expect(entry!.shortcut).toBeUndefined();
     entry!.action();
     expect(onAddToLastUsedFolder).toHaveBeenCalledOnce();
   });
