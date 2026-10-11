@@ -402,6 +402,15 @@ export function createLibraryHostService({
     }
   }
 
+  async function locatedLibraryPath(selectedPath, basename) {
+    for (const candidate of [selectedPath, path.join(selectedPath, basename)]) {
+      if (await fs.access(path.join(candidate, 'library.sqlite')).then(() => true, () => false)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   async function handleMissingLibrary(libraryPath) {
     const name = libraryDisplayName(libraryPath);
     const result = await dialog.showMessageBox({
@@ -422,11 +431,9 @@ export function createLibraryHostService({
         message: `Select the folder containing ${basename}`,
       });
       if (!picked.canceled && picked.filePaths.length > 0) {
-        const destDir = picked.filePaths[0];
-        const newPath = path.join(destDir, basename);
+        const newPath = await locatedLibraryPath(picked.filePaths[0], basename);
         if (newPath === libraryPath) return { action: 'cancelled' };
-        const exists = await fs.access(newPath).then(() => true, () => false);
-        if (!exists) {
+        if (!newPath) {
           await dialog.showMessageBox({
             type: 'error',
             title: 'Library Not Found',
@@ -927,13 +934,14 @@ export function createLibraryHostService({
     }
 
     const destDir = picked.filePaths[0];
-    const newPath = path.join(destDir, basename);
+    const newPath = oldExists
+      ? path.join(destDir, basename)
+      : await locatedLibraryPath(destDir, basename);
     if (newPath === oldPath) return { action: 'cancelled' };
 
-    const destExists = await fs.access(newPath).then(() => true, () => false);
+    const destExists = newPath && await fs.access(newPath).then(() => true, () => false);
     if (!oldExists) {
-      const isLibrary = await fs.access(path.join(newPath, 'library.sqlite')).then(() => true, () => false);
-      if (!isLibrary) {
+      if (!newPath) {
         await dialog.showMessageBox({
           type: 'error',
           title: 'Library Not Found',

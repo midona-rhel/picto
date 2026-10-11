@@ -1972,3 +1972,27 @@ test('a relocation superseded while its history update fails still reports the m
   await switching;
   expect(state.current).toBe('/Pictures/C.library');
 });
+
+test.each([
+  ['/Archive/Renamed.library', '/Archive/Renamed.library'],
+  ['/Archive', '/Archive/A.library'],
+])('Locate accepts a library package or its parent: %s', async (selected, expected) => {
+  const updated = vi.fn();
+  const { service } = createOpenService(createNativeOpenStub(), {
+    fs: { access: async (target) => {
+      if (target !== expected && target !== `${expected}/library.sqlite`) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+    } },
+    dialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: [selected] }),
+      showMessageBox: async () => ({ response: 0 }),
+    },
+    updateLibraryPath: updated,
+  });
+  await expect(service.relocateLibrary('/Pictures/A.library')).resolves.toEqual({ action: 'relocated', newPath: expected });
+  expect(updated).toHaveBeenCalledWith('/Pictures/A.library', expected);
+  updated.mockClear();
+  await expect(service.handleMissingLibrary('/Pictures/A.library')).resolves.toEqual({ action: 'relocated', newPath: expected });
+  expect(updated).toHaveBeenCalledWith('/Pictures/A.library', expected);
+});
