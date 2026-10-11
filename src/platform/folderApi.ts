@@ -191,11 +191,11 @@ export function exportMedia(target: EntityTarget, config: {
 
 export function reorderFolderMembers(
   folderId: number,
-  itemIds: number[],
+  rootIds: number[],
 ): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.items.reorder', {
     folder_id: folderId,
-    item_ids: itemIds,
+    root_ids: rootIds,
   });
 }
 
