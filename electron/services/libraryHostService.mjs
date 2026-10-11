@@ -23,6 +23,75 @@ export function isInsideLibraryPackage(pathApi, candidatePath) {
   }
 }
 
+async function directoryManifest(fs, pathApi, root, relative = '') {
+  const manifest = [];
+  const entries = await fs.readdir(relative ? pathApi.join(root, relative) : root, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const child = relative ? pathApi.join(relative, entry.name) : entry.name;
+    const absolute = pathApi.join(root, child);
+    if (entry.isDirectory()) {
+      manifest.push(['directory', child]);
+      for (const item of await directoryManifest(fs, pathApi, root, child)) manifest.push(item);
+    } else if (entry.isFile()) {
+      const stat = await fs.stat(absolute);
+      manifest.push(['file', child, stat.size]);
+    } else if (entry.isSymbolicLink()) {
+      manifest.push(['symlink', child, await fs.readlink(absolute)]);
+    } else {
+      throw new Error(`Unsupported library entry: ${child}`);
+    }
+  }
+  return manifest;
+}
+
+async function verifyDirectoryCopy(fs, pathApi, source, destination) {
+  const [sourceManifest, destinationManifest] = await Promise.all([
+    directoryManifest(fs, pathApi, source),
+    directoryManifest(fs, pathApi, destination),
+  ]);
+  if (JSON.stringify(sourceManifest) !== JSON.stringify(destinationManifest)) {
+    throw new Error('Copied library verification failed');
+  }
+  for (const [kind, relative] of sourceManifest) {
+    if (kind !== 'file') continue;
+    if (!await filesEqual(
+      fs,
+      pathApi.join(source, relative),
+      pathApi.join(destination, relative),
+    )) {
+      throw new Error('Copied library verification failed');
+    }
+  }
+}
+
+async function filesEqual(fs, source, destination) {
+  const sourceHandle = await fs.open(source, 'r');
+  let destinationHandle;
+  try {
+    destinationHandle = await fs.open(destination, 'r');
+    const sourceBuffer = Buffer.allocUnsafe(1024 * 1024);
+    const destinationBuffer = Buffer.allocUnsafe(sourceBuffer.length);
+    let position = 0;
+    while (true) {
+      const [sourceRead, destinationRead] = await Promise.all([
+        sourceHandle.read(sourceBuffer, 0, sourceBuffer.length, position),
+        destinationHandle.read(destinationBuffer, 0, destinationBuffer.length, position),
+      ]);
+      if (sourceRead.bytesRead !== destinationRead.bytesRead) return false;
+      if (sourceRead.bytesRead === 0) return true;
+      if (!sourceBuffer.subarray(0, sourceRead.bytesRead)
+        .equals(destinationBuffer.subarray(0, destinationRead.bytesRead))) return false;
+      position += sourceRead.bytesRead;
+    }
+  } finally {
+    await Promise.all([
+      sourceHandle.close(),
+      destinationHandle?.close(),
+    ]);
+  }
+}
+
 export function createLibraryHostService({
   fs,
   path,
@@ -64,6 +133,7 @@ export function createLibraryHostService({
   // of `settleFailedOpen`.
   let currentAttempt = null;
   let shuttingDown = false;
+  let relocationSequence = 0;
   const coverExtensions = ['jpg', 'png'];
 
   function markShuttingDown() {
@@ -337,6 +407,66 @@ export function createLibraryHostService({
       return true;
     } catch {
       return false;
+    }
+  }
+
+  async function ownedLibraryPath(libraryPath) {
+    try {
+      const entry = await fs.lstat(libraryPath);
+      if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('not a real directory');
+      const resolved = await fs.realpath(libraryPath);
+      if (!path.basename(resolved).toLowerCase().endsWith('.library')) {
+        throw new Error('not a library package');
+      }
+      const database = await fs.lstat(path.join(resolved, 'library.sqlite'));
+      if (!database.isFile()) throw new Error('missing library database');
+      return resolved;
+    } catch {
+      throw new Error('Refusing to delete a path that is no longer a Picto library.');
+    }
+  }
+
+  async function moveLibraryDirectory(oldPath, newPath) {
+    try {
+      await fs.rename(oldPath, newPath);
+      return;
+    } catch (error) {
+      if (error?.code !== 'EXDEV') throw error;
+    }
+
+    const stagingPath = path.join(
+      path.dirname(newPath),
+      `.${path.basename(newPath)}.picto-moving-${process.pid}-${++relocationSequence}`,
+    );
+    let published = false;
+    try {
+      await fs.cp(oldPath, stagingPath, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+      });
+      await verifyDirectoryCopy(fs, path, oldPath, stagingPath);
+      const destinationExists = await fs.access(newPath).then(() => true, (error) => {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      });
+      if (destinationExists) throw new Error('The move destination appeared while copying the library');
+      await fs.rename(stagingPath, newPath);
+      published = true;
+    } finally {
+      if (!published) await fs.rm(stagingPath, { recursive: true, force: true }).catch(() => {});
+    }
+
+    try {
+      await fs.rm(oldPath, { recursive: true, force: false });
+    } catch (error) {
+      console.warn('[library] unable to remove the original after a verified cross-volume copy', {
+        oldPath,
+        newPath,
+        message: error?.message ?? String(error),
+      });
     }
   }
 
@@ -845,8 +975,16 @@ export function createLibraryHostService({
       destructiveId: 0,
     });
     if (result.response !== 0) return { deleted: false };
-    await removeLibraryFromHistory(libraryPath);
-    await fs.rm(libraryPath, { recursive: true, force: true });
+    const deletionPath = await ownedLibraryPath(libraryPath);
+    const currentPath = getCurrentLibraryRoot();
+    if (currentPath) {
+      const currentRealPath = await fs.realpath(currentPath).catch(() => null);
+      if (currentRealPath === deletionPath) {
+        throw new Error('Cannot delete the currently open library. Switch to a different library first.');
+      }
+    }
+    await fs.rm(deletionPath, { recursive: true, force: false });
+    await recordLibrary(libraryPath, () => removeLibraryFromHistory(libraryPath));
     buildAppMenu();
     return { deleted: true };
   }
@@ -966,7 +1104,7 @@ export function createLibraryHostService({
           await closeUnderAttempt(attempt);
           ensureOwned(attempt);
           try {
-            await fs.rename(oldPath, newPath);
+            await moveLibraryDirectory(oldPath, newPath);
           } catch (err) {
             const moveError = new Error(`Failed to move library: ${err.message}`);
             await reopenUnderAttempt(attempt, oldPath);
@@ -991,7 +1129,7 @@ export function createLibraryHostService({
           },
         });
       } else {
-        await fs.rename(oldPath, newPath);
+        await moveLibraryDirectory(oldPath, newPath);
         await updateLibraryPath(oldPath, newPath);
       }
     } else {

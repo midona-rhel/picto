@@ -351,6 +351,297 @@ test('open dialog accepts a macOS library package as well as a directory', async
   expect(opened).toEqual(['/Pictures/Main.library']);
 });
 
+test('delete revalidates library ownership after confirmation before removing anything', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-delete-ownership-'));
+  const libraryPath = path.join(root, 'Remembered.library');
+  const removedFromHistory = vi.fn();
+  try {
+    await fs.mkdir(libraryPath);
+    await fs.writeFile(path.join(libraryPath, 'library.sqlite'), 'database');
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs,
+      path,
+      dialog: {
+        showMessageBox: async () => {
+          await fs.rm(path.join(libraryPath, 'library.sqlite'));
+          await fs.writeFile(path.join(libraryPath, 'important.txt'), 'unrelated data');
+          return { response: 0 };
+        },
+      },
+      removeLibraryFromHistory: removedFromHistory,
+    });
+
+    await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('no longer a Picto library');
+    await expect(fs.readFile(path.join(libraryPath, 'important.txt'), 'utf8')).resolves.toBe('unrelated data');
+    expect(removedFromHistory).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('delete refuses a symlink even when its target is a Picto library', async () => {
+  const removed = vi.fn();
+  const { service } = createOpenService(createNativeOpenStub(), {
+    fs: {
+      lstat: async () => ({ isDirectory: () => false, isSymbolicLink: () => true }),
+      realpath: async () => '/Pictures/Actual.library',
+      rm: removed,
+    },
+    dialog: { showMessageBox: async () => ({ response: 0 }) },
+  });
+
+  await expect(service.deleteLibrary('/Pictures/Remembered.library')).rejects.toThrow('no longer a Picto library');
+  expect(removed).not.toHaveBeenCalled();
+});
+
+test('delete refuses a symlinked library database ownership marker', async () => {
+  const removed = vi.fn();
+  const libraryPath = '/Pictures/Remembered.library';
+  const { service } = createOpenService(createNativeOpenStub(), {
+    fs: {
+      lstat: async (target) => (target === libraryPath
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : { isFile: () => false, isSymbolicLink: () => true }),
+      realpath: async () => libraryPath,
+      rm: removed,
+    },
+    dialog: { showMessageBox: async () => ({ response: 0 }) },
+  });
+
+  await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('no longer a Picto library');
+  expect(removed).not.toHaveBeenCalled();
+});
+
+test('delete rechecks the current library by real path after the confirmation dialog', async () => {
+  const libraryPath = '/Pictures/Owned.library';
+  const aliasPath = '/Volumes/Pictures Alias/Owned.library';
+  const removed = vi.fn();
+  let currentPath = null;
+  const { service } = createOpenService(createNativeOpenStub(), {
+    fs: {
+      lstat: async (target) => (target === libraryPath
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : { isFile: () => true }),
+      realpath: async (target) => (target === aliasPath ? libraryPath : target),
+      rm: removed,
+    },
+    dialog: {
+      showMessageBox: async () => {
+        currentPath = aliasPath;
+        return { response: 0 };
+      },
+    },
+    getCurrentLibraryRoot: () => currentPath,
+  });
+
+  await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('currently open library');
+  expect(removed).not.toHaveBeenCalled();
+});
+
+test('delete removes a revalidated Picto library and then forgets it', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-delete-library-'));
+  const libraryPath = path.join(root, 'Owned.library');
+  const removedFromHistory = vi.fn();
+  try {
+    await fs.mkdir(libraryPath);
+    await fs.writeFile(path.join(libraryPath, 'library.sqlite'), 'database');
+    await fs.writeFile(path.join(libraryPath, 'metadata.json'), '{}');
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs,
+      path,
+      dialog: { showMessageBox: async () => ({ response: 0 }) },
+      removeLibraryFromHistory: removedFromHistory,
+    });
+
+    await expect(service.deleteLibrary(libraryPath)).resolves.toEqual({ deleted: true });
+    await expect(fs.access(libraryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(removedFromHistory).toHaveBeenCalledWith(libraryPath);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a cross-volume relocation publishes a verified real copy before removing the source', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-move-'));
+  const source = path.join(root, 'source', 'A.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const destination = path.join(destinationDirectory, 'A.library');
+  const updates = vi.fn();
+  try {
+    await fs.mkdir(path.join(source, 'blobs', 'aa'), { recursive: true });
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'database bytes');
+    await fs.writeFile(path.join(source, 'blobs', 'aa', 'asset.bin'), 'asset bytes');
+    const crossVolumeFs = new Proxy(fs, {
+      get(target, property) {
+        if (property !== 'rename') return target[property];
+        return async (from, to) => {
+          if (from === source && to === destination) {
+            throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+          }
+          return target.rename(from, to);
+        };
+      },
+    });
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs: crossVolumeFs,
+      path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+      updateLibraryPath: updates,
+    });
+
+    await expect(service.relocateLibrary(source)).resolves.toEqual({ action: 'relocated', newPath: destination });
+    await expect(fs.access(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readFile(path.join(destination, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    await expect(fs.readFile(path.join(destination, 'blobs', 'aa', 'asset.bin'), 'utf8')).resolves.toBe('asset bytes');
+    expect(updates).toHaveBeenCalledWith(source, destination);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed cross-volume copy leaves the source intact and removes staging', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-copy-failure-'));
+  const source = path.join(root, 'source', 'A.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const destination = path.join(destinationDirectory, 'A.library');
+  const updates = vi.fn();
+  try {
+    await fs.mkdir(source, { recursive: true });
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'database bytes');
+    const failingFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === 'rename') {
+          return async (from, to) => {
+            if (from === source && to === destination) {
+              throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+            }
+            return target.rename(from, to);
+          };
+        }
+        if (property === 'cp') {
+          return async (_from, to) => {
+            await target.mkdir(to, { recursive: true });
+            await target.writeFile(path.join(to, 'partial'), 'partial');
+            throw Object.assign(new Error('copy failed'), { code: 'EIO' });
+          };
+        }
+        return target[property];
+      },
+    });
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs: failingFs,
+      path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+      updateLibraryPath: updates,
+    });
+
+    await expect(service.relocateLibrary(source)).rejects.toThrow('copy failed');
+    await expect(fs.readFile(path.join(source, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readdir(destinationDirectory)).resolves.toEqual([]);
+    expect(updates).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed cross-volume verification leaves the source intact and removes staging', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-verify-failure-'));
+  const source = path.join(root, 'source', 'A.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const destination = path.join(destinationDirectory, 'A.library');
+  try {
+    await fs.mkdir(source, { recursive: true });
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'database bytes');
+    const corruptingFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === 'rename') {
+          return async (from, to) => {
+            if (from === source && to === destination) {
+              throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+            }
+            return target.rename(from, to);
+          };
+        }
+        if (property === 'cp') {
+          return async (from, to, options) => {
+            await target.cp(from, to, options);
+            const database = path.join(to, 'library.sqlite');
+            const bytes = await target.readFile(database);
+            bytes[0] ^= 0xff;
+            await target.writeFile(database, bytes);
+          };
+        }
+        return target[property];
+      },
+    });
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs: corruptingFs,
+      path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+    });
+
+    await expect(service.relocateLibrary(source)).rejects.toThrow('verification failed');
+    await expect(fs.readFile(path.join(source, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readdir(destinationDirectory)).resolves.toEqual([]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed source cleanup keeps the verified cross-volume copy and reports the move', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-cleanup-failure-'));
+  const source = path.join(root, 'source', 'A.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const destination = path.join(destinationDirectory, 'A.library');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    await fs.mkdir(source, { recursive: true });
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'database bytes');
+    const cleanupFailingFs = new Proxy(fs, {
+      get(target, property) {
+        if (property === 'rename') {
+          return async (from, to) => {
+            if (from === source && to === destination) {
+              throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+            }
+            return target.rename(from, to);
+          };
+        }
+        if (property === 'rm') {
+          return async (targetPath, options) => {
+            if (targetPath === source) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+            return target.rm(targetPath, options);
+          };
+        }
+        return target[property];
+      },
+    });
+    const { service, state } = createOpenService(createNativeOpenStub(), {
+      fs: cleanupFailingFs,
+      path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+    });
+
+    await expect(service.relocateLibrary(source)).resolves.toEqual({ action: 'relocated', newPath: destination });
+    await expect(fs.readFile(path.join(source, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    await expect(fs.readFile(path.join(destination, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    expect(state.updates).toEqual([[source, destination]]);
+    expect(warning).toHaveBeenCalledWith(
+      '[library] unable to remove the original after a verified cross-volume copy',
+      { oldPath: source, newPath: destination, message: 'resource busy' },
+    );
+  } finally {
+    warning.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('opening a library installs standard Windows folder icon metadata', async () => {
   const writes = [];
   const attributes = [];
