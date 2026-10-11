@@ -41,6 +41,7 @@ vi.mock('../runtime/libraryInvalidation', () => ({
 }));
 
 import { gridController } from './gridController';
+import { setViewPrefs } from '../platform/settingsApi';
 
 it('turns a stalled preference read into a retryable destination error within ten seconds', async () => {
   vi.useFakeTimers();
@@ -854,5 +855,57 @@ describe('gridController pagination', () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(queryItemsMock).toHaveBeenCalledTimes(2);
     } finally { gridController.deactivate(); vi.useRealTimers(); }
+  });
+  describe('view preference saves', () => {
+    const visit = async (folderId: number) => {
+      const prepared = await gridController.prepareNavigation({ kind: 'folder', folder_id: folderId });
+      gridController.commitNavigation(prepared);
+    };
+
+    it('saves each patch to the scope it was made in, never merging scopes', async () => {
+      vi.useFakeTimers();
+      try {
+        await visit(1);
+        vi.mocked(setViewPrefs).mockClear();
+        gridController.saveViewPref({ spacing: 'tight' });
+        await visit(2);
+        gridController.saveViewPref({ target_size: 300 });
+        await vi.advanceTimersByTimeAsync(501);
+        expect(vi.mocked(setViewPrefs).mock.calls).toEqual([
+          ['folder:1', { spacing: 'tight' }],
+          ['folder:2', { target_size: 300 }],
+        ]);
+      } finally { gridController.deactivate(); vi.useRealTimers(); }
+    });
+
+    it('flushes pending saves on deactivate and drops them on library switch', async () => {
+      vi.useFakeTimers();
+      try {
+        await visit(3);
+        vi.mocked(setViewPrefs).mockClear();
+        gridController.saveViewPref({ show_name: true });
+        gridController.deactivate();
+        expect(setViewPrefs).toHaveBeenCalledWith('folder:3', { show_name: true });
+
+        await visit(4);
+        vi.mocked(setViewPrefs).mockClear();
+        gridController.saveViewPref({ show_name: false });
+        gridController.discardPendingPreferences();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(setViewPrefs).not.toHaveBeenCalled();
+      } finally { gridController.deactivate(); vi.useRealTimers(); }
+    });
+
+    it('reports a failed save instead of swallowing it', async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await visit(5);
+        vi.mocked(setViewPrefs).mockRejectedValueOnce(new Error('disk full'));
+        gridController.saveViewPref({ spacing: 'wide' });
+        await vi.advanceTimersByTimeAsync(501);
+        expect(warn).toHaveBeenCalledWith('Could not save grid view preferences', 'folder:5', expect.any(Error));
+      } finally { warn.mockRestore(); gridController.deactivate(); vi.useRealTimers(); }
+    });
   });
 });

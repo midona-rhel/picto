@@ -6,6 +6,7 @@ import { WindowControls } from '../../shared/ui/WindowControls';
 import styles from './LibraryGate.module.css';
 import { t } from '../../i18n';
 import { setRecentFoldersLibrary } from '../../shared/hooks/useRecentFolders';
+import { gridController } from '../../controllers/gridController';
 
 interface LibraryConfig {
   currentPath: string | null;
@@ -79,6 +80,8 @@ export function LibraryGate({ children }: { children: ReactNode }) {
       else unlisteners.push(dispose);
     });
     void listen<{ path: string }>('library-switching', ({ payload }) => {
+      // Unsaved view preferences belong to the library being closed.
+      gridController.discardPendingPreferences();
       if (!cancelled) transition({ kind: 'loading', path: payload.path });
     }).then((dispose) => {
       if (cancelled) dispose();

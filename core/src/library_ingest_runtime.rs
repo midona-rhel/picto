@@ -28,6 +28,11 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// A job whose batch keeps failing is retried this many times in all.
+const MAX_INGEST_ATTEMPTS: u32 = 5;
+/// How long a released job waits before it is claimed again.
+const RELEASED_JOB_RETRY_DELAY: chrono::Duration = chrono::Duration::seconds(10);
+
 pub fn run_batch(
     application: &LibraryApplication,
     limit: usize,
@@ -44,6 +49,33 @@ pub fn run_batch(
     if claimed.is_empty() {
         return Ok(report);
     }
+    let claimed_ids = claimed.iter().map(|job| job.ingest_job_id).collect::<Vec<_>>();
+    let settled = settle_claimed(application, claimed, &now, &mut report);
+    if let Err(error) = &settled {
+        // The worker owns every claim until it settles it. Whatever this batch
+        // left running goes back to the queue; replay is idempotent because
+        // ingest finds an already-imported item by its stable key.
+        let retry_at = (chrono::Utc::now() + RELEASED_JOB_RETRY_DELAY).to_rfc3339();
+        if let Err(release) = application.library().release_ingest_jobs(
+            &claimed_ids,
+            error,
+            &chrono::Utc::now().to_rfc3339(),
+            &retry_at,
+            MAX_INGEST_ATTEMPTS,
+        ) {
+            tracing::warn!(%release, "Could not release ingest claims; they recover on next open");
+        }
+    }
+    settled.map(|()| report)
+}
+
+fn settle_claimed(
+    application: &LibraryApplication,
+    claimed: Vec<ClaimedIngestJob>,
+    now: &str,
+    report: &mut CanonicalIngestRunReport,
+) -> Result<(), String> {
+    let now = now.to_owned();
     let auto_tag = application
         .application_settings()?
         .value
@@ -61,7 +93,7 @@ pub fn run_batch(
                 PreparedIngestPayload::Item(input) => {
                     pending.push(job.ingest_job_id, input, cleanup);
                     if pending.should_flush() {
-                        pending.flush(application, &now, auto_tag, &mut report)?;
+                        pending.flush(application, &now, auto_tag, report)?;
                     }
                 }
                 PreparedIngestPayload::Collection(input) => {
@@ -72,7 +104,7 @@ pub fn run_batch(
                         cleanup,
                         &now,
                         auto_tag,
-                        &mut report,
+                        report,
                     )?;
                 }
             },
@@ -86,9 +118,9 @@ pub fn run_batch(
             }
         }
     }
-    pending.flush(application, &now, auto_tag, &mut report)?;
+    pending.flush(application, &now, auto_tag, report)?;
     crate::library_subscription_state::settle_ingest_runs(application, &now)?;
-    Ok(report)
+    Ok(())
 }
 
 const PENDING_FLUSH_AFTER: std::time::Duration = std::time::Duration::from_millis(250);
@@ -630,6 +662,86 @@ mod tests {
             )
             .unwrap();
         assert_eq!(work, 3);
+    }
+
+    #[test]
+    fn a_failed_batch_returns_its_claims_and_the_replay_imports_each_item_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let library = application.library();
+        for (index, color) in [[10, 20, 30, 255], [40, 50, 60, 255]].into_iter().enumerate() {
+            let path = directory.path().join(format!("claim-{index}.png"));
+            let input = image_import(&path, &format!("claim-root-{index}"), color);
+            library
+                .enqueue_ingest_job(
+                    &PreparedIngestJob {
+                        job_key: format!("manual:claim-root-{index}"),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(input),
+                    },
+                    "2026-08-28T12:00:00Z",
+                )
+                .unwrap();
+        }
+        let maintenance = picto_library::database::WorkPriority::Maintenance;
+        // Fail the acknowledgement after the items are already imported.
+        library
+            .database()
+            .maintenance_write(maintenance, |transaction| {
+                transaction.execute_batch(
+                    "CREATE TEMP TRIGGER fail_completion BEFORE UPDATE OF status ON ingest_job
+                     WHEN NEW.status = 'succeeded'
+                     BEGIN SELECT RAISE(ABORT, 'injected completion failure'); END;",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(run_batch(&application, 64).is_err());
+
+        let statuses = || {
+            library
+                .auxiliary_read(maintenance, |connection| {
+                    let mut statement = connection.prepare(
+                        "SELECT status, available_at > ?1 FROM ingest_job ORDER BY ingest_job_id",
+                    )?;
+                    let rows = statement
+                        .query_map([chrono::Utc::now().to_rfc3339()], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(rows)
+                })
+                .unwrap()
+        };
+        // Nothing is stranded as running; both wait out the retry delay.
+        assert_eq!(statuses(), vec![("pending".into(), true), ("pending".into(), true)]);
+        assert_eq!(run_batch(&application, 64).unwrap().claimed, 0);
+
+        library
+            .database()
+            .maintenance_write(maintenance, |transaction| {
+                transaction.execute_batch("DROP TRIGGER temp.fail_completion;")?;
+                Ok(())
+            })
+            .unwrap();
+        library
+            .auxiliary_write(maintenance, ["ingest".to_owned()], [], |transaction, _| {
+                transaction.execute("UPDATE ingest_job SET available_at = '2026-08-28T12:00:00Z'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let replay = run_batch(&application, 64).unwrap();
+        assert_eq!(replay.claimed, 2);
+        assert_eq!(statuses(), vec![("succeeded".into(), false), ("succeeded".into(), false)]);
+        let roots = library
+            .auxiliary_read(maintenance, |connection| {
+                Ok(connection.query_row("SELECT COUNT(*) FROM library_item WHERE item_kind = 1", [], |row| row.get::<_, i64>(0))?)
+            })
+            .unwrap();
+        assert_eq!(roots, 2);
     }
 
     #[test]

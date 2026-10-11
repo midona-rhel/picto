@@ -89,6 +89,37 @@ describe('navigateToNode', () => {
     });
   });
 
+  it('records numeric filters in history and restores them through Back and Forward', () => {
+    const before = createEmptyItemFilters();
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: before });
+    // The grid applies each filter intent before the next navigation.
+    const visit = (filters: typeof before) => {
+      navigateWithGridFilters('system:active', filters);
+      store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: { ...filters } });
+    };
+    const wide = { ...before, min_width: 100n, max_size_bytes: 5_000_000n };
+    visit(wide);
+    // An equal value is the same visit; a different bound is a new one.
+    visit({ ...before, min_width: 100n, max_size_bytes: 5_000_000n });
+    visit({ ...wide, min_width: 200n });
+    wide.min_width = 999n; // the editor's object changing later does not rewrite history
+    store.set(pendingGridIntentAtom, null);
+
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toEqual({
+      type: 'filter',
+      filters: { ...before, min_width: 100n, max_size_bytes: 5_000_000n },
+      restoreScroll: true,
+    });
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters: before });
+    goForward();
+    goForward();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({
+      filters: { ...before, min_width: 200n, max_size_bytes: 5_000_000n },
+    });
+  });
+
   it('keeps independent scroll positions for filtered visits in the same scope', () => {
     const allPosition = { scrollTop: 7_900_000, progress: 0.99 };
     const filteredPosition = { scrollTop: 360, progress: 0.2 };
