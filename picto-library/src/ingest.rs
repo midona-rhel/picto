@@ -168,6 +168,13 @@ pub(crate) fn insert_one(
                     input.facts.perceptual_hash,
                     serde_json::to_string(&input.facts.palette)?,
                 ])?;
+            transaction
+                .prepare_cached(
+                    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
+                     SELECT ?1, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                     FROM cloud_state WHERE singleton = 1 AND provider IS NOT NULL",
+                )?
+                .execute([&input.facts.content_hash])?;
             (file_id, input.facts.perceptual_hash.is_some())
         };
 

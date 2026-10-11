@@ -31,6 +31,7 @@ const navigation: CanonicalNavigationSnapshot = {
     watch_path: null,
     watch_enabled: false,
     watch_subfolders: false,
+      watch_lifecycle: 'inbox',
   }],
   smart_folders: [{
     smart_folder_id: 7,
@@ -143,20 +144,25 @@ describe('replacement sidebar reads', () => {
     expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
   });
 
-  it('coalesces concurrent sidebar reads', async () => {
+  it('coalesces reads requested during a read into one follow-up read', async () => {
+    // Requests made while a read is in flight may postdate what it saw, so
+    // they collapse into exactly one trailing read rather than being dropped.
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
-    getNavigation.mockImplementation(async () => { await pending; return navigation; });
+    getNavigation.mockImplementationOnce(async () => { await pending; return navigation; });
+    getNavigation.mockResolvedValue(navigation);
     getSidebarCounts.mockResolvedValue(counts);
 
     const first = sidebarController.fetchTree();
-    const second = sidebarController.fetchTree();
+    const others = [sidebarController.fetchTree(), sidebarController.fetchTree()];
     release();
-    await Promise.all([first, second]);
+    await Promise.all([first, ...others]);
+    await vi.waitFor(() => expect(getNavigation).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(getNavigation).toHaveBeenCalledTimes(1);
-    expect(getSidebarCounts).toHaveBeenCalledTimes(1);
-    expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
+    expect(getNavigation).toHaveBeenCalledTimes(2);
+    expect(getSidebarCounts).toHaveBeenCalledTimes(2);
+    expect(getNamespaceSummary).toHaveBeenCalledTimes(2);
   });
 
   it('replaces a pending read when the sidebar mounts for another library', async () => {

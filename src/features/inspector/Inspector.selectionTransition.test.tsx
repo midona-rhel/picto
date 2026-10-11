@@ -1,7 +1,22 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
+import { Profiler } from 'react';
 import { MantineProvider } from '@mantine/core';
 import { getDefaultStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const invalidationMocks = vi.hoisted(() => ({
+  callbacks: new Set<(payload: { revision: number; resources: string[]; item_ids: number[] }) => void>(),
+  invoke: vi.fn(),
+}));
+vi.mock('../../platform/ipc', () => ({ invoke: invalidationMocks.invoke }));
+vi.mock('../../runtime/libraryInvalidation', () => ({
+  libraryInvalidation: {
+    register: (_resource: string, callback: (payload: { revision: number; resources: string[]; item_ids: number[] }) => void) => {
+      invalidationMocks.callbacks.add(callback);
+      return () => invalidationMocks.callbacks.delete(callback);
+    },
+  },
+}));
 
 vi.mock('../../controllers/entityMutations', () => ({
   getTargetSelectionSummary: vi.fn(),
@@ -38,8 +53,11 @@ import {
 } from '../../state/inspector';
 import { emptyGridSelection, gridSelectionAtom } from '../../state/selection';
 import { Inspector } from './Inspector';
+import { startInspectorSettle } from '../../runtime/inspectorSettle';
+import { cancelInspectorLoad } from '../../controllers/inspectorController';
 
 const store = getDefaultStore();
+let stopInspector: (() => void) | undefined;
 const itemDetails = {
   root: {
     root_id: 1,
@@ -102,6 +120,7 @@ const summary = {
 describe('Inspector selection transition', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    invalidationMocks.invoke.mockReset();
     vi.mocked(entityMutations.getTargetSelectionSummary).mockReset();
     tagMocks.getById.mockReset();
     tagMocks.getById.mockResolvedValue([]);
@@ -126,7 +145,11 @@ describe('Inspector selection transition', () => {
   });
 
   afterEach(() => {
+    stopInspector?.();
+    stopInspector = undefined;
+    cancelInspectorLoad();
     cleanup();
+    invalidationMocks.callbacks.clear();
     store.set(gridSelectionAtom, emptyGridSelection());
     store.set(displayedInspectorTargetAtom, { kind: 'none' });
     store.set(displayedInspectorItemDetailsAtom, null);
@@ -152,6 +175,38 @@ describe('Inspector selection transition', () => {
     expect(document.querySelector('[data-inspector-preview-hash="file-1"] [class*="stackShade"]')).toHaveStyle({ opacity: '0.7' });
     expect(document.querySelector('[data-inspector-core-property="Size"]')).toHaveTextContent('300 B');
     expect(document.querySelector('[data-inspector-summary-loading]')).not.toBeInTheDocument();
+  });
+
+  it('never renders single-item properties while Undo and Redo refresh a multi-selection', async () => {
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue(summary as never);
+    invalidationMocks.invoke.mockResolvedValue({ ...itemDetails, media: [] });
+    const committedProperties: string[][] = [];
+    render(<MantineProvider><Profiler id="inspector" onRender={() => {
+      committedProperties.push(Array.from(document.querySelectorAll('[data-inspector-core-property]'),
+        (node) => node.getAttribute('data-inspector-core-property')!));
+    }}><Inspector /></Profiler></MantineProvider>);
+    await act(async () => {});
+    expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
+    committedProperties.length = 0;
+    stopInspector = startInspectorSettle();
+
+    for (const revision of [3, 4]) {
+      let resolveSummary!: (value: typeof summary) => void;
+      vi.mocked(entityMutations.getTargetSelectionSummary).mockReturnValue(new Promise((resolve) => {
+        resolveSummary = resolve;
+      }) as never);
+      await act(async () => {
+        invalidationMocks.callbacks.forEach((callback) => callback({ revision, resources: ['library'], item_ids: [1, 2] }));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
+      expect(document.querySelector('[data-inspector-core-property="Dimensions"]')).not.toBeInTheDocument();
+      await act(async () => { resolveSummary({ ...summary, revision }); });
+    }
+
+    expect(committedProperties.length).toBeGreaterThan(0);
+    expect(committedProperties.every((properties) => properties.join(',') === 'Media,Size')).toBe(true);
+    expect(invalidationMocks.invoke).not.toHaveBeenCalledWith('items.details', expect.anything());
   });
 
   it('shows the loading presentation only after 250ms', async () => {

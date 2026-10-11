@@ -300,7 +300,6 @@ function StandardRow({
 // ── Unified export ───────────────────────────────────────────────
 
 export type SidebarRowProps = SectionProps | (RowProps & { variant?: 'system' | 'folder' | 'smart_folder' });
-export { INDENT_PX as SIDEBAR_INDENT_PX };
 
 export function SidebarRow(props: SidebarRowProps) {
   if (props.variant === 'section') {

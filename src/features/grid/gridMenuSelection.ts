@@ -6,7 +6,7 @@ export function resolveContextMenuTarget(
   currentTarget: EntityTarget | null,
   visibleItemIds: ReadonlySet<number>,
 ): EntityTarget | null {
-  if (querySelectionActive && currentTarget?.kind === 'query') {
+  if (querySelectionActive && (currentTarget?.kind === 'query' || currentTarget?.kind === 'range')) {
     return currentTarget;
   }
   if (visibleItemIds.size === 0) return null;

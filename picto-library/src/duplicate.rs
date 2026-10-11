@@ -138,31 +138,37 @@ pub(crate) fn replace_detected(
             .or_insert(distance);
     }
 
+    // Diff against the stored detections: a rescan that finds what it found
+    // last time writes nothing, keeps each pair's first detection time, and
+    // names only the roots whose pairs appeared, moved or vanished.
+    let existing = {
+        let mut statement = transaction.prepare(
+            "SELECT file_id_a, file_id_b, distance FROM duplicate_pair WHERE status = ?1",
+        )?;
+        let rows = statement.query_map([STATUS_DETECTED], |row| {
+            Ok(((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?), row.get::<_, u32>(2)?))
+        })?;
+        rows.collect::<std::result::Result<std::collections::HashMap<_, _>, _>>()?
+    };
     let mut affected = RoaringBitmap::new();
+    for (&(file_id_a, file_id_b), _) in existing
+        .iter()
+        .filter(|(pair, _)| !normalized.contains_key(*pair))
     {
-        let mut statement = transaction
-            .prepare("SELECT file_id_a, file_id_b FROM duplicate_pair WHERE status = ?1")?;
-        let existing = statement
-            .query_map([STATUS_DETECTED], |row| {
-                Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (file_id_a, file_id_b) in existing {
-            affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
-        }
+        transaction.execute(
+            "DELETE FROM duplicate_pair WHERE file_id_a = ?1 AND file_id_b = ?2",
+            params![file_id_a, file_id_b],
+        )?;
+        affected |= &affected_roots(transaction, snapshot, FileId(file_id_a), FileId(file_id_b))?;
     }
-    transaction.execute(
-        "DELETE FROM duplicate_pair WHERE status = ?1",
-        [STATUS_DETECTED],
-    )?;
-
     for ((file_id_a, file_id_b), distance) in normalized {
+        if existing.get(&(file_id_a, file_id_b)) == Some(&distance) {
+            continue;
+        }
         let file_id_a = FileId(file_id_a);
         let file_id_b = FileId(file_id_b);
-        let _ = record_detected(transaction, file_id_a, file_id_b, distance, detected_at_ms)?;
-        if load_pair(transaction, file_id_a, file_id_b)?
-            .is_some_and(|pair| pair.status == DuplicateStatus::Detected)
-        {
+        // A pair the user already decided stays decided.
+        if record_detected(transaction, file_id_a, file_id_b, distance, detected_at_ms)?.is_some() {
             affected |= &affected_roots(transaction, snapshot, file_id_a, file_id_b)?;
         }
     }
@@ -206,14 +212,24 @@ pub(crate) fn list_candidates(
 ) -> Result<Vec<DuplicateCandidate>> {
     let pairs = list_pairs(connection, Some(DuplicateStatus::Detected), 500)?;
     let mut candidates = Vec::with_capacity(limit.min(pairs.len()));
+    // A file near many others appears in many pairs; read each side once.
+    let mut sides = std::collections::HashMap::<FileId, Option<DuplicateCandidateSide>>::new();
+    let mut side = |file_id: FileId| -> Result<Option<DuplicateCandidateSide>> {
+        if let Some(side) = sides.get(&file_id) {
+            return Ok(side.clone());
+        }
+        let side = candidate_side(connection, snapshot, file_id)?;
+        sides.insert(file_id, side.clone());
+        Ok(side)
+    };
     for pair in pairs {
         if candidates.len() == limit.clamp(1, 500) {
             break;
         }
-        let Some(left) = candidate_side(connection, snapshot, pair.file_id_a)? else {
+        let Some(left) = side(pair.file_id_a)? else {
             continue;
         };
-        let Some(right) = candidate_side(connection, snapshot, pair.file_id_b)? else {
+        let Some(right) = side(pair.file_id_b)? else {
             continue;
         };
         candidates.push(DuplicateCandidate {
@@ -261,40 +277,37 @@ pub(crate) fn count_visible_candidates(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
 ) -> Result<u64> {
-    let mut statement = connection.prepare(
-        "SELECT file_id_a, file_id_b FROM duplicate_pair
-         WHERE status = ?1 ORDER BY file_id_a, file_id_b",
+    // Two set-based reads instead of one or two queries per pair side.
+    let mut owned_files = std::collections::HashSet::new();
+    let mut statement = connection.prepare_cached(
+        "SELECT media.file_id, media.media_id FROM media_item media
+         WHERE media.file_id IN (
+             SELECT file_id_a FROM duplicate_pair WHERE status = ?1
+             UNION SELECT file_id_b FROM duplicate_pair WHERE status = ?1)",
+    )?;
+    let rows = statement.query_map([STATUS_DETECTED], |row| {
+        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+    })?;
+    for row in rows {
+        let (file_id, media_id) = row?;
+        if snapshot.media_owner.get(media_id).is_some() {
+            owned_files.insert(file_id);
+        }
+    }
+    let mut statement = connection.prepare_cached(
+        "SELECT file_id_a, file_id_b FROM duplicate_pair WHERE status = ?1",
     )?;
     let pairs = statement.query_map([STATUS_DETECTED], |row| {
-        Ok((FileId(row.get(0)?), FileId(row.get(1)?)))
+        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
     })?;
     let mut count = 0_u64;
     for pair in pairs {
         let (left, right) = pair?;
-        if file_has_occurrence(connection, snapshot, left)?
-            && file_has_occurrence(connection, snapshot, right)?
-        {
+        if owned_files.contains(&left) && owned_files.contains(&right) {
             count += 1;
         }
     }
     Ok(count)
-}
-
-fn file_has_occurrence(
-    connection: &Connection,
-    snapshot: &ProjectionSnapshot,
-    file_id: FileId,
-) -> Result<bool> {
-    let mut statement =
-        connection.prepare_cached("SELECT media_id FROM media_item WHERE file_id = ?1")?;
-    let rows = statement.query_map([file_id.0], |row| row.get::<_, u32>(0))?;
-    for media_id in rows {
-        let media_id = media_id?;
-        if snapshot.media_owner.get(media_id).is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn candidate_side(

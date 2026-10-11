@@ -117,11 +117,11 @@ pub struct RootWindow {
     pub head_items: Vec<RootSummary>,
 }
 
-struct OrderedResult {
+pub(crate) struct OrderedResult {
     revision: u64,
     key: QueryKey,
     query: RootQuery,
-    ids: Vec<RootId>,
+    pub(crate) ids: Vec<RootId>,
 }
 
 /// Up to eight compact orders, capped at three million IDs (12 MB). This lets
@@ -278,6 +278,29 @@ fn window_ids(
     }
     let order = cached_complete_order(snapshot, query, matches, Some((order_cache, metrics)))?;
     Ok(order.ids[start..(start + limit).min(order.ids.len())].to_vec())
+}
+
+/// The ids at positions `start..=end` of the query's order, sought directly
+/// in the resident order. `None` when this order cannot be sought (recently
+/// viewed) or the range runs past the end; callers then fall back to the
+/// complete order.
+pub(crate) fn ordinal_range(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+    start: usize,
+    end: usize,
+) -> Result<Option<Vec<RootId>>> {
+    if end < start {
+        return Ok(None);
+    }
+    let matches = matching_roots_cached(snapshot, query, media, cache)?;
+    if end >= matches.len() as usize {
+        return Ok(None);
+    }
+    let ids = direct_window(snapshot, query, &matches, start, end - start + 1)?;
+    Ok(ids.filter(|ids| ids.len() == end - start + 1))
 }
 
 /// Ordinal windows that seek the resident order directly, without
@@ -505,21 +528,33 @@ pub struct LibraryCounts {
 }
 
 pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
+    let mut counts = scope_counts(snapshot, &crate::smart::SmartCountCache::default());
     let active = snapshot.active();
-    let tags = snapshot
+    counts.tags = snapshot
         .tags
         .iter()
-        .map(|(tag_id, roots)| (*tag_id, (roots & active).len()))
+        .map(|(tag_id, roots)| (*tag_id, roots.intersection_len(active)))
         .collect();
+    counts
+}
+
+/// Counts for every scope except per-tag counts, which cost one intersection
+/// per tag in the library and are not shown in the sidebar.
+pub fn scope_counts(
+    snapshot: &ProjectionSnapshot,
+    smart_counts: &crate::smart::SmartCountCache,
+) -> LibraryCounts {
+    let active = snapshot.active();
+    let tags = Default::default();
     let folders = snapshot
         .folders
         .iter()
-        .map(|(folder_id, roots)| (*folder_id, (roots & active).len()))
+        .map(|(folder_id, roots)| (*folder_id, roots.intersection_len(active)))
         .collect();
     let smart_folders = snapshot
         .smart_results
-        .iter()
-        .map(|(smart_folder_id, roots)| (SmartFolderId(*smart_folder_id), roots.len()))
+        .keys()
+        .map(|id| (SmartFolderId(*id), smart_counts.active_count(snapshot, *id)))
         .collect();
     LibraryCounts {
         all: active.len(),
@@ -528,8 +563,8 @@ pub fn counts(snapshot: &ProjectionSnapshot) -> LibraryCounts {
         tags,
         folders,
         smart_folders,
-        untagged: (active & &snapshot.tag_count.between(Some(0), Some(0))).len(),
-        uncategorized: (active & &snapshot.folder_count.between(Some(0), Some(0))).len(),
+        untagged: snapshot.tag_count.between_within(Some(0), Some(0), active).len(),
+        uncategorized: snapshot.folder_count.between_within(Some(0), Some(0), active).len(),
         revision: snapshot.revision,
     }
 }
@@ -649,55 +684,59 @@ pub fn details(
     })
 }
 
+/// Media records in the given order, read with one query for all members.
 fn load_media(connection: &Connection, media_ids: &[MediaId]) -> Result<Vec<MediaRecord>> {
     let mut statement = connection.prepare_cached(
-        "SELECT media.media_name, media.media_notes, file.file_id, file.file_path, file.mime,
-                file.size_bytes, file.width, file.height, file.duration_ms,
-                file.frame_count, file.content_hash, file.perceptual_hash,
+        "SELECT media.media_id, media.media_name, media.media_notes, file.file_id,
+                file.file_path, file.mime, file.size_bytes, file.width, file.height,
+                file.duration_ms, file.frame_count, file.content_hash, file.perceptual_hash,
                 file.palette_json
          FROM media_item media
          JOIN media_file file ON file.file_id = media.file_id
-         WHERE media.media_id = ?1",
+         WHERE media.media_id IN (SELECT value FROM json_each(?1))",
     )?;
+    let ids = serde_json::to_string(&media_ids.iter().map(|id| id.0).collect::<Vec<_>>())?;
+    let mut by_id = statement
+        .query_map([ids], |row| {
+            let palette_json = row.get::<_, String>(13)?;
+            let palette =
+                serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        13,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+            let media_id = MediaId(row.get(0)?);
+            Ok((
+                media_id,
+                MediaRecord {
+                    media_id,
+                    media_name: row.get(1)?,
+                    media_notes: row.get(2)?,
+                    file_id: FileId(row.get(3)?),
+                    file_path: row.get(4)?,
+                    facts: ImmutableMediaFacts {
+                        mime: row.get(5)?,
+                        size_bytes: row.get::<_, i64>(6)? as u64,
+                        width: row.get(7)?,
+                        height: row.get(8)?,
+                        duration_ms: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+                        frame_count: row.get(10)?,
+                        content_hash: row.get(11)?,
+                        perceptual_hash: row.get(12)?,
+                        palette,
+                    },
+                },
+            ))
+        })?
+        .collect::<std::result::Result<std::collections::HashMap<_, _>, _>>()?;
     media_ids
         .iter()
         .map(|media_id| {
-            statement
-                .query_row([media_id.0], |row| {
-                    let palette_json = row.get::<_, String>(12)?;
-                    let palette =
-                        serde_json::from_str::<Vec<LabColor>>(&palette_json).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                12,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(MediaRecord {
-                        media_id: *media_id,
-                        media_name: row.get(0)?,
-                        media_notes: row.get(1)?,
-                        file_id: FileId(row.get(2)?),
-                        file_path: row.get(3)?,
-                        facts: ImmutableMediaFacts {
-                            mime: row.get(4)?,
-                            size_bytes: row.get::<_, i64>(5)? as u64,
-                            width: row.get(6)?,
-                            height: row.get(7)?,
-                            duration_ms: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
-                            frame_count: row.get(9)?,
-                            content_hash: row.get(10)?,
-                            perceptual_hash: row.get(11)?,
-                            palette,
-                        },
-                    })
-                })
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        LibraryError::InvalidState(format!("missing media {media_id}"))
-                    }
-                    other => other.into(),
-                })
+            by_id
+                .remove(media_id)
+                .ok_or_else(|| LibraryError::InvalidState(format!("missing media {media_id}")))
         })
         .collect()
 }
@@ -853,11 +892,52 @@ pub fn matching_roots(
     query: &RootQuery,
     media: &MediaMatches,
 ) -> Result<RoaringBitmap> {
-    let universe = scope_bitmap(snapshot, &query.scope, media)?;
+    matching_roots_within(snapshot, query, media, None)
+}
+
+pub(crate) fn matching_roots_within(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    candidates: Option<&RoaringBitmap>,
+) -> Result<RoaringBitmap> {
+    let universe = scope_bitmap(snapshot, &query.scope, media, candidates)?;
     let mut text = |field, value: &str, candidates: &RoaringBitmap| {
         snapshot.text_index.search(field, value, candidates)
     };
     predicate::evaluate(&query.view.filter, &universe, snapshot, &mut text)
+}
+
+/// The complete order of a query through both caches, so resolving a
+/// shift-click range and then acting on it orders the view once.
+pub(crate) fn ordered_ids_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    match_cache: &MatchCache,
+    order_cache: &OrderCache,
+) -> Result<Arc<OrderedResult>> {
+    let key = QueryKey::ordered(snapshot, query);
+    if let Some(ordered) = order_cache.get(&key, query) {
+        return Ok(ordered);
+    }
+    let matches = matching_roots_cached(snapshot, query, media, Some(match_cache))?;
+    cached_complete_order(snapshot, query, &matches, Some((order_cache, &match_cache.metrics)))
+}
+
+pub(crate) fn matching_roots_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+) -> Result<RoaringBitmap> {
+    // Reuse what the grid already computed; on a miss evaluate plainly, so a
+    // write never pays for the view's size totals it does not need.
+    let key = QueryKey::matches(snapshot, query);
+    match cache.and_then(|cache| cache.get(&key, &query.scope, &query.view.filter)) {
+        Some(hit) => Ok((*hit.ids).clone()),
+        None => matching_roots(snapshot, query, media),
+    }
 }
 
 /// Returns MIME values for the complete query result, independent of paging.
@@ -868,12 +948,24 @@ pub fn mime_facets(
     query: &RootQuery,
     media: &MediaMatches,
 ) -> Result<MimeFacets> {
-    let matches = matching_roots(snapshot, query, media)?;
+    mime_facets_cached(snapshot, query, media, None)
+}
+
+/// Facets share the grid's match cache, so opening the type filter after a
+/// page load costs one intersection count per MIME and no re-evaluation.
+pub(crate) fn mime_facets_cached(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    cache: Option<&MatchCache>,
+) -> Result<MimeFacets> {
+    let matches = cached_matches(snapshot, query, media, cache)?;
+    let matches: &RoaringBitmap = &matches.ids;
     let mut values = snapshot
         .mime
         .iter()
         .filter_map(|(mime, roots)| {
-            let count = (roots & &matches).len();
+            let count = roots.intersection_len(matches);
             (count > 0).then(|| MimeFacet {
                 mime: mime.clone(),
                 count,
@@ -885,15 +977,6 @@ pub fn mime_facets(
         values,
         revision: snapshot.revision,
     })
-}
-
-pub fn page(
-    snapshot: &ProjectionSnapshot,
-    query: &RootQuery,
-    request: &PageRequest,
-    media: &MediaMatches,
-) -> Result<RootPage> {
-    page_inner(snapshot, query, request, media, None)
 }
 
 pub(crate) fn page_cached(
@@ -1133,27 +1216,28 @@ fn scope_bitmap(
     snapshot: &ProjectionSnapshot,
     scope: &ItemScope,
     media: &MediaMatches,
+    candidates: Option<&RoaringBitmap>,
 ) -> Result<RoaringBitmap> {
+    let within = |values: &RoaringBitmap| match candidates {
+        Some(candidates) => candidates & values,
+        None => values.clone(),
+    };
     Ok(match scope {
-        ItemScope::All => snapshot.active().clone(),
-        ItemScope::Inbox => snapshot.lifecycle(Lifecycle::Inbox).clone(),
-        ItemScope::Trash => snapshot.lifecycle(Lifecycle::Trash).clone(),
-        ItemScope::MediaMatches { .. } => media.roots()?.clone(),
+        ItemScope::All => within(snapshot.active()),
+        ItemScope::Inbox => within(snapshot.lifecycle(Lifecycle::Inbox)),
+        ItemScope::Trash => within(snapshot.lifecycle(Lifecycle::Trash)),
+        ItemScope::MediaMatches { .. } => within(media.roots()?),
         ItemScope::Untagged => {
-            let mut values = snapshot.active().clone();
-            values &= snapshot.tag_count.between(Some(0), Some(0));
-            values
+            snapshot.tag_count.between_within(Some(0), Some(0), &within(snapshot.active()))
         }
         ItemScope::Uncategorized => {
-            let mut values = snapshot.active().clone();
-            values &= snapshot.folder_count.between(Some(0), Some(0));
-            values
+            snapshot.folder_count.between_within(Some(0), Some(0), &within(snapshot.active()))
         }
         ItemScope::Folder { folder_id } => {
             let mut values = snapshot
                 .folders
                 .get(folder_id)
-                .map(|values| values.to_bitmap())
+                .map(|values| within(values))
                 .unwrap_or_default();
             values &= snapshot.active();
             values
@@ -1167,7 +1251,7 @@ fn scope_bitmap(
                     continue;
                 }
                 if let Some(members) = snapshot.folders.get(&folder_id) {
-                    values |= members;
+                    values |= within(members);
                 }
                 pending.extend(
                     snapshot
@@ -1184,17 +1268,13 @@ fn scope_bitmap(
             let mut values = snapshot
                 .smart_results
                 .get(&smart_folder_id.0)
-                .map(|values| values.to_bitmap())
+                .map(|values| within(values))
                 .unwrap_or_default();
             values &= snapshot.active();
             values
         }
         ItemScope::RecentlyViewed => {
-            let mut values = snapshot
-                .recent_views
-                .iter()
-                .map(|(id, _)| id.0)
-                .collect::<RoaringBitmap>();
+            let mut values = within(&snapshot.recent_views.members);
             values &= snapshot.active();
             values
         }
@@ -1668,7 +1748,7 @@ mod tests {
             Arc::make_mut(&mut snapshot.total_bytes).insert(id, bytes as u64);
         }
         snapshot.name_index = Arc::new(crate::name_index::NameIndex::load(connection).unwrap());
-        snapshot.recent_views = Arc::new(crate::projection::load_recent_views(connection).unwrap());
+        snapshot.recent_views = Arc::new(crate::projection::load_recent_views(connection).unwrap().into());
         snapshot
     }
 
@@ -1854,6 +1934,7 @@ mod tests {
                     folder_id: folder(id),
                 },
                 &MediaMatches::default(),
+                None,
             )
             .unwrap()
             .iter()
@@ -1868,7 +1949,8 @@ mod tests {
             scope_bitmap(
                 &snapshot,
                 &ItemScope::MediaMatches { item_id: 1 },
-                &MediaMatches::default()
+                &MediaMatches::default(),
+                None
             ),
             Err(LibraryError::InvalidState(_))
         ));

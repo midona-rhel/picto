@@ -2,42 +2,56 @@
 
 [← User Guide](README.md)
 
-Picto can export files from your library in their original format or converted to a different format with optional resizing.
+Picto can export copies of your files, converted images, or a Picto Pack that another Picto library
+can import. Exporting never changes the library.
 
-## Basic Export (Originals)
+Export commands are in the **File** menu, under **Export** in the item context menu, and in the
+right-click menu of folders and smart folders (which export everything in them). Exporting a
+collection exports all of its members.
 
-Press `Ctrl+E` (`Cmd+E` on Mac) to export selected files in their original format. Choose a destination folder and the files are copied as-is.
+## Export originals
 
-## Advanced Export
+**Export Originals…** (`Mod+E`) asks for a destination folder and copies the original files there
+unchanged.
 
-Press `Ctrl+Shift+E` (`Cmd+Shift+E` on Mac) for format conversion and resize options.
+## Export As
 
-### Format
+**Export As…** (`Mod+Shift+E`) opens a dialog:
 
-Choose the output format:
+| Field | Options |
+|-------|---------|
+| Destination | Click **Browse** to choose a folder. |
+| Format | Original Format, JPEG, PNG, WebP, AVIF |
+| Quality | 1–100 % (default 90). JPEG, WebP, and AVIF only. |
+| Resize (optional) | Width and/or height in pixels |
+| Keep Aspect Ratio | On by default |
 
-| Format | Notes |
-|--------|-------|
-| PNG | Lossless, larger files |
-| JPEG | Lossy, configurable quality |
-| WebP | Modern format, good quality/size ratio |
-| AVIF | Newest format, best compression |
+Only images can be converted. Other media is skipped when a conversion format is chosen; choose
+**Original Format** to export it.
 
-### Quality
+## File names
 
-For lossy formats (JPEG, WebP, AVIF), adjust the quality slider from 1-100. Higher values mean better quality but larger files. PNG is always lossless.
+Exported files are named after the item, with the extension of the output format. If a file with
+that name already exists, Picto adds a number, for example `photo (2).jpg`.
 
-### Resize
+## Picto Packs
 
-Optionally resize exported files:
+A Picto Pack (`.picto-pack`) is a portable package for moving items between libraries.
 
-- Set a target **width** and/or **height** in pixels
-- **Keep aspect ratio** — When enabled, the image scales proportionally. Only one dimension needs to be specified; the other is calculated automatically.
+It contains original media, collections, names, notes, dates, ratings, tags, source links, and the
+definitions of included folders. It never contains subscriptions, provider history, login data, or
+watched-folder paths.
 
-## Batch Export
+### Export a Picto Pack
 
-Select multiple files before pressing the export shortcut. All selected files are exported with the same settings. A progress indicator shows the export status.
+1. Select items, or right-click a folder or smart folder.
+2. Choose **Export as Picto Pack...** (or **File → Export as Picto Pack…**).
+3. Click **Choose Destination...** and save the file.
 
-## Export Destination
+Exporting a smart folder exports only its current matching items, not the smart folder or its rules.
 
-You'll be prompted to choose a destination folder each time. Exported files are written to that folder with their original file names (or with the new extension if converting).
+### Import a Picto Pack
+
+Use **File → Import Picto Pack…**, drop a single `.picto-pack` file on the grid, or open the file
+with Picto. The dialog shows how many items, media files, folders, and smart folders it holds and
+its original size. Click **Import**.

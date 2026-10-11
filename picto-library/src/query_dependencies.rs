@@ -69,6 +69,12 @@ impl QueryVersions {
         versions
     }
 
+    /// Changes exactly when some projection a query can read changed (or
+    /// SQL-derived results were invalidated); bookkeeping writes leave it.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.0.iter().copied().max().unwrap_or(0)
+    }
+
     pub(crate) fn invalidate_sql(&mut self, revision: u64) {
         self.0[Dependency::Sql as usize] = revision;
     }
@@ -91,17 +97,26 @@ impl QueryKey {
             ItemScope::Uncategorized => dependencies.push(FolderCount),
             ItemScope::Folder { .. } => dependencies.push(Folders),
             ItemScope::FolderTree { .. } => dependencies.extend([Folders, FolderParents]),
-            ItemScope::SmartFolder { .. } => dependencies.push(SmartResults),
+            // Versioned per folder below: other folders' changes keep this cached.
+            ItemScope::SmartFolder { .. } => {}
             ItemScope::RecentlyViewed => dependencies.push(RecentViews),
             ItemScope::MediaMatches { .. } => dependencies.push(Sql),
         }
         filter_dependencies(&query.view.filter, &mut dependencies);
-        Self(
-            dependencies
-                .into_iter()
-                .map(|d| snapshot.query_versions.0[d as usize])
-                .collect(),
-        )
+        let mut versions = dependencies
+            .into_iter()
+            .map(|d| snapshot.query_versions.0[d as usize])
+            .collect::<Vec<_>>();
+        if let ItemScope::SmartFolder { smart_folder_id } = query.scope {
+            versions.push(
+                snapshot
+                    .smart_result_versions
+                    .get(&smart_folder_id.0)
+                    .copied()
+                    .unwrap_or(0),
+            );
+        }
+        Self(versions)
     }
 
     pub(crate) fn ordered(snapshot: &ProjectionSnapshot, query: &RootQuery) -> Self {

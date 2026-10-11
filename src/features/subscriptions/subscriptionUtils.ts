@@ -1,7 +1,6 @@
 import type {
   CredentialDomain,
   CredentialHealth,
-  FailedPostGroup,
   SubscriptionProgressEvent,
   SubscriptionInfo,
   SubscriptionQueryInfo,
@@ -83,19 +82,6 @@ export function getSiteLabel(siteId: string, sites: SubscriptionSiteInfo[]): str
   return sites.find((site) => site.id === siteId)?.name ?? siteId;
 }
 
-export function getSubscriptionSiteSummary(
-  queries: SubscriptionQueryInfo[],
-  sites: SubscriptionSiteInfo[],
-): string {
-  const siteIds = Array.from(new Set(queries.map((query) => query.site_id)));
-  if (siteIds.length === 0) return t('No sites');
-  if (siteIds.length === 1) return getSiteLabel(siteIds[0], sites);
-  if (siteIds.length === 2) {
-    return siteIds.map((siteId) => getSiteLabel(siteId, sites)).join(' + ');
-  }
-  return t('{value0} sites', { value0: siteIds.length });
-}
-
 export function describeSubscriptionState(input: {
   paused: boolean;
   running?: boolean;
@@ -123,12 +109,6 @@ export function isSubscriptionCompleted(subscription: SubscriptionInfo): boolean
   return !subscription.paused
     && subscription.queries.length > 0
     && subscription.queries.every((query) => isQueryCompleted(query));
-}
-
-export function getQueryFailedCount(queryId: string, failedPosts: FailedPostGroup[]): number {
-  return failedPosts
-    .filter((group) => group.queryId === queryId)
-    .reduce((count, group) => count + group.failedMembers, 0);
 }
 
 export function getQueryAuthState(input: {

@@ -37,8 +37,10 @@ import {
   gridScopeAtom,
   gridChildFoldersAtom,
   gridFilterToolbarOpenAtom,
+  currentGridQueryAtom,
   type GridTransitionPhase,
 } from '../../state/grid';
+import { addSelectionSpan } from '../../controllers/rangeSelectionController';
 import { gridController } from '../../controllers/gridController';
 import { foldersController } from '../../controllers/foldersController';
 import { isNativeDragPending, isDragActive as isDragActiveCheck, isInternalDragOrigin } from './dragState';
@@ -69,7 +71,7 @@ import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntr
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor } from '../../state/portals';
-import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
+import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchInitial, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
 import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
@@ -1149,7 +1151,7 @@ export function GridScreen({
               }));
             },
             onAttachWatch: () => {
-              store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
+              store.set(folderWatchModalAtom, { open: true, folderId, initial: folderWatchInitial(folder.meta) });
             },
             onRemoveWatch: watchEnabled ? () => {
               store.set(confirmModalAtom, {
@@ -1231,6 +1233,7 @@ export function GridScreen({
         items={items}
         headerContent={subfolderHeader}
         dragSourceScope={gridScope}
+        dragSelectionTarget={selectionTarget}
         viewportCommitKey={viewportCommitKey}
         viewMode={viewMode}
         targetSize={targetSize}
@@ -1264,8 +1267,28 @@ export function GridScreen({
         }}
         onTileClick={(index, item, event) => {
           const itemId = item.root_id;
+          const position = windowStart + index;
           if (event?.shiftKey && selection.anchor?.kind === 'item') {
-            const anchorIndex = items.findIndex((entry) => entry.root_id === selection.anchor!.id);
+            const anchor = selection.anchor;
+            const anchorIndex = items.findIndex((entry) => entry.root_id === anchor.id);
+            const additive = Boolean(event.metaKey || event.ctrlKey);
+            if (anchor.index != null) {
+              const query = store.get(currentGridQueryAtom);
+              const span = { anchor: { id: anchor.id, index: anchor.index }, focus: { id: itemId, index: position } };
+              if (additive && (anchorIndex < 0 || selectionMode !== 'explicit')) {
+                // Adding to a selection that reaches beyond the loaded window:
+                // the backend places the existing selection before merging.
+                void addSelectionSpan(query, span)
+                  .catch((error) => console.warn('Could not extend the selection', error));
+                return;
+              }
+              if (!additive && anchorIndex < 0) {
+                // The anchor scrolled out of the loaded window: the backend
+                // resolves the range instead of only the loaded tiles.
+                dispatchSelection({ type: 'range_query', query, ...span });
+                return;
+              }
+            }
             const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
             const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
             const base = (event.metaKey || event.ctrlKey)
@@ -1277,10 +1300,10 @@ export function GridScreen({
             dispatchSelection({ type: 'range_items', itemIds: base });
           } else if (event?.metaKey || event?.ctrlKey) {
             dispatchSelection(selectionMode === 'query_results'
-              ? { type: 'toggle_query_item', itemId, totalCount: totalCount ?? items.length }
-              : { type: 'toggle_item', itemId });
+              ? { type: 'toggle_query_item', itemId, totalCount: totalCount ?? items.length, index: position }
+              : { type: 'toggle_item', itemId, index: position });
           } else {
-            dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId });
+            dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId, anchorIndex: position });
           }
         }}
         onTileDoubleClick={(_index, item) => {

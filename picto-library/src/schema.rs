@@ -9,7 +9,10 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
+const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
+const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
+const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
 const RESIDENT_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-resident-browsing";
 const ROWID_PREDECESSOR: &str = "picto-library-schema-1-2026-09-07-summary-page-rowids";
 const KEYS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-06-persisted-name-keys";
@@ -22,12 +25,20 @@ const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-nat
 const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
+const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
+
+/// Create any missing accelerator index. Idempotent; runs at create and open.
+pub fn ensure_accelerator_indexes(connection: &Connection) -> Result<()> {
+    connection.execute_batch(ACCELERATOR_INDEXES)?;
+    Ok(())
+}
 
 pub fn create(connection: &mut Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;")?;
     let result = (|| {
         connection.execute_batch(SCHEMA)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
+        connection.execute_batch(ACCELERATOR_INDEXES)?;
         connection.execute(
             "INSERT INTO library_meta
                  (singleton, schema_generation, schema_fingerprint, revision, next_local_id)
@@ -102,7 +113,10 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            RESIDENT_PREDECESSOR
+            CHUNKED_ORDERS_PREDECESSOR
+                | WATCH_LIFECYCLE_PREDECESSOR
+                | SOURCE_ROOTS_PREDECESSOR
+                | RESIDENT_PREDECESSOR
                 | ROWID_PREDECESSOR
                 | KEYS_PREDECESSOR
                 | NODE_PREDECESSOR
@@ -174,6 +188,9 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                CHUNKED_ORDERS_PREDECESSOR,
+                WATCH_LIFECYCLE_PREDECESSOR,
+                SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 DRAWING_PREDECESSOR,
                 TEXT_PREDECESSOR,
@@ -218,7 +235,14 @@ pub fn migrate_for_open(
             // and repair lifecycle. The resident model rebuilds all of it from
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
-            if fingerprint != RESIDENT_PREDECESSOR {
+            if ![
+                RESIDENT_PREDECESSOR,
+                SOURCE_ROOTS_PREDECESSOR,
+                WATCH_LIFECYCLE_PREDECESSOR,
+                CHUNKED_ORDERS_PREDECESSOR,
+            ]
+            .contains(&fingerprint.as_str())
+            {
                 connection.execute_batch(
                     "DROP TABLE IF EXISTS browsing_summary_page;
              DROP TABLE IF EXISTS browsing_page;
@@ -244,6 +268,9 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                CHUNKED_ORDERS_PREDECESSOR,
+                WATCH_LIFECYCLE_PREDECESSOR,
+                SOURCE_ROOTS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 TEXT_PREDECESSOR,
                 NAME_PREDECESSOR,
@@ -292,10 +319,32 @@ pub fn migrate_for_open(
             )?;
             // Older attempts do not prove grid-root creation; never infer it
             // from retained files or backfill speculative notification counts.
-            connection.execute_batch(
-                "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
-            )?;
+            if !has_column(connection, "source_attempt_root", "created_root")? {
+                connection.execute_batch(
+                    "ALTER TABLE source_attempt_root ADD COLUMN created_root INTEGER NOT NULL DEFAULT 0 CHECK (created_root IN (0, 1));"
+                )?;
+            }
+            // Watched folders kept importing into the Inbox; that stays the default.
+            if !has_column(connection, "folder_definition", "watch_lifecycle")? {
+                connection.execute_batch(
+                    "ALTER TABLE folder_definition ADD COLUMN watch_lifecycle INTEGER NOT NULL DEFAULT 2 CHECK (watch_lifecycle IN (1, 2));"
+                )?;
+            }
             require_columns(connection, "source_attempt_root", &["created_root"])?;
+            // Orders move from one blob per owner to fixed-size chunks; the
+            // ids and their order are unchanged, so checkpoints stay valid.
+            if !has_table(connection, "ordered_membership_chunk")? {
+                crate::ordering::migrate_single_blob_orders(connection)?;
+            }
+            // The per-field CRDT design was replaced by snapshot sync; nothing
+            // ever wrote these tables.
+            connection.execute_batch(
+                "DROP INDEX IF EXISTS idx_cloud_outbox_pending;
+                 DROP TABLE IF EXISTS cloud_outbox;
+                 DROP TABLE IF EXISTS cloud_applied_mutation;
+                 DROP TABLE IF EXISTS cloud_field_clock;
+                 DROP TABLE IF EXISTS cloud_membership_clock;",
+            )?;
             connection.execute(
                 "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
                 [SCHEMA_FINGERPRINT],
@@ -358,6 +407,27 @@ fn migration_backup_path(database_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("library.sqlite");
     database_path.with_file_name(format!("{file_name}.pre-migration-{timestamp}.backup"))
+}
+
+fn has_table(connection: &Connection, table: &str) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let found = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == column);
+    Ok(found)
 }
 
 fn require_columns(connection: &Connection, table: &str, required: &[&str]) -> Result<()> {
@@ -548,6 +618,146 @@ mod tests {
             super::RESIDENT_PREDECESSOR
         );
         assert_eq!(count(&backup, "SELECT COUNT(*) FROM pragma_table_info('source_attempt_root') WHERE name='created_root'"), 0);
+    }
+
+    #[test]
+    fn source_roots_migration_keeps_existing_watches_importing_into_the_inbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE folder_definition DROP COLUMN watch_lifecycle;
+                 INSERT INTO folder_definition
+                     (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
+                 VALUES (3, 'watched', 'Watched', '/watched', 1, 0);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::SOURCE_ROOTS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT watch_lifecycle FROM folder_definition WHERE folder_id = 3"
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn malformed_legacy_orders_fail_without_mutating_the_database_on_reopen() {
+        for (label, cardinality, version, declared_count, ids) in [
+            ("format", 2, 2, 2_u32, vec![1_u32, 2]),
+            ("cardinality", 3, 1, 2, vec![1, 2]),
+            ("negative cardinality", -1, 1, 2, vec![1, 2]),
+            ("embedded count", 2, 1, 3, vec![1, 2]),
+            ("duplicates", 3, 1, 3, vec![1, 2, 1]),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("library.sqlite");
+            drop(LibraryDatabase::create(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(
+                "DROP TABLE ordered_membership_chunk;
+                 CREATE TABLE ordered_membership (
+                     owner_kind INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+                     revision INTEGER NOT NULL, cardinality INTEGER NOT NULL,
+                     format_version INTEGER NOT NULL, checksum BLOB NOT NULL,
+                     payload BLOB NOT NULL, PRIMARY KEY(owner_kind, owner_id)
+                 ) WITHOUT ROWID, STRICT;",
+            ).unwrap();
+            let mut payload = declared_count.to_le_bytes().to_vec();
+            ids.iter().for_each(|id| payload.extend_from_slice(&id.to_le_bytes()));
+            connection.execute(
+                "INSERT INTO ordered_membership VALUES (2, 9, 1, ?1, ?2, ?3, ?4)",
+                rusqlite::params![cardinality, version, crate::bitmap::checksum(&payload).as_slice(), payload],
+            ).unwrap();
+            connection.execute("UPDATE library_meta SET schema_fingerprint=?1", [super::WATCH_LIFECYCLE_PREDECESSOR]).unwrap();
+            drop(connection);
+
+            for _ in 0..2 {
+                assert!(LibraryDatabase::open(&path).is_err(), "{label} was silently migrated");
+                assert_eq!(fingerprint_of(&path), super::WATCH_LIFECYCLE_PREDECESSOR);
+                let connection = Connection::open(&path).unwrap();
+                assert_eq!(count(&connection, "SELECT COUNT(*) FROM sqlite_master WHERE name='ordered_membership_chunk'"), 0);
+                let stored = connection.query_row("SELECT cardinality, format_version, payload FROM ordered_membership", [], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, Vec<u8>>(2)?))
+                }).unwrap();
+                assert_eq!(stored, (cardinality, version, payload.clone()));
+            }
+            let backups = std::fs::read_dir(directory.path()).unwrap()
+                .map(|entry| entry.unwrap().path()).filter(|path| path.extension().is_some_and(|extension| extension == "backup"))
+                .collect::<Vec<_>>();
+            assert!(!backups.is_empty());
+            for backup in backups {
+                assert_eq!(fingerprint_of(&backup), super::WATCH_LIFECYCLE_PREDECESSOR);
+                let connection = Connection::open(backup).unwrap();
+                assert_eq!(connection.query_row("SELECT payload FROM ordered_membership", [], |row| row.get::<_, Vec<u8>>(0)).unwrap(), payload);
+            }
+        }
+    }
+
+    #[test]
+    fn single_blob_orders_are_split_into_chunks_without_changing_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        // The predecessor kept each order as one blob: a u32 count, then ids.
+        let ids = (1..=2_500_u32).rev().collect::<Vec<_>>();
+        let mut payload = (ids.len() as u32).to_le_bytes().to_vec();
+        ids.iter()
+            .for_each(|id| payload.extend_from_slice(&id.to_le_bytes()));
+        connection
+            .execute_batch(
+                "DROP TABLE ordered_membership_chunk;
+                 CREATE TABLE ordered_membership (
+                     owner_kind INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+                     revision INTEGER NOT NULL, cardinality INTEGER NOT NULL,
+                     format_version INTEGER NOT NULL, checksum BLOB NOT NULL,
+                     payload BLOB NOT NULL, PRIMARY KEY(owner_kind, owner_id)
+                 ) WITHOUT ROWID, STRICT;",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO ordered_membership VALUES (2, 9, 1, ?1, 1, ?2, ?3)",
+                rusqlite::params![
+                    ids.len() as i64,
+                    crate::bitmap::checksum(&payload).as_slice(),
+                    payload
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint=?1",
+                [super::WATCH_LIFECYCLE_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        super::validate(&connection).unwrap();
+        assert_eq!(
+            crate::ordering::load(&connection, crate::ordering::OrderOwnerKind::Folder, 9)
+                .unwrap()
+                .unwrap(),
+            ids
+        );
+        assert_eq!(
+            count(&connection, "SELECT COUNT(*) FROM ordered_membership_chunk"),
+            3
+        );
     }
 
     #[test]

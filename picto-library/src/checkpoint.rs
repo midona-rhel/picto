@@ -7,7 +7,7 @@ use crate::projection::{DateIndex, NumericIndex, ProjectionSnapshot, ShardedIdMa
 use crate::schema::SCHEMA_FINGERPRINT;
 use crate::{LibraryError, Result};
 
-pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v11-signed-dates";
+pub const PROJECTION_IMPLEMENTATION_HASH: &str = "greenfield-projection-v12-smart-results-all-lifecycles";
 
 #[derive(Serialize, Deserialize)]
 struct CheckpointData {
@@ -128,7 +128,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         text_index: std::sync::Arc::new(crate::text_index::TextIndex::default()),
         name_index: std::sync::Arc::new(crate::name_index::NameIndex::default()),
         drawing: std::sync::Arc::new(crate::browsing::DrawingIndex::default()),
-        recent_views: std::sync::Arc::new(Vec::new()),
+        recent_views: std::sync::Arc::new(Default::default()),
         folder_parents: std::sync::Arc::new(std::collections::HashMap::new()),
         query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: std::sync::Arc::new(data.lifecycle),
@@ -160,6 +160,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         urls_present: std::sync::Arc::new(data.urls_present),
         smart_local_results: std::sync::Arc::new(data.smart_local_results),
         smart_results: std::sync::Arc::new(data.smart_results),
+        smart_result_versions: std::sync::Arc::new(std::collections::HashMap::new()),
         smart_queries: std::sync::Arc::new(smart_queries),
         smart_effective_queries: std::sync::Arc::new(smart_effective_queries),
     })

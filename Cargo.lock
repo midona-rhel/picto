@@ -2956,6 +2956,7 @@ dependencies = [
  "arc-swap",
  "bincode",
  "chrono",
+ "memchr",
  "parking_lot",
  "rayon",
  "roaring",

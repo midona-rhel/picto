@@ -171,6 +171,22 @@ impl DateIndex {
         self.0.between(minimum, maximum)
     }
 
+    pub fn between_within(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        within: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        if minimum.is_some_and(|value| value > i64::MAX as u64) {
+            return RoaringBitmap::new();
+        }
+        let minimum = minimum
+            .filter(|&value| value > 0)
+            .map(|value| Self::key(value as i64));
+        let maximum = maximum.map(|value| Self::key(value.min(i64::MAX as u64) as i64));
+        self.0.between_within(minimum, maximum, within)
+    }
+
     pub(crate) fn ordered_window(
         &self,
         selection: &RoaringBitmap,
@@ -186,9 +202,13 @@ impl DateIndex {
         }
         // SQL's COALESCE(date, -1) ties missing dates with actual -1 values.
         // Select three disjoint ranges; never materialize a full matching order.
-        let below = selection & &index.between(None, Some(Self::key(-2)));
-        let equal = (selection & &index.between(Some(Self::key(-1)), Some(Self::key(-1)))) | absent;
-        let above = selection & &index.between(Some(Self::key(0)), None);
+        let below = index.between(None, Some(Self::key(-2)), selection & &index.present);
+        let equal = index.between(
+            Some(Self::key(-1)),
+            Some(Self::key(-1)),
+            selection & &index.present,
+        ) | absent;
+        let above = index.between(Some(Self::key(0)), None, selection & &index.present);
         let mut groups = [(below, false), (equal, true), (above, false)];
         if descending {
             groups.reverse();
@@ -337,7 +357,28 @@ impl NumericIndex {
     pub fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
         let mut result = RoaringBitmap::new();
         for shard in self.shards.values() {
-            result |= shard.between(minimum, maximum);
+            result |= shard.between(minimum, maximum, shard.present.clone());
+        }
+        result
+    }
+
+    /// `between` restricted to `within`. Work is proportional to the overlap,
+    /// so evaluating a filter over a few changed roots stays cheap.
+    pub fn between_within(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        within: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        let mut result = RoaringBitmap::new();
+        if within.is_empty() {
+            return result;
+        }
+        for shard in self.shards.values() {
+            let base = &shard.present & within;
+            if !base.is_empty() {
+                result |= shard.between(minimum, maximum, base);
+            }
         }
         result
     }
@@ -565,13 +606,18 @@ impl NumericShard {
         })
     }
 
-    fn between(&self, minimum: Option<u64>, maximum: Option<u64>) -> RoaringBitmap {
-        let mut result = self.present.clone();
+    fn between(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        base: RoaringBitmap,
+    ) -> RoaringBitmap {
+        let mut result = base;
         if let Some(minimum) = minimum {
-            result -= &self.less_than(minimum);
+            result -= &self.less_than(minimum, &result);
         }
         if let Some(exclusive) = maximum.and_then(|value| value.checked_add(1)) {
-            result &= self.less_than(exclusive);
+            result &= self.less_than(exclusive, &result);
         }
         result
     }
@@ -580,7 +626,7 @@ impl NumericShard {
         self.slices
             .iter()
             .enumerate()
-            .map(|(bit, slice)| (slice & selection).len() as u128 * (1u128 << bit))
+            .map(|(bit, slice)| slice.intersection_len(selection) as u128 * (1u128 << bit))
             .sum()
     }
 
@@ -594,29 +640,54 @@ impl NumericShard {
             + self.slices.capacity() * std::mem::size_of::<RoaringBitmap>()
     }
 
-    fn less_than(&self, value: u64) -> RoaringBitmap {
+    /// Members of `base` (a subset of `present`) whose value is below `value`.
+    fn less_than(&self, value: u64, base: &RoaringBitmap) -> RoaringBitmap {
         if value == 0 {
             return RoaringBitmap::new();
         }
-        let mut equal = self.present.clone();
+        // Walk the bits from the top, keeping the members still equal to
+        // `value` so far; no slice is copied, and the walk stops as soon as
+        // nothing is left equal.
+        let empty = RoaringBitmap::new();
+        let mut equal = base.clone();
         let mut less = RoaringBitmap::new();
         let highest = self.slices.len().max(64 - value.leading_zeros() as usize);
         for bit in (0..highest).rev() {
-            let ones = self
-                .slices
-                .get(bit)
-                .cloned()
-                .unwrap_or_else(RoaringBitmap::new);
-            let mut zeros = equal.clone();
-            zeros -= &ones;
+            if equal.is_empty() {
+                break;
+            }
+            let ones = self.slices.get(bit).unwrap_or(&empty);
             if bit < 64 && value & (1u64 << bit) != 0 {
-                less |= &zeros;
-                equal &= &ones;
+                less |= &equal - ones;
+                equal &= ones;
             } else {
-                equal = zeros;
+                equal -= ones;
             }
         }
         less
+    }
+}
+
+/// One immutable recent-view projection: display order and candidate membership
+/// are built together from the same canonical rows.
+#[derive(Debug, Clone, Default)]
+pub struct RecentViews {
+    ordered: Vec<(RootId, i64)>,
+    pub(crate) members: RoaringBitmap,
+}
+
+impl From<Vec<(RootId, i64)>> for RecentViews {
+    fn from(ordered: Vec<(RootId, i64)>) -> Self {
+        let members = ordered.iter().map(|(id, _)| id.0).collect();
+        Self { ordered, members }
+    }
+}
+
+impl Deref for RecentViews {
+    type Target = [(RootId, i64)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.ordered
     }
 }
 
@@ -628,7 +699,7 @@ pub struct ProjectionSnapshot {
     /// Drawing facts of every root, hydrated for grid summaries without SQLite.
     pub drawing: Arc<crate::browsing::DrawingIndex>,
     /// Recently viewed roots, most recent first; ties break by descending ID.
-    pub recent_views: Arc<Vec<(RootId, i64)>>,
+    pub recent_views: Arc<RecentViews>,
     /// Parent of every folder, for folder-tree scopes.
     pub folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
     pub(crate) query_versions: crate::query_dependencies::QueryVersions,
@@ -663,6 +734,9 @@ pub struct ProjectionSnapshot {
     pub smart_local_results: Arc<HashMap<u32, SharedBitmap>>,
     /// Local results intersected with every ancestor result.
     pub smart_results: Arc<HashMap<u32, SharedBitmap>>,
+    /// Session-local cache version of each smart folder's result. It moves only
+    /// when that folder's membership changes, so other folders stay cached.
+    pub smart_result_versions: Arc<HashMap<u32, u64>>,
     /// Definitions exactly as saved by each smart folder.
     pub smart_queries: Arc<HashMap<u32, ViewQuerySpec>>,
     /// Local definitions composed with every ancestor definition.
@@ -743,7 +817,8 @@ impl ProjectionSnapshot {
             .values()
             .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
             .sum::<usize>();
-        bytes += self.recent_views.capacity() * std::mem::size_of::<(RootId, i64)>();
+        bytes += self.recent_views.ordered.capacity() * std::mem::size_of::<(RootId, i64)>()
+            + self.recent_views.members.serialized_size();
         bytes += self.folder_parents.capacity()
             * (std::mem::size_of::<FolderId>()
                 + std::mem::size_of::<Option<FolderId>>()
@@ -813,7 +888,7 @@ struct ResidentState {
     text_index: Arc<crate::text_index::TextIndex>,
     name_index: Arc<crate::name_index::NameIndex>,
     drawing: Arc<crate::browsing::DrawingIndex>,
-    recent_views: Arc<Vec<(RootId, i64)>>,
+    recent_views: Arc<RecentViews>,
     folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
 }
 
@@ -837,7 +912,7 @@ impl ResidentState {
         statistics.drawing_load_us = stage.elapsed().as_micros() as u64;
         progress(OpenStage::Loading(LoadStage::Navigation));
         let stage = std::time::Instant::now();
-        let recent_views = Arc::new(load_recent_views(connection)?);
+        let recent_views = Arc::new(load_recent_views(connection)?.into());
         let folder_parents = Arc::new(load_folder_parents(connection)?);
         statistics.navigation_load_us = stage.elapsed().as_micros() as u64;
         Ok(Self {
@@ -1048,30 +1123,15 @@ fn load(
     let mut folder_orders = HashMap::new();
     let mut folders = HashMap::new();
     let mut collection_orders = HashMap::new();
-    let mut orders = connection
-        .prepare("SELECT owner_kind, owner_id, checksum, payload FROM ordered_membership")?;
-    let rows = orders.query_map([], |row| {
-        Ok((
-            row.get::<_, u8>(0)?,
-            row.get::<_, u32>(1)?,
-            row.get::<_, Vec<u8>>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
-        ))
-    })?;
-    for (index, row) in rows.enumerate() {
-        if index % 256 == 0 {
-            crate::query_request::check()?;
-        }
-        let (kind, owner_id, checksum, payload) = row?;
-        let values = ordering::decode(&payload, &checksum)?;
+    ordering::load_all(connection, |kind, owner_id, values| {
         match kind {
-            value if value == OrderOwnerKind::Collection as u8 => {
+            OrderOwnerKind::Collection => {
                 collection_orders.insert(
                     RootId(owner_id),
                     Arc::new(values.into_iter().map(MediaId).collect::<Vec<_>>()),
                 );
             }
-            value if value == OrderOwnerKind::Folder as u8 => {
+            OrderOwnerKind::Folder => {
                 let bitmap = values.iter().copied().collect::<RoaringBitmap>();
                 folders.insert(FolderId(owner_id), bitmap.into());
                 folder_orders.insert(
@@ -1079,13 +1139,9 @@ fn load(
                     Arc::new(values.into_iter().map(RootId).collect()),
                 );
             }
-            _ => {
-                return Err(crate::LibraryError::InvalidState(format!(
-                    "unknown ordered membership kind {kind}"
-                )))
-            }
         }
-    }
+        Ok(())
+    })?;
 
     let mut root_kinds: HashMap<RootKind, SharedBitmap> = [
         (RootKind::Media, SharedBitmap::default()),
@@ -1319,6 +1375,7 @@ fn load(
         urls_present: Arc::new(urls_present),
         smart_local_results: Arc::new(HashMap::new()),
         smart_results: Arc::new(HashMap::new()),
+        smart_result_versions: Arc::new(HashMap::new()),
         smart_queries: Arc::new(HashMap::new()),
         smart_effective_queries: Arc::new(HashMap::new()),
     };

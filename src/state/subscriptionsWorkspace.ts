@@ -84,39 +84,3 @@ export const subscriptionsSelectedProgressAtom = atom((get) => {
   if (!selected) return null;
   return get(subscriptionsProgressBySubscriptionIdAtom).get(selected.id) ?? null;
 });
-
-/** Query id currently being processed for the selected subscription. */
-export const subscriptionsActiveQueryIdAtom = atom((get) => {
-  const progress = get(subscriptionsSelectedProgressAtom);
-  return progress?.query_id ?? null;
-});
-
-/** Credential presence by canonical site category — drives auth chips and wizard gating. */
-export const subscriptionsCredentialBySiteAtom = atom((get) => {
-  const snapshot = get(subscriptionsWorkspaceSnapshotAtom);
-  const map = new Map<string, { type: string; health: string | null }>();
-  if (!snapshot) return map;
-  for (const credential of snapshot.credentials) {
-    map.set(credential.site_category, { type: credential.credential_type, health: null });
-  }
-  for (const health of snapshot.credentialHealth) {
-    const entry = map.get(health.site_category);
-    if (entry) entry.health = health.health_status;
-  }
-  return map;
-});
-
-/** Failed posts for the selected subscription, grouped by failure reason. */
-export const subscriptionsHealthGroupsAtom = atom((get) => {
-  const detail = get(subscriptionsDetailAtom);
-  const groups = new Map<string, FailedPostGroup[]>();
-  for (const post of detail.failedPosts) {
-    const reason = post.lastError?.trim() || 'Unknown failure';
-    // Group by the leading portion of the error so variants collapse together.
-    const key = reason.length > 80 ? `${reason.slice(0, 80)}…` : reason;
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(post);
-    else groups.set(key, [post]);
-  }
-  return groups;
-});

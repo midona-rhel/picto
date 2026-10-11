@@ -11,6 +11,12 @@ use crate::schema;
 use crate::{LibraryError, Result};
 
 const DEFAULT_READERS: usize = 8;
+/// SQLite's own page cache per connection. Without it every connection keeps
+/// about 2 MB and leans on the OS file cache, which Linux keeps generously and
+/// Windows and macOS do not. The cache fills only as pages are read; the
+/// resident projection, not SQLite, serves grid reads.
+const WRITER_CACHE_KIB: i64 = 64 * 1024;
+const READER_CACHE_KIB: i64 = 16 * 1024;
 const GATE_HISTOGRAM_BUCKETS: usize = 32;
 
 /// A prepared publication settles its resident derived state in the same
@@ -179,7 +185,7 @@ impl ReadPool {
         };
         let connection = match idle {
             Some(connection) => connection,
-            None => match open_connection(&self.path, false) {
+            None => match open_connection(&self.path, false, READER_CACHE_KIB) {
                 Ok(connection) => connection,
                 Err(error) => {
                     self.restore_permit();
@@ -234,7 +240,7 @@ impl LibraryDatabase {
                 path.display()
             )));
         }
-        let mut writer = open_connection(&path, true)?;
+        let mut writer = open_connection(&path, true, WRITER_CACHE_KIB)?;
         schema::create(&mut writer)?;
         Self::from_writer(path, writer)
     }
@@ -251,9 +257,10 @@ impl LibraryDatabase {
         progress: &mut dyn FnMut(OpenStage),
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut writer = open_connection(&path, false)?;
+        let mut writer = open_connection(&path, false, WRITER_CACHE_KIB)?;
         schema::migrate_for_open(&mut writer, &path, cancellation, progress)?;
         schema::validate(&writer)?;
+        schema::ensure_accelerator_indexes(&writer)?;
         Self::from_writer(path, writer)
     }
 
@@ -444,6 +451,32 @@ impl LibraryDatabase {
         Ok(output)
     }
 
+    /// Copy committed WAL pages into the database without blocking readers or
+    /// waiting for them. Trim an oversized, fully checkpointed WAL only when
+    /// SQLite can acquire the required reader locks immediately.
+    pub fn checkpoint_wal_passive(&self) -> Result<()> {
+        let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
+        let writer = self.writer.lock();
+        let (frames, copied): (i64, i64) =
+            writer.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((row.get(1)?, row.get(2)?))
+            })?;
+        let mut wal_path = self.path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        if frames == copied
+            && std::fs::metadata(wal_path).is_ok_and(|m| m.len() >= 64 * 1024 * 1024)
+        {
+            // journal_size_limit applies when WAL is reused, not when PASSIVE
+            // completes. An idle library may otherwise retain a large WAL forever.
+            let timeout: u32 = writer.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            let trimmed = writer.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            writer.busy_timeout(std::time::Duration::from_millis(timeout.into()))?;
+            trimmed?;
+        }
+        Ok(())
+    }
+
     pub fn checkpoint_wal(&self) -> Result<()> {
         let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
         let writer = self.writer.lock();
@@ -469,7 +502,7 @@ impl LibraryDatabase {
     }
 }
 
-fn open_connection(path: &Path, create: bool) -> Result<Connection> {
+fn open_connection(path: &Path, create: bool, cache_kib: i64) -> Result<Connection> {
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_URI;
@@ -486,8 +519,12 @@ fn open_connection(path: &Path, create: bool) -> Result<Connection> {
          PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
-         PRAGMA wal_autocheckpoint = 0;",
+         PRAGMA wal_autocheckpoint = 0;
+         PRAGMA journal_size_limit = 67108864;
+         PRAGMA mmap_size = 0;",
     )?;
+    // Negative = KiB rather than pages, so the budget ignores the page size.
+    connection.pragma_update(None, "cache_size", -cache_kib)?;
     Ok(connection)
 }
 
@@ -495,6 +532,61 @@ fn open_connection(path: &Path, create: bool) -> Result<Connection> {
 mod tests {
     use super::*;
     use crate::query_request::{QueryRequest, WindowRequests};
+
+    #[test]
+    fn idle_checkpoint_trims_large_wal_without_waiting_for_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = LibraryDatabase::create(directory.path().join("library.sqlite")).unwrap();
+        database.writer.lock().execute_batch(
+            "CREATE TABLE wal_test(value BLOB); INSERT INTO wal_test VALUES(zeroblob(73400320));",
+        ).unwrap();
+        let wal = directory.path().join("library.sqlite-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 64 * 1024 * 1024);
+        let reader = Connection::open(database.path()).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT length(value) FROM wal_test;")
+            .unwrap();
+        database.checkpoint_wal_passive().unwrap();
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        assert_eq!(
+            database
+                .writer
+                .lock()
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5000
+        );
+        // Observe lock retries directly: copying a large WAL can take over a
+        // second on CI even when SQLite never waits for the pinned reader.
+        static BUSY_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        BUSY_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        database
+            .writer
+            .lock()
+            .busy_handler(Some(|_| {
+                BUSY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                false
+            }))
+            .unwrap();
+        database.checkpoint_wal_passive().unwrap();
+        assert_eq!(BUSY_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+        database
+            .writer
+            .lock()
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        reader.execute_batch("COMMIT").unwrap();
+        database.checkpoint_wal_passive().unwrap();
+        assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
+        assert_eq!(
+            database
+                .writer
+                .lock()
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5000
+        );
+    }
 
     fn unopenable_pool() -> Arc<ReadPool> {
         // A file in a directory that does not exist can neither be opened nor

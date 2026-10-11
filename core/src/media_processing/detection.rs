@@ -259,12 +259,9 @@ pub async fn get_mime(path: &Path) -> FileResult<MimeType> {
         if passes_header_rule(rule, header) {
             match mime {
                 MimeType::ApplicationZip => {
-                    if super::formats::format_for_path(path)
-                        .is_some_and(|format| format.mime_type == "application/x-ugoira")
-                    {
-                        return Ok(MimeType::AnimationUgoira);
-                    }
-                    return Ok(MimeType::ApplicationZip);
+                    return Ok(super::formats::format_for_path(path)
+                        .and_then(|format| zip_container_mime(format.mime_type))
+                        .unwrap_or(MimeType::ApplicationZip));
                 }
                 MimeType::UndeterminedPng => {
                     let mut extended = vec![0u8; 8192];
@@ -347,6 +344,27 @@ pub async fn get_mime(path: &Path) -> FileResult<MimeType> {
     }
 
     Ok(MimeType::ApplicationUnknown)
+}
+
+// These formats share ZIP's signature but have their own bounded readers.
+pub(super) fn zip_container_mime(mime: &str) -> Option<MimeType> {
+    Some(match mime {
+        "application/x-ugoira" => MimeType::AnimationUgoira,
+        "application/vnd.comicbook+zip" => MimeType::ApplicationCbz,
+        "application/epub+zip" => MimeType::ApplicationEpub,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            MimeType::ApplicationDocx
+        }
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+            MimeType::ApplicationXlsx
+        }
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            MimeType::ApplicationPptx
+        }
+        "application/x-krita" => MimeType::ApplicationKrita,
+        "application/x-procreate" => MimeType::ApplicationProcreate,
+        _ => return None,
+    })
 }
 
 pub fn is_image(mime: MimeType) -> bool {

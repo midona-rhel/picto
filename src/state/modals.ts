@@ -52,7 +52,7 @@ export const smartFolderModalAtom = atom<SmartFolderModalState>({ open: false, m
 export interface FolderWatchModalState {
   open: boolean;
   folderId?: number;
-  initial?: { watchPath?: string; enabled?: boolean; subfolders?: boolean; importStatusMode?: string };
+  initial?: FolderWatchInitial;
 }
 
 export const folderWatchModalAtom = atom<FolderWatchModalState>({ open: false });
@@ -192,3 +192,24 @@ export const groupOrganizerModalAtom = atom<GroupOrganizerModalState>({
 });
 
 export const updateModalAtom = atom({ open: false });
+
+export type WatchImportStatus = 'inbox' | 'active';
+
+export interface FolderWatchInitial {
+  watchPath?: string;
+  enabled?: boolean;
+  subfolders?: boolean;
+  importStatus?: WatchImportStatus;
+}
+
+/** The watch dialog's starting values, taken from a folder node's sidebar meta. */
+export function folderWatchInitial(meta: unknown): FolderWatchInitial {
+  const value = (meta ?? {}) as Record<string, unknown>;
+  if (!value.watch_enabled || typeof value.watch_path !== 'string') return {};
+  return {
+    watchPath: value.watch_path,
+    enabled: true,
+    subfolders: Boolean(value.watch_subfolders),
+    importStatus: value.watch_lifecycle === 'active' ? 'active' : 'inbox',
+  };
+}

@@ -1,6 +1,10 @@
 import { act, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultStore } from 'jotai';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test/render';
+import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../../state/navigation';
+import { canGoBackAtom, pushHistory, resetNavigationHistory } from '../../state/navigationHistory';
+import { emptyGridSelection, gridSelectionAtom } from '../../state/selection';
 import { LibraryGate } from './LibraryGate';
 
 type EventHandler = (payload: unknown) => void;
@@ -28,6 +32,15 @@ function installDesktop(currentPath: string | null, config: Record<string, unkno
   return { handlers, invoke, getConfig };
 }
 
+const store = getDefaultStore();
+
+beforeEach(() => {
+  resetNavigationHistory();
+  store.set(activeNodeIdAtom, 'system:active');
+  store.set(displayedSurfaceNodeIdAtom, 'system:active');
+  store.set(gridSelectionAtom, emptyGridSelection());
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -51,6 +64,31 @@ describe('LibraryGate', () => {
 
     expect(await screen.findByText('Library content')).toBeInTheDocument();
     expect(screen.queryByText('Open a library to start')).not.toBeInTheDocument();
+  });
+
+  it('starts a switched library at All instead of retaining the previous library scope', async () => {
+    const { handlers } = installDesktop('/tmp/Old.library');
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
+    await screen.findByText('Library content');
+
+    pushHistory('folder:1');
+    store.set(activeNodeIdAtom, 'folder:1');
+    store.set(displayedSurfaceNodeIdAtom, 'folder:1');
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      folderNodeIds: new Set(['folder:1']),
+      anchor: { kind: 'folder', id: 'folder:1' },
+    });
+    expect(store.get(canGoBackAtom)).toBe(true);
+
+    act(() => handlers.get('library-switching')?.({ path: '/tmp/New.library' }));
+    act(() => handlers.get('library-switched')?.({ path: '/tmp/New.library' }));
+
+    expect(await screen.findByText('Library content')).toBeInTheDocument();
+    expect(store.get(activeNodeIdAtom)).toBe('system:active');
+    expect(store.get(displayedSurfaceNodeIdAtom)).toBe('system:active');
+    expect(store.get(gridSelectionAtom)).toEqual(emptyGridSelection());
+    expect(store.get(canGoBackAtom)).toBe(false);
   });
 
   it('mounts library-backed UI immediately when a library is already open', async () => {

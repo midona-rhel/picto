@@ -43,12 +43,14 @@ pub fn snapshot_library(
     application
         .library()
         .auxiliary_read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+            // Finished jobs stay in ingest_job (their keys deduplicate later
+            // imports), so count each live status through its index range
+            // instead of reading every import the library ever made.
             let ingest = connection.query_row(
                 "SELECT
-                     COUNT(*) FILTER (WHERE status = 'pending'),
-                     COUNT(*) FILTER (WHERE status = 'running'),
-                     COUNT(*) FILTER (WHERE status = 'failed')
-                 FROM ingest_job",
+                     (SELECT COUNT(*) FROM ingest_job WHERE status = 'pending'),
+                     (SELECT COUNT(*) FROM ingest_job WHERE status = 'running'),
+                     (SELECT COUNT(*) FROM ingest_job WHERE status = 'failed')",
                 [],
                 counts,
             )?;
@@ -72,9 +74,8 @@ pub fn snapshot_library(
             )?;
             let cloud = connection.query_row(
                 "SELECT
-                     (SELECT COUNT(*) FROM cloud_outbox WHERE published_at IS NULL)
-                       + (SELECT COUNT(*) FROM cloud_blob_state
-                          WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
+                     (SELECT COUNT(*) FROM cloud_blob_state
+                      WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
                      (SELECT COUNT(*) FROM cloud_state
                       WHERE singleton = 1 AND state = 'reconciling')
                        + (SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'downloading'),

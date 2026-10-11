@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 const packages = ['picto-macos-arm64', 'picto-windows-x64', 'picto-linux-x64'];
 const reports = ['alpha-smoke-macos', 'alpha-smoke-windows', 'alpha-smoke-linux'];
 
-export function findReleaseGate({ repository, sha, tag, version }, api) {
+export function findReleaseGate({ repository, sha, tag, version, requireMainAncestry = true }, api) {
   if (!/^\d+\.\d+\.\d+-(?:alpha|rc)(?:[.-]\d+)?$/.test(version) || tag !== `v${version}`) {
     throw new Error('Release tag must match the alpha/rc package version.');
   }
@@ -18,9 +18,11 @@ export function findReleaseGate({ repository, sha, tag, version }, api) {
   const branch = `release/${version}`;
   const ref = api(`${base}/git/ref/heads/${branch}`);
   if (ref.object?.sha !== sha) throw new Error('Tag does not match the release branch.');
-  const comparison = api(`${base}/compare/${sha}...main`);
-  if (!['ahead', 'identical'].includes(comparison.status)) {
-    throw new Error('Release commit must be landed on main before publication.');
+  if (requireMainAncestry) {
+    const comparison = api(`${base}/compare/${sha}...main`);
+    if (!['ahead', 'identical'].includes(comparison.status)) {
+      throw new Error('Release commit must be landed on main before publication.');
+    }
   }
   const query = new URLSearchParams({ branch, head_sha: sha, event: 'push', status: 'success', per_page: '100' });
   const { workflow_runs: runs } = api(`${base}/actions/workflows/alpha-gate.yml/runs?${query}`);

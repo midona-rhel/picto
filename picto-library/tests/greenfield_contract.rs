@@ -2,7 +2,7 @@ use picto_library::predicate::{
     FilterClause, FilterExpr, ItemSort, SetMatchMode, SortDirection, SortField, ViewQuerySpec,
 };
 use picto_library::query::{ItemScope, PageRequest, RootQuery, WindowRequest};
-use picto_library::selection::SelectionTarget;
+use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     ContentSortField, GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle,
     PreparedImport, Rating, RootKind, RootTagAssignment, SmartFolderInput,
@@ -2202,6 +2202,30 @@ fn ai_tag_assignments_union_member_predictions_onto_one_collection_root() {
 }
 
 #[test]
+fn background_ai_tags_stay_out_of_undo_and_do_not_block_it() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (mine, _) = library.ingest(&imported("undo-mine", Lifecycle::Active, &[])).unwrap();
+    let (imported_later, _) = library.ingest(&imported("undo-auto", Lifecycle::Active, &[])).unwrap();
+    library
+        .apply_tags(&SelectionTarget::Explicit { root_ids: vec![mine] }, &["shared".into()], true)
+        .unwrap();
+    // Auto-tagging writes the same tag on another root while the user's edit
+    // is still the newest undo entry.
+    library
+        .add_automatic_tag_assignments(&[RootTagAssignment {
+            root_id: imported_later,
+            tags: vec!["shared".into()],
+        }])
+        .unwrap();
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(root_tag_count(&library, mine), 0, "undo reverts the user's edit");
+    assert_eq!(root_tag_count(&library, imported_later), 1, "and leaves the AI tag alone");
+    assert!(library.undo().unwrap().is_none(), "the AI tag never entered the history");
+}
+
+#[test]
 fn cloud_reads_compact_semantic_journal_without_advancing_library_revision() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -2770,6 +2794,171 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn recent_view_membership_tracks_clear_undo_deletion_and_reopen() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let first = library.ingest(&imported("recent-first", Lifecycle::Active, &[])).unwrap().0;
+    let second = library.ingest(&imported("recent-second", Lifecycle::Active, &[])).unwrap().0;
+    let candidates = [first, second];
+    let recent = query(ItemScope::RecentlyViewed);
+    library.record_recent_view(first, 1).unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, false]);
+    library.record_recent_view(second, 2).unwrap();
+    library.clear_recent_views().unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, false]);
+    library.undo().unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, true]);
+    let target = SelectionTarget::Explicit { root_ids: vec![first] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.permanently_delete(&target, 3).unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, true]);
+    drop(library);
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(reopened.root_membership(&recent, &candidates).unwrap(), [false, true]);
+}
+
+#[test]
+fn root_membership_checks_only_candidates_without_building_query_order() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let first = library.ingest(&imported("needle-first", Lifecycle::Active, &["chosen"])).unwrap().0;
+    let second = library.ingest(&imported("other-second", Lifecycle::Active, &[])).unwrap().0;
+    let inbox = library.ingest(&imported("needle-inbox", Lifecycle::Inbox, &[])).unwrap().0;
+    let trash = library.ingest(&imported("needle-trash", Lifecycle::Trash, &[])).unwrap().0;
+    library.settle_fts(100).unwrap();
+    let candidates = [first, second, inbox, trash, picto_library::RootId(u32::MAX), first];
+    let all = query(ItemScope::All);
+    let before = library.query_statistics();
+    assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, true, false, false, false, true]);
+    let target = SelectionTarget::Explicit { root_ids: vec![second] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.permanently_delete(&target, 1_700_000_001_000).unwrap();
+    assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, false, false, false, false, true]);
+    assert_eq!(library.query_statistics().order_builds, before.order_builds);
+    assert!(library.root_membership(&all, &[]).unwrap().is_empty());
+
+    let (parent, _) = library.create_folder("Parent", None).unwrap();
+    let (child, _) = library.create_folder("Child", Some(parent)).unwrap();
+    library.add_to_folder(&SelectionTarget::Explicit { root_ids: vec![first] }, child).unwrap();
+    library.record_recent_view(first, 1_700_000_001_001).unwrap();
+    let text = FilterExpr::Clause(FilterClause::Text {
+        field: picto_library::predicate::TextField::Name, query: "needle".into(),
+    });
+    let smart = library.create_smart_folder(SmartFolderInput {
+        name: "Needles".into(), parent_id: None, icon: None, color: None, notes: None,
+        view: ViewQuerySpec { filter: text.clone(), sort: ItemSort::default() },
+    }).unwrap().0;
+    for scope in [
+        ItemScope::All, ItemScope::Inbox, ItemScope::Trash, ItemScope::Untagged,
+        ItemScope::Uncategorized, ItemScope::RecentlyViewed,
+        ItemScope::Folder { folder_id: child }, ItemScope::FolderTree { folder_id: parent },
+        ItemScope::SmartFolder { smart_folder_id: smart }, ItemScope::MediaMatches { item_id: first.0 },
+    ] {
+        for filter in [FilterExpr::default(), text.clone(), FilterExpr::Not(Box::new(text.clone()))] {
+            let query = RootQuery { scope: scope.clone(), view: ViewQuerySpec { filter, sort: ItemSort::default() } };
+            let before = library.query_statistics();
+            let membership = library.root_membership(&query, &candidates).unwrap();
+            assert_eq!(library.query_statistics().order_builds, before.order_builds);
+            let expected = library.query(&query, &PageRequest { limit: 100, cursor: None }).unwrap();
+            assert_eq!(membership, candidates.iter().map(|id| expected.items.iter().any(|item| item.root_id == *id)).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn range_positions_are_trusted_only_when_both_ends_still_match() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    for key in ["a", "b", "c", "d", "e", "f"] {
+        library
+            .ingest(&imported(key, Lifecycle::Active, &[]))
+            .unwrap();
+    }
+    let all = query(ItemScope::All);
+    let order = library
+        .query_window(&all, &WindowRequest::at(0, 10))
+        .unwrap()
+        .page
+        .items
+        .into_iter()
+        .map(|item| item.root_id)
+        .collect::<Vec<_>>();
+    let span = |anchor: usize, focus: usize, positions: Option<(u64, u64)>| RangeSpan {
+        anchor_root_id: order[anchor],
+        focus_root_id: order[focus],
+        anchor_index: positions.map(|(anchor, _)| anchor),
+        focus_index: positions.map(|(_, focus)| focus),
+    };
+    let range = |anchor: usize, focus: usize, positions: Option<(u64, u64)>, excluded: Vec<_>| {
+        SelectionTarget::Range {
+            query: all.clone(),
+            spans: vec![span(anchor, focus, positions)],
+            included_root_ids: Vec::new(),
+            excluded_root_ids: excluded,
+        }
+    };
+    let ids_only = library
+        .ordered_image_selection(&range(4, 1, None, Vec::new()))
+        .unwrap();
+    assert_eq!(ids_only, order[1..=4]);
+    // Correct positions, either direction.
+    for target in [range(4, 1, Some((4, 1)), Vec::new()), range(1, 4, Some((1, 4)), Vec::new())] {
+        assert_eq!(library.ordered_image_selection(&target).unwrap(), ids_only);
+        assert_eq!(library.selection_summary(&target).unwrap().selected_count, 4);
+    }
+    // Stale or impossible positions fall back to finding the ids.
+    for positions in [(3, 0), (5, 2), (40, 1)] {
+        let target = range(4, 1, Some(positions), Vec::new());
+        assert_eq!(library.ordered_image_selection(&target).unwrap(), ids_only);
+        assert_eq!(library.selection_summary(&target).unwrap().selected_count, 4);
+    }
+    // Roots toggled off inside the range stay out.
+    let excluded = range(1, 4, Some((1, 4)), vec![order[2]]);
+    assert_eq!(
+        library.ordered_image_selection(&excluded).unwrap(),
+        vec![order[1], order[3], order[4]]
+    );
+    assert_eq!(library.selection_summary(&excluded).unwrap().selected_count, 3);
+
+    // Two spans, a root added outside them and one toggled off inside.
+    let union = SelectionTarget::Range {
+        query: all.clone(),
+        spans: vec![span(0, 1, Some((0, 1))), span(5, 4, None)],
+        included_root_ids: vec![order[2]],
+        excluded_root_ids: vec![order[5]],
+    };
+    assert_eq!(
+        library.ordered_image_selection(&union).unwrap(),
+        vec![order[0], order[1], order[2], order[4]]
+    );
+    assert_eq!(library.selection_summary(&union).unwrap().selected_count, 4);
+
+    // Positions follow the current order, and a root outside the view has none.
+    let mut positions = library
+        .root_positions(&all, &[order[3], order[0], picto_library::RootId(999_999)])
+        .unwrap();
+    assert_eq!(positions, vec![Some(3), Some(0), None]);
+    // After an edit reorders the view, positions move with the roots.
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![order[3]] }, Rating::Five)
+        .unwrap();
+    let by_rating = RootQuery {
+        view: ViewQuerySpec {
+            sort: ItemSort {
+                field: SortField::Rating,
+                direction: SortDirection::Descending,
+                random_seed: None,
+            },
+            ..all.view.clone()
+        },
+        ..all.clone()
+    };
+    positions = library.root_positions(&by_rating, &[order[3]]).unwrap();
+    assert_eq!(positions, vec![Some(0)]);
+}
+
+#[test]
 fn selection_summary_returns_six_ordered_previews_and_structural_collection_candidates() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
@@ -2964,6 +3153,78 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
         1
     );
     assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+}
+
+#[test]
+fn new_imports_register_pending_cloud_files_without_requeueing_duplicates() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let queued = || library.auxiliary_read(
+        picto_library::database::WorkPriority::VisibleRead,
+        |connection| Ok(connection.query_row(
+            "SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'queued'",
+            [], |row| row.get::<_, i64>(0),
+        )?),
+    ).unwrap();
+    library.ingest(&imported("disabled", Lifecycle::Active, &[])).unwrap();
+    assert_eq!(queued(), 0);
+    library.database().maintenance_write(
+        picto_library::database::WorkPriority::Cloud,
+        |transaction| {
+            transaction.execute("UPDATE cloud_state SET provider = 'dropbox', paused = 1 WHERE singleton = 1", [])?;
+            Ok(())
+        },
+    ).unwrap();
+    let input = imported("new-cloud-file", Lifecycle::Active, &[]);
+    library.ingest(&input).unwrap();
+    assert_eq!(queued(), 1);
+    library.database().maintenance_write(
+        picto_library::database::WorkPriority::Cloud,
+        |transaction| {
+            transaction.execute("UPDATE cloud_blob_state SET state = 'available', remote_present = 1", [])?;
+            Ok(())
+        },
+    ).unwrap();
+    library.ingest(&input).unwrap();
+    assert_eq!(queued(), 0);
+}
+
+#[test]
+fn smart_folder_rating_undo_and_redo_publish_changed_counts() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("rating", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .create_smart_folder(smart_input(
+            "Unrated",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Ratings {
+                    ratings: vec![Rating::Unrated],
+                }),
+                sort: ItemSort::default(),
+            },
+        ))
+        .unwrap();
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![root] }, Rating::Five)
+        .unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    let receipt = library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+    assert!(receipt.resources.iter().any(|resource| resource == "smart_folders"));
+    let receipt = library.redo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    assert!(receipt.resources.iter().any(|resource| resource == "smart_folders"));
+
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![root] }, Rating::Four)
+        .unwrap();
+    let receipt = library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    assert!(!receipt.resources.iter().any(|resource| resource == "smart_folders"));
 }
 
 #[test]

@@ -2,82 +2,149 @@
 
 [← User Guide](README.md)
 
-Subscriptions keep one subject up to date from one or more supported sources. Each query downloads
-new posts, persists progress, and imports media continuously into Inbox.
+A subscription follows one subject (an artist, a tag, a character) across one or more sources and
+downloads new posts into the Inbox.
 
-## Concepts
+- **Subscription** — a name, a schedule, a posts-per-run limit, and optional folders and tags for
+  new files.
+- **Query** (source) — one search or one account on one site. A subscription can have many.
 
-- **Subscription** — A named subject with one or more source queries and one schedule
-- **Query** — A search or account on one source, such as a Gelbooru tag or Pixiv user
-- **Schedule** — When the subscription runs: manually, daily, weekly, or monthly
-- **Account** — Login material for a source that requires authentication
+## Create a subscription
 
-## Adding a Subscription
+1. Open **Subscriptions** in the sidebar.
+2. Click **Add**, enter a name, and click **Add**.
+3. In the subscription, at the bottom of **Sources**, pick a site, type the search or account (the
+   box shows an example for the chosen site) and click **Add**.
+4. Add more queries if the same subject lives on other sites.
 
-1. Open **Subscriptions** from the sidebar
-2. Click **New subscription**
-3. Enter a name for the subject
-4. Click **Add**
+New subscriptions use the defaults from **Settings → Subscriptions** (schedule, posts per run,
+grouping).
 
-The subscription does not own a source. Add each source query from its detail view:
+## Supported sources
 
-1. Choose a source
-2. Enter the source-specific search or account
-3. Click **Add**
+| Source | Query type | Example | Login |
+|---|---|---|---|
+| Pixiv | Search | `風景` | Required (Pixiv account) |
+| Pixiv (user) | Account | `12345` | Required (same Pixiv account) |
+| Gelbooru | Search | `1girl solo` | Required (API key) |
+| Rule34.xxx | Search | `1girl solo` | Required (API key) |
+| Danbooru | Search | `1girl solo` | Optional |
+| Safebooru | Search | `1girl solo` | Optional |
+| Yande.re | Search | `landscape` | Optional |
+| Konachan | Search | `landscape` | Optional |
+| e621 | Search | `canine solo` | Optional |
+| Idol Complex | Search | `solo` | Recommended for full access |
+| Sankaku | Search | `solo rating:safe` | Recommended for full access |
+| Hentai Foundry | Account | `username` | Optional |
+| Baraag | Account | `username` | Optional |
+| DeviantArt | Account | `username` | Optional |
+| Twitter / X | Account | `username` | Required |
+| Newgrounds | Account | `username` | Recommended for full access |
+| Fur Affinity | Account | `username` | Recommended for full access |
+| Patreon | Account | `creator-slug` | Recommended for full access |
+| pixivFANBOX | Account | `creator-slug` | Recommended for full access |
+| SubscribeStar | Account | `https://www.subscribestar.com/creator-slug` | Recommended for full access |
+| OnlyFans | Account | `creator-name` | Required |
+| Pawchive | Account (URL) | `https://pawchive.pw/patreon/user/12345` | None |
+| E-Hentai / ExHentai | Gallery URL | `https://e-hentai.org/g/12345/67890abcde/` | Optional; ExHentai needs an E-Hentai login |
 
-Add more queries when the same subject should be followed across several sources.
+"Search" sources take tags or search text. "Account" sources take a user name, ID or creator URL.
+Anonymous Danbooru searches allow at most two tags.
 
-## Running
-
-Click **Run now** to run every enabled query. Each query:
-
-1. Connects to its source
-2. Discovers posts from its durable cursor
-3. Skips media already recorded in its download archive
-4. Downloads and imports new media into Inbox as it arrives
-5. Imports every file from a multi-file post as an independent image or video, copying shared
-   source-post metadata and preserving source order on each media entity
-
-The subscription remains running until every query's downloads and imports have settled. A
-successful run with no new media is shown as up to date.
-
-Click **Stop** to cancel pending work and active downloads. Media already imported remains in the
-library. The next run resumes from durable query and archive state.
-
-## Schedules
-
-| Schedule | Behavior |
-|----------|----------|
-| Manual | Only runs when you click **Run now** |
-| Daily | Runs once per day |
-| Weekly | Runs once per week |
-| Monthly | Runs once per month |
-
-The schedule belongs to the subscription and runs all enabled queries while Picto is open.
+E-Hentai is not in the source picker. See [Gallery downloads](#gallery-downloads).
 
 ## Accounts
 
-Open **Accounts** from the subscriptions view. Only the login methods supported by the selected
-source are available. Pixiv search and Pixiv user queries share one Pixiv account. Gelbooru requires
-both its account user ID and API key.
+Click **Accounts** in the Subscriptions view (or **Fix login** on a problem) to open **Site
+accounts**. Pick a site and click **Log In**: Picto opens the site's own login page and stores the
+resulting session, OAuth token or API key. **Refresh Login** renews it and **Remove** deletes it.
 
-Secrets are stored in the operating system's credential store: Keychain on macOS, Credential
-Manager on Windows, or Secret Service on Linux. Picto records health from real runs and reports
-missing, expired, or rejected credentials.
+- Pixiv and Pixiv (user) share one login.
+- SubscribeStar stores one login at a time; choose the service (`.com`, `.adult`, `.art`) first.
+- OnlyFans also accepts a session entered by hand (**Enter session manually…**: Cookie,
+  User-Agent, X-BC).
 
-## Inbox Limit
+Credentials are stored in the operating system's credential store (Keychain on macOS, Credential
+Manager on Windows, Secret Service on Linux).
 
-A subscription stops discovering new work when Inbox reaches the configured limit. Review or accept
-Inbox media, then run the subscription again to continue from its saved position.
+## Run a subscription
 
-## Supported Sources
+Click **Run now**, or right-click a subscription → **Run Now**. Right-click lets you run several
+selected subscriptions at once.
 
-Picto supports:
+During a run:
 
-- searches on supported booru sources
-- creator/account feeds on supported art and social sources
-- Pixiv searches and Pixiv users through one shared Pixiv login
+- Each post is processed once. Media already in the library or already handled is skipped.
+- New media goes to the **Inbox**, into the subscription's folders and with its tags (set under
+  **New files** in the subscription: **Automatically add to folders** and **Add tags**).
+- **Pause** stops the run so it can be resumed; **Stop** ends it. Posts already added stay.
+- The next run continues from where the last one stopped.
 
-The source picker is the current supported-source list. A source is release-ready only after its
-production-path certification proves independent multi-file media, shared source metadata, source
-order, restart/resume behavior, and its real Electron login and run workflow.
+### Posts per run
+
+**Posts per run** (1–10,000) caps how many posts a run settles. Both **added** and **skipped**
+posts count toward the limit; failed posts do not. Set the default in **Settings → Subscriptions**
+and override it per subscription.
+
+### Multi-file posts
+
+By default, a post with several files is imported as one collection after all of its files arrive
+("Group multi-media posts"). Click the group button on a query row to switch it to **Keep post
+media separate**, which imports each file as its own item. The default for new queries is in
+**Settings → Subscriptions**.
+
+### Inbox limit
+
+Subscription work waits when the Inbox holds **Settings → Subscriptions → Maximum Inbox items**
+top-level items (default 1,000). The subscription shows **Inbox full**. Accept or reject Inbox
+items, then run again.
+
+## Schedules
+
+| Schedule | Runs |
+|---|---|
+| Manual | Only when you click **Run now** |
+| Daily | Once a day |
+| Weekly | Once a week |
+| Monthly | Once a month |
+
+Scheduled runs happen while Picto is running.
+
+## Hold, reset and edit
+
+**Subscription** (right-click, or the buttons in the header):
+
+- **Hold** — skips future runs until you **Release** it.
+- **Schedule**, **Rename**, **Set Cover Photo…**
+- **Reset Sync History…** — forgets which posts were handled and scans every query from the
+  beginning. Existing media and logins are untouched; media you deleted may download again.
+- **Delete Subscription…** — downloaded files stay in the library.
+
+**Query** (buttons on each row):
+
+- **Run only this source now**
+- **Put query on hold** / **Resume query** — the source is skipped in subscription runs while held
+- Group toggle (see above)
+- **Edit** — change the site, query, an optional display name and notes
+- **Delete** — the query stops syncing; downloaded files stay
+- Double-click a row for **Source details** (posts, media, last check, state, last error)
+
+## History and problems
+
+- **History** lists past runs with start time, status and counts.
+- **Problems** lists failed posts and source issues with the reason. Use **Retry**, **Retry all**,
+  **Open post**, **Fix login** or **Review source**.
+
+The header shows totals: posts traversed, added and skipped, files downloaded and files already in
+the library.
+
+## Gallery downloads
+
+E-Hentai and ExHentai galleries are downloaded one at a time, not followed.
+
+1. In Subscriptions, click **Add Gallery**.
+2. Choose **E-Hentai** or **ExHentai** and paste the gallery URL.
+3. Click **Add Gallery**.
+
+The gallery is imported into the Inbox as one collection. Progress appears under **Gallery
+downloads**, where you can pause, resume, retry or stop it. Only one gallery downloads at a time.

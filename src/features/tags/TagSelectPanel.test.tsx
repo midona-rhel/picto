@@ -10,6 +10,8 @@ import styles from './TagSelectPanel.module.css';
 const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
   getNamespaceSummary: vi.fn(),
+  getById: vi.fn(),
+  register: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-virtual', () => ({
@@ -25,6 +27,7 @@ vi.mock('@tanstack/react-virtual', () => ({
   }),
 }));
 vi.mock('../../controllers/tagsController', () => ({ tagsController: mocks }));
+vi.mock('../../runtime/libraryInvalidation', () => ({ libraryInvalidation: { register: mocks.register } }));
 vi.mock('./tagPreferences', () => ({
   useTagPreferences: () => ({ showTagGroups: true, showTagPrefixes: false, starredTags: [], tagGroupColors: {} }),
   setTagStarred: vi.fn(),
@@ -34,6 +37,8 @@ vi.mock('./tagPreferences', () => ({
 describe('TagSelectPanel assignment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.register.mockReturnValue(vi.fn());
+    mocks.getById.mockResolvedValue([]);
     mocks.getPaginated.mockResolvedValue({
       tags: [
         { tag_id: 1, namespace_id: 1, namespace: 'creator', subname: 'alice', active_count: 4, assignment_count: 4 },
@@ -43,6 +48,24 @@ describe('TagSelectPanel assignment', () => {
       revision: 1,
     });
     mocks.getNamespaceSummary.mockResolvedValue([{ namespace_id: 1, name: 'creator', tag_count: 2 }]);
+  });
+
+  it('refreshes loaded usage counts without reordering the open picker', async () => {
+    const store = createStore();
+    store.set(tagSelectPortalAtom, { open: true, selectedTags: [] });
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+    });
+    const before = [...document.querySelectorAll('[data-tag-index]')].map((row) => row.textContent);
+    mocks.getById.mockResolvedValue([
+      { tag_id: 1, namespace_id: 1, namespace: 'creator', subname: 'alice', active_count: 500004, assignment_count: 500004 },
+    ]);
+    await act(async () => { mocks.register.mock.calls[mocks.register.mock.calls.length - 1][1](); });
+    expect(mocks.getById).toHaveBeenCalledWith([1, 2]);
+    const after = [...document.querySelectorAll('[data-tag-index]')].map((row) => row.textContent);
+    expect(after[0]).toContain('500,004');
+    expect(after[0]).toContain('alice');
+    expect(after[1]).toBe(before[1]);
   });
 
   it('focuses search from the full visible header row', async () => {

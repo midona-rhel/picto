@@ -63,6 +63,9 @@ export function gridViewportMissesWindow(
   viewportHeight: number,
 ): boolean {
   if (viewportHeight <= 0 || model.items.length === 0) return false;
+  // A short complete result can end above the viewport center. There is no
+  // unloaded window to wait for in that case.
+  if (model.windowTop === 0 && model.windowBottom === model.totalHeight) return false;
   const center = scrollTop + viewportHeight / 2;
   return center < model.windowTop || center >= model.windowBottom;
 }

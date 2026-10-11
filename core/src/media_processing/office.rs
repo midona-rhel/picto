@@ -3,7 +3,7 @@
 //! OOXML files are ZIP archives containing XML metadata.
 //! OLE files use the Compound Binary File format.
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::Path;
 
 use image::GenericImageView;
@@ -106,9 +106,15 @@ pub fn get_pptx_info(path: &Path) -> (Option<u32>, (Option<u32>, Option<u32>)) {
     (num_words, (width, height))
 }
 
-/// Generate a thumbnail from an OOXML document.
-///
-/// Extracts `docProps/thumbnail.jpeg` from the archive and resizes it.
+/// Read the embedded preview dimensions through the bounded archive reader.
+pub fn preview_resolution(path: &Path) -> FileResult<(u32, u32)> {
+    let bytes = read_ooxml_entry_bytes(path, "docProps/thumbnail.jpeg")?;
+    Ok(image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_dimensions()?)
+}
+
+/// Generate a thumbnail from the embedded OOXML preview.
 pub fn generate_thumbnail_from_office(
     path: &Path,
     target_resolution: (u32, u32),
@@ -142,17 +148,7 @@ fn read_ooxml_entry(path: &Path, entry_path: &str) -> FileResult<String> {
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open OOXML archive: {}", e)))?;
 
-    let mut entry = zip.by_name(entry_path).map_err(|e| {
-        FileError::UnsupportedFile(format!(
-            "Could not find '{}' in OOXML archive: {}",
-            entry_path, e
-        ))
-    })?;
-
-    let mut buf = String::new();
-    entry.read_to_string(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    super::archive::read_entry_text_bounded(&mut zip, entry_path)
 }
 
 /// Read a file entry from an OOXML (ZIP) archive as bytes.
@@ -161,15 +157,9 @@ fn read_ooxml_entry_bytes(path: &Path, entry_path: &str) -> FileResult<Vec<u8>> 
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open OOXML archive: {}", e)))?;
 
-    let mut entry = zip.by_name(entry_path).map_err(|e| {
-        FileError::Thumbnail(format!(
-            "Could not find '{}' in OOXML archive: {}",
-            entry_path, e
-        ))
-    })?;
-
-    let mut buf = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    super::archive::read_entry_bounded(
+        &mut zip,
+        entry_path,
+        super::archive::MAX_PREVIEW_ENTRY_BYTES,
+    )
 }

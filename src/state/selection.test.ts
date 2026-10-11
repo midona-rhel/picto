@@ -1,11 +1,12 @@
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
-import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
+import type { CanonicalEntityGridItem } from '../shared/types/canonical';
 import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
   emptyGridSelection,
   gridSelectionActionAtom,
+  gridSelectionAtom,
   loadedSelectedItemIdsAtom,
   reduceGridSelection,
   selectedItemIdsAtom,
@@ -40,22 +41,97 @@ function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridIte
 }
 
 describe('selection state', () => {
-  it('exposes range targets without expanding unloaded renderer item IDs', () => {
-    const query = createStore().get(currentGridQueryAtom);
-    const target: EntityTarget = {
-      kind: 'range',
-      query,
-      anchor_root_id: 11,
-      focus_root_id: 999_999,
-    };
-
-    expect(target).toEqual({
-      kind: 'range',
-      query,
-      anchor_root_id: 11,
-      focus_root_id: 999_999,
+  it('keeps a shift-click range with an unloaded anchor as a backend range', () => {
+    const store = createStore();
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [buildGridItem(1, 'a'), buildGridItem(2, 'b'), buildGridItem(3, 'c')],
+      windowStart: 5_000,
+      totalCount: 1_000_000,
     });
-    expect('item_ids' in target).toBe(false);
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, {
+      type: 'range_query',
+      query,
+      anchor: { id: 11, index: 20 },
+      focus: { id: 2, index: 5_001 },
+    });
+
+    expect(store.get(selectionCountAtom)).toBe(4_982);
+    // Loaded tiles light up only up to the focus position.
+    expect(store.get(loadedSelectedItemIdsAtom)).toEqual(new Set([1, 2]));
+    store.set(gridSelectionActionAtom, { type: 'toggle_query_item', itemId: 1, totalCount: 1_000_000, index: 5_000 });
+    expect(store.get(selectionCountAtom)).toBe(4_981);
+    // A tile beyond the range is added, not excluded (#78).
+    store.set(gridSelectionActionAtom, { type: 'toggle_query_item', itemId: 3, totalCount: 1_000_000, index: 5_002 });
+    expect(store.get(selectionCountAtom)).toBe(4_982);
+    expect(store.get(loadedSelectedItemIdsAtom)).toEqual(new Set([2, 3]));
+    expect(store.get(selectionTargetAtom)).toEqual({
+      kind: 'range',
+      query,
+      spans: [{ anchor_root_id: 11, focus_root_id: 2, anchor_index: 20, focus_index: 5_001 }],
+      included_root_ids: [3],
+      excluded_root_ids: [1],
+    });
+    // Toggling inside a range keeps the original anchor for the next shift-click.
+    expect(store.get(gridSelectionAtom).anchor).toEqual({ kind: 'item', id: 11, index: 20 });
+  });
+
+  it('adds an off-window range to a selection without losing unloaded roots (#78)', () => {
+    const store = createStore();
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, { type: 'replace_items', itemIds: new Set([7]), anchor: 7, anchorIndex: 10 });
+    store.set(gridSelectionActionAtom, { type: 'toggle_item', itemId: 8, index: 9_000 });
+    // Cmd+Shift from root 8 (index 9,000) back to root 50 (index 5,010).
+    store.set(gridSelectionActionAtom, {
+      type: 'range_add',
+      query,
+      span: { anchor: { id: 8, index: 9_000 }, focus: { id: 50, index: 5_010 } },
+      positions: new Map([[7, 10], [8, 9_000]]),
+    });
+    // 3,991 in the span plus root 7, which lies outside it.
+    expect(store.get(selectionCountAtom)).toBe(3_992);
+    expect(store.get(selectionTargetAtom)).toMatchObject({
+      kind: 'range',
+      included_root_ids: [7],
+      excluded_root_ids: [],
+    });
+  });
+
+  it('follows backend positions after the view changes, and drops a span that lost an end (#79)', () => {
+    const store = createStore();
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, {
+      type: 'range_query', query, anchor: { id: 1, index: 0 }, focus: { id: 5, index: 4 },
+    });
+    expect(store.get(selectionCountAtom)).toBe(5);
+    // The view reorders to [2, 1, 5, 3, 4]: the backend now spans roots 1..5 = positions 1..2.
+    store.set(gridSelectionActionAtom, { type: 'range_reconcile', positions: new Map([[1, 1], [5, 2]]) });
+    expect(store.get(selectionCountAtom)).toBe(2);
+    expect(store.get(gridSelectionAtom).anchor).toEqual({ kind: 'item', id: 1, index: 1 });
+    expect(store.get(selectionTargetAtom)).toMatchObject({
+      spans: [{ anchor_root_id: 1, focus_root_id: 5, anchor_index: 1, focus_index: 2 }],
+    });
+    // Root 5 leaves the view: nothing describes that run any more.
+    store.set(gridSelectionActionAtom, { type: 'range_reconcile', positions: new Map([[1, 1], [5, null]]) });
+    expect(store.get(gridSelectionAtom).range ?? null).toBeNull();
+    expect(store.get(selectionCountAtom)).toBe(0);
+  });
+
+  it('clears a missing range anchor while preserving separately selected roots', () => {
+    const store = createStore();
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, {
+      type: 'range_query', query, anchor: { id: 1, index: 0 }, focus: { id: 5, index: 4 },
+    });
+    store.set(gridSelectionActionAtom, { type: 'toggle_query_item', itemId: 9, index: 8, totalCount: 10 });
+    store.set(gridSelectionActionAtom, {
+      type: 'range_reconcile', positions: new Map([[1, null], [5, 3], [9, 7]]),
+    });
+
+    expect(store.get(selectionCountAtom)).toBe(1);
+    expect(store.get(selectionTargetAtom)).toMatchObject({ included_root_ids: [9], spans: [] });
+    expect(store.get(gridSelectionAtom).anchor).toBeNull();
   });
 
   it('builds query targets from the canonical grid session', () => {

@@ -37,6 +37,58 @@ struct SavedDefinition {
 static SMART_FOLDER_POOL: OnceLock<std::result::Result<rayon::ThreadPool, String>> =
     OnceLock::new();
 
+/// Remembers each folder's Active count for as long as neither its result nor
+/// the Active partition changed. Counting is one intersection per folder, so
+/// with hundreds of folders the sidebar would otherwise pay for all of them
+/// after every edit. Entries hold the bitmaps they were computed from, so an
+/// allocation is never reused while its count is cached.
+#[derive(Default)]
+pub struct SmartCountCache(parking_lot::Mutex<HashMap<u32, (SharedBitmap, SharedBitmap, u64)>>);
+
+impl SmartCountCache {
+    pub(crate) fn active_count(&self, snapshot: &ProjectionSnapshot, smart_folder_id: u32) -> u64 {
+        let Some(results) = snapshot.smart_results.get(&smart_folder_id) else {
+            return 0;
+        };
+        let active = snapshot
+            .lifecycle
+            .get(&crate::model::Lifecycle::Active)
+            .expect("every snapshot contains the active partition");
+        let mut entries = self.0.lock();
+        if let Some((cached_results, cached_active, count)) = entries.get(&smart_folder_id) {
+            if cached_results.allocation_id() == results.allocation_id()
+                && cached_active.allocation_id() == active.allocation_id()
+            {
+                return *count;
+            }
+        }
+        let count = results.intersection_len(active);
+        entries.insert(smart_folder_id, (results.clone(), active.clone(), count));
+        if entries.len() > MAX_SMART_FOLDERS * 2 {
+            entries.retain(|id, _| snapshot.smart_results.contains_key(id));
+        }
+        count
+    }
+}
+
+/// Smart-folder results cover roots in every lifecycle; a smart folder scope
+/// shows them intersected with Active. Moving roots between Inbox, Active and
+/// Trash therefore re-evaluates no smart folder, however many there are.
+fn live_roots(snapshot: &ProjectionSnapshot) -> RoaringBitmap {
+    snapshot.lifecycle.values().fold(RoaringBitmap::new(), |mut all, ids| {
+        all |= &**ids;
+        all
+    })
+}
+
+/// The `affected` roots that still exist (deleted roots drop out of results).
+fn live_within(snapshot: &ProjectionSnapshot, affected: &RoaringBitmap) -> RoaringBitmap {
+    snapshot.lifecycle.values().fold(RoaringBitmap::new(), |mut live, ids| {
+        live |= &**ids & affected;
+        live
+    })
+}
+
 pub(crate) fn load(connection: &Connection, snapshot: &mut ProjectionSnapshot) -> Result<()> {
     refresh_all(connection, snapshot)
 }
@@ -70,38 +122,67 @@ pub(crate) fn settle_affected(
         connection,
         snapshot,
         affected,
-        predicate::DependencyChange::All,
+        &[predicate::DependencyChange::All],
     )
 }
 
+/// Re-evaluate, over the `affected` roots only, the smart folders whose rules
+/// can observe any of `changes`. A folder's stored result, and its cache
+/// version, change only when its membership among those roots actually moved.
 pub(crate) fn settle_affected_for(
     connection: &Connection,
     snapshot: &mut ProjectionSnapshot,
     affected: &RoaringBitmap,
-    change: predicate::DependencyChange,
+    changes: &[predicate::DependencyChange],
 ) -> Result<()> {
-    if affected.is_empty() || snapshot.smart_queries.is_empty() {
+    if affected.is_empty() || snapshot.smart_queries.is_empty() || changes.is_empty() {
+        return Ok(());
+    }
+    // Most edits concern no smart folder; decide that from the resident rules
+    // before reading and parsing every definition.
+    if !snapshot.smart_queries.values().any(|view| {
+        changes
+            .iter()
+            .any(|change| predicate::depends_on(&view.filter, *change))
+    }) {
         return Ok(());
     }
     let definitions = load_definitions(connection)?;
     let changed_local_ids = definitions
         .iter()
         .filter_map(|(id, definition)| {
-            predicate::depends_on(&definition.view.filter, change).then_some(*id)
+            changes
+                .iter()
+                .any(|change| predicate::depends_on(&definition.view.filter, *change))
+                .then_some(*id)
         })
         .collect::<Vec<_>>();
-    let changed_local_set = changed_local_ids.iter().copied().collect::<HashSet<_>>();
-    let active_affected = SharedBitmap::from(snapshot.active() & affected);
+    if changed_local_ids.is_empty() {
+        return Ok(());
+    }
+    let active_affected = SharedBitmap::from(live_within(snapshot, affected));
     let local_replacements = evaluate_local_results(
         snapshot,
         &definitions,
         changed_local_ids.iter().copied(),
         &active_affected,
     )?;
-    let mut local_results = (*snapshot.smart_local_results).clone();
+    let mut local_changed = HashSet::new();
+    let mut local_results = None::<HashMap<u32, SharedBitmap>>;
     for (smart_folder_id, matches) in local_replacements {
-        let result = local_results.entry(smart_folder_id).or_default();
-        replace_affected(result, affected, &matches);
+        let current = snapshot.smart_local_results.get(&smart_folder_id);
+        if current.is_some_and(|current| (&**current & affected) == *matches) {
+            continue;
+        }
+        let results = local_results.get_or_insert_with(|| (*snapshot.smart_local_results).clone());
+        replace_affected(results.entry(smart_folder_id).or_default(), affected, &matches);
+        local_changed.insert(smart_folder_id);
+    }
+    if local_changed.is_empty() {
+        return Ok(());
+    }
+    if let Some(local_results) = local_results {
+        snapshot.smart_local_results = Arc::new(local_results);
     }
 
     let mut children = HashMap::<u32, Vec<u32>>::new();
@@ -116,10 +197,9 @@ pub(crate) fn settle_affected_for(
 
     let mut replacements = Vec::new();
     while let Some((smart_folder_id, universe, parent_changed)) = pending.pop() {
-        let local_changed = changed_local_set.contains(&smart_folder_id);
-        let changed = parent_changed || local_changed;
+        let changed = parent_changed || local_changed.contains(&smart_folder_id);
         let matches: SharedBitmap = if changed {
-            let local = &local_results[&smart_folder_id];
+            let local = &snapshot.smart_local_results[&smart_folder_id];
             if universe.is_subset(local) {
                 universe.clone()
             } else if local.is_subset(&universe) {
@@ -143,17 +223,35 @@ pub(crate) fn settle_affected_for(
             );
         }
         if changed {
-            replacements.push((smart_folder_id, matches));
+            let unchanged = snapshot
+                .smart_results
+                .get(&smart_folder_id)
+                .is_some_and(|current| (&**current & affected) == *matches);
+            if !unchanged {
+                replacements.push((smart_folder_id, matches));
+            }
         }
     }
-
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    bump_versions(snapshot, replacements.iter().map(|(id, _)| *id));
     let results = Arc::make_mut(&mut snapshot.smart_results);
     for (smart_folder_id, matches) in replacements {
         let result = results.entry(smart_folder_id).or_default();
         replace_affected(result, affected, &matches);
     }
-    snapshot.smart_local_results = Arc::new(local_results);
     Ok(())
+}
+
+/// Give each listed smart folder a cache version newer than any in use, so
+/// cached windows of exactly those folders are invalidated.
+fn bump_versions(snapshot: &mut ProjectionSnapshot, ids: impl IntoIterator<Item = u32>) {
+    let versions = Arc::make_mut(&mut snapshot.smart_result_versions);
+    let next = versions.values().max().copied().unwrap_or(0) + 1;
+    for id in ids {
+        versions.insert(id, next);
+    }
 }
 
 fn replace_affected(
@@ -176,6 +274,7 @@ pub(crate) fn remove(snapshot: &mut ProjectionSnapshot, smart_folder_id: SmartFo
     Arc::make_mut(&mut snapshot.smart_effective_queries).remove(&smart_folder_id.0);
     Arc::make_mut(&mut snapshot.smart_local_results).remove(&smart_folder_id.0);
     Arc::make_mut(&mut snapshot.smart_results).remove(&smart_folder_id.0);
+    Arc::make_mut(&mut snapshot.smart_result_versions).remove(&smart_folder_id.0);
 }
 
 pub(crate) fn rewrite_tag_references(
@@ -246,12 +345,13 @@ pub(crate) fn refresh_all(
         .iter()
         .filter_map(|(id, definition)| definition.parent_id.is_none().then_some(*id))
         .collect::<Vec<_>>();
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let local_results =
         evaluate_local_results(snapshot, &definitions, definitions.keys().copied(), &active)?;
     let results = compose_trees(snapshot, &definitions, roots, &local_results)?;
     snapshot.smart_queries = Arc::new(local_queries);
     snapshot.smart_effective_queries = Arc::new(effective_queries);
+    bump_versions(snapshot, results.keys().copied());
     snapshot.smart_local_results = Arc::new(local_results);
     snapshot.smart_results = Arc::new(results);
     Ok(())
@@ -274,7 +374,7 @@ pub(crate) fn refresh_subtree(
         .map(|(id, definition)| (*id, definition.view.clone()))
         .collect::<HashMap<_, _>>();
     let effective_queries = compile_effective_queries(&definitions)?;
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let replacement_local =
         evaluate_local_results(snapshot, &definitions, [smart_folder_id.0], &active)?;
     let mut local_results = (*snapshot.smart_local_results).clone();
@@ -286,6 +386,7 @@ pub(crate) fn refresh_subtree(
         vec![smart_folder_id.0],
         &local_results,
     )?;
+    bump_versions(snapshot, replacements.keys().copied());
     let mut results = (*snapshot.smart_results).clone();
     results.retain(|id, _| definitions.contains_key(id));
     results.extend(replacements);
@@ -348,7 +449,7 @@ fn evaluate_local_results(
     Ok(results)
 }
 
-fn smart_folder_pool() -> Result<&'static rayon::ThreadPool> {
+pub(crate) fn smart_folder_pool() -> Result<&'static rayon::ThreadPool> {
     let pool = SMART_FOLDER_POOL.get_or_init(|| {
         let threads = std::thread::available_parallelism()
             .map(|value| value.get().saturating_sub(1).max(1))
@@ -376,7 +477,7 @@ fn compose_trees(
             children.entry(parent_id.0).or_default().push(*id);
         }
     }
-    let active = SharedBitmap::from(snapshot.active().clone());
+    let active = SharedBitmap::from(live_roots(snapshot));
     let mut pending = Vec::with_capacity(roots.len());
     for root in roots {
         let definition = &definitions[&root];
@@ -510,6 +611,7 @@ fn resolve_effective(
 pub fn list(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
+    counts: &SmartCountCache,
 ) -> Result<Vec<SmartFolderRecord>> {
     let mut statement = connection.prepare(
         "SELECT smart_folder_id, name, parent_id, icon, color, notes,
@@ -533,10 +635,7 @@ pub fn list(
     rows.map(|row| {
         let (smart_folder_id, name, parent_id, icon, color, notes, json, display_order) = row?;
         let view = serde_json::from_str(&json)?;
-        let count = snapshot
-            .smart_results
-            .get(&smart_folder_id.0)
-            .map_or(0, |values| values.len());
+        let count = counts.active_count(snapshot, smart_folder_id.0);
         Ok(SmartFolderRecord {
             smart_folder_id,
             name,

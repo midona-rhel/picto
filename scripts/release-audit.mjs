@@ -160,9 +160,6 @@ for (const slug of Object.keys(coremlArtifacts)) {
   assert(model?.license && model.license !== 'NOASSERTION', `Core ML artifact lacks explicit redistribution terms: ${slug}`);
 }
 
-const releasePlan = read('docs/RELEASE_COMPLETION_PLAN.md');
-assert(releasePlan.includes('Cloud Sync and Tutorials'), 'release plan must identify Cloud Sync and Tutorials as release gates');
-assert(!releasePlan.includes('Cloud sync is deferred') && !releasePlan.includes('Cloud sync is absent'), 'release plan still claims Cloud Sync is deferred or absent');
 assert(!existsSync(path.join(root, '.github/workflows/build.yml')), 'duplicate build workflow must be removed');
 const readiness = read('docs/RELEASE_READINESS.md');
 assert(readiness.includes('Apple Silicon (`arm64`)'), 'release readiness must identify Apple Silicon as the only macOS target');

@@ -76,23 +76,42 @@ pub fn mark_dirty(
 }
 
 pub fn settle_batch(transaction: &Transaction<'_>, limit: usize) -> Result<RoaringBitmap> {
+    // Interleave categories by rank (the first of each, then the second of
+    // each, ...), oldest first within a category. Each category is read
+    // through `idx_fts_dirty_order` up to `limit` rows, so a batch costs the
+    // same whether 300 or 1,000,000 roots are waiting; a window function over
+    // the whole backlog made draining a large import quadratic.
     let roots = {
-        let mut statement = transaction.prepare(
-            "WITH ranked AS (
-                 SELECT root_id, category, queued_at_ms,
-                        row_number() OVER (
-                            PARTITION BY category ORDER BY queued_at_ms, root_id
-                        ) AS category_rank
-                 FROM fts_dirty
-             )
-             SELECT root_id FROM ranked
-             ORDER BY category_rank, queued_at_ms, category, root_id
-             LIMIT ?1",
+        let mut next_category = transaction.prepare_cached(
+            "SELECT MIN(category) FROM fts_dirty WHERE category > ?1",
         )?;
-        let values = statement
-            .query_map([limit as i64], |row| row.get::<_, u32>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        values
+        let mut oldest = transaction.prepare_cached(
+            "SELECT root_id, queued_at_ms FROM fts_dirty WHERE category = ?1
+             ORDER BY queued_at_ms, root_id LIMIT ?2",
+        )?;
+        let mut ranked = Vec::new();
+        let mut after = i64::MIN;
+        while let Some(category) =
+            next_category.query_row([after], |row| row.get::<_, Option<i64>>(0))?
+        {
+            let rows = oldest
+                .query_map(params![category, limit as i64], |row| {
+                    Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ranked.extend(
+                rows.into_iter()
+                    .enumerate()
+                    .map(|(rank, (root_id, queued))| (rank, queued, category, root_id)),
+            );
+            after = category;
+        }
+        ranked.sort_unstable();
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, _, root_id)| root_id)
+            .collect::<Vec<_>>()
     };
     let unique = roots.into_iter().collect::<std::collections::BTreeSet<_>>();
     for root_id in &unique {

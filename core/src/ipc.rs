@@ -64,6 +64,24 @@ pub fn dispatch_library(
             let input: RootInput = parse(args_json)?;
             read(application.details(input.root_id)?)
         }
+        "items.positions" => {
+            #[derive(Deserialize)]
+            struct Input {
+                query: picto_library::query::RootQuery,
+                root_ids: Vec<picto_library::RootId>,
+            }
+            let input: Input = parse(args_json)?;
+            read(application.root_positions(&input.query, &input.root_ids)?)
+        }
+        "items.membership" => {
+            #[derive(serde::Deserialize)]
+            struct Input {
+                query: picto_library::query::RootQuery,
+                root_ids: Vec<picto_library::RootId>,
+            }
+            let input: Input = parse(args_json)?;
+            read(application.root_membership(&input.query, &input.root_ids)?)
+        }
         "items.selection_summary" => {
             let input: TargetInput = parse(args_json)?;
             read(application.selection_summary(&input.target)?)

@@ -1,12 +1,13 @@
 /** Single command owner for the canonical grid session. */
 
 import { getDefaultStore } from 'jotai';
-import { queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
+import { getRootMembership, queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
-import { clearSelectionAtom } from '../state/selection';
+import { clearSelectionAtom, gridSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
+import { navigateWithGridFilters } from '../state/navigationHistory';
 import {
   compileGridQuery,
   createEmptyItemFilters,
@@ -16,6 +17,7 @@ import {
 import {
   currentGridQueryAtom,
   gridSessionAtom,
+  gridDrilldownAtom,
   gridTransitionPhaseAtom,
   initialGridFilters,
   initialGridView,
@@ -111,6 +113,9 @@ function preferenceSortField(value: string | null): SortField {
     case 'random':
     case 'folder_order':
       return value;
+    // Older builds saved the File Size choice as 'size', which the backend rejects.
+    case 'size':
+      return 'total_size';
     default:
       return 'imported_at';
   }
@@ -181,8 +186,11 @@ class GridSessionController {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private searchInFlight: Promise<void> | null = null;
   private searchQueued = false;
-  private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingPreferencePatch: ViewPrefsPatch = {};
+  /** Debounced preference patches, each bound to the scope it was made in. */
+  private readonly pendingPreferences = new Map<string, {
+    patch: ViewPrefsPatch;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private scopeKey = '';
   private navigationRequest = 0;
   private queryVersion = 0;
@@ -193,9 +201,11 @@ class GridSessionController {
   private activeWindow: { start: number; generation: number; request: number } | null = null;
   private preparationRequest: number | null = null;
   private pendingNavigationVersion: number | null = null;
+  private pendingSearchText: string | null = null;
   private refreshWanted = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshRunning: Promise<boolean> | null = null;
+  private readonly refreshAffectedItemIds = new Set<number>();
   private lastRefreshTarget = -Infinity;
   private lastRefreshCompletedAt = -Infinity;
   private lastRefreshDurationMs = 0;
@@ -214,6 +224,7 @@ class GridSessionController {
   ): Promise<PreparedGridNavigation> {
     this.cancelWindowRequest();
     this.cancelSearch();
+    this.pendingSearchText = null;
     const queryVersion = ++this.queryVersion;
     const current = store.get(gridSessionAtom);
     const scopeKey = scopeToKey(scope);
@@ -274,6 +285,8 @@ class GridSessionController {
     const queryVersion = ++this.queryVersion;
     this.pendingNavigationVersion = queryVersion;
     const current = store.get(gridSessionAtom);
+    const manualFolderOrder = intent.type === 'sort' && intent.field === 'folder_order'
+      && current.scope.kind === 'folder';
     const session: GridSessionSnapshot = {
       ...current,
       generation: current.generation + 1,
@@ -281,6 +294,8 @@ class GridSessionController {
       ...(intent.type === 'sort' ? {
         sort: { field: intent.field, direction: intent.direction,
           randomSeed: intent.field === 'random' ? createRandomSeed() : null },
+        // A folder's manual order applies to its own members, not descendants.
+        ...(manualFolderOrder ? { view: { ...current.view, showSubfolders: false } } : {}),
       } : { view: { ...current.view, ...intent.patch } }),
     };
     const changesQuery = intent.type === 'sort'
@@ -288,9 +303,10 @@ class GridSessionController {
     const prepared = changesQuery
       ? await this.prepareSession(this.scopeKey, session, queryVersion)
       : { scopeKey: this.scopeKey, session, queryVersion };
-    return { ...prepared, preserveSelection: intent.type === 'view',
+    return { ...prepared, preserveSelection: intent.type === 'view' || manualFolderOrder,
       preferencePatch: intent.type === 'sort'
-        ? { sort_field: intent.field, sort_order: intent.direction } : undefined };
+        ? { sort_field: intent.field, sort_order: intent.direction,
+          ...(manualFolderOrder ? { show_subfolders: false } : {}) } : undefined };
   }
 
   private async prepareSession(
@@ -347,23 +363,28 @@ class GridSessionController {
   /** Commit every grid-facing value synchronously while the workspace is hidden. */
   commitNavigation(prepared: PreparedGridNavigation): void {
     if (prepared.queryVersion !== this.queryVersion) return;
+    const pendingSearchText = this.pendingSearchText;
+    this.pendingSearchText = null;
     this.pendingNavigationVersion = null;
     this.navigationRequest += 1;
     this.scopeKey = prepared.scopeKey;
     if (!prepared.preserveSelection) store.set(clearSelectionAtom);
     store.set(gridSessionAtom, prepared.session);
+    if (pendingSearchText !== null) this.setSearchText(pendingSearchText);
     this.observeNewerRevision(prepared.session.revision);
     if (prepared.preferencePatch) this.saveViewPref(prepared.preferencePatch);
   }
 
   cancelPreparation(): void {
     this.pendingNavigationVersion = null;
+    this.pendingSearchText = null;
     if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.refreshWanted = false;
     this.lastRefreshTarget = -Infinity;
     this.lastRefreshCompletedAt = -Infinity;
     this.lastRefreshDurationMs = 0;
+    this.refreshAffectedItemIds.clear();
     this.cancelWindowRequest();
     this.queryVersion += 1;
     this.navigationRequest += 1;
@@ -371,13 +392,16 @@ class GridSessionController {
   }
 
   deactivate(): void {
+    this.flushPreferences();
     this.pendingNavigationVersion = null;
+    this.pendingSearchText = null;
     if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.refreshWanted = false;
     this.lastRefreshTarget = -Infinity;
     this.lastRefreshCompletedAt = -Infinity;
     this.lastRefreshDurationMs = 0;
+    this.refreshAffectedItemIds.clear();
     this.cancelWindowRequest();
     this.queryVersion += 1;
     this.cancelSearch();
@@ -394,10 +418,16 @@ class GridSessionController {
     const previousQuery = textSearchQuery(store.get(gridSessionAtom).searchText);
     const nextQuery = textSearchQuery(text);
     updateSession({ searchText: text });
+    // Typing targets the destination, not the outgoing scope. Do not
+    // invalidate a prepared navigation that the workspace is waiting on.
+    if (this.pendingNavigationVersion !== null) {
+      this.pendingSearchText = text;
+      return;
+    }
+    if (previousQuery === nextQuery) return;
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
     this.cancelSearch();
-    if (previousQuery == null && nextQuery == null) return;
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
       this.runSettledSearch();
@@ -410,7 +440,7 @@ class GridSessionController {
 
   applyIntent(intent: GridIntent): void {
     if (intent.type === 'filter') {
-      this.setFiltersNow(intent.filters);
+      this.setFiltersNow(intent.filters, intent.restoreScroll ? intent.restoreProgress : undefined);
       return;
     }
     if (intent.type === 'sort') {
@@ -424,7 +454,12 @@ class GridSessionController {
   }
 
   setFilters(filters: QueryFilters): void {
-    this.requestIntent({ type: 'filter', filters });
+    const drilldown = store.get(gridDrilldownAtom);
+    navigateWithGridFilters(
+      drilldown?.scopeNodeId ?? scopeToKey(store.get(gridSessionAtom).scope),
+      filters,
+      drilldown?.ownerNodeId,
+    );
   }
 
   setSort(field: SortField, direction: SortDirection): void {
@@ -440,18 +475,42 @@ class GridSessionController {
   }
 
   saveViewPref(patch: ViewPrefsPatch): void {
-    if (!this.scopeKey) return;
-    this.pendingPreferencePatch = { ...this.pendingPreferencePatch, ...patch };
-    if (this.preferenceTimer) clearTimeout(this.preferenceTimer);
-    this.preferenceTimer = setTimeout(() => {
-      this.preferenceTimer = null;
-      const pending = this.pendingPreferencePatch;
-      this.pendingPreferencePatch = {};
-      void setViewPrefs(this.scopeKey, pending).catch(() => {});
-    }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
+    const scopeKey = this.scopeKey;
+    if (!scopeKey) return;
+    const pending = this.pendingPreferences.get(scopeKey);
+    if (pending) clearTimeout(pending.timer);
+    this.pendingPreferences.set(scopeKey, {
+      patch: { ...pending?.patch, ...patch },
+      timer: setTimeout(() => this.writePreferences(scopeKey), VIEW_PREFS_SAVE_DEBOUNCE_MS),
+    });
   }
 
-  async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
+  /** Write every pending preference patch now, each to its own scope. */
+  flushPreferences(): void {
+    for (const scopeKey of [...this.pendingPreferences.keys()]) this.writePreferences(scopeKey);
+  }
+
+  /**
+   * Drop unsaved preference patches. Called when the library is switching, so
+   * a patch can never reach the library that opens next.
+   */
+  discardPendingPreferences(): void {
+    for (const { timer } of this.pendingPreferences.values()) clearTimeout(timer);
+    this.pendingPreferences.clear();
+  }
+
+  private writePreferences(scopeKey: string): void {
+    const pending = this.pendingPreferences.get(scopeKey);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingPreferences.delete(scopeKey);
+    void setViewPrefs(scopeKey, pending.patch)
+      .catch(error => console.warn('Could not save grid view preferences', scopeKey, error));
+  }
+
+  async loadFirstPage(options?: { preserveItems?: boolean; generation?: number; restoreProgress?: number }): Promise<void> {
+    const restore = options?.restoreProgress;
+    const progress = restore != null && Number.isFinite(restore) ? Math.max(0, Math.min(1, restore)) : 0;
     this.cancelWindowRequest();
     const request = this.windowRequest;
     const queryVersion = this.queryVersion;
@@ -469,7 +528,9 @@ class GridSessionController {
     try {
       const query = store.get(currentGridQueryAtom);
       this.preparationRequest = request;
-      const result = await queryItemWindow(query, { position: { kind: 'ordinal', value: 0 }, limit: PAGE_SIZE }, {
+      const result = await queryItemWindow(query, progress > 0
+        ? { position: { kind: 'fraction', value: progress }, limit: GRID_WINDOW_SIZE }
+        : { position: { kind: 'ordinal', value: 0 }, limit: PAGE_SIZE }, {
         channel: this.windowChannel, generation: request,
       });
       if (request === this.preparationRequest) this.preparationRequest = null;
@@ -564,7 +625,8 @@ class GridSessionController {
     }
   }
 
-  reconcile(_affectedItemIds: readonly number[] = []): Promise<boolean> {
+  reconcile(affectedItemIds: readonly number[] = []): Promise<boolean> {
+    affectedItemIds.forEach((itemId) => this.refreshAffectedItemIds.add(itemId));
     this.refreshWanted = true;
     if (this.refreshRunning) return this.refreshRunning;
     if (this.pendingNavigationVersion != null) return Promise.resolve(false);
@@ -573,8 +635,10 @@ class GridSessionController {
     if (phase === 'fading_out' || phase === 'waiting') return Promise.resolve(false);
     if (!current.active || current.status === 'loading' || current.status === 'appending') return Promise.resolve(false);
     this.refreshWanted = false;
+    const affected = new Set(this.refreshAffectedItemIds);
+    this.refreshAffectedItemIds.clear();
     const started = Date.now();
-    this.refreshRunning = this.reconcileSnapshot().finally(() => {
+    this.refreshRunning = this.reconcileSnapshot(affected).finally(() => {
       this.refreshRunning = null;
       this.lastRefreshCompletedAt = Date.now();
       this.lastRefreshDurationMs = Math.max(0, this.lastRefreshCompletedAt - started);
@@ -583,7 +647,7 @@ class GridSessionController {
     return this.refreshRunning;
   }
 
-  private async reconcileSnapshot(): Promise<boolean> {
+  private async reconcileSnapshot(affectedItemIds: ReadonlySet<number>): Promise<boolean> {
     const before = store.get(gridSessionAtom);
     if (!before.active || before.status === 'loading' || before.status === 'appending') return false;
     const generation = before.generation;
@@ -599,10 +663,15 @@ class GridSessionController {
         limit: Math.min(GRID_WINDOW_SIZE, Math.max(PAGE_SIZE, before.items.length)),
       }, { channel: this.windowChannel, generation: request });
       if (this.preparationRequest === request) this.preparationRequest = null;
-      if (queryVersion !== this.queryVersion || request !== this.windowRequest) return false;
+      const canReconcile = () => {
+        const current = store.get(gridSessionAtom);
+        return queryVersion === this.queryVersion && request === this.windowRequest
+          && current.generation === generation && current.active && result.revision >= current.revision;
+      };
+      if (!canReconcile()) return false;
+      await reconcileExplicitSelection(query, result.items, affectedItemIds, canReconcile);
+      if (!canReconcile()) return false;
       const current = store.get(gridSessionAtom);
-      if (current.generation !== generation || !current.active) return false;
-      if (result.revision < current.revision) return false;
       const previousById = new Map(current.items.map((item) => [item.root_id, item]));
       const items = result.items.map((item) => {
         const previous = previousById.get(item.root_id);
@@ -634,12 +703,12 @@ class GridSessionController {
     this.applyIntent({ type: 'sort', field: 'folder_order', direction: 'ascending' });
   }
 
-  private setFiltersNow(filters: QueryFilters): void {
+  private setFiltersNow(filters: QueryFilters, restoreProgress?: number): void {
     if (itemFiltersEqual(store.get(gridSessionAtom).filters, filters)) return;
     updateSession({ filters: cloneFilters(filters) });
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
-    void this.loadFirstPage({ preserveItems: true });
+    void this.loadFirstPage({ preserveItems: true, restoreProgress });
   }
 
   private cancelSearch(): void {
@@ -652,7 +721,10 @@ class GridSessionController {
 
   private runSettledSearch(): void {
     if (this.searchInFlight) {
+      // The query changed while the previous one was still scanning: stop
+      // that scan in the backend instead of letting it finish unseen.
       this.searchQueued = true;
+      this.cancelWindowRequest();
       return;
     }
     this.searchInFlight = (async () => {
@@ -675,7 +747,8 @@ class GridSessionController {
   }
 
   /** Committed invalidations coalesce here; the event adapter owns no scheduler. */
-  requestReconcile(): void {
+  requestReconcile(affectedItemIds: readonly number[] = []): void {
+    affectedItemIds.forEach((itemId) => this.refreshAffectedItemIds.add(itemId));
     this.refreshWanted = true;
     this.scheduleRefresh();
   }
@@ -700,6 +773,36 @@ class GridSessionController {
     }, Math.max(40, Math.min(1_000, this.lastRefreshDurationMs * 3)
       - (Date.now() - this.lastRefreshCompletedAt)));
   }
+}
+
+async function reconcileExplicitSelection(
+  query: EntityViewQuery,
+  nextItems: GridSessionSnapshot['items'],
+  affectedItemIds: ReadonlySet<number>,
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (affectedItemIds.size === 0) return;
+  const selection = store.get(gridSelectionAtom);
+  if (selection.mode !== 'explicit' || selection.itemIds.size === 0) return;
+  const nextIds = new Set(nextItems.map((item) => item.root_id));
+  // Absence from the window is not absence from the query, even for a previously loaded root.
+  const candidates = [...affectedItemIds].filter((id) => selection.itemIds.has(id) && !nextIds.has(id));
+  if (candidates.length === 0) return;
+  const membership = await getRootMembership(query, candidates);
+  if (!isCurrent()) return;
+  const current = store.get(gridSelectionAtom);
+  if (current.mode !== 'explicit') return;
+  const removed = candidates.filter((id, index) => membership[index] === false && current.itemIds.has(id));
+  if (removed.length === 0) return;
+  const itemIds = new Set(current.itemIds);
+  removed.forEach((id) => itemIds.delete(id));
+  store.set(gridSelectionAtom, {
+    ...current,
+    itemIds,
+    anchor: current.anchor?.kind === 'item' && removed.includes(current.anchor.id)
+      ? null
+      : current.anchor,
+  });
 }
 
 function itemSummaryEqual(

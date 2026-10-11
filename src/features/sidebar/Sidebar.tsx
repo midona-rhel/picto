@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useCallback, useRef, useState, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
-import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
+import { folderWatchInitial, folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus,
   IconCopy, IconDownload,
@@ -59,7 +59,7 @@ import { clearRecentViews } from '../../platform/entityApi';
 import { compileGridQuery, createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { folderPickerPortalAtom } from '../../state/portals';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
-import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { getShortcut, matchesShortcutDef, shortcutHint } from '../../shared/lib/shortcuts';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import {
   addQuickAccess,
@@ -83,10 +83,7 @@ const IC = 19;
 const SIDEBAR_RETURN_TO_TOP_THRESHOLD = 360;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
 
-function kbd(id: string): string | undefined {
-  const shortcut = getShortcut(id);
-  return shortcut ? formatKeysDisplay(shortcut.keys) : undefined;
-}
+const kbd = shortcutHint;
 
 const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:active':        IconPhoto,
@@ -722,7 +719,7 @@ export function Sidebar() {
         void chooseAndImportFolder({ kind: 'folder', folder_id: folderId });
       } },
       { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: () => {
-        store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
+        store.set(folderWatchModalAtom, { open: true, folderId, initial: folderWatchInitial(node.meta) });
       } },
       ...((node.meta as Record<string, unknown> | null)?.watch_enabled ? [{
         label: t("Remove Watched Folder"), icon: <IconWatchFolder size={14} />,

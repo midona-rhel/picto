@@ -84,10 +84,6 @@ async function persist(next: TagPreferences, patch: Partial<TagPreferences>): Pr
   }
 }
 
-export function setTagGroupsVisible(visible: boolean): Promise<void> {
-  return persist({ ...snapshot, showTagGroups: visible }, { showTagGroups: visible });
-}
-
 export function setTagStarred(tag: string, starred: boolean): Promise<void> {
   const starredTags = starred
     ? [...new Set([...snapshot.starredTags, tag])].sort()

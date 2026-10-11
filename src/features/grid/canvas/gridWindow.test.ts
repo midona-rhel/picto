@@ -82,4 +82,11 @@ describe('million-item window geometry', () => {
     expect(gridViewportMissesWindow(model, 0, 800)).toBe(false);
     expect(gridViewportMissesWindow(model, model.totalHeight - 800, 800)).toBe(true);
   });
+  it('reveals a fully loaded short result even when the viewport center is below its tiles', () => {
+    for (const count of [1, 3]) {
+      const model = placeGridWindow(layout(count), 0, count, 50);
+      expect(model.totalHeight).toBeLessThan(400);
+      expect(gridViewportMissesWindow(model, 0, 800)).toBe(false);
+    }
+  });
 });

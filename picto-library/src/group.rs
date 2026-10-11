@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::bitmap::{self, BitmapDomain, BitmapKey};
 use crate::database::LibraryDatabase;
-use crate::model::{GroupRequest, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind};
+use crate::model::{GroupRequest, LabColor, Lifecycle, MediaId, Rating, RootId, RootKind, TagId};
 use crate::ordering::{self, OrderOwnerKind};
 use crate::projection::{color_cell, ProjectionSnapshot};
 use crate::{LibraryError, Result};
@@ -30,6 +30,30 @@ pub(crate) struct DetachResult {
     pub snapshot: ProjectionSnapshot,
 }
 
+/// Tags holding any of `roots`. `candidates`, when given, already lists every
+/// tag that can hold them (captured by the caller), so the whole tag set is not
+/// scanned again.
+fn tags_holding(
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
+    candidates: Option<&[TagId]>,
+) -> Vec<TagId> {
+    let holds = |members: &RoaringBitmap| !members.is_disjoint(roots);
+    match candidates {
+        Some(candidates) => candidates
+            .iter()
+            .copied()
+            .filter(|tag_id| snapshot.tags.get(tag_id).is_some_and(|members| holds(members)))
+            .collect(),
+        None => snapshot
+            .tags
+            .iter()
+            .filter_map(|(tag_id, members)| holds(members).then_some(*tag_id))
+            .collect(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn detach_many(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -38,6 +62,7 @@ pub(crate) fn detach_many(
     media_ids: &[MediaId],
     target_lifecycle: Option<Lifecycle>,
     modified_at_ms: i64,
+    tags: Option<&[TagId]>,
 ) -> Result<DetachResult> {
     let members = snapshot
         .collection_orders
@@ -74,11 +99,7 @@ pub(crate) fn detach_many(
     let lifecycle = common_lifecycle(&snapshot, &[collection_id.0].into_iter().collect())?;
     let detached_lifecycle = target_lifecycle.unwrap_or(lifecycle);
     let rating = rating_for(&snapshot, collection_id)?;
-    let inherited_tags = snapshot
-        .tags
-        .iter()
-        .filter_map(|(tag_id, roots)| roots.contains(collection_id.0).then_some(*tag_id))
-        .collect::<Vec<_>>();
+    let inherited_tags = tags_holding(&snapshot, &[collection_id.0].into_iter().collect(), tags);
     let inherited_folders = snapshot
         .folders
         .iter()
@@ -129,6 +150,9 @@ pub(crate) fn detach_many(
         .checked_sub(detached_size)
         .ok_or_else(|| LibraryError::InvalidState("collection size underflow".into()))?;
     let removes_collection = remaining.is_empty();
+    // Only these ids change membership: persist only the shards holding them.
+    let mut touched = selected.clone();
+    touched.insert(collection_id.0);
     let next_cover = remaining
         .first()
         .copied()
@@ -204,7 +228,7 @@ pub(crate) fn detach_many(
         if value == detached_lifecycle {
             *lifecycle_members |= &selected;
         }
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -212,6 +236,7 @@ pub(crate) fn detach_many(
                 key_id: value.bitmap_key(),
             },
             lifecycle_members,
+            &touched,
         )?;
     }
     let rating_members = Arc::make_mut(&mut snapshot.ratings)
@@ -221,7 +246,7 @@ pub(crate) fn detach_many(
         rating_members.remove(collection_id.0);
     }
     *rating_members |= &selected;
-    bitmap::replace(
+    bitmap::replace_changed(
         transaction,
         revision,
         BitmapKey {
@@ -229,6 +254,7 @@ pub(crate) fn detach_many(
             key_id: rating.bitmap_key(),
         },
         rating_members,
+        &touched,
     )?;
     for tag_id in &inherited_tags {
         let roots = Arc::make_mut(&mut snapshot.tags)
@@ -238,7 +264,7 @@ pub(crate) fn detach_many(
             roots.remove(collection_id.0);
         }
         *roots |= &selected;
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -246,6 +272,7 @@ pub(crate) fn detach_many(
                 key_id: tag_id.0,
             },
             roots,
+            &touched,
         )?;
     }
     for folder_id in &inherited_folders {
@@ -279,9 +306,16 @@ pub(crate) fn detach_many(
             folder_id.0,
             &after.iter().map(|root| root.0).collect::<Vec<_>>(),
         )?;
-        Arc::make_mut(&mut snapshot.folder_orders).insert(*folder_id, Arc::new(after.clone()));
-        Arc::make_mut(&mut snapshot.folders)
-            .insert(*folder_id, after.iter().map(|root| root.0).collect());
+        Arc::make_mut(&mut snapshot.folder_orders).insert(*folder_id, Arc::new(after));
+        let members = Arc::make_mut(&mut snapshot.folders)
+            .get_mut(folder_id)
+            .expect("folder bitmap exists for a folder that holds the collection");
+        if removes_collection {
+            members.remove(collection_id.0);
+        }
+        for (media_id, _, _, _) in &media_rows {
+            members.insert(media_id.0);
+        }
     }
 
     if removes_collection {
@@ -445,6 +479,7 @@ pub(crate) fn ungroup(
     mut snapshot: ProjectionSnapshot,
     collection_id: RootId,
     modified_at_ms: i64,
+    tags: Option<&[TagId]>,
 ) -> Result<UngroupResult> {
     let members = snapshot
         .collection_orders
@@ -459,11 +494,7 @@ pub(crate) fn ungroup(
         .ok_or_else(|| LibraryError::NotFound(format!("collection {collection_id}")))?;
     let lifecycle = common_lifecycle(&snapshot, &[collection_id.0].into_iter().collect())?;
     let rating = rating_for(&snapshot, collection_id)?;
-    let inherited_tags = snapshot
-        .tags
-        .iter()
-        .filter_map(|(tag_id, roots)| roots.contains(collection_id.0).then_some(*tag_id))
-        .collect::<Vec<_>>();
+    let inherited_tags = tags_holding(&snapshot, &[collection_id.0].into_iter().collect(), tags);
     let inherited_folders = snapshot
         .folders
         .iter()
@@ -477,6 +508,8 @@ pub(crate) fn ungroup(
         .iter()
         .map(|root| root.0)
         .collect::<RoaringBitmap>();
+    let mut touched = new_bitmap.clone();
+    touched.insert(collection_id.0);
 
     let mut media_rows = Vec::with_capacity(members.len());
     let mut statement = transaction.prepare_cached(
@@ -544,7 +577,7 @@ pub(crate) fn ungroup(
         if value == lifecycle {
             *members |= &new_bitmap;
         }
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -552,6 +585,7 @@ pub(crate) fn ungroup(
                 key_id: value.bitmap_key(),
             },
             members,
+            &touched,
         )?;
     }
     for value in Rating::ALL {
@@ -562,7 +596,7 @@ pub(crate) fn ungroup(
         if value == rating {
             *members |= &new_bitmap;
         }
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -570,6 +604,7 @@ pub(crate) fn ungroup(
                 key_id: value.bitmap_key(),
             },
             members,
+            &touched,
         )?;
     }
     for tag_id in &inherited_tags {
@@ -578,7 +613,7 @@ pub(crate) fn ungroup(
             .or_default();
         roots.remove(collection_id.0);
         *roots |= &new_bitmap;
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -586,6 +621,7 @@ pub(crate) fn ungroup(
                 key_id: tag_id.0,
             },
             roots,
+            &touched,
         )?;
     }
     for folder_id in &inherited_folders {
@@ -608,9 +644,14 @@ pub(crate) fn ungroup(
             folder_id.0,
             &after.iter().map(|root| root.0).collect::<Vec<_>>(),
         )?;
-        Arc::make_mut(&mut snapshot.folder_orders).insert(*folder_id, Arc::new(after.clone()));
-        Arc::make_mut(&mut snapshot.folders)
-            .insert(*folder_id, after.iter().map(|root| root.0).collect());
+        Arc::make_mut(&mut snapshot.folder_orders).insert(*folder_id, Arc::new(after));
+        let members = Arc::make_mut(&mut snapshot.folders)
+            .get_mut(folder_id)
+            .expect("folder bitmap exists for a folder that holds the collection");
+        members.remove(collection_id.0);
+        for root in &new_roots {
+            members.insert(root.0);
+        }
     }
 
     Arc::make_mut(&mut snapshot.collection_orders).remove(&collection_id);
@@ -661,6 +702,7 @@ pub(crate) fn organize(
     mut snapshot: ProjectionSnapshot,
     request: &GroupRequest,
     allow_singleton: bool,
+    tags: Option<&[TagId]>,
 ) -> Result<GroupResult> {
     let ordered_roots = crate::selection::resolve_ordered(transaction, &snapshot, &request.target)?;
     if ordered_roots.is_empty() || (!allow_singleton && ordered_roots.len() < 2) {
@@ -852,6 +894,7 @@ pub(crate) fn organize(
         &mut snapshot,
         &selected,
         collection_id,
+        tags,
     )?;
     let folder_count = settle_folders(
         transaction,
@@ -996,6 +1039,8 @@ fn settle_partitions(
     lifecycle: Lifecycle,
     rating: Rating,
 ) -> Result<()> {
+    let mut touched = selected.clone();
+    touched.insert(collection_id.0);
     for value in Lifecycle::ALL {
         let map = Arc::make_mut(&mut snapshot.lifecycle);
         let members = map.entry(value).or_default();
@@ -1003,7 +1048,7 @@ fn settle_partitions(
         if value == lifecycle {
             members.insert(collection_id.0);
         }
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -1011,6 +1056,7 @@ fn settle_partitions(
                 key_id: value.bitmap_key(),
             },
             members,
+            &touched,
         )?;
     }
     for value in Rating::ALL {
@@ -1020,7 +1066,7 @@ fn settle_partitions(
         if value == rating {
             members.insert(collection_id.0);
         }
-        bitmap::replace(
+        bitmap::replace_changed(
             transaction,
             revision,
             BitmapKey {
@@ -1028,6 +1074,7 @@ fn settle_partitions(
                 key_id: value.bitmap_key(),
             },
             members,
+            &touched,
         )?;
     }
     Ok(())
@@ -1039,14 +1086,21 @@ fn settle_tags(
     snapshot: &mut ProjectionSnapshot,
     selected: &RoaringBitmap,
     collection_id: RootId,
+    tags: Option<&[TagId]>,
 ) -> Result<u64> {
     let mut count = 0;
-    for (tag_id, members) in Arc::make_mut(&mut snapshot.tags) {
-        if !(&*members & selected).is_empty() {
+    let tagged = tags_holding(snapshot, selected, tags);
+    for tag_id in tagged {
+        let members = Arc::make_mut(&mut snapshot.tags).get_mut(&tag_id).expect("tag exists");
+        {
+            // Persist only the shards this tag changed in, not every shard
+            // the selection spans: most tags hold one or two selected roots.
+            let mut changed = &**members & selected;
+            changed.insert(collection_id.0);
             *members -= selected;
             members.insert(collection_id.0);
             count += 1;
-            bitmap::replace(
+            bitmap::replace_changed(
                 transaction,
                 revision,
                 BitmapKey {
@@ -1054,6 +1108,7 @@ fn settle_tags(
                     key_id: tag_id.0,
                 },
                 members,
+                &changed,
             )?;
         }
     }
@@ -1068,24 +1123,21 @@ fn settle_folders(
     collection_id: RootId,
 ) -> Result<u64> {
     let mut count = 0;
-    let folder_ids = snapshot.folder_orders.keys().copied().collect::<Vec<_>>();
+    // Only folders that hold a selected root need their order scanned.
+    let folder_ids = snapshot
+        .folders
+        .iter()
+        .filter_map(|(folder_id, members)| (!members.is_disjoint(selected)).then_some(*folder_id))
+        .collect::<Vec<_>>();
+    let dense = bitmap::DenseIds::new(selected);
     for folder_id in folder_ids {
         let before = snapshot.folder_orders[&folder_id].as_ref();
-        let positions = before
-            .iter()
-            .enumerate()
-            .filter_map(|(index, root)| selected.contains(root.0).then_some(index))
-            .collect::<Vec<_>>();
-        if positions.is_empty() {
+        let Some(insertion) = before.iter().position(|root| dense.contains(root.0)) else {
             continue;
-        }
-        let insertion = *positions.first().expect("positions is not empty");
-        let mut after = before
-            .iter()
-            .copied()
-            .filter(|root| !selected.contains(root.0))
-            .collect::<Vec<_>>();
-        let insertion = insertion.min(after.len());
+        };
+        let mut after = Vec::with_capacity(before.len());
+        after.extend_from_slice(&before[..insertion]);
+        after.extend(before[insertion..].iter().copied().filter(|root| !dense.contains(root.0)));
         after.insert(insertion, collection_id);
         ordering::replace(
             transaction,
@@ -1094,14 +1146,21 @@ fn settle_folders(
             folder_id.0,
             &after.iter().map(|root| root.0).collect::<Vec<_>>(),
         )?;
-        Arc::make_mut(&mut snapshot.folder_orders).insert(folder_id, Arc::new(after.clone()));
-        Arc::make_mut(&mut snapshot.folders)
-            .insert(folder_id, after.iter().map(|root| root.0).collect());
+        Arc::make_mut(&mut snapshot.folder_orders).insert(folder_id, Arc::new(after));
+        // Same members minus the grouped roots plus the collection: bitmap
+        // operations instead of re-inserting every member of a large folder.
+        let members = Arc::make_mut(&mut snapshot.folders)
+            .get_mut(&folder_id)
+            .expect("folder bitmap exists for a folder that holds a grouped root");
+        members.subtract(selected);
+        members.insert(collection_id.0);
         count += 1;
     }
     Ok(count)
 }
 
+/// Bitmaps that hold none of `roots` are left alone, so they stay shared with
+/// the published snapshot instead of being copied.
 pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: &RoaringBitmap) {
     Arc::make_mut(&mut snapshot.text_index).remove(roots);
     let names = Arc::make_mut(&mut snapshot.name_index);
@@ -1110,16 +1169,24 @@ pub(crate) fn remove_root_projections(snapshot: &mut ProjectionSnapshot, roots: 
     }
     *Arc::make_mut(&mut snapshot.roots_with_images) -= roots;
     for members in Arc::make_mut(&mut snapshot.root_kinds).values_mut() {
-        *members -= roots;
+        if !members.is_disjoint(roots) {
+            *members -= roots;
+        }
     }
     for members in Arc::make_mut(&mut snapshot.mime).values_mut() {
-        *members -= roots;
+        if !members.is_disjoint(roots) {
+            *members -= roots;
+        }
     }
     for members in Arc::make_mut(&mut snapshot.mime_family).values_mut() {
-        *members -= roots;
+        if !members.is_disjoint(roots) {
+            *members -= roots;
+        }
     }
     for members in Arc::make_mut(&mut snapshot.color_cells).values_mut() {
-        *members -= roots;
+        if !members.is_disjoint(roots) {
+            *members -= roots;
+        }
     }
     for root_id in roots {
         Arc::make_mut(&mut snapshot.cover_palettes).remove(root_id);

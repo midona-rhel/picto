@@ -95,6 +95,16 @@ export function deleteItems(target: EntityTarget): Promise<unknown> {
   return invoke('items.delete', { target });
 }
 
+/** Current positions of roots in a view's order; null for a root the view no longer holds. */
+export function getRootPositions(query: EntityViewQuery, rootIds: number[]): Promise<Array<number | null>> {
+  return invoke<Array<number | null>>('items.positions', { query, root_ids: rootIds });
+}
+
+/** Whether each candidate root still belongs to the view, without resolving its order. */
+export function getRootMembership(query: EntityViewQuery, rootIds: number[]): Promise<boolean[]> {
+  return invoke<boolean[]>('items.membership', { query, root_ids: rootIds });
+}
+
 export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return invoke<SelectionSummary>('items.selection_summary', { target });
 }

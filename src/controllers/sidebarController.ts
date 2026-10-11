@@ -80,6 +80,7 @@ function folderNodes(
       watch_path: folder.watch_path,
       watch_enabled: folder.watch_enabled,
       watch_subfolders: folder.watch_subfolders,
+      watch_lifecycle: folder.watch_lifecycle,
     },
   }));
 }
@@ -154,9 +155,16 @@ async function readSidebarSnapshot() {
 
 let treeFetchPromise: Promise<void> | null = null;
 let treeFetchGeneration = 0;
+// An invalidation that arrives during a read may postdate what that read saw.
+// Coalesce all of them into one follow-up read instead of dropping them.
+let treeRefetchQueued = false;
 
 function fetchSidebarTree(replacePending: boolean): Promise<void> {
-  if (!replacePending && treeFetchPromise) return treeFetchPromise;
+  if (!replacePending && treeFetchPromise) {
+    treeRefetchQueued = true;
+    return treeFetchPromise;
+  }
+  treeRefetchQueued = false;
 
   const generation = ++treeFetchGeneration;
   store.set(sidebarLoadingAtom, true);
@@ -174,6 +182,7 @@ function fetchSidebarTree(replacePending: boolean): Promise<void> {
       if (generation !== treeFetchGeneration) return;
       store.set(sidebarLoadingAtom, false);
       treeFetchPromise = null;
+      if (treeRefetchQueued) void fetchSidebarTree(false).catch(() => {});
     });
   treeFetchPromise = request;
   return request;

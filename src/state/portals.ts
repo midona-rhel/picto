@@ -48,13 +48,3 @@ export function inspectorAnchor(): { x: number; y: number } | null {
   const rect = panel.getBoundingClientRect();
   return { x: rect.left, y: rect.top + 80 };
 }
-
-/** Open a portal with an anchor position (e.g., from the inspector + button). */
-export function openPortalAnchored(
-  set: (atom: any, value: any) => void,
-  portalAtom: typeof tagSelectPortalAtom,
-  buttonEl: HTMLElement,
-) {
-  const rect = buttonEl.getBoundingClientRect();
-  set(portalAtom, { open: true, anchor: { x: rect.left, y: rect.top } });
-}

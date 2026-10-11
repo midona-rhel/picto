@@ -1,27 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LIBRARY_OPEN_CANCELLED, isLibraryOpenCancelled } from '../libraryOpenCancellation.mjs';
+import { createLibraryFilesystem, isFailedCloudJoinDirectory, isInsideLibraryPackage } from './libraryFilesystem.mjs';
 
 const execFileAsync = promisify(execFile);
-
-export async function isFailedCloudJoinDirectory(fs, targetRoot) {
-  const entries = await fs.readdir(targetRoot, { withFileTypes: true }).catch(() => null);
-  if (!entries || entries.length === 0) return false;
-  return entries.every((entry) =>
-    (entry.isDirectory() && entry.name === 'blobs')
-    || (entry.isFile() && /^failed-cloud-join-[\w-]+\.sqlite$/.test(entry.name)),
-  );
-}
-
-export function isInsideLibraryPackage(pathApi, candidatePath) {
-  let current = pathApi.resolve(candidatePath);
-  while (true) {
-    if (pathApi.basename(current).toLowerCase().endsWith('.library')) return true;
-    const parent = pathApi.dirname(current);
-    if (parent === current) return false;
-    current = parent;
-  }
-}
 
 export function createLibraryHostService({
   fs,
@@ -64,6 +46,8 @@ export function createLibraryHostService({
   // of `settleFailedOpen`.
   let currentAttempt = null;
   let shuttingDown = false;
+  const { isValidLibrary, ownedLibraryPath, moveLibraryDirectory } = createLibraryFilesystem({ fs, path });
+  const libraryReservations = new Map();
   const coverExtensions = ['jpg', 'png'];
 
   function markShuttingDown() {
@@ -119,8 +103,24 @@ export function createLibraryHostService({
    * `settleFailedOpen` classifies the refusal as 'shutdown' or 'superseded'.
    */
   async function startNativeOpen(attempt, open) {
+    if (libraryReservations.size) await assertLibraryAvailable(attempt.path, attempt.reservation);
     if (shuttingDown || !ownsAttempt(attempt)) throw new Error(LIBRARY_OPEN_CANCELLED);
     return open();
+  }
+
+  async function canonicalLibraryPath(libraryPath) {
+    // A move destination does not exist yet; its parent still resolves aliases.
+    return fs.realpath(libraryPath).catch(async () => path.join(
+      await fs.realpath(path.dirname(libraryPath)), path.basename(libraryPath),
+    ));
+  }
+
+  async function assertLibraryAvailable(libraryPath, ownedReservation) {
+    const resolved = await canonicalLibraryPath(libraryPath);
+    const reservation = libraryReservations.get(resolved);
+    if (reservation && reservation !== ownedReservation) {
+      throw new Error(`Cannot open this library while ${reservation.operation} is in progress.`);
+    }
   }
 
   function reportOpenFailure(libraryPath, error, cancelled = false) {
@@ -185,8 +185,10 @@ export function createLibraryHostService({
    * resolves with `onSuperseded(error)` when given, else rejects with the
    * cancellation sentinel whatever error the takeover surfaced as.
    */
-  async function runAttempt(libraryPath, flow, { onSuperseded } = {}) {
+  async function runAttempt(libraryPath, flow, { onSuperseded, reservation } = {}) {
+    if (libraryReservations.size) await assertLibraryAvailable(libraryPath, reservation);
     const attempt = beginAttempt(libraryPath);
+    attempt.reservation = reservation;
     try {
       return await flow(attempt);
     } catch (error) {
@@ -331,15 +333,6 @@ export function createLibraryHostService({
     }
   }
 
-  async function isValidLibrary(libraryPath) {
-    try {
-      await fs.access(path.join(libraryPath, 'library.sqlite'));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   function libraryDisplayName(libraryPath) {
     const base = path.basename(libraryPath);
     return base.endsWith('.library') ? base.slice(0, -8) : base;
@@ -402,6 +395,15 @@ export function createLibraryHostService({
     }
   }
 
+  async function locatedLibraryPath(selectedPath, basename) {
+    for (const candidate of [selectedPath, path.join(selectedPath, basename)]) {
+      if (await fs.access(path.join(candidate, 'library.sqlite')).then(() => true, () => false)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   async function handleMissingLibrary(libraryPath) {
     const name = libraryDisplayName(libraryPath);
     const result = await dialog.showMessageBox({
@@ -422,11 +424,9 @@ export function createLibraryHostService({
         message: `Select the folder containing ${basename}`,
       });
       if (!picked.canceled && picked.filePaths.length > 0) {
-        const destDir = picked.filePaths[0];
-        const newPath = path.join(destDir, basename);
+        const newPath = await locatedLibraryPath(picked.filePaths[0], basename);
         if (newPath === libraryPath) return { action: 'cancelled' };
-        const exists = await fs.access(newPath).then(() => true, () => false);
-        if (!exists) {
+        if (!newPath) {
           await dialog.showMessageBox({
             type: 'error',
             title: 'Library Not Found',
@@ -838,8 +838,28 @@ export function createLibraryHostService({
       destructiveId: 0,
     });
     if (result.response !== 0) return { deleted: false };
-    await removeLibraryFromHistory(libraryPath);
-    await fs.rm(libraryPath, { recursive: true, force: true });
+    const deletionPath = await ownedLibraryPath(libraryPath);
+    while (true) {
+      const currentPath = getCurrentLibraryRoot();
+      const pendingPath = openingPath();
+      for (const activePath of [currentPath, pendingPath]) {
+        if (!activePath) continue;
+        const resolved = await fs.realpath(activePath).catch(() => path.resolve(activePath));
+        if (resolved === deletionPath) {
+          throw new Error('Cannot delete the currently open or opening library. Switch to a different library first.');
+        }
+      }
+      // Opening can settle or change during realpath; validate the new state before unlinking.
+      if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
+    }
+    if (libraryReservations.has(deletionPath)) throw new Error('A library operation is already in progress.');
+    libraryReservations.set(deletionPath, { operation: 'deletion' });
+    try {
+      await fs.rm(deletionPath, { recursive: true, force: false });
+    } finally {
+      libraryReservations.delete(deletionPath);
+    }
+    await recordLibrary(libraryPath, () => removeLibraryFromHistory(libraryPath));
     buildAppMenu();
     return { deleted: true };
   }
@@ -847,6 +867,36 @@ export function createLibraryHostService({
   async function toggleLibraryPin(libraryPath) {
     await togglePinned(libraryPath);
     buildAppMenu();
+  }
+
+  async function withRelocationReservation(oldPath, newPath, operation, flow) {
+    const sourcePath = await ownedLibraryPath(await canonicalLibraryPath(oldPath));
+    const destinationPath = await canonicalLibraryPath(newPath);
+    const reservation = { operation };
+    let isCurrent;
+    while (true) {
+      const currentPath = getCurrentLibraryRoot();
+      const pendingPath = openingPath();
+      isCurrent = currentPath && await canonicalLibraryPath(currentPath) === sourcePath;
+      if (pendingPath) {
+        const pending = await canonicalLibraryPath(pendingPath);
+        if (pending === sourcePath || pending === destinationPath) {
+          throw new Error('Cannot rename or move a library while it is opening.');
+        }
+      }
+      if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
+    }
+    for (const target of [sourcePath, destinationPath]) {
+      if (libraryReservations.has(target)) throw new Error('A library operation is already in progress.');
+    }
+    libraryReservations.set(sourcePath, reservation);
+    libraryReservations.set(destinationPath, reservation);
+    try {
+      return await flow({ sourcePath, newPath: destinationPath, reservation, isCurrent });
+    } finally {
+      libraryReservations.delete(sourcePath);
+      libraryReservations.delete(destinationPath);
+    }
   }
 
   async function renameLibrary(libraryPath, newName) {
@@ -868,44 +918,47 @@ export function createLibraryHostService({
       if (err.code !== 'ENOENT') throw err;
     }
 
-    if (libraryPath === getCurrentLibraryRoot()) {
-      let renamed = false;
-      return runAttempt(newPath, async (attempt) => {
-        sendToAllWindows('library-switching', { path: newPath });
-        await closeUnderAttempt(attempt);
-        ensureOwned(attempt);
-        try {
-          await fs.rename(libraryPath, newPath);
-        } catch (err) {
-          const renameError = new Error(`Failed to rename library: ${err.message}`);
-          await reopenUnderAttempt(attempt, libraryPath);
-          throw renameError;
-        }
-        // The disk rename happened: the library exists under its new name
-        // whatever happens next. Recording it in the history is bookkeeping
-        // that can only be logged, never turned into an open failure.
-        renamed = true;
-        await recordLibrary(newPath, () => updateLibraryPath(libraryPath, newPath));
-        await startNativeOpen(attempt, () => openLibrary(newPath));
-        publishOpen(attempt);
+    return withRelocationReservation(libraryPath, newPath, 'rename', async ({ sourcePath, newPath, reservation, isCurrent }) => {
+      if (isCurrent) {
+        let renamed = false;
+        return runAttempt(newPath, async (attempt) => {
+          sendToAllWindows('library-switching', { path: newPath });
+          await closeUnderAttempt(attempt);
+          ensureOwned(attempt);
+          try {
+            await fs.rename(sourcePath, newPath);
+          } catch (err) {
+            const renameError = new Error(`Failed to rename library: ${err.message}`);
+            await reopenUnderAttempt(attempt, libraryPath);
+            throw renameError;
+          }
+          // The disk rename happened: the library exists under its new name
+          // whatever happens next. Recording it in the history is bookkeeping
+          // that can only be logged, never turned into an open failure.
+          renamed = true;
+          await recordLibrary(newPath, () => updateLibraryPath(libraryPath, newPath));
+          await startNativeOpen(attempt, () => openLibrary(newPath));
+          publishOpen(attempt);
+          buildAppMenu();
+          return { newPath };
+        }, {
+          reservation,
+          // Superseded after the rename reached the disk, the library exists
+          // under its new name; before that, the caller learns why nothing
+          // was renamed.
+          onSuperseded: (error) => {
+            if (renamed) return { newPath };
+            throw error;
+          },
+        });
+      } else {
+        await fs.rename(sourcePath, newPath);
+        await updateLibraryPath(libraryPath, newPath);
         buildAppMenu();
-        return { newPath };
-      }, {
-        // Superseded after the rename reached the disk, the library exists
-        // under its new name; before that, the caller learns why nothing
-        // was renamed.
-        onSuperseded: (error) => {
-          if (renamed) return { newPath };
-          throw error;
-        },
-      });
-    } else {
-      await fs.rename(libraryPath, newPath);
-      await updateLibraryPath(libraryPath, newPath);
-      buildAppMenu();
-    }
+      }
 
-    return { newPath };
+      return { newPath };
+    });
   }
 
   async function relocateLibrary(oldPath) {
@@ -913,21 +966,43 @@ export function createLibraryHostService({
     const basename = path.basename(oldPath);
     const oldExists = await fs.access(oldPath).then(() => true, () => false);
 
+    // A library that still exists is moved into the chosen folder. A missing
+    // one is located: the chosen folder must already contain it.
     const picked = await dialog.showOpenDialog({
-      title: `Choose destination for "${name}"`,
+      title: oldExists ? `Choose destination for "${name}"` : `Locate "${name}"`,
       properties: ['openDirectory', 'createDirectory'],
-      message: `${basename} will be placed in the selected folder`,
+      message: oldExists
+        ? `${basename} will be placed in the selected folder`
+        : `Choose the folder that contains ${basename}`,
     });
     if (picked.canceled || picked.filePaths.length === 0) {
       return { action: 'cancelled' };
     }
 
-    const destDir = picked.filePaths[0];
-    const newPath = path.join(destDir, basename);
+    const pickedDir = picked.filePaths[0];
+    if (oldExists && isInsideLibraryPackage(path, pickedDir)) {
+      throw new Error('A library cannot be moved inside another Picto library.');
+    }
+    const destDir = oldExists ? await fs.realpath(pickedDir) : pickedDir;
+    if (oldExists && isInsideLibraryPackage(path, destDir)) {
+      throw new Error('A library cannot be moved inside another Picto library.');
+    }
+    const newPath = oldExists
+      ? path.join(destDir, basename)
+      : await locatedLibraryPath(destDir, basename);
     if (newPath === oldPath) return { action: 'cancelled' };
 
-    const destExists = await fs.access(newPath).then(() => true, () => false);
-    if (destExists) {
+    const destExists = newPath && await fs.access(newPath).then(() => true, () => false);
+    if (!oldExists) {
+      if (!newPath) {
+        await dialog.showMessageBox({
+          type: 'error',
+          title: 'Library Not Found',
+          message: `"${basename}" was not found in that folder.`,
+        });
+        return { action: 'cancelled' };
+      }
+    } else if (destExists) {
       await dialog.showMessageBox({
         type: 'error',
         title: 'Already Exists',
@@ -937,41 +1012,46 @@ export function createLibraryHostService({
     }
 
     if (oldExists) {
-      if (oldPath === getCurrentLibraryRoot()) {
-        let moved = false;
-        return runAttempt(newPath, async (attempt) => {
-          sendToAllWindows('library-switching', { path: newPath });
-          await closeUnderAttempt(attempt);
-          ensureOwned(attempt);
-          try {
-            await fs.rename(oldPath, newPath);
-          } catch (err) {
-            const moveError = new Error(`Failed to move library: ${err.message}`);
-            await reopenUnderAttempt(attempt, oldPath);
-            throw moveError;
-          }
-          // The move happened: the library exists at its new place whatever
-          // happens next. Recording it in the history is bookkeeping that
-          // can only be logged, never turned into an open failure.
-          moved = true;
-          await recordLibrary(newPath, () => updateLibraryPath(oldPath, newPath));
-          await startNativeOpen(attempt, () => openLibrary(newPath));
-          publishOpen(attempt);
-          buildAppMenu();
-          return { action: 'relocated', newPath };
-        }, {
-          // Superseded after the move reached the disk, the library exists
-          // at its new place; before that, the caller learns why nothing
-          // was moved.
-          onSuperseded: (error) => {
-            if (moved) return { action: 'relocated', newPath };
-            throw error;
-          },
-        });
-      } else {
-        await fs.rename(oldPath, newPath);
-        await updateLibraryPath(oldPath, newPath);
-      }
+      return withRelocationReservation(oldPath, newPath, 'relocation', async ({ sourcePath, newPath, reservation, isCurrent }) => {
+        if (isCurrent) {
+          let moved = false;
+          return await runAttempt(newPath, async (attempt) => {
+            sendToAllWindows('library-switching', { path: newPath });
+            await closeUnderAttempt(attempt);
+            ensureOwned(attempt);
+            try {
+              await moveLibraryDirectory(sourcePath, newPath);
+            } catch (err) {
+              const moveError = new Error(`Failed to move library: ${err.message}`);
+              await reopenUnderAttempt(attempt, oldPath);
+              throw moveError;
+            }
+            // The move happened: the library exists at its new place whatever
+            // happens next. Recording it in the history is bookkeeping that
+            // can only be logged, never turned into an open failure.
+            moved = true;
+            await recordLibrary(newPath, () => updateLibraryPath(oldPath, newPath));
+            await startNativeOpen(attempt, () => openLibrary(newPath));
+            publishOpen(attempt);
+            buildAppMenu();
+            return { action: 'relocated', newPath };
+          }, {
+            reservation,
+            // Superseded after the move reached the disk, the library exists
+            // at its new place; before that, the caller learns why nothing
+            // was moved.
+            onSuperseded: (error) => {
+              if (moved) return { action: 'relocated', newPath };
+              throw error;
+            },
+          });
+        } else {
+          await moveLibraryDirectory(sourcePath, newPath);
+          await updateLibraryPath(oldPath, newPath);
+        }
+        buildAppMenu();
+        return { action: 'relocated', newPath };
+      });
     } else {
       await updateLibraryPath(oldPath, newPath);
     }

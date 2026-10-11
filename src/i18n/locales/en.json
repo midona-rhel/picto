@@ -1471,5 +1471,14 @@
   "Opening your library": "Opening your library",
   "Updating your library database": "Updating your library database",
   "Loading your library": "Loading your library",
-  "Starting library services": "Starting library services"
+  "Starting library services": "Starting library services",
+  "Library deleted.": "Library deleted.",
+  "Move…": "Move…",
+  "Locate…": "Locate…",
+  "Delete…": "Delete…",
+  "Part of the selection left this view": "Part of the selection left this view",
+  "A selected range lost its first or last item, so that range is no longer selected.": "A selected range lost its first or last item, so that range is no longer selected.",
+  "Could not preview smart folder rules": "Could not preview smart folder rules",
+  "Could not restore smart folder rules": "Could not restore smart folder rules",
+  "Could not save smart folder": "Could not save smart folder"
 }

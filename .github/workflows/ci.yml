@@ -1,0 +1,57 @@
+name: CI
+
+# Every pull request is verified before review, not only release branches.
+# Release branches keep their own gate (alpha-gate.yml), which calls the same
+# verify workflow and additionally packages and smokes all three platforms.
+# Stacked pull requests (based on another work branch) are verified too.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches: [dev]
+  merge_group:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    uses: ./.github/workflows/verify.yml
+
+  branch-policy:
+    name: branch-policy
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # The protected branches predate this policy. Use this reviewed immutable
+      # implementation only until the base carries its own policy, never a PR's
+      # candidate script. This also lets the bootstrap PR satisfy its own gate.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ hashFiles('scripts/ci/check-branch-policy.mjs') == '' }}
+        with:
+          repository: midona-rhel/picto
+          ref: 4ef23325093f6e0c55b9db925643f26251d20ed9
+          path: .branch-policy-bootstrap
+          persist-credentials: false
+      - name: Enforce the release-only main branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if test -f scripts/ci/check-branch-policy.mjs; then
+            node scripts/ci/check-branch-policy.mjs
+          else
+            node .branch-policy-bootstrap/scripts/ci/check-branch-policy.mjs
+          fi

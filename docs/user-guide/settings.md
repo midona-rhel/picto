@@ -2,77 +2,105 @@
 
 [← User Guide](README.md)
 
-Open Settings with `Ctrl+,` (`Cmd+,` on Mac). Settings are organized into panels.
+Open Settings with `Mod+,` (on macOS also **Picto → Preferences…**; on Windows and Linux **File →
+Settings…**). Use the search box at the top of the sidebar to find a setting.
+
+Most changes take effect when you click **Apply** or **Save & Close**. Cloud actions and AI model
+downloads happen immediately.
 
 ## General
 
-### Appearance
+| Setting | Options |
+|---|---|
+| Theme | Auto, Light, Light Gray, Gray, Dark, Blue, Purple |
+| Zoom Level | 75% to 150% |
+| Language | English, Deutsch, Español, Português, Français, 简体中文, 日本語, Suomi |
+| Show item counts in the sidebar | On/off |
+| Hide group prefixes | Shows tags without their group prefix (see [Tags](tags.md)) |
 
-- **Theme** — Choose from: Auto, Dark, Blue, Purple, Gray, Light, Light Gray
-  - Auto follows your system preference (defaults to dark)
-  - Dark, Blue, and Purple are dark-themed
-  - Light and Light Gray use light backgrounds
-- **Zoom Level** — Scale the entire UI: 75%, 80%, 90%, 100%, 110%, 125%, 150%
+## Updates
 
-### Grid Defaults
-
-- **Default Layout** — Waterfall, Grid, or Justified
-- **Thumbnail Size** — Default tile size in pixels (100-600, default 250)
-- **Sort By** — Default sort field: Date Added, File Size, Rating
-- **Sort Order** — Ascending or Descending
-
-### Reverse Image Search
-
-Enable or disable search engines for the right-click → Reverse Image Search menu:
-- Google Lens
-- TinEye
-- SauceNAO
-- Yandex Images
-- Sogou
-- Bing Visual Search
-
-### Storage
-
-View your library's storage statistics — total file count, active/inbox/trash breakdown, and total disk usage.
+Installed version, **Check Now**, and **Restart and Install** (or **Open Download Page** on macOS)
+when an update is ready. See [Updates](auto-updates.md).
 
 ## Library
 
-View information about the current library: name, path, and file count. See [Library Management](library-management.md) for library operations.
+Read-only statistics for the open library: items (All, Inbox, Trash, standalone, groups), media
+assets by type, physical files, size, tags, folders, smart folders and subscriptions.
 
-## Download Services
+## Sidebar
 
-Configure subscription download behavior:
+- **Double Click** on a folder: **Rename** or **Expand/Collapse** (default).
+- **Show these items in the sidebar**: Uncategorized, Untagged, Inbox, Random, Tag Manager,
+  Recently Viewed, Subscriptions, Duplicates, Quick Access, Smart Folders, Folders. All and Trash
+  are always shown.
+- **Show hierarchy guides** in the folder tree.
 
-- Subscription posts are serial. Native providers use their required request timing; sources without
-  a specific interval wait a random 0.5-2 seconds between requests to the same host. Media within the
-  current post may download concurrently, and failed requests retry with increasing backoff.
-- **Batch Size** — Maximum files per subscription run. Set to unlimited or a specific number (1-5000).
-- **Abort Threshold** — Stop a subscription run after this many consecutive already-downloaded files (1-500, default 10). Prevents re-scanning your entire download history.
-- **Default Import Status** — Whether watched folders import as Inbox or Active by default.
+## Controls
 
-## Duplicates
+| Setting | Options |
+|---|---|
+| Mouse wheel | Scroll grid, or Adjust thumbnail size |
+| Media view gestures (macOS) | Wheel zoom, or Trackpad pan + pinch zoom |
+| Double-click | Open Media View, or Open in default app |
+| Middle-click | Open in new window, or Do nothing |
+| Space key | Quick Look, or Scroll page |
 
-Configure [duplicate detection](duplicates.md):
+**Grid Defaults** apply to every view that has no saved choices of its own:
 
-- **Detection Similarity** — Minimum perceptual similarity to discover a pair (95-100%)
-- **Review Similarity** — Minimum similarity to show in the review queue (95-100%)
-- **Auto-Merge** — Toggle automatic merging of exact duplicates on import
-  - **Similarity Threshold** — How similar files must be for auto-merge
-  - **Require Matching Dimensions** — Only auto-merge if width and height match exactly
-  - **Subscriptions Only** — Only auto-merge during subscription downloads (not manual imports)
+- Default layout (Waterfall, Grid, Justified), thumbnail size (100–600 px, default 220), grid
+  spacing (Wide, Tight)
+- Sort by (Date Added, Date Created, Name, Rating, File Size, Random) and order
+- Fit thumbnails, Show name, Show resolution, Show extension, Show label, Show item count
+- **Reset all views** clears the layout, sort and display choices saved per view.
+
+## Preview
+
+- **Image**: scaling (Smooth, Pixelated), default zoom (Fit to window, Actual size), show
+  transparency grid.
+- **Video**: autoplay, loop.
+- **Audio**: visualization (None, Spectrum, Oscilloscope, Orbit).
 
 ## Shortcuts
 
-A searchable reference of all [keyboard shortcuts](keyboard-shortcuts.md). Shortcuts are grouped by category and display platform-appropriate key symbols.
+- **Keyboard layout**: US (QWERTY) or EU (QWERTZ / AZERTY / Nordic). EU mode swaps in alternatives
+  for shortcuts that use backtick, backslash or brackets, for example `Shift+F` for Fit to Window.
+- The full shortcut list, with search. Click a binding and press new keys to change it; Picto
+  refuses a binding that is already in use. Each shortcut can have a second binding.
 
-## Developer
+This panel is the reference for keyboard shortcuts. Common ones are also listed on the pages for
+each feature.
 
-Performance diagnostics for development:
-- **SLO Check** — Shows latency percentiles (p50/p95/p99) for key operations
-- Auto-refreshes every 10 seconds
+## Notifications
 
-## Danger Zone
+Turn pop-ups on or off, and choose which kinds appear: successful actions, information, warnings,
+errors.
 
-Destructive operations:
+## Auto-Import
 
-- **Wipe Image Data** — Removes all images, videos, tags, and review items from the library. Subscription definitions are preserved. **This is irreversible.** A confirmation dialog is required.
+- **Auto-Import** on/off: turns all [watched folders](folders.md#watched-folders) on or off.
+- **Manual Imports → Multiple files**: Ask every time, Group as collection, or Keep separate.
+
+## Subscriptions
+
+- **Defaults for New Subscriptions**: schedule (default Daily), posts per run (1–10,000, default
+  100), group multi-media posts (default on).
+- **Maximum Inbox items** (default 1,000): subscription work waits when the Inbox reaches this many
+  top-level items.
+
+See [Subscriptions](subscriptions.md).
+
+## Cloud
+
+Sync status, pending work, recovery retention and restore history for the open library. See
+[Cloud Sync](cloud-sync.md).
+
+## AI Models
+
+Download and manage local tagging models, confidence levels, and auto-tagging of new imports. See
+[AI Tagging](ai-tagging.md).
+
+## About
+
+Version and platform, **Check Now** for updates, license (MIT), and links to the project on GitHub,
+the release notes and the license.

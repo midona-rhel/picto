@@ -346,7 +346,7 @@ const SORT_FIELD_OPTIONS = [
   { value: 'captured_at', label: t("Date Created") },
   { value: 'name', label: t("Name") },
   { value: 'rating', label: t("Rating") },
-  { value: 'size', label: t("File Size") },
+  { value: 'total_size', label: t("File Size") },
   { value: 'random', label: t("Random") },
 ];
 const SORT_DIR_OPTIONS = [
@@ -510,10 +510,31 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
     setRestorePoints(initialSnapshot.restorePoints);
   }, [initialSnapshot]);
 
+  // Status is cheap and follows `cloud` events; restore points list the
+  // remote folder, so they are read on open, after an operation and when a
+  // snapshot publishes, never on a timer.
   useEffect(() => {
     if (!initialSnapshot) void refresh().catch(() => {});
-    const timer = setInterval(() => void refresh().catch(() => {}), 2_000);
-    return () => clearInterval(timer);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const refreshStatus = () => {
+      void invoke<CloudSyncStatus>('cloud.status.get')
+        .then((value) => { if (!disposed) setStatus(value); })
+        .catch(() => {});
+    };
+    const timer = setInterval(refreshStatus, 5_000);
+    void listen<LibraryChanged>('library/changed', ({ payload }) => {
+      if (payload.resources.includes('cloud')) void refresh().catch(() => {});
+      else if (payload.resources.includes('tasks')) refreshStatus();
+    }).then((value) => {
+      if (disposed) value();
+      else unlisten = value;
+    });
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+      unlisten?.();
+    };
   }, [initialSnapshot, refresh]);
 
   const run = async (operation: () => Promise<unknown>, success?: string) => {
@@ -1202,12 +1223,16 @@ export function Settings() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const refreshTimer = window.setInterval(() => {
-      void refreshLibraryStatistics().catch(() => {});
-    }, 10_000);
+    // Change events drive the statistics; a busy import coalesces into at
+    // most one read per second.
+    let refreshTimer: number | undefined;
     void listen<LibraryChanged>('library/changed', ({ payload }) => {
+      if (refreshTimer !== undefined) return;
       if (payload.resources.some((resource) => ['library', 'sidebar', 'tags', 'folders', 'smart_folders', 'subscriptions'].includes(resource))) {
-        void refreshLibraryStatistics().catch(() => {});
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = undefined;
+          if (!disposed) void refreshLibraryStatistics().catch(() => {});
+        }, 1_000);
       }
     }).then((value) => {
       if (disposed) value();
@@ -1215,7 +1240,7 @@ export function Settings() {
     });
     return () => {
       disposed = true;
-      window.clearInterval(refreshTimer);
+      window.clearTimeout(refreshTimer);
       unlisten?.();
     };
   }, [refreshLibraryStatistics]);

@@ -26,6 +26,7 @@ import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import * as entityMutations from '../../controllers/entityMutations';
 import { tagsController } from '../../controllers/tagsController';
+import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary, SetMatchMode } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
@@ -178,6 +179,21 @@ export function TagSelectPanel() {
     const generation = ++requestGenerationRef.current;
     requestTags(search, ns ?? null, generation);
   }, [requestTags]);
+
+  // Refresh counts in place so assignment does not reorder the open picker.
+  useEffect(() => {
+    if (!open || tags.length === 0) return;
+    let generation = 0;
+    const unregister = libraryInvalidation.register('tags', () => {
+      const requested = ++generation;
+      void tagsController.getById(tags.map((tag) => tag.tag_id)).then((records) => {
+        if (requested !== generation) return;
+        const updated = new Map(records.map((tag) => [tag.tag_id, tag]));
+        setTags((current) => current.map((tag) => updated.get(tag.tag_id) ?? tag));
+      }).catch(() => {});
+    });
+    return () => { generation += 1; unregister(); };
+  }, [open, tags]);
 
   const loadMore = useCallback(() => {
     if (!cursor || loadingCursorRef.current === cursor) return;

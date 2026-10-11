@@ -182,7 +182,14 @@ impl PreparedMediaSource {
         if let Some(mime) = self.detected_mime {
             return Ok(mime);
         }
-        let mime = get_mime(&self.path).await?;
+        let detected = get_mime(&self.path).await?;
+        // Stored blobs need not retain the original extension. Only specialize
+        // a verified ZIP signature using the canonical stored format.
+        let mime = if detected == MimeType::ApplicationZip {
+            super::detection::zip_container_mime(&self.mime_type).unwrap_or(detected)
+        } else {
+            detected
+        };
         self.detected_mime = Some(mime);
         Ok(mime)
     }
@@ -219,5 +226,47 @@ impl PreparedMediaSource {
             percentage_in,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod archive_preview_tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+
+    #[tokio::test]
+    async fn archive_imports_and_extensionless_blobs_keep_their_preview_adapter() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut jpeg = Cursor::new(Vec::new());
+        DynamicImage::new_rgb8(64, 48)
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        for (extension, mime, entries) in [
+            ("cbz", MimeType::ApplicationCbz, vec![("001.jpg", jpeg.get_ref().clone())]),
+            ("epub", MimeType::ApplicationEpub, vec![
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>"#.to_vec()),
+                ("content.opf", br#"<package><manifest><item id="cover" href="cover.jpg" properties="cover-image"/></manifest></package>"#.to_vec()),
+                ("cover.jpg", jpeg.get_ref().clone()),
+            ]),
+            ("docx", MimeType::ApplicationDocx, vec![("docProps/thumbnail.jpeg", jpeg.get_ref().clone())]),
+        ] {
+            let original = temp.path().join(format!("book.{extension}"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&original).unwrap());
+            for (name, bytes) in entries {
+                zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                zip.write_all(&bytes).unwrap();
+            }
+            zip.finish().unwrap();
+            let mut source = PreparedMediaSource::prepare_ingest(&original).await.unwrap();
+            assert_eq!(source.mime_type, mime.mime_string());
+            assert_eq!((source.pixel_width, source.pixel_height), (Some(64), Some(48)));
+            assert!(!source.render_thumbnail_bytes((32, 32), 0).await.unwrap().0.is_empty());
+            let blob = temp.path().join(format!("hash-{extension}"));
+            std::fs::copy(original, &blob).unwrap();
+            let mut stored = PreparedMediaSource::from_stored_metadata(blob, mime.mime_string(), None, None);
+            let bytes = stored.render_thumbnail_bytes((32, 32), 0).await.unwrap().0;
+            let preview = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((preview.width(), preview.height()), (32, 24));
+        }
     }
 }
