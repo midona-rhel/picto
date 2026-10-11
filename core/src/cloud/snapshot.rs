@@ -616,10 +616,11 @@ fn set_sync_state(
 ) -> Result<(), String> {
     application
         .library()
-        .database()
-        .maintenance_write(
+        .auxiliary_write(
             picto_library::database::WorkPriority::Cloud,
-            |transaction| {
+            ["cloud".to_string()],
+            [],
+            |transaction, _| {
                 transaction.execute(
                     "UPDATE cloud_state
                      SET state = ?1, phase = ?2,
@@ -637,6 +638,7 @@ fn set_sync_state(
                 Ok(())
             },
         )
+        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
@@ -923,6 +925,18 @@ fn validate_library_database(connection: &Connection) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::cloud::provider::DirectoryProvider;
+
+    #[test]
+    fn sync_start_publishes_cloud_invalidation_before_work() {
+        let root = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(root.path()).unwrap();
+        application.library().publication().flush();
+        set_sync_state(&application, "reconciling", "preparing", "Preparing library sync")
+            .unwrap();
+        let event = application.library().publication().flush().unwrap();
+        assert!(event.resources.iter().any(|resource| resource == "cloud"));
+        assert_eq!(super::super::status_library(&application).unwrap().state, "reconciling");
+    }
 
     #[test]
     fn blob_recovery_progress_counts_bytes_instead_of_files() {

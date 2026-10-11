@@ -3083,6 +3083,40 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
 }
 
 #[test]
+fn new_imports_register_pending_cloud_files_without_requeueing_duplicates() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let queued = || library.auxiliary_read(
+        picto_library::database::WorkPriority::VisibleRead,
+        |connection| Ok(connection.query_row(
+            "SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'queued'",
+            [], |row| row.get::<_, i64>(0),
+        )?),
+    ).unwrap();
+    library.ingest(&imported("disabled", Lifecycle::Active, &[])).unwrap();
+    assert_eq!(queued(), 0);
+    library.database().maintenance_write(
+        picto_library::database::WorkPriority::Cloud,
+        |transaction| {
+            transaction.execute("UPDATE cloud_state SET provider = 'dropbox', paused = 1 WHERE singleton = 1", [])?;
+            Ok(())
+        },
+    ).unwrap();
+    let input = imported("new-cloud-file", Lifecycle::Active, &[]);
+    library.ingest(&input).unwrap();
+    assert_eq!(queued(), 1);
+    library.database().maintenance_write(
+        picto_library::database::WorkPriority::Cloud,
+        |transaction| {
+            transaction.execute("UPDATE cloud_blob_state SET state = 'available', remote_present = 1", [])?;
+            Ok(())
+        },
+    ).unwrap();
+    library.ingest(&input).unwrap();
+    assert_eq!(queued(), 0);
+}
+
+#[test]
 fn smart_folder_rating_undo_and_redo_publish_changed_counts() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
