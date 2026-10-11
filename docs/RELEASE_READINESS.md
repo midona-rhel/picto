@@ -58,8 +58,8 @@ native addons, and downloaded native tools must not imply otherwise.
 
 ## 0.6.16-alpha local preparation
 
-- Local `release/0.6.16-alpha` is based on accepted `dev` commit `747e5204`. Its additional
-  changes are application version synchronization, release notes and this readiness update only.
+- `release/0.6.16-alpha` is based on accepted `dev` commit `747e5204`. Its additional
+  changes are version synchronization, release notes and the release-only packaging fix in #92.
 - Fresh `npm run alpha:verify` passed: 202 frontend/Electron test files, 1,340 tests passed and
   one skipped; 633 Rust tests passed and four ignored; source audit, localization (1,482 messages
   across eight languages), TypeScript, strict Clippy and command parity passed. Local Rust is
@@ -70,10 +70,11 @@ native addons, and downloaded native tools must not imply otherwise.
 - `npm run build` passed, including viewer assets and generated license notices.
   `npm audit --omit=dev` reported zero known vulnerabilities. Non-failing output included React
   `act(...)` warnings in GroupSurface/ScopeTitle tests and Vite's large-chunk warning.
-- No release branch or tag has been pushed, and no installer has been built or signed during
-  this preparation. Exact-candidate macOS/Windows/Linux native packaging, artifact audits and
-  packaged smoke tests remain required after authorization to push the release branch. Earlier
-  acceptance smoke evidence is historical, not a newly packaged release-candidate test.
+- The release branch was pushed at `2afd34c6`. Alpha Gate run `38154619086` passed verification,
+  all three package jobs and packaged smoke tests, but log inspection found an unacceptable
+  macOS ad-hoc signing and flat-icon fallback. Those artifacts are not publication candidates.
+  Issue #92 makes these requirements fail closed; all three platform gates must pass again on
+  the corrected release head. No tag or publication has been created.
 - Issue reconciliation is tracked in #91; partial fixes and deferred work remain open rather than
   being closed merely because the integration merged.
 
@@ -84,7 +85,10 @@ native addons, and downloaded native tools must not imply otherwise.
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
 - Public Apple Developer ID signing and notarization are not part of the alpha gate. The macOS
   alpha packages are signed with the project's private self-signed certificate so packaged
-  binaries have one stable identity.
+  binaries have one stable identity. Packaging requires a valid signing identity, then verifies
+  the final app's signature, matching leaf certificate and compiled icon catalog before archiving.
+  Temporary self-signed certificate trust is installed and removed only on disposable GitHub-hosted
+  macOS runners; local and self-hosted machines must already trust the signing identity.
 - Pull requests to `release/**` branches run verification. Release-branch pushes run verification
   and all three platform package/smoke jobs in parallel; manual runs can also exercise them. Tags
   only publish the exact artifacts from a successful release-branch push for the same commit; they
