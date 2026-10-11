@@ -470,8 +470,10 @@ fn seed_local_originals_library(application: &LibraryApplication) -> Result<(), 
             picto_library::database::WorkPriority::Cloud,
             |transaction| {
                 transaction.execute(
+                    // `WHERE true` ends the SELECT: after `FROM media_file`
+                    // SQLite would otherwise read `ON` as a join constraint.
                     "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-                     SELECT content_hash, 'queued', ?1 FROM media_file
+                     SELECT content_hash, 'queued', ?1 FROM media_file WHERE true
                      ON CONFLICT(file_hash) DO UPDATE SET
                          state = 'queued', remote_present = 0, last_error = NULL,
                          uploaded_at = NULL, updated_at = excluded.updated_at",
@@ -611,5 +613,106 @@ mod tests {
         assert_eq!(retention["deleted_blobs_days"], 7);
         assert_eq!(retention["epochs_days"], 30);
         assert_eq!(retention["full_media_history"], false);
+    }
+
+    fn image_job(directory: &std::path::Path, index: u8) -> picto_library::PreparedIngestJob {
+        use sha2::Digest;
+        let path = directory.join(format!("cloud-{index}.png"));
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([index, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        picto_library::PreparedIngestJob {
+            job_key: format!("manual:cloud-{index}"),
+            source_kind: "manual".into(),
+            source_path: path.to_string_lossy().into_owned(),
+            source_item_id: None,
+            delete_after_ingest: false,
+            payload: picto_library::PreparedIngestPayload::Item(picto_library::PreparedImport {
+                stable_key: format!("cloud-root-{index}"),
+                media_name: format!("cloud-{index}.png"),
+                file_path: path.to_string_lossy().into_owned(),
+                facts: picto_library::ImmutableMediaFacts {
+                    mime: "image/png".into(),
+                    size_bytes: bytes.len() as u64,
+                    width: Some(8),
+                    height: Some(8),
+                    duration_ms: None,
+                    frame_count: Some(1),
+                    content_hash: hex::encode(sha2::Sha256::digest(&bytes)),
+                    perceptual_hash: None,
+                    palette: Vec::new(),
+                },
+                lifecycle: picto_library::Lifecycle::Inbox,
+                rating: picto_library::Rating::Unrated,
+                notes: None,
+                tags: Vec::new(),
+                folders: Vec::new(),
+                source_urls: Vec::new(),
+                source_identity: None,
+                imported_at_ms: 1_700_000_000_000,
+                captured_at_ms: None,
+            }),
+        }
+    }
+
+    /// Configure, publish and stage a restore against a disposable folder that
+    /// stands in for Dropbox, with an empty and with a populated library.
+    #[tokio::test]
+    async fn configure_publish_and_restore_round_trip_through_a_provider_folder() {
+        let provider_root = tempfile::tempdir().unwrap();
+        std::env::set_var("PICTO_DROPBOX_ROOT", provider_root.path());
+        for roots in [0u8, 2] {
+            let temp = tempfile::tempdir().unwrap();
+            let application =
+                LibraryApplication::create(temp.path().join(format!("Cloud{roots}.library")))
+                    .unwrap();
+            for index in 0..roots {
+                application
+                    .library()
+                    .enqueue_ingest_job(&image_job(temp.path(), index), "2026-08-28T12:00:00Z")
+                    .unwrap();
+            }
+            if roots > 0 {
+                let report = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
+                assert_eq!(report.ingested, roots as usize);
+            }
+
+            configure_library(
+                &application,
+                &ConfigureCloudInput {
+                    provider: "dropbox".into(),
+                    account_label: "Test".into(),
+                    root_path: provider_root.path().to_string_lossy().into_owned(),
+                },
+            )
+            .unwrap();
+            let queued = application
+                .library()
+                .auxiliary_read(picto_library::database::WorkPriority::Maintenance, |connection| {
+                    Ok(connection.query_row(
+                        "SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'queued'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?)
+                })
+                .unwrap();
+            assert_eq!(queued, roots as i64, "every original is queued for upload");
+
+            let provider = directory_provider_library(&application).unwrap();
+            let manifest = snapshot::publish_library(&application, &provider).await.unwrap();
+            let points = snapshot::list_remote_for_library(&application, &provider)
+                .await
+                .unwrap();
+            assert_eq!(points.len(), 1);
+            let restore = snapshot::prepare_restore(&application, &provider, &manifest.snapshot_id)
+                .await
+                .unwrap();
+            let staged = rusqlite::Connection::open(&restore.database_path).unwrap();
+            let restored_roots: i64 = staged
+                .query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(restored_roots, roots as i64);
+        }
     }
 }
