@@ -238,13 +238,15 @@ pub(crate) fn migrate_single_blob_orders(connection: &Connection) -> Result<()> 
     connection.execute_batch(ORDER_CHUNK_SCHEMA)?;
     let legacy = {
         let mut statement = connection
-            .prepare("SELECT owner_kind, owner_id, checksum, payload FROM ordered_membership")?;
+            .prepare("SELECT owner_kind, owner_id, checksum, payload, cardinality, format_version FROM ordered_membership")?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, u8>(0)?,
                 row.get::<_, u32>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, u32>(5)?,
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -254,7 +256,12 @@ pub(crate) fn migrate_single_blob_orders(connection: &Connection) -> Result<()> 
              (owner_kind, owner_id, chunk_index, checksum, payload)
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    for (kind, owner_id, digest, payload) in legacy {
+    for (kind, owner_id, digest, payload, cardinality, version) in legacy {
+        if version != 1 {
+            return Err(LibraryError::InvalidState(format!(
+                "unsupported ordered membership format {version}"
+            )));
+        }
         if checksum(&payload).as_slice() != digest.as_slice() || payload.len() < 4 {
             return Err(LibraryError::InvalidState(
                 "ordered membership checksum mismatch".into(),
@@ -262,6 +269,14 @@ pub(crate) fn migrate_single_blob_orders(connection: &Connection) -> Result<()> 
         }
         let mut values = Vec::new();
         decode_chunk_unchecked(&payload[4..], &mut values)?;
+        let declared_count = u32::from_le_bytes(payload[..4].try_into().expect("validated header"));
+        if u64::from(declared_count) != values.len() as u64 {
+            return Err(LibraryError::InvalidState("ordered membership length mismatch".into()));
+        }
+        if cardinality != i64::from(declared_count) {
+            return Err(LibraryError::InvalidState("ordered membership cardinality mismatch".into()));
+        }
+        require_unique(&values, LibraryError::InvalidState)?;
         let chunks = if values.is_empty() {
             vec![&values[..0]]
         } else {

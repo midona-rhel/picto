@@ -654,6 +654,59 @@ mod tests {
     }
 
     #[test]
+    fn malformed_legacy_orders_fail_without_mutating_the_database_on_reopen() {
+        for (label, cardinality, version, declared_count, ids) in [
+            ("format", 2, 2, 2_u32, vec![1_u32, 2]),
+            ("cardinality", 3, 1, 2, vec![1, 2]),
+            ("negative cardinality", -1, 1, 2, vec![1, 2]),
+            ("embedded count", 2, 1, 3, vec![1, 2]),
+            ("duplicates", 3, 1, 3, vec![1, 2, 1]),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("library.sqlite");
+            drop(LibraryDatabase::create(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(
+                "DROP TABLE ordered_membership_chunk;
+                 CREATE TABLE ordered_membership (
+                     owner_kind INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+                     revision INTEGER NOT NULL, cardinality INTEGER NOT NULL,
+                     format_version INTEGER NOT NULL, checksum BLOB NOT NULL,
+                     payload BLOB NOT NULL, PRIMARY KEY(owner_kind, owner_id)
+                 ) WITHOUT ROWID, STRICT;",
+            ).unwrap();
+            let mut payload = declared_count.to_le_bytes().to_vec();
+            ids.iter().for_each(|id| payload.extend_from_slice(&id.to_le_bytes()));
+            connection.execute(
+                "INSERT INTO ordered_membership VALUES (2, 9, 1, ?1, ?2, ?3, ?4)",
+                rusqlite::params![cardinality, version, crate::bitmap::checksum(&payload).as_slice(), payload],
+            ).unwrap();
+            connection.execute("UPDATE library_meta SET schema_fingerprint=?1", [super::WATCH_LIFECYCLE_PREDECESSOR]).unwrap();
+            drop(connection);
+
+            for _ in 0..2 {
+                assert!(LibraryDatabase::open(&path).is_err(), "{label} was silently migrated");
+                assert_eq!(fingerprint_of(&path), super::WATCH_LIFECYCLE_PREDECESSOR);
+                let connection = Connection::open(&path).unwrap();
+                assert_eq!(count(&connection, "SELECT COUNT(*) FROM sqlite_master WHERE name='ordered_membership_chunk'"), 0);
+                let stored = connection.query_row("SELECT cardinality, format_version, payload FROM ordered_membership", [], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, Vec<u8>>(2)?))
+                }).unwrap();
+                assert_eq!(stored, (cardinality, version, payload.clone()));
+            }
+            let backups = std::fs::read_dir(directory.path()).unwrap()
+                .map(|entry| entry.unwrap().path()).filter(|path| path.extension().is_some_and(|extension| extension == "backup"))
+                .collect::<Vec<_>>();
+            assert!(!backups.is_empty());
+            for backup in backups {
+                assert_eq!(fingerprint_of(&backup), super::WATCH_LIFECYCLE_PREDECESSOR);
+                let connection = Connection::open(backup).unwrap();
+                assert_eq!(connection.query_row("SELECT payload FROM ordered_membership", [], |row| row.get::<_, Vec<u8>>(0)).unwrap(), payload);
+            }
+        }
+    }
+
+    #[test]
     fn single_blob_orders_are_split_into_chunks_without_changing_them() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("library.sqlite");
