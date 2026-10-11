@@ -70,12 +70,9 @@ impl crate::database::PublicationDelta for PublishedDelta {
         // Receipts carry the renderer's resource names.
         let changed = |resource: &str| self.receipt.resources.iter().any(|value| value == resource);
         if changed("recently_viewed")
-            || snapshot
-                .recent_views
-                .iter()
-                .any(|(root_id, _)| dirty.contains(root_id.0))
+            || !snapshot.recent_views.members.is_disjoint(&dirty)
         {
-            snapshot.recent_views = Arc::new(crate::projection::load_recent_views(transaction)?);
+            snapshot.recent_views = Arc::new(crate::projection::load_recent_views(transaction)?.into());
         }
         if changed("folders") {
             snapshot.folder_parents =

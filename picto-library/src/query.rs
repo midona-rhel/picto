@@ -1274,12 +1274,7 @@ fn scope_bitmap(
             values
         }
         ItemScope::RecentlyViewed => {
-            let mut values = snapshot
-                .recent_views
-                .iter()
-                .map(|(id, _)| id.0)
-                .filter(|id| candidates.is_none_or(|candidates| candidates.contains(*id)))
-                .collect::<RoaringBitmap>();
+            let mut values = within(&snapshot.recent_views.members);
             values &= snapshot.active();
             values
         }
@@ -1753,7 +1748,7 @@ mod tests {
             Arc::make_mut(&mut snapshot.total_bytes).insert(id, bytes as u64);
         }
         snapshot.name_index = Arc::new(crate::name_index::NameIndex::load(connection).unwrap());
-        snapshot.recent_views = Arc::new(crate::projection::load_recent_views(connection).unwrap());
+        snapshot.recent_views = Arc::new(crate::projection::load_recent_views(connection).unwrap().into());
         snapshot
     }
 

@@ -668,6 +668,29 @@ impl NumericShard {
     }
 }
 
+/// One immutable recent-view projection: display order and candidate membership
+/// are built together from the same canonical rows.
+#[derive(Debug, Clone, Default)]
+pub struct RecentViews {
+    ordered: Vec<(RootId, i64)>,
+    pub(crate) members: RoaringBitmap,
+}
+
+impl From<Vec<(RootId, i64)>> for RecentViews {
+    fn from(ordered: Vec<(RootId, i64)>) -> Self {
+        let members = ordered.iter().map(|(id, _)| id.0).collect();
+        Self { ordered, members }
+    }
+}
+
+impl Deref for RecentViews {
+    type Target = [(RootId, i64)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.ordered
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectionSnapshot {
     pub revision: u64,
@@ -676,7 +699,7 @@ pub struct ProjectionSnapshot {
     /// Drawing facts of every root, hydrated for grid summaries without SQLite.
     pub drawing: Arc<crate::browsing::DrawingIndex>,
     /// Recently viewed roots, most recent first; ties break by descending ID.
-    pub recent_views: Arc<Vec<(RootId, i64)>>,
+    pub recent_views: Arc<RecentViews>,
     /// Parent of every folder, for folder-tree scopes.
     pub folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
     pub(crate) query_versions: crate::query_dependencies::QueryVersions,
@@ -794,7 +817,8 @@ impl ProjectionSnapshot {
             .values()
             .map(|query| serde_json::to_vec(query).map_or(0, |value| value.len()))
             .sum::<usize>();
-        bytes += self.recent_views.capacity() * std::mem::size_of::<(RootId, i64)>();
+        bytes += self.recent_views.ordered.capacity() * std::mem::size_of::<(RootId, i64)>()
+            + self.recent_views.members.serialized_size();
         bytes += self.folder_parents.capacity()
             * (std::mem::size_of::<FolderId>()
                 + std::mem::size_of::<Option<FolderId>>()
@@ -864,7 +888,7 @@ struct ResidentState {
     text_index: Arc<crate::text_index::TextIndex>,
     name_index: Arc<crate::name_index::NameIndex>,
     drawing: Arc<crate::browsing::DrawingIndex>,
-    recent_views: Arc<Vec<(RootId, i64)>>,
+    recent_views: Arc<RecentViews>,
     folder_parents: Arc<HashMap<FolderId, Option<FolderId>>>,
 }
 
@@ -888,7 +912,7 @@ impl ResidentState {
         statistics.drawing_load_us = stage.elapsed().as_micros() as u64;
         progress(OpenStage::Loading(LoadStage::Navigation));
         let stage = std::time::Instant::now();
-        let recent_views = Arc::new(load_recent_views(connection)?);
+        let recent_views = Arc::new(load_recent_views(connection)?.into());
         let folder_parents = Arc::new(load_folder_parents(connection)?);
         statistics.navigation_load_us = stage.elapsed().as_micros() as u64;
         Ok(Self {

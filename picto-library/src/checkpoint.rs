@@ -128,7 +128,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         text_index: std::sync::Arc::new(crate::text_index::TextIndex::default()),
         name_index: std::sync::Arc::new(crate::name_index::NameIndex::default()),
         drawing: std::sync::Arc::new(crate::browsing::DrawingIndex::default()),
-        recent_views: std::sync::Arc::new(Vec::new()),
+        recent_views: std::sync::Arc::new(Default::default()),
         folder_parents: std::sync::Arc::new(std::collections::HashMap::new()),
         query_versions: crate::query_dependencies::QueryVersions::new(revision),
         lifecycle: std::sync::Arc::new(data.lifecycle),

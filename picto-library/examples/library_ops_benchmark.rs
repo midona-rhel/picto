@@ -70,7 +70,26 @@ fn main() -> R<()> {
     }
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     library.set_lifecycle(&target, Lifecycle::Active)?;
-    if std::env::args().any(|arg| arg == "--membership-only") { return Ok(()); }
+    if std::env::args().any(|arg| arg == "--membership-only") {
+        // Populate only the closed synthetic fixture, then rebuild its projection normally.
+        drop(library);
+        let connection = rusqlite::Connection::open(&path)?;
+        connection.execute(
+            "INSERT INTO recent_view(root_id, viewed_at_ms) SELECT root_id, root_id FROM library_root", [],
+        )?;
+        drop(connection);
+        library = Library::open(&path)?;
+        assert_eq!(library.projections().snapshot().recent_views.len(), roots);
+        library.set_lifecycle(&target, Lifecycle::Trash)?;
+        let before = library.query_statistics();
+        let query = RootQuery { scope: ItemScope::RecentlyViewed, view: ViewQuerySpec::default() };
+        bench("recent-view membership with 1M history", "3 candidates", runs, || {
+            assert_eq!(library.root_membership(&query, &candidates)?, [true, false, false]);
+            Ok(())
+        }, None::<fn() -> R<()>>)?;
+        assert_eq!(library.query_statistics().order_builds, before.order_builds);
+        return Ok(());
+    }
 
     // --- fixture: folders ---
     let t = Instant::now();

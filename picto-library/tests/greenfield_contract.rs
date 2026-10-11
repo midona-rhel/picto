@@ -2794,6 +2794,31 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn recent_view_membership_tracks_clear_undo_deletion_and_reopen() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let first = library.ingest(&imported("recent-first", Lifecycle::Active, &[])).unwrap().0;
+    let second = library.ingest(&imported("recent-second", Lifecycle::Active, &[])).unwrap().0;
+    let candidates = [first, second];
+    let recent = query(ItemScope::RecentlyViewed);
+    library.record_recent_view(first, 1).unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, false]);
+    library.record_recent_view(second, 2).unwrap();
+    library.clear_recent_views().unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, false]);
+    library.undo().unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, true]);
+    let target = SelectionTarget::Explicit { root_ids: vec![first] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.permanently_delete(&target, 3).unwrap();
+    assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, true]);
+    drop(library);
+    let reopened = Library::open(&path).unwrap();
+    assert_eq!(reopened.root_membership(&recent, &candidates).unwrap(), [false, true]);
+}
+
+#[test]
 fn root_membership_checks_only_candidates_without_building_query_order() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
