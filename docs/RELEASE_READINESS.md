@@ -42,7 +42,9 @@ native addons, and downloaded native tools must not imply otherwise.
 - The Google Drive check used a real remote round trip: all 502 uploaded, downloaded, and restored
   blobs matched by hash. Dropbox was not checked because it is not installed on the test host.
 - Windows memory remains untested because the acceptance host is macOS. This is an unavailable
-  platform check, not a pass or a waiver of the Windows gate.
+  platform check, not a test pass. The user accepted both Windows manual testing and Dropbox
+  remote delivery as unverified exceptions for this acceptance. Automated CI and package gates
+  are not waived.
 - The six-filter UI check used Date Imported because the UI has no capture-date control;
   `captured_at` remains covered by runtime evidence only.
 - Picto Pack reimport through the native chooser restored conflicting metadata without changing
