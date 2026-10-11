@@ -77,6 +77,19 @@ pub enum Lifecycle {
 impl Lifecycle {
     pub const ALL: [Self; 3] = [Self::Active, Self::Inbox, Self::Trash];
 
+    pub const fn inbox() -> Self {
+        Self::Inbox
+    }
+
+    /// Watched folders may import into Active or Inbox, never Trash.
+    pub(crate) fn from_watch_code(code: i64) -> Self {
+        if code == 1 { Self::Active } else { Self::Inbox }
+    }
+
+    pub(crate) fn watch_code(self) -> i64 {
+        if self == Self::Active { 1 } else { 2 }
+    }
+
     pub const fn bitmap_key(self) -> u32 {
         match self {
             Self::Active => 1,
@@ -191,6 +204,7 @@ pub struct FolderRecord {
     pub watch_path: Option<String>,
     pub watch_enabled: bool,
     pub watch_subfolders: bool,
+    pub watch_lifecycle: Lifecycle,
     pub display_order: i64,
     pub count: u64,
 }
@@ -335,6 +349,9 @@ pub struct FolderWatchInput {
     pub folder_id: FolderId,
     pub path: String,
     pub include_subfolders: bool,
+    /// Status of files the watcher imports: Inbox (default) or Active.
+    #[serde(default = "Lifecycle::inbox")]
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,8 +494,24 @@ pub struct RootTagAssignment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RootMetadataPatch {
     pub rating: Option<Rating>,
+    /// Absent leaves notes unchanged; an explicit `null` clears them.
+    #[serde(
+        default,
+        deserialize_with = "present_or_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub notes: Option<Option<String>>,
     pub source_urls: Option<Vec<String>>,
+}
+
+/// A field that is present maps to `Some`, even when its value is `null`, so
+/// "clear" (`Some(None)`) is distinct from "leave unchanged" (`None`).
+fn present_or_null<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,4 +691,24 @@ pub struct CloudJournalRecord {
     pub target_root_ids: Option<roaring::RoaringBitmap>,
     pub payload: serde_json::Value,
     pub created_at_ms: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_metadata_patch_tells_clearing_notes_from_leaving_them() {
+        let clear: RootMetadataPatch = serde_json::from_str(r#"{"notes":null}"#).unwrap();
+        assert_eq!(clear.notes, Some(None));
+        let set: RootMetadataPatch = serde_json::from_str(r#"{"notes":"hi"}"#).unwrap();
+        assert_eq!(set.notes, Some(Some("hi".into())));
+        let untouched: RootMetadataPatch = serde_json::from_str(r#"{"rating":"five"}"#).unwrap();
+        assert_eq!(untouched.notes, None);
+        for patch in [clear, set, untouched] {
+            let round_trip: RootMetadataPatch =
+                serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+            assert_eq!(round_trip, patch);
+        }
+    }
 }

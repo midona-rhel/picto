@@ -1,35 +1,44 @@
-# Auto-Updates
+# Updates
 
 [← User Guide](README.md)
 
-Picto checks for updates automatically using GitHub Releases.
+Picto checks GitHub Releases for new versions. Pre-release versions (such as alpha builds) are
+included.
 
-## How It Works
+## When Picto checks
 
-1. **Startup check** — 10 seconds after launching, Picto checks for a newer version
-2. **Periodic checks** — Every 4 hours while Picto is running
-3. **Manual download** — Updates are not downloaded automatically. When an update is available, you'll be notified and can choose to download it
-4. **Install on quit** — After downloading, the update installs automatically the next time you close Picto
+- 15 seconds after launch
+- every 6 hours while Picto is running
+- when you click **Check Now** in **Settings → Updates** or **Settings → About**, or choose
+  **File → Check for Updates…**
 
-## Platform Details
+Update checks only run in installed (packaged) builds.
 
-| Platform | Update Format | Notes |
-|----------|--------------|-------|
-| Windows | NSIS installer | Full installer replacement, seamless |
-| Linux | AppImage | Self-contained, replaces the running AppImage |
-| macOS | ZIP | Replaces the app bundle |
+## Windows and Linux
 
-The `.deb` package on Linux does **not** support auto-update. Use the AppImage version if you want automatic updates.
+1. When a newer version exists, Picto downloads it in the background and shows a notification.
+2. When the download finishes, Picto notifies you again.
+3. The update installs when you quit Picto. To install right away, open **Settings → Updates** and
+   click **Restart and Install**.
 
-## Releases
+| Platform | Package | Update |
+|---|---|---|
+| Windows (x64) | NSIS installer (`Picto-Setup-<version>.exe`) | Automatic |
+| Linux (x64) | AppImage | Automatic |
 
-Updates are published as [GitHub Releases](https://github.com/midona-rhel/picto/releases). Pre-release versions (alpha, rc) are also distributed through this channel.
+## macOS
 
-## Troubleshooting
+macOS builds (Apple silicon, `.dmg` and `.zip`) are not signed for automatic installation. When a
+newer version exists, Picto notifies you and **Open Download Page** opens the release on GitHub.
+Download and install it yourself.
 
-If auto-update isn't working:
+## After an update
 
-- Make sure you're running a packaged version (not a development build)
-- Check your internet connection
-- On Linux, ensure the AppImage file is writable (auto-update replaces it in place)
-- Check the developer console for error messages (Settings → Developer or `Ctrl+Shift+I`)
+The first time a new version starts, Picto shows its release notes. They are bundled with the app,
+so this works offline.
+
+## If updates do not work
+
+- Make sure you are running an installed release, not a development build.
+- Check your internet connection; the check contacts github.com.
+- **Settings → Updates** shows the last error, if any.

@@ -1471,5 +1471,14 @@
   "Opening your library": "A abrir a sua biblioteca",
   "Updating your library database": "A atualizar a base de dados da sua biblioteca",
   "Loading your library": "A carregar a sua biblioteca",
-  "Starting library services": "A iniciar os serviços da biblioteca"
+  "Starting library services": "A iniciar os serviços da biblioteca",
+  "Library deleted.": "Biblioteca excluída.",
+  "Move…": "Mover…",
+  "Locate…": "Localizar…",
+  "Delete…": "Excluir…",
+  "Part of the selection left this view": "Parte da seleção saiu desta visualização",
+  "A selected range lost its first or last item, so that range is no longer selected.": "Um intervalo selecionado perdeu o primeiro ou o último item, por isso deixou de estar selecionado.",
+  "Could not preview smart folder rules": "Não foi possível pré-visualizar as regras da pasta inteligente",
+  "Could not restore smart folder rules": "Não foi possível restaurar as regras da pasta inteligente",
+  "Could not save smart folder": "Não foi possível salvar a pasta inteligente"
 }

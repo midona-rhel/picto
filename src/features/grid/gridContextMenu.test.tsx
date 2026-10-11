@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuEntry, MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildExportContextEntry, buildTileContextMenu } from './gridContextMenu';
+import { shortcutHint } from '../../shared/lib/shortcuts';
 
 function submenuChildren(entries: MenuEntry[], label: string): MenuEntry[] {
   const entry = entries.find(
@@ -12,6 +13,28 @@ function submenuChildren(entries: MenuEntry[], label: string): MenuEntry[] {
 }
 
 describe('buildTileContextMenu', () => {
+  it('advertises folder removal, not trash, for the contextual delete shortcut', () => {
+    const onRemoveFromFolder = vi.fn();
+    const onMoveToTrash = vi.fn();
+    const base = {
+      selectionCount: 1, querySelectionActive: false, singleSelected: true,
+      singleHash: 'hash', loadedCount: 1, statusFilter: null,
+      onRemoveFromFolder, onMoveToTrash,
+    };
+    const entries = buildTileContextMenu({ ...base, scopeKind: 'folder' });
+    const remove = entries.find((e): e is MenuItem => 'label' in e && e.label === 'Remove from Folder')!;
+    const trash = entries.find((e): e is MenuItem => 'label' in e && e.label === 'Move to Trash')!;
+    expect(remove.shortcut).toBe(shortcutHint('file.removeFromFolder'));
+    expect(trash.shortcut).toBeUndefined();
+    remove.action?.();
+    expect(onRemoveFromFolder).toHaveBeenCalledOnce();
+    expect(onMoveToTrash).not.toHaveBeenCalled();
+    for (const scopeKind of ['system', 'smart_folder'] as const) {
+      const outside = buildTileContextMenu({ ...base, scopeKind });
+      expect(outside.find((e) => 'label' in e && e.label === 'Remove from Folder')).toBeUndefined();
+      expect(outside.find((e): e is MenuItem => 'label' in e && e.label === 'Move to Trash')?.shortcut).toBe(shortcutHint('file.delete'));
+    }
+  });
   it('finds every root containing the selected exact media for any media type', () => {
     const onFindMediaMatches = vi.fn();
     for (const singleMime of ['image/png', 'video/mp4', 'application/pdf']) {
@@ -546,7 +569,8 @@ describe('buildTileContextMenu', () => {
     );
 
     expect(entry).toBeDefined();
-    expect(entry!.shortcut).toBe('Shift+D');
+    // The Shift+D shortcut is deferred, so the menu does not advertise it.
+    expect(entry!.shortcut).toBeUndefined();
     entry!.action();
     expect(onAddToLastUsedFolder).toHaveBeenCalledOnce();
   });

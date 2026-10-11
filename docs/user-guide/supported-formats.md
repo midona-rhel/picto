@@ -6,9 +6,6 @@ Picto separates **acceptance** from **preview support**. Every extension below c
 preserved in the library. A format may still open through its default application when Picto does
 not yet have an internal thumbnail or viewer adapter.
 
-The executable source of truth is `core/src/media_processing/formats.rs`; preview capabilities are
-owned separately by `core/src/media_capabilities.rs`. This page must change with those registries.
-
 ## Images and textures
 
 `.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.gif`, `.webp`, `.bmp`, `.dib`, `.tif`,
@@ -29,8 +26,8 @@ plays depends on its codecs as well as its container extension.
 `.aac`, `.flac`, `.m4a`, `.mp3`, `.ogg`, `.oga`, `.opus`, `.wav`, `.wave`, `.wma`, `.mka`, `.wv`,
 `.tta`.
 
-Audio files are accepted and preserved. They currently use metadata/file presentation rather than
-inventing a still-image thumbnail.
+Audio files get a waveform thumbnail and play in the internal player, with an optional
+visualization (**Settings → Preview → Audio**).
 
 ## 3D
 
@@ -48,7 +45,8 @@ opened externally.
 
 ## Fonts and camera RAW
 
-Fonts: `.ttf`, `.ttc`, `.otf`, `.woff`.
+Fonts: `.ttf`, `.ttc`, `.otf`, `.woff`. Fonts open in a font viewer with Preview (editable sample
+text), Waterfall, Glyphs and Information tabs.
 
 Camera RAW: `.3fr`, `.arw`, `.cr2`, `.cr3`, `.crw`, `.dng`, `.erf`, `.mrw`, `.nef`, `.nrw`, `.orf`,
 `.pef`, `.raf`, `.raw`, `.rw2`, `.sr2`, `.srw`, `.x3f`.
@@ -65,11 +63,14 @@ per-entry limit. Accepted members are ingested as a collection and the container
 nested archives are not expanded. ZIPs encountered while importing or watching a folder are
 ignored. Format-specific containers such as EPUB and CBZ remain supported.
 
-PDF, DOCX, PPTX, plain text, Markdown, JSON, RTF, EPUB, CBZ and DjVu have read-only internal
-viewers built on the same document shell. JPEG XL has native decode, thumbnails, image analysis and
-the standard image viewer. DOCX/PPTX use embedded thumbnails when the file supplies one; EPUB/CBZ
-use archive cover/page previews. Legacy DOC/PPT and spreadsheet formats remain accepted library
-files and open externally rather than being misrouted through the image viewer.
+PDF, DOCX, PPTX, plain text, Markdown, JSON, RTF, EPUB, CBZ and DjVu open in read-only internal
+viewers; use `J` and `L` for the previous and next page. CBZ comics and EPUB books open as paged
+documents. DOCX/PPTX use embedded thumbnails when the file supplies one; EPUB/CBZ use their cover or
+first page. JPEG XL has native decoding, thumbnails and the standard image viewer.
+
+Flash (`.swf`) files play in a built-in Flash player (Ruffle) with play, pause and stop controls.
+
+Legacy DOC/PPT and spreadsheet formats are accepted and open in their default application.
 
 ## Additional production formats
 

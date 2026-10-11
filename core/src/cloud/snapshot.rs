@@ -204,15 +204,16 @@ async fn publish_library_inner(
                         manifest_path,
                     ],
                 )?;
+                // The snapshot now contains these changes; nothing reads them again.
                 transaction.execute(
-                    "UPDATE cloud_journal SET expanded_at_ms = ?1
-                     WHERE expanded_at_ms IS NULL AND revision <= ?2",
-                    rusqlite::params![Utc::now().timestamp_millis(), database_revision as i64],
+                    "DELETE FROM cloud_journal WHERE revision <= ?1",
+                    [database_revision as i64],
                 )?;
                 transaction.execute(
                     "UPDATE cloud_state
                      SET last_snapshot_at = ?1, last_sync_at = ?1,
-                         state = 'idle', phase = 'idle', message = ''
+                         state = CASE WHEN paused THEN 'paused' ELSE 'idle' END,
+                         phase = 'idle', message = ''
                      WHERE singleton = 1",
                     [manifest.created_at.as_str()],
                 )?;
@@ -615,10 +616,11 @@ fn set_sync_state(
 ) -> Result<(), String> {
     application
         .library()
-        .database()
-        .maintenance_write(
+        .auxiliary_write(
             picto_library::database::WorkPriority::Cloud,
-            |transaction| {
+            ["cloud".to_string()],
+            [],
+            |transaction, _| {
                 transaction.execute(
                     "UPDATE cloud_state
                      SET state = ?1, phase = ?2,
@@ -636,6 +638,7 @@ fn set_sync_state(
                 Ok(())
             },
         )
+        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
@@ -922,6 +925,18 @@ fn validate_library_database(connection: &Connection) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::cloud::provider::DirectoryProvider;
+
+    #[test]
+    fn sync_start_publishes_cloud_invalidation_before_work() {
+        let root = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(root.path()).unwrap();
+        application.library().publication().flush();
+        set_sync_state(&application, "reconciling", "preparing", "Preparing library sync")
+            .unwrap();
+        let event = application.library().publication().flush().unwrap();
+        assert!(event.resources.iter().any(|resource| resource == "cloud"));
+        assert_eq!(super::super::status_library(&application).unwrap().state, "reconciling");
+    }
 
     #[test]
     fn blob_recovery_progress_counts_bytes_instead_of_files() {

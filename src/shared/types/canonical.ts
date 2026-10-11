@@ -81,12 +81,6 @@ export interface CanonicalEntityDetails {
   revision: number;
 }
 
-export interface CanonicalTagInfo {
-  tag_id: number;
-  namespace: string;
-  subtag: string;
-}
-
 export interface CanonicalTagRecord {
   tag_id: number;
   namespace_id: number;
@@ -108,11 +102,6 @@ export interface CanonicalNamespaceSummary {
   tag_count: number;
 }
 
-export interface CanonicalFolderInfo {
-  folder_id: number;
-  name: string;
-}
-
 export interface CanonicalFolderRecord {
   folder_id: number;
   stable_key: string;
@@ -125,6 +114,8 @@ export interface CanonicalFolderRecord {
   watch_path: string | null;
   watch_enabled: boolean;
   watch_subfolders: boolean;
+  /** Status of files the watcher imports. */
+  watch_lifecycle: 'inbox' | 'active';
   display_order: number;
   count: number;
 }
@@ -242,42 +233,6 @@ export interface MimeFacets {
   revision: number;
 }
 
-export type FilterOp = 'eq' | 'gte' | 'lte' | 'gt' | 'lt';
-
-export interface RatingFilter {
-  value: number;
-  op?: FilterOp;
-}
-
-export type TagMatchMode = 'include' | 'exclude';
-
-export interface TagFilter {
-  tag: string;
-  match_mode?: TagMatchMode;
-}
-
-export interface DateRange {
-  from?: string | null;
-  to?: string | null;
-}
-
-export interface QueryFilters {
-  rating?: RatingFilter | null;
-  colors?: string[] | null;
-  mime_types?: string[] | null;
-  entity_types?: string[] | null;
-  tags?: TagFilter[] | null;
-  date_created?: DateRange | null;
-  date_added?: DateRange | null;
-  date_modified?: DateRange | null;
-  search_text?: string | null;
-}
-
-export interface QuerySort {
-  field?: string;
-  direction?: string;
-}
-
 export interface QueryPage {
   limit?: number;
   cursor?: string | null;
@@ -301,12 +256,6 @@ export interface SidebarNodeDto {
   selectable: boolean;
   expanded_by_default?: boolean;
   meta?: Record<string, unknown> | null;
-}
-
-export interface SidebarTreeResponse {
-  nodes: SidebarNodeDto[];
-  tree_epoch: number;
-  generated_at: string;
 }
 
 // ── Smart folder types ───────────────────────────────────────────
@@ -375,9 +324,18 @@ export type EntityTarget =
   | {
       kind: 'range';
       query: EntityViewQuery;
-      anchor_root_id: number;
-      focus_root_id: number;
+      spans: EntityRangeSpan[];
+      included_root_ids?: number[];
+      excluded_root_ids?: number[];
     };
+
+/** A run of the view between two roots; the indices are where the grid showed them. */
+export interface EntityRangeSpan {
+  anchor_root_id: number;
+  focus_root_id: number;
+  anchor_index?: number;
+  focus_index?: number;
+}
 
 export interface OrganizeCollectionInput {
   target: EntityTarget;

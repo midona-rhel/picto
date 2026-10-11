@@ -17,13 +17,8 @@ media occurrences, and visible roots have separate identities. Attached collecti
 their root's lifecycle and folder placement. `All` contains active roots only; Inbox and Trash are
 separate lifecycle scopes.
 
-Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. Source
-adapters normalize posts into ordered media items. A multi-media post is promoted to a collection
-when its second distinct item arrives, without delaying the first item.
-
-Subscriptions persist definitions, runs, source posts, source items, retries, and progress. Direct
-site sessions are captured in a Picto-owned browser and secrets remain in the operating-system
-credential store.
+Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. See
+[Subscriptions](#subscriptions) for how source posts become standalone items or collections.
 
 ## Application boundaries
 
@@ -59,7 +54,13 @@ changing byte totals does not invalidate unrelated text membership.
 Text filters and text-based smart folders share one matching contract: the trimmed, lowercased
 literal of at least three characters is a byte substring of the requested lowercased fields.
 Selections of up to 4,096 roots look each root's settled text up directly; larger selections
-scan the resident text shards, in parallel above 32 shards. There is no admission budget, no
+scan the resident text shards, in parallel above 32 shards. A shard scan runs one vectorized
+substring search (`memchr::memmem`) over the shard's text and maps each hit to its row and field,
+resuming at the next row in scope; shards with no root in scope are skipped, and a shard with
+under 3% of its rows in scope looks those rows up instead. A query that contains a recent
+selective query (typing one more letter) searches only that query's matches. FTS settlement takes
+the oldest 256 dirty roots per batch through an index, so its cost does not grow with the
+backlog. There is no admission budget, no
 trigram candidate probe and no SQL fallback; a common term over a million items is a visible
 resident scan, not a hidden slower path. Every byte of the settled text is ordinary, including an
 embedded NUL: text after it stays searchable and a query containing one matches the fields that
@@ -77,6 +78,17 @@ orders: value-keyed cursors for date, size and recently-viewed order seek their 
 cached complete order, and name, rating, random and folder-order cursors keep their pagers.
 The derived checkpoint implementation version distinguishes signed date keys from older
 clamped keys; incompatible derived checkpoints rebuild from canonical SQLite data.
+
+The renderer holds only a ~1,500-tile window, so a selection is never expanded from loaded tiles
+when it reaches beyond them. Select-all is a `query` target with exclusions. A shift-click whose
+anchor has left the window is a `range` target: spans between two roots with their view
+positions, plus roots added outside them and roots toggled off inside them. The backend reads a
+span straight from the resident order and trusts its positions only while both ends still hold
+the span's roots, otherwise it locates the two roots in the complete order. Adding a span
+(Cmd/Ctrl+Shift) first asks the backend (`items.positions`) where the earlier selection sits, and
+after every refresh the renderer moves the spans, additions and exclusions to their current
+positions, so highlights and the count match what an operation changes; a span whose end left the
+view is dropped with a notice. A shift-click inside the loaded window stays an explicit list.
 
 ### The resident library model
 
@@ -128,15 +140,117 @@ Unrelated imports, memberships, derived media facts, and folder members remain c
 does not replace them with an older library snapshot. Folder positions are merged in one pass,
 preserving the relative order of unaffected members and additions made after the original edit.
 
+Smart-folder results are stored per folder and settled incrementally. A write names what it
+changed (a tag, ratings, root text, cover facts, folders, lifecycle); only folders whose rules can
+observe that change are re-evaluated, and only over the roots the write touched, with every clause
+intersecting that set before it reads a full index. A folder's result and its cache version change
+only when its membership actually moved. `smart_settle_oracle` checks this against a fresh
+evaluation of every folder after each step of a random edit sequence.
+Results cover roots in every lifecycle; a smart-folder scope and its sidebar count intersect them
+with Active on read, as every other scope does. Trashing, restoring or accepting Inbox items
+therefore re-checks no smart folder, however many exist.
+
+Every SQLite connection sets its own page cache (64 MB for the writer, 16 MB per reader) instead
+of relying on the operating system's file cache, which differs widely between Linux, Windows and
+macOS; memory-mapped I/O is off. Indexes that only accelerate queries live in `accelerator_indexes.sql` and are created at create
+and open; adding one needs no fingerprint migration. Autocheckpoint is off: the runtime folds the
+WAL back every minute and truncates it on close.
+
+### Writes, history and background work
+
+Every canonical write goes through `Library::publish` (in `picto-library/src/mutation/`, one file
+per aggregate: tags, folders, smart folders, imports, duplicates, structure, undo). It opens the
+writer transaction, settles the delta, publishes the snapshot and records any history entry.
+
+Persistence follows the change, not the size of the thing changed. Bitmaps are stored in 64k-id
+shards and a write re-encodes only shards holding ids that changed in that bitmap (grouping
+ten roots rewrites each tag's one or two shards, not every shard the selection spans). An edit
+leaves bitmaps that hold none of its roots shared with the previous snapshot rather than
+copying them. Folder and collection orders are
+stored as 1,024-id chunks (`ordered_membership_chunk`); an append rewrites one chunk. A history
+entry for a bitmap keeps only the members it changed, and replay checks and restores only those
+members: later edits to other roots never block an undo, while a later edit to the same roots
+does. Replay re-checks only the smart folders the replayed change can affect.
+
+Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
+subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
+when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual
+hash announces nothing and a palette refreshes only the colour index. The IPC response cache for
+`items.query` and `items.mime_facets` is keyed on the query epoch, which bookkeeping does not move.
+
+Background workers (ingest, FTS, derivatives, AI tagging, subscriptions) sleep until the library
+publishes a change, with a fallback probe every 2-30 s for work that becomes ready with time alone
+(`core/src/work_wake.rs`). An idle library starts no writer transactions between probes. Imports
+publish prepared items in groups of up to 48, flushed at least every 250 ms so the grid fills
+progressively. Auto-tagging on import writes in batches outside the undo history; manual AI tagging
+stays undoable.
+
+`picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
+(`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
+never committed.
+
 Committed grid invalidations coalesce in the grid controller with one active refresh and one
 pending successor. Fast refreshes use a 40 ms delay. During sustained expensive refresh work,
 the cooldown is three times the previous refresh duration (capped at one second), allowing
 background work to progress without imposing a fixed two-second stale-view interval on edits.
 The displayed grid remains intact during refresh, and navigation retains its existing fades.
 
-## Pre-release integration seams
+## Subscriptions
 
-Cloud Sync must consume committed revisions and application operations; it must not write SQLite,
-blob files, or Roaring projections behind the core. Tutorials may observe stable navigation and
-command identifiers, but may not fork production components or synthesize host input. Both are
-release gates until their own behavior, persistence, accessibility, and packaged smoke tests pass.
+Subscriptions persist definitions, runs, source posts, source items, retries, and progress in
+SQLite. Direct site sessions are captured in a Picto-owned browser and secrets remain in the
+operating-system credential store.
+
+Every source uses one native Rust path; there is no Python runtime, gallery-dl, OF-Scraper, or
+sidecar in production or packaging:
+
+`query -> provider adapter -> shared HTTP runtime -> one exposed post -> current-post downloads ->
+canonical ingest -> settlement acknowledgement -> next post`
+
+Provider adapters (`picto-sources/src/providers/`) own only endpoint selection, bounded
+pagination and cursor decoding, response parsing, and media descriptors. The shared runtime owns
+scheduling, HTTP pacing and retries, downloads, staging, ingest, counters, and settlement. One
+provider's headers, authentication, or parsing must not affect another. The product site registry
+(`core/src/subscriptions/sites.rs`) and the native registry are tested for exact equality.
+
+### One-post settlement
+
+For each query, in order:
+
+1. Expose the next source post and record it as traversed.
+2. If it has no usable media, settle it as skipped.
+3. Download every usable file of that post (files within the post may download concurrently;
+   media of later posts is never prefetched).
+4. Ingest the post canonically, then settle it as added.
+5. Only after settlement is acknowledged, expose the next post.
+
+An adapter may fetch a bounded metadata page when its API paginates, but the session refuses to
+expose another post until the current one settles.
+
+- **Limit.** `Posts per run` caps settled posts per query per run: both added and skipped posts
+  count toward it (`SourcePostOutcome::counts_as_settled_post`). A failed or interrupted post does
+  not settle and does not advance the cursor. Partitioned feeds (for example OnlyFans) share one
+  query-level budget with independent cursors.
+- **Multi-file posts.** With **Group multi-media posts** on (the default, per query), the files of
+  one post are buffered until the post completes and ingested as one collection. With it off
+  (**Keep post media separate**), each file becomes its own standalone item. A single-file post is
+  always a standalone item. E-Hentai/ExHentai galleries are one post and always one collection.
+- **Duplicates.** Exact content hashes reuse existing media facts instead of creating another
+  standalone root.
+- **ZIP attachments** go through the shared bounded extractor and become members of the current
+  post (1 GiB archive and expanded total, 512 MiB per entry).
+- **Runs.** A subscription has at most one active run. Staging is scoped to the run and removed
+  after settlement, failure, startup recovery, or reset. Restart resumes from the last settled
+  post; stable source identity and content hashes keep a repeated post idempotent.
+
+Progress counters: posts traversed (metadata inspected), posts added (complete media set reached
+the library), posts skipped (settled without a new visible item). A post is never reported as
+added before canonical ingest succeeds.
+
+When a source breaks, follow
+[`SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](./SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).
+
+## Cloud sync
+
+Cloud sync (experimental) consumes committed revisions and application operations; it does not
+write SQLite, blob files, or Roaring projections behind the core.

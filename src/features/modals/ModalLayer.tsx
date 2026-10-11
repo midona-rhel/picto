@@ -135,7 +135,7 @@ export function ModalLayer() {
               watchPath: config.watchPath,
               enabled: config.enabled,
               subfolders: config.subfolders,
-              importStatusMode: config.importStatusMode,
+              importStatus: config.importStatus,
             });
           }
           setFolderWatch({ ...folderWatch, open: false });

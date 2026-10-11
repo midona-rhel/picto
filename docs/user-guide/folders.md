@@ -2,67 +2,79 @@
 
 [← User Guide](README.md)
 
-Folders in Picto provide a hierarchical way to organize your files. Unlike tags (which are descriptive labels), folders represent a structural grouping — like albums or categories.
+Folders group media by hand, like albums. An item can be in several folders at once. Removing an
+item from a folder, or deleting a folder, never deletes the media.
 
-## Creating Folders
+## Create folders
 
-| Action | Shortcut |
-|--------|----------|
-| New folder | `Ctrl+Shift+N` |
-| New subfolder | `Alt+N` (when a folder is selected) |
+| Action | How |
+|---|---|
+| New folder | `Mod+Shift+N`, or **+** next to **Folders** in the sidebar |
+| New subfolder | Select a folder, press `Alt+N`, or right-click it → **New Subfolder** |
+| Folder from a selection | Right-click selected items → **New Folder with Selection** |
 
-Enter a name for the folder. It appears in the sidebar under the Folders section.
+Folders nest up to **8 levels** deep. When you import or watch a disk folder that is deeper than
+the space left, Picto keeps as many levels as fit and puts files from deeper folders into the
+nearest kept folder. No files are skipped because of depth.
 
-## Adding Files to Folders
+## Add and remove items
 
-| Method | How |
-|--------|-----|
-| Folder picker | Select files, press `F` to open the folder picker |
-| Quick add | `Shift+D` adds selected files to the last-used folder |
-| Drag and drop | Drag files from the grid onto a folder in the sidebar |
-| Context menu | Right-click → Add to Folder |
+| Action | How |
+|---|---|
+| Add to folders | Select items, press `F` (or `Mod+Shift+J`), pick folders |
+| Add to the last folder you used | Right-click → **Add to "folder name"** |
+| Drag | Drag items from the grid onto a folder in the sidebar |
+| Remove from the current folder | Inside the folder, press `Mod+Shift+Backspace` or right-click → **Remove from Folder** |
 
-A file can belong to multiple folders simultaneously.
+## Manage folders
 
-## Removing Files from Folders
+Right-click a folder in the sidebar:
 
-Select files and press `Ctrl+Shift+Backspace`, or right-click → **Remove from Folder**. This only removes the folder association — the file itself is not deleted.
+- **Add to Quick Access**, **Rename**, **Move to…**, **Duplicate**
+- **Set Auto Tags…** — see [Auto-tags](#auto-tags)
+- **Import Folder Here…**, **Attach Watched Folder…**, **Remove Watched Folder**
+- **Sort Folders** — sorts the folder tree A–Z or Z–A, for this level or this level and all
+  descendants
+- **Sort by** — reorders the items inside the folder by Name, Import Date, Date Created, Date
+  Modified, Size or Notes
+- **Expand/Collapse Folder**, **Expand/Collapse All Folders**
+- **Change Icon** and a color picker
+- **Export** and **Delete** (asks for confirmation; deletes the folder and its subfolders, not the
+  media)
 
-## Folder Management
+You can also drag folders in the sidebar to reorder or nest them. Double-clicking a folder renames
+it or expands it, depending on **Settings → Sidebar → Double Click**.
 
-Right-click a folder in the sidebar for the context menu:
+Inside a folder, right-click an item → **More → Set as Folder Cover** to choose the folder's cover.
 
-- **Rename** — Change the folder name
-- **Delete** — Remove the folder (files inside are not deleted)
-- **Set Icon** — Choose a custom icon
-- **Set Color** — Set a color label for visual distinction
-- **Create Subfolder** — Add a child folder
-- **Sort By** — Change the sort order for files in this folder
+## Auto-tags
 
-## Nested Folders
+A folder can add tags to every item that enters it.
 
-Folders can be nested to any depth. Click the expand arrow to reveal subfolders. Drag folders in the sidebar to rearrange or nest them.
+1. Right-click the folder → **Set Auto Tags…**, or select folders and press `Mod+Shift+R`.
+2. Add the tags.
 
-## Watched Folders
+From then on, items added to the folder (by hand, by import or by a watched folder) get those tags.
+Items already in the folder are not changed.
 
-A watched folder monitors a directory on your filesystem and automatically imports new files that appear in it.
+## Watched folders
 
-### Setting Up a Watched Folder
+A watched folder imports new files that appear in a folder on disk.
 
-1. Right-click a folder in the sidebar
-2. Choose **Attach Watched Folder**
-3. Select a directory on disk to watch
-4. Configure options:
-   - **Import status** — Inbox, Active, or use global default
-   - **Watch subfolders** — Monitor subdirectories too
-   - **Import existing** — Import files already in the directory
+1. Right-click a Picto folder → **Attach Watched Folder…**.
+2. Click **Browse** and choose the disk folder.
+3. Set the options and click **Save**.
 
-A small eye icon appears on watched folders in the sidebar.
+| Option | Meaning |
+|---|---|
+| Enable Watch | Turn off to stop watching |
+| Watch Subfolders | Also import from subfolders, recreating them as Picto subfolders |
+| Import Status | **Inbox** (default) or **Active**: where new files from this folder land |
 
-### Removing a Watch
+Picto checks watched folders about every 30 seconds while the library is open, and waits until a
+file has finished copying. A file is imported once; if it later changes on disk (size or
+modification time), it is imported again. ZIP files in a watched folder are ignored.
 
-Right-click the folder → **Remove Watched Folder**. This stops monitoring but does not delete already-imported files.
+To stop watching, right-click the folder → **Remove Watched Folder**. Media already imported stays.
 
-## Folder Covers
-
-Folders display a thumbnail cover in the sidebar using the first image in the folder. This updates automatically as you add or remove files.
+**Settings → Auto-Import** turns all watched folders on or off at once.

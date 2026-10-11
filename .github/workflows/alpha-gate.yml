@@ -23,93 +23,11 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  verify-renderer:
-    name: verify:renderer
+  verify:
+    name: verify
     # Verify and package the release branch once. Tags only publish its artifacts.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Check localization
-        run: npm run check:localization
-
-      - name: Typecheck renderer
-        run: npx tsc -p tsconfig.json --noEmit
-
-      - name: Test renderer
-        run: npm run test -- --run
-
-      - name: Check command parity
-        run: npm run check:command-parity
-
-  verify-rust:
-    name: verify:rust
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # release-audit is a Node script, but this job does not install the
-      # renderer dependency tree.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: 1.98.0
-          components: clippy
-
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          workspaces: . -> target
-          cache-on-failure: true
-
-      # The workspace crates dominate clean CI builds. The target cache keeps
-      # Cargo's local dependency graph; sccache reuses unchanged compilation
-      # units when a source change prevents an exact target-cache hit.
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-
-      - name: Install Rust system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libssl-dev \
-            libclang-dev
-
-      - name: Download FFmpeg test binaries
-        run: bash scripts/download-ffmpeg.sh
-
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --manifest-path core/Cargo.toml --locked
-
-      - name: Audit release inputs
-        run: node scripts/release-audit.mjs
-
-      # Keep strict lint ahead of the long Rust test suite. A new compiler lint
-      # should fail one named step immediately, not surface after every test has run.
-      - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Test Rust workspace
-        run: cargo test --workspace --lib --tests --locked --quiet
+    uses: ./.github/workflows/verify.yml
 
   alpha-package:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})

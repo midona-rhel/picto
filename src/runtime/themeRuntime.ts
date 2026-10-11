@@ -103,10 +103,6 @@ export function previewTheme(value: unknown, publish = true): PictoTheme {
   return requestedTheme;
 }
 
-export function getRequestedTheme(): PictoTheme {
-  return requestedTheme;
-}
-
 /** One renderer-local owner; repeated starts replace the previous subscriptions. */
 export function startThemeRuntime(): () => void {
   publishPlatform();

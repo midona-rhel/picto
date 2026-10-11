@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Picto is broken or behaves unexpectedly.
+labels: ["type: bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search existing issues first. Do not paste
+        cookies, API keys, or private URLs — remove them from logs before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Picto version
+      description: Settings → About.
+      placeholder: 0.6.15-alpha
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Browsing / grid
+        - Viewer
+        - Import / watched folders
+        - Subscriptions / sources
+        - Tags / folders / smart folders
+        - Duplicates
+        - AI tagging
+        - Cloud sync
+        - Updates / install
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: library
+    attributes:
+      label: Library size
+      description: Roughly how many items, and whether it uses cloud sync.
+      placeholder: ~40k items, no sync
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Optional. Strip credentials and private URLs first.
+      render: text

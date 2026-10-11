@@ -214,6 +214,20 @@ pub fn replace(
     Ok(changed)
 }
 
+/// Persist `bitmap` when the caller knows which ids changed: only the shards
+/// holding those ids are encoded, hashed and compared.
+pub fn replace_changed(
+    transaction: &Transaction<'_>,
+    revision: u64,
+    key: BitmapKey,
+    bitmap: &RoaringBitmap,
+    changed: &RoaringBitmap,
+) -> Result<usize> {
+    let mut high_bits = changed.iter().map(|id| (id >> 16) as u16).collect::<Vec<_>>();
+    high_bits.dedup();
+    replace_shards(transaction, revision, key, bitmap, high_bits)
+}
+
 pub fn replace_shards(
     transaction: &Transaction<'_>,
     revision: u64,
@@ -275,6 +289,31 @@ pub fn revision(transaction: &Transaction<'_>, key: BitmapKey) -> Result<Option<
         .optional()
         .map(|value| value.flatten().map(|revision| revision as u64))
         .map_err(Into::into)
+}
+
+/// Membership of a small id set, checked against long id lists such as folder
+/// orders: a dense bitset up to the largest id, so each check is one load
+/// instead of a roaring container search.
+pub(crate) struct DenseIds {
+    words: Vec<u64>,
+}
+
+impl DenseIds {
+    pub(crate) fn new(ids: &RoaringBitmap) -> Self {
+        let len = ids.max().map_or(0, |max| (max as usize >> 6) + 1);
+        let mut words = vec![0u64; len];
+        for id in ids {
+            words[id as usize >> 6] |= 1 << (id & 63);
+        }
+        Self { words }
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, id: u32) -> bool {
+        self.words
+            .get(id as usize >> 6)
+            .is_some_and(|word| word >> (id & 63) & 1 == 1)
+    }
 }
 
 #[cfg(test)]

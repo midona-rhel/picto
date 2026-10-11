@@ -1471,5 +1471,14 @@
   "Opening your library": "Avataan kirjastoasi",
   "Updating your library database": "Päivitetään kirjastosi tietokantaa",
   "Loading your library": "Ladataan kirjastoasi",
-  "Starting library services": "Käynnistetään kirjastopalveluita"
+  "Starting library services": "Käynnistetään kirjastopalveluita",
+  "Library deleted.": "Kirjasto poistettu.",
+  "Move…": "Siirrä…",
+  "Locate…": "Etsi…",
+  "Delete…": "Poista…",
+  "Part of the selection left this view": "Osa valinnasta poistui tästä näkymästä",
+  "A selected range lost its first or last item, so that range is no longer selected.": "Valittu alue menetti ensimmäisen tai viimeisen kohteensa, joten aluetta ei ole enää valittu.",
+  "Could not preview smart folder rules": "Älykansion sääntöjen esikatselu epäonnistui",
+  "Could not restore smart folder rules": "Älykansion sääntöjä ei voitu palauttaa",
+  "Could not save smart folder": "Älykansiota ei voitu tallentaa"
 }

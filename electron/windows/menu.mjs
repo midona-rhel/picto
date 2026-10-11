@@ -146,7 +146,7 @@ export function createMenuManager({
         submenu: [
           {
             label: 'Library Manager…',
-            accelerator: 'CmdOrCtrl+L',
+            accelerator: 'CmdOrCtrl+Shift+L', // Mod+L belongs to the log window
             click: () => openLibraryManager(),
           },
           { type: 'separator' },
@@ -310,7 +310,7 @@ export function createMenuManager({
           { type: 'separator' },
           {
             label: 'Remove from Folder',
-            accelerator: accelerator('file.removeFromFolder', 'CmdOrCtrl+Shift+Backspace'),
+            accelerator: inFolder && !inTrash ? accelerator('file.removeFromFolder', 'CmdOrCtrl+Backspace') : undefined,
             enabled: inFolder && hasSelection,
             click: selectionAction('remove-from-folder'),
           },
@@ -329,7 +329,7 @@ export function createMenuManager({
             },
           ] : [{
             label: commandContext.selectionCount > 1 ? `Move ${commandContext.selectionCount} to Trash` : 'Move to Trash',
-            accelerator: accelerator('file.delete', 'CmdOrCtrl+Backspace'),
+            accelerator: inFolder ? undefined : accelerator('file.delete', 'CmdOrCtrl+Backspace'),
             enabled: hasSelection,
             click: selectionAction('move-to-trash'),
           }]),

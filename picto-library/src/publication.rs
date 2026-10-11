@@ -78,6 +78,12 @@ impl PublicationCoordinator {
         let mut pending = self.pending.lock();
         pending.revision = pending.revision.max(receipt.revision);
         pending.resources.extend(receipt.resources.iter().cloned());
+        // Item ids only qualify `library` (listeners never read them for any
+        // other resource). A bookkeeping receipt names no items, and must not
+        // turn a precise frame into a broad one.
+        if !receipt.resources.iter().any(|resource| resource == "library") {
+            return;
+        }
         if receipt.item_ids.is_empty() {
             pending.broad = true;
             pending.item_ids.clear();

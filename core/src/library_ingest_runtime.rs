@@ -28,6 +28,11 @@ pub fn recover(application: &LibraryApplication) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// A job whose batch keeps failing is retried this many times in all.
+const MAX_INGEST_ATTEMPTS: u32 = 5;
+/// How long a released job waits before it is claimed again.
+const RELEASED_JOB_RETRY_DELAY: chrono::Duration = chrono::Duration::seconds(10);
+
 pub fn run_batch(
     application: &LibraryApplication,
     limit: usize,
@@ -44,25 +49,52 @@ pub fn run_batch(
     if claimed.is_empty() {
         return Ok(report);
     }
+    let claimed_ids = claimed.iter().map(|job| job.ingest_job_id).collect::<Vec<_>>();
+    let settled = settle_claimed(application, claimed, &now, &mut report);
+    if let Err(error) = &settled {
+        // The worker owns every claim until it settles it. Whatever this batch
+        // left running goes back to the queue; replay is idempotent because
+        // ingest finds an already-imported item by its stable key.
+        let retry_at = (chrono::Utc::now() + RELEASED_JOB_RETRY_DELAY).to_rfc3339();
+        if let Err(release) = application.library().release_ingest_jobs(
+            &claimed_ids,
+            error,
+            &chrono::Utc::now().to_rfc3339(),
+            &retry_at,
+            MAX_INGEST_ATTEMPTS,
+        ) {
+            tracing::warn!(%release, "Could not release ingest claims; they recover on next open");
+        }
+    }
+    settled.map(|()| report)
+}
+
+fn settle_claimed(
+    application: &LibraryApplication,
+    claimed: Vec<ClaimedIngestJob>,
+    now: &str,
+    report: &mut CanonicalIngestRunReport,
+) -> Result<(), String> {
+    let now = now.to_owned();
     let auto_tag = application
         .application_settings()?
         .value
         .get("aiTaggerAutoOnImport")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    // Prepared single items are written together: one publication, one
+    // source reconcile and one completion per group instead of three writes
+    // per item. A group is flushed when it is full or has waited long enough
+    // that the first items should already be visible.
+    let mut pending = PendingItems::default();
     for mut job in claimed {
         match prepare_job(application, &mut job) {
             Ok(cleanup) => match job.payload {
                 PreparedIngestPayload::Item(input) => {
-                    settle_item(
-                        application,
-                        job.ingest_job_id,
-                        input,
-                        cleanup,
-                        &now,
-                        auto_tag,
-                        &mut report,
-                    )?;
+                    pending.push(job.ingest_job_id, input, cleanup);
+                    if pending.should_flush() {
+                        pending.flush(application, &now, auto_tag, report)?;
+                    }
                 }
                 PreparedIngestPayload::Collection(input) => {
                     settle_collection(
@@ -72,7 +104,7 @@ pub fn run_batch(
                         cleanup,
                         &now,
                         auto_tag,
-                        &mut report,
+                        report,
                     )?;
                 }
             },
@@ -86,8 +118,80 @@ pub fn run_batch(
             }
         }
     }
+    pending.flush(application, &now, auto_tag, report)?;
     crate::library_subscription_state::settle_ingest_runs(application, &now)?;
-    Ok(report)
+    Ok(())
+}
+
+const PENDING_FLUSH_AFTER: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[derive(Default)]
+struct PendingItems {
+    jobs: Vec<i64>,
+    inputs: Vec<PreparedImport>,
+    cleanup: Vec<Vec<PathBuf>>,
+    since: Option<std::time::Instant>,
+}
+
+impl PendingItems {
+    fn push(&mut self, job_id: i64, input: PreparedImport, cleanup: Vec<PathBuf>) {
+        self.since.get_or_insert_with(std::time::Instant::now);
+        self.jobs.push(job_id);
+        self.inputs.push(input);
+        self.cleanup.push(cleanup);
+    }
+
+    fn should_flush(&self) -> bool {
+        self.jobs.len() >= picto_library::ingest::MAX_INGEST_BATCH
+            || self
+                .since
+                .is_some_and(|since| since.elapsed() >= PENDING_FLUSH_AFTER)
+    }
+
+    fn flush(
+        &mut self,
+        application: &LibraryApplication,
+        now: &str,
+        auto_tag: bool,
+        report: &mut CanonicalIngestRunReport,
+    ) -> Result<(), String> {
+        let jobs = std::mem::take(&mut self.jobs);
+        let inputs = std::mem::take(&mut self.inputs);
+        let cleanup = std::mem::take(&mut self.cleanup);
+        self.since = None;
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        let ingested = if auto_tag {
+            application.library().ingest_batch_with_auto_tags(&inputs)
+        } else {
+            application.library().ingest_batch(&inputs)
+        };
+        let Ok(outputs) = ingested else {
+            // One bad item fails the whole group; settle each on its own so
+            // the rest still import and the bad one gets its own error.
+            for ((job_id, input), cleanup) in jobs.into_iter().zip(inputs).zip(cleanup) {
+                settle_item(application, job_id, input, cleanup, now, auto_tag, report)?;
+            }
+            return Ok(());
+        };
+        let placed = inputs
+            .iter()
+            .zip(&outputs)
+            .map(|(input, (root_id, _))| (std::slice::from_ref(input), *root_id))
+            .collect::<Vec<_>>();
+        reconcile_ingested_sources(application, &placed, now)?;
+        application
+            .library()
+            .complete_ingest_jobs(&jobs, now)
+            .map_err(|error| error.to_string())?;
+        for ((root_id, _), cleanup) in outputs.into_iter().zip(cleanup) {
+            report.ingested += 1;
+            report.root_ids.push(root_id);
+            report.cleanup_failures += cleanup_sources(cleanup);
+        }
+        Ok(())
+    }
 }
 
 fn settle_item(
@@ -109,7 +213,7 @@ fn settle_item(
     };
     match ingested {
         Ok((root_id, _)) => {
-            reconcile_ingested_sources(application, std::slice::from_ref(&input), root_id, now)?;
+            reconcile_ingested_sources(application, &[(std::slice::from_ref(&input), root_id)], now)?;
             application
                 .library()
                 .complete_ingest_jobs(&[job_id], now)
@@ -160,7 +264,7 @@ fn settle_collection(
     };
     match ingested {
         Ok((root_id, _)) => {
-            reconcile_ingested_sources(application, &input.members, root_id, now)?;
+            reconcile_ingested_sources(application, &[(&input.members, root_id)], now)?;
             application
                 .library()
                 .complete_ingest_jobs(&[job_id], now)
@@ -285,20 +389,21 @@ fn mark_failed_sources(
 
 fn reconcile_ingested_sources(
     application: &LibraryApplication,
-    inputs: &[PreparedImport],
-    root_id: RootId,
+    placed: &[(&[PreparedImport], RootId)],
     now: &str,
 ) -> Result<(), String> {
-    let sources = inputs
+    let sources = placed
         .iter()
-        .filter_map(|input| input.source_identity.as_ref())
-        .filter_map(|source| {
+        .flat_map(|(inputs, root_id)| inputs.iter().map(move |input| (input, *root_id)))
+        .filter_map(|(input, root_id)| Some((input.source_identity.as_ref()?, root_id)))
+        .filter_map(|(source, root_id)| {
             let (site_id, post_key) = source.source_key.split_once(':')?;
             Some((
                 site_id.to_owned(),
                 post_key.to_owned(),
                 source.source_key.clone(),
                 source.source_item_key.clone(),
+                root_id,
             ))
         })
         .collect::<Vec<_>>();
@@ -311,10 +416,13 @@ fn reconcile_ingested_sources(
         .auxiliary_write_if_changed(
             picto_library::database::WorkPriority::CanonicalIngest,
             ["subscriptions".to_owned(), "tasks".to_owned()],
-            [root_id],
+            // Source bookkeeping changes no library item; listing the root would
+            // invalidate SQL-derived query results for nothing.
+            std::iter::empty(),
             |transaction, _| {
                 let mut changed = 0;
-                for (site_id, post_key, source_key, item_key) in &sources {
+                for (site_id, post_key, source_key, item_key, root_id) in &sources {
+                    let root_id = *root_id;
                     let mut statement = transaction.prepare_cached(
                         "SELECT media_id FROM source_provenance
                          WHERE source_key = ?1 AND source_item_key = ?2
@@ -557,7 +665,87 @@ mod tests {
     }
 
     #[test]
-    fn standalone_jobs_settle_as_individual_publications() {
+    fn a_failed_batch_returns_its_claims_and_the_replay_imports_each_item_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let library = application.library();
+        for (index, color) in [[10, 20, 30, 255], [40, 50, 60, 255]].into_iter().enumerate() {
+            let path = directory.path().join(format!("claim-{index}.png"));
+            let input = image_import(&path, &format!("claim-root-{index}"), color);
+            library
+                .enqueue_ingest_job(
+                    &PreparedIngestJob {
+                        job_key: format!("manual:claim-root-{index}"),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(input),
+                    },
+                    "2026-08-28T12:00:00Z",
+                )
+                .unwrap();
+        }
+        let maintenance = picto_library::database::WorkPriority::Maintenance;
+        // Fail the acknowledgement after the items are already imported.
+        library
+            .database()
+            .maintenance_write(maintenance, |transaction| {
+                transaction.execute_batch(
+                    "CREATE TEMP TRIGGER fail_completion BEFORE UPDATE OF status ON ingest_job
+                     WHEN NEW.status = 'succeeded'
+                     BEGIN SELECT RAISE(ABORT, 'injected completion failure'); END;",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(run_batch(&application, 64).is_err());
+
+        let statuses = || {
+            library
+                .auxiliary_read(maintenance, |connection| {
+                    let mut statement = connection.prepare(
+                        "SELECT status, available_at > ?1 FROM ingest_job ORDER BY ingest_job_id",
+                    )?;
+                    let rows = statement
+                        .query_map([chrono::Utc::now().to_rfc3339()], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(rows)
+                })
+                .unwrap()
+        };
+        // Nothing is stranded as running; both wait out the retry delay.
+        assert_eq!(statuses(), vec![("pending".into(), true), ("pending".into(), true)]);
+        assert_eq!(run_batch(&application, 64).unwrap().claimed, 0);
+
+        library
+            .database()
+            .maintenance_write(maintenance, |transaction| {
+                transaction.execute_batch("DROP TRIGGER temp.fail_completion;")?;
+                Ok(())
+            })
+            .unwrap();
+        library
+            .auxiliary_write(maintenance, ["ingest".to_owned()], [], |transaction, _| {
+                transaction.execute("UPDATE ingest_job SET available_at = '2026-08-28T12:00:00Z'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let replay = run_batch(&application, 64).unwrap();
+        assert_eq!(replay.claimed, 2);
+        assert_eq!(statuses(), vec![("succeeded".into(), false), ("succeeded".into(), false)]);
+        let roots = library
+            .auxiliary_read(maintenance, |connection| {
+                Ok(connection.query_row("SELECT COUNT(*) FROM library_item WHERE item_kind = 1", [], |row| row.get::<_, i64>(0))?)
+            })
+            .unwrap();
+        assert_eq!(roots, 2);
+    }
+
+    #[test]
+    fn standalone_jobs_prepared_together_publish_together() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         for (index, color) in [[10, 20, 30, 255], [40, 50, 60, 255], [70, 80, 90, 255]]
@@ -601,7 +789,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(journal, (3, 3));
+        // Three small files are prepared well inside one flush window, so they
+        // land in one publication. Larger imports still appear progressively,
+        // one group at least every PENDING_FLUSH_AFTER.
+        assert_eq!(journal, (1, 1));
     }
 
     #[test]

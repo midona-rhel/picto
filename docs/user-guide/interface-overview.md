@@ -2,85 +2,65 @@
 
 [← User Guide](README.md)
 
-Picto's interface is divided into four main areas: the sidebar, the grid, the inspector panel, and the toolbar.
+The main window has a title bar, a sidebar, the grid, and the inspector.
+
+## Title bar
+
+| Control | What it does |
+|---------|--------------|
+| Application menu (☰, Windows and Linux) | Opens the Library, File, Edit, Organize, View, Window, and Help menus. On macOS these are in the system menu bar. |
+| Settings (gear) | Opens Settings (`Mod+,`). |
+| Toggle Panels | Shows or hides the sidebar and inspector (`Tab`). Right-click it to toggle them one at a time. |
+| Back / Forward | Moves through the views you visited (`Alt+Left` / `Alt+Right`, or `Mod+[` / `Mod+]`). |
+| View title | The current view. For folders and smart folders it shows the full path. |
+| Thumbnail size slider | Makes tiles smaller or larger. |
+| View options | Layout, sort order, and tile display. See [Browsing](browsing-and-navigation.md#layout-and-sorting). |
+| Filter library | Shows the filter bar. A badge shows how many filters are active. |
+| Search | Searches the current view (`Mod+F`). |
+
+When a viewer is open, the title bar shows viewer controls instead (zoom, previous/next, back).
 
 ## Sidebar
 
-The sidebar on the left provides navigation to all major views and organizational structures.
+- **Library switcher** (top): the open library. Click it to search your libraries, switch, or open
+  **Create Library…**, **Open Library…**, and **Library Manager…**.
+- **Views**: All, Inbox, Recently Viewed, Uncategorized, Untagged, Tags, Random, Subscriptions,
+  Duplicates, Trash. See [Browsing](browsing-and-navigation.md#views).
+- **Quick Access**: folders and smart folders you pinned.
+- **Smart Folders** and **Folders**: see [Smart Folders](smart-folders.md) and [Folders](folders.md).
+- **Filter** box: narrows the folder and smart-folder trees by name.
 
-### System Views
-
-- **All Active** — All accepted images and videos with active status (your library)
-- **Inbox** — Newly imported files awaiting review (see [Inbox Workflow](inbox-workflow.md))
-- **Uncategorized** — Active files not assigned to any folder
-- **Untagged** — Active files with no tags
-- **Trash** — Deleted files (can be restored or permanently removed)
-- **Duplicates** — Duplicate detection and resolution (see [Duplicates](duplicates.md))
-
-Each view shows a count badge with the number of files in that scope.
-
-### Folders
-
-A hierarchical folder tree for organizing files. Folders can be nested, reordered via drag-and-drop, and customized with icons and colors. See [Folders](folders.md).
-
-### Smart Folders
-
-Dynamic folders that automatically collect files matching tag-based rules. See [Smart Folders](smart-folders.md).
-
-### Tags
-
-Displays the total tag count. Click to open the tag management view. See [Tags](tags.md).
-
-### Sidebar Job Status
-
-The bottom of the sidebar shows the progress of running tasks — subscription downloads, duplicate scans, and other background operations.
+Right-click a view to choose which views and sections the sidebar shows. **All** and **Trash** are
+always shown. Drag the sidebar edge to resize it. `Mod+Alt+1` hides or shows it.
 
 ## Grid
 
-The main content area displays your files as thumbnails. It supports three layout modes:
+Shows the items of the current view. Click to select, double-click or press `Enter` to open, press
+`Space` for Quick Look, and right-click for actions. See
+[Browsing and Navigation](browsing-and-navigation.md) and
+[Viewing Images and Video](viewing-images-and-video.md).
 
-- **Waterfall** (`Alt+2`) — Masonry layout with variable row heights (default)
-- **Grid** (`Alt+1`) — Fixed-size uniform grid
-- **Justified** (`Alt+3`) — Rows justified to fill the width
+## Inspector
 
-The grid supports:
-- Single click to select, `Ctrl`+click to toggle, `Shift`+click for range, click-drag for marquee selection
-- Arrow keys (or WASD) to navigate between thumbnails
-- Double-click or `Enter` to open detail view
-- Right-click for context menu with all file actions
-- Thumbnail size adjustment via toolbar controls
+Shows the selected item, or a summary when several items are selected:
 
-See [Browsing and Navigation](browsing-and-navigation.md) for full details.
+- Preview and color palette. Click a color to filter the view by it.
+- **Name**, **Notes**, and source URLs (editable).
+- **Folders** and **Tags** the item belongs to.
+- **Properties**: rating (click the stars, or press `0`–`5` in the grid) and file facts.
+- **Details**: extra metadata when available.
 
-## Inspector Panel
+The pin button at the top of the inspector keeps it on the current item while you select others.
+Drag its edge to resize it (260–550 px). `Mod+Alt+2` hides or shows it.
 
-The right panel shows metadata for the currently selected file(s):
+## Native menus
 
-- **Properties** — File name, size, dimensions, format, duration (video)
-- **Rating** — 0-5 stars (click or press `0`-`5`)
-- **Tags** — View, add, and remove tags with namespace color coding
-- **Folders** — Which folders contain this file
-- **Notes** — Free-text notes (hover to expand editor)
-- **Source URLs** — Clickable links to original sources
-- **Color Palette** — Dominant colors extracted from the image
+| Menu | Contents |
+|------|----------|
+| Library | Library Manager…, New Library…, Open Library…, Recent Libraries, Subscriptions… (`Mod+Shift+S`) |
+| File | New Folder, New Smart Folder, Import Files…, Import Folder…, Import Picto Pack…, Export Originals…, Export As…, Export as Picto Pack…, Check for Updates… |
+| Edit | Rename / Batch Rename…, Undo, Redo, copy commands, Regenerate Thumbnail, Select All, Deselect All, Remove from Folder, Move to Trash (or Restore / Delete Permanently in Trash) |
+| Organize | Accept / Reject (in Inbox), Add Tags…, Add to Folder…, Auto Tag…, Set Rating, Tags |
+| View | Open with Default App, Reveal in Finder / Show in Explorer, Open in New Window, All Images, Inbox, Untagged, Trash, Duplicates, Log Window |
 
-The inspector width is resizable (200-600px). Toggle it with `Ctrl+Alt+2`.
-
-## Toolbar
-
-The top toolbar provides:
-
-- **Back/Forward** — Navigate through view history (`Alt+Left/Right`)
-- **Search** — Full-text search across file metadata (`Ctrl+F`)
-- **Thumbnail size** — Increase/decrease tile size
-- **View mode** — Switch between Grid, Waterfall, and Justified layouts
-- **Sort** — Choose sort field and order (Date Added, File Size, Name, Resolution, Rating)
-- **Filter** — Toggle the filter bar for rating, MIME type, and color filters
-
-## Window Controls
-
-On Windows and Linux, the custom titlebar includes minimize, maximize, and close buttons. On macOS, native traffic light buttons are used.
-
-## Keyboard-Driven Workflow
-
-Nearly every action in Picto has a keyboard shortcut. Press `Ctrl+K` to open the command palette, or see the [complete shortcut reference](keyboard-shortcuts.md).
+The full, current key list is in **Settings → Shortcuts** (see [Settings](settings.md)).

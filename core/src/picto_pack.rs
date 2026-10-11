@@ -222,7 +222,12 @@ pub fn import(
         let worker = std::thread::Builder::new()
             .name("picto-pack-import".into())
             .stack_size(IMPORT_STACK_BYTES)
-            .spawn_scoped(scope, || import_on_current_thread(application, request))
+            .spawn_scoped(scope, || {
+                application
+                    .library()
+                    .history()
+                    .without_recording(|| import_on_current_thread(application, request))
+            })
             .map_err(|error| format!("Could not start Picto Pack import: {error}"))?;
         worker
             .join()
@@ -257,6 +262,7 @@ fn import_on_current_thread(
     let folder_ids = import_folders(application, &portable_folders)?;
     let mut imported_by_key = HashMap::<String, RootId>::new();
     let mut imported_media = 0;
+    let mut pending = Vec::<(&PackRoot, PreparedImport)>::new();
     for root in &manifest.roots {
         let folders = root
             .folder_keys
@@ -300,14 +306,21 @@ fn import_on_current_thread(
             });
             imported_media += 1;
         }
-        let (root_id, _) = match root.kind {
-            RootKind::Media => application.library().ingest(
-                members
-                    .first()
-                    .ok_or_else(|| "Media root has no media".to_string())?,
-            ),
+        match root.kind {
+            // Single-media roots are ingested together, one publication per
+            // batch instead of one per item.
+            RootKind::Media => {
+                let member = members
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "Media root has no media".to_string())?;
+                pending.push((root, member));
+                if pending.len() == picto_library::ingest::MAX_INGEST_BATCH {
+                    ingest_pack_media(application, &mut pending, &mut imported_by_key)?;
+                }
+            }
             RootKind::Collection => {
-                application
+                let (root_id, _) = application
                     .library()
                     .ingest_collection(&PreparedCollectionImport {
                         members,
@@ -316,12 +329,13 @@ fn import_on_current_thread(
                         name: Some(root.name.clone()),
                         modified_at_ms: root.modified_at_ms,
                     })
+                    .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
+                restore_root_metadata(application, root_id, root)?;
+                imported_by_key.insert(root.stable_key.clone(), root_id);
             }
         }
-        .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
-        restore_root_metadata(application, root_id, root)?;
-        imported_by_key.insert(root.stable_key.clone(), root_id);
     }
+    ingest_pack_media(application, &mut pending, &mut imported_by_key)?;
     restore_folder_metadata(
         application,
         &portable_folders,
@@ -688,39 +702,87 @@ fn import_folders(
     Ok(ids)
 }
 
+fn ingest_pack_media(
+    application: &LibraryApplication,
+    pending: &mut Vec<(&PackRoot, PreparedImport)>,
+    imported_by_key: &mut HashMap<String, RootId>,
+) -> Result<(), String> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let batch = std::mem::take(pending);
+    let inputs = batch
+        .iter()
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
+    let outputs = application
+        .library()
+        .ingest_batch(&inputs)
+        .map_err(|error| format!("Could not ingest Picto Pack item: {error}"))?;
+    for ((root, _), (root_id, _)) in batch.into_iter().zip(outputs) {
+        restore_root_metadata(application, root_id, root)?;
+        imported_by_key.insert(root.stable_key.clone(), root_id);
+    }
+    Ok(())
+}
+
+/// Make the library root match the pack. A fresh import already carries every
+/// field, so this normally writes nothing; it only corrects roots that
+/// existed before the import, one write per field that actually differs.
 fn restore_root_metadata(
     application: &LibraryApplication,
     root_id: RootId,
     root: &PackRoot,
 ) -> Result<(), String> {
+    let details = application
+        .library()
+        .details(root_id)
+        .map_err(|error| error.to_string())?;
     let target = SelectionTarget::Explicit {
         root_ids: vec![root_id],
     };
-    application
-        .library()
-        .rename_root(root_id, &root.name, root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_notes(&target, root.notes.clone(), root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_source_urls(&target, root.source_urls.clone(), root.modified_at_ms)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_rating(&target, root.rating)
-        .map_err(|error| error.to_string())?;
-    application
-        .library()
-        .set_lifecycle(&target, root.lifecycle)
-        .map_err(|error| error.to_string())?;
-    for tag in &root.tags {
+    if details.root.name != root.name {
         application
             .library()
-            .add_tag(&target, tag)
+            .rename_root(root_id, &root.name, root.modified_at_ms)
             .map_err(|error| error.to_string())?;
+    }
+    if details.root.notes != root.notes {
+        application
+            .library()
+            .set_notes(&target, root.notes.clone(), root.modified_at_ms)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.root.source_urls != root.source_urls {
+        application
+            .library()
+            .set_source_urls(&target, root.source_urls.clone(), root.modified_at_ms)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.rating != root.rating {
+        application
+            .library()
+            .set_rating(&target, root.rating)
+            .map_err(|error| error.to_string())?;
+    }
+    if details.lifecycle != root.lifecycle {
+        application
+            .library()
+            .set_lifecycle(&target, root.lifecycle)
+            .map_err(|error| error.to_string())?;
+    }
+    let snapshot = application.library().projections().snapshot();
+    for tag in &root.tags {
+        let present = snapshot
+            .tag_ids_by_name
+            .get(tag)
+            .is_some_and(|tag_id| details.tag_ids.contains(tag_id));
+        if !present {
+            application
+                .library()
+                .add_tag(&target, tag)
+                .map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -1218,5 +1280,81 @@ mod tests {
             .smart_folders()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn reimport_restores_metadata_without_changing_session_history() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = LibraryApplication::create(temporary.path().join("source.library")).unwrap();
+        let destination =
+            LibraryApplication::create(temporary.path().join("destination.library")).unwrap();
+        let (folder_id, _) = source.library().create_folder("Pack", None).unwrap();
+        let input = prepared(&source, "portable-item", "One", b"one-original", folder_id);
+        let (source_root, _) = source.library().ingest(&input).unwrap();
+        let pack = temporary.path().join("history.picto-pack");
+        export(
+            &source,
+            &PictoPackExportRequest {
+                source: PictoPackSource::Items {
+                    target: SelectionTarget::Explicit {
+                        root_ids: vec![source_root],
+                    },
+                },
+                output_path: pack.clone(),
+            },
+        )
+        .unwrap();
+        import(&destination, &PictoPackImportRequest { path: pack.clone() }).unwrap();
+
+        let destination_root = destination
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT local_id FROM library_item WHERE stable_key = ?1",
+                            ["portable-item"],
+                            |row| row.get::<_, u32>(0).map(RootId),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        let target = SelectionTarget::Explicit {
+            root_ids: vec![destination_root],
+        };
+        destination.library().history().clear();
+        destination
+            .library()
+            .set_notes(&target, Some("local notes".into()), 1_720_000_000_000)
+            .unwrap();
+        destination
+            .library()
+            .set_lifecycle(&target, Lifecycle::Active)
+            .unwrap();
+        destination.library().undo().unwrap();
+        let history_before = destination.library().history().state();
+        assert_eq!(
+            history_before.undo.as_ref().unwrap().command,
+            "items.patch_metadata"
+        );
+        assert_eq!(
+            history_before.redo.as_ref().unwrap().command,
+            "items.set_lifecycle"
+        );
+
+        import(&destination, &PictoPackImportRequest { path: pack }).unwrap();
+
+        assert_eq!(destination.library().history().state(), history_before);
+        assert_eq!(
+            destination
+                .library()
+                .details(destination_root)
+                .unwrap()
+                .root
+                .notes,
+            Some("notes for One".into())
+        );
     }
 }

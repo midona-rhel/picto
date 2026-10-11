@@ -51,8 +51,3 @@ export function tagGroupColor(
 export function tagGroupOrder(namespace: string): number {
   return tagGroupPresentation(namespace).order;
 }
-
-export function tagGroupTextColor(namespace: string | null | undefined, scheme: 'dark' | 'light'): string {
-  const presentation = tagGroupPresentation(namespace);
-  return scheme === 'dark' ? presentation.darkText : presentation.lightText;
-}

@@ -272,7 +272,9 @@ export function WorkspaceSurface() {
       restoreScrollPositionRef.current = position;
       setInlineScrollRestore({ token, nodeId: activeScopeNodeId, position });
       setPendingIntent(null);
-      gridController.applyIntent(pendingIntent);
+      // Ask for the window at the saved spot directly, as cross-scope Back
+      // does; asking for the top made the restore wait for a second window.
+      gridController.applyIntent({ ...pendingIntent, restoreProgress: position.progress });
       return;
     }
     restoreScrollPositionRef.current = TOP_SCROLL_POSITION;

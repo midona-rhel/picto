@@ -1,73 +1,64 @@
-# Duplicate Detection
+# Duplicates
 
 [← User Guide](README.md)
 
-Picto uses perceptual hashing to detect near-duplicate images. This finds visually similar images even if they differ in format, resolution, or compression level.
+Picto finds near-duplicate images: the same picture saved at another size, format or compression
+level. You review each pair side by side and decide what to keep.
 
-## How It Works
+## How pairs are found
 
-When files are imported, Picto computes a perceptual hash (pHash) for each image. A BK-tree data structure enables efficient similarity lookups across your entire library.
+Picto computes a perceptual hash for each static image (formats Picto can decode and preview
+itself). Videos, audio and documents are not compared.
 
-Two images are considered potential duplicates if their perceptual similarity exceeds the configured threshold (default: 95%).
+Scanning happens automatically: after new images finish their perceptual hash, Picto scans the
+library in the background. To scan by hand, open **Duplicates** in the sidebar when the queue is
+empty and click **Scan library**. A notification reports how many new pairs were found.
 
-## Scanning for Duplicates
+The similarity threshold is fixed; there is no setting for it.
 
-Navigate to **Duplicates** in the sidebar. If no pairs are shown, click **Scan for Duplicates** to analyze your library.
+## Review a pair
 
-Picto also runs periodic background scans (every 5 minutes while the duplicates view is open) to catch newly imported duplicates.
+Open **Duplicates** in the sidebar. The two candidates appear side by side, each with its keep
+button and details: name, resolution, size, format, rating, tag count, created and added dates,
+group (if the image is part of a collection) and occurrences. The footer shows the similarity
+percentage. Perceptual similarity is not pixel equality, so check the images before you merge.
 
-## Reviewing Pairs
+### Compare
 
-The duplicate review interface shows two images side by side:
+- **Zoom and pan are linked.** Scroll to zoom and drag to pan on either side; the other side follows
+  so you always see the same region.
+- **Zoom to fit** (`F`, or double-click a preview) and **Actual pixels** (`Mod+0`) are in the title
+  bar, next to the pair counter and the previous/next arrows.
+- **Show Difference** — hold the pointer over the button (or focus it) to replace both previews with
+  a difference overlay. Release to return to the images.
+- Hover **Smart merge** to highlight the file that Smart Merge would keep.
 
-- **Left image** — File A of the duplicate pair
-- **Right image** — File B of the duplicate pair
-- **Center column** — Resolution action buttons
-- **Similarity badge** — Percentage match (color-coded: red for 99%+, orange for 95%+)
+Right-click either preview to open the file in its default app or in a new window.
 
-Below each image, metadata shows: file name, dimensions, file size, format, and tag count.
+## Resolve a pair
 
-Both images are scaled to the same visual size regardless of their actual resolution. This means a lower-quality duplicate will appear pixelated compared to the higher-quality original, making quality differences immediately visible.
+| Key | Button | Result |
+|---|---|---|
+| `S` | Smart merge | Keeps the better file automatically (see below) |
+| `Z` | Keep left | Keeps the left file; the right file is removed |
+| `X` | Keep right | Keeps the right file; the left file is removed |
+| `B` | Keep both | Keeps both files; the pair leaves the queue |
+| `N` | Not duplicates | Marks them as different media; the pair leaves the queue |
+| `←` / `→` | Arrows in the title bar | Previous / next pair |
 
-## Zoom and Pan
+When you keep one file, the other file's library entries are pointed at the kept file, so their
+tags, folders, ratings and collections stay. The better of the two names is kept. The removed
+file is deleted from the library's storage once the decision can no longer be undone.
 
-Zoom into both images simultaneously to compare fine details:
+After each decision the next pair loads. Every decision can be undone with `Mod+Z`.
 
-- **Scroll wheel** — Zoom in/out (focal-point zoom follows your cursor)
-- **Click and drag** — Pan the view
-- **F key** — Reset to fit-to-pane
+## Smart Merge
 
-Zoom works on whichever image your cursor is over. Both images pan and zoom together so the same region is always visible in both panes.
+Smart Merge picks the winner from file quality:
 
-A navigator minimap appears when zoomed in, showing your current viewport position.
+- identical files: either one
+- near-identical images where one is larger in both dimensions: the larger one
+- same pixels: a lossless file over a lossy one; for the same lossy format, the larger file
 
-## Resolution Actions
-
-| Key | Action | What Happens |
-|-----|--------|--------------|
-| `S` | Smart Merge | Keeps the higher-quality file, merges tags and metadata from both |
-| `L` | Keep Left | Keeps left image, moves right to trash |
-| `R` | Keep Right | Keeps right image, moves left to trash |
-| `N` | Not Duplicate | Marks the pair as not duplicate (won't appear again) |
-| — | Keep Both | Keeps both files, marks pair as resolved |
-
-After resolving, the next pair loads automatically.
-
-| Key | Action |
-|-----|--------|
-| `Left Arrow` | Previous pair |
-| `Right Arrow` | Next pair |
-
-## Undo
-
-All resolution actions support undo (`Ctrl+Z`). This restores the trashed file and re-opens the pair for review.
-
-## Settings
-
-In [Settings](settings.md) → Duplicates:
-
-- **Detection Similarity** — Threshold for discovering pairs (95-100%)
-- **Review Similarity** — Minimum similarity to show in review queue
-- **Auto-Merge** — Automatically merge exact duplicates on import
-  - **Require Matching Dimensions** — Stricter safety check
-  - **Subscriptions Only** — Limit auto-merge to subscription imports
+If there is no clear winner, Picto says **Smart merge needs a choice** and leaves the pair for you
+to resolve with Keep left, Keep right or Keep both.

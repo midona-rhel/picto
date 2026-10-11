@@ -1,0 +1,4707 @@
+[
+  [
+    "ai.models.cancel",
+    {
+      "slug": "wd14"
+    }
+  ],
+  [
+    "ai.models.delete",
+    {
+      "slug": "wd14"
+    }
+  ],
+  [
+    "ai.models.download",
+    {
+      "slug": "wd14"
+    }
+  ],
+  [
+    "ai.models.optimize",
+    {
+      "slug": "wd14"
+    }
+  ],
+  [
+    "ai.review.apply",
+    {
+      "assignments": []
+    }
+  ],
+  [
+    "ai.review.apply",
+    {
+      "assignments": [
+        {
+          "root_id": 1,
+          "tags": [
+            "cat",
+            "character:alice"
+          ]
+        }
+      ]
+    }
+  ],
+  [
+    "ai.review.predict",
+    {
+      "targets": [],
+      "modelSlugs": [
+        "wd14",
+        "e621"
+      ]
+    }
+  ],
+  [
+    "ai.review.predict",
+    {
+      "targets": [
+        {
+          "rootId": 1,
+          "mediaItemId": 10
+        }
+      ],
+      "modelSlugs": null
+    }
+  ],
+  [
+    "ai.review.unload",
+    {}
+  ],
+  [
+    "ai.status",
+    {}
+  ],
+  [
+    "auth.credentials.delete",
+    {
+      "site_id": "danbooru"
+    }
+  ],
+  [
+    "auth.credentials.list",
+    {}
+  ],
+  [
+    "auth.health.list",
+    {}
+  ],
+  [
+    "auth_onlyfans_manual",
+    {
+      "cookie": "sess=1",
+      "user_agent": "Mozilla/5.0",
+      "x_bc": "token"
+    }
+  ],
+  [
+    "auth_session_cancel",
+    {}
+  ],
+  [
+    "auth_session_start",
+    {
+      "site_category": "mastodon",
+      "service_host": "mastodon.social"
+    }
+  ],
+  [
+    "auth_session_start",
+    {
+      "site_category": "pixiv"
+    }
+  ],
+  [
+    "auth_session_state",
+    {}
+  ],
+  [
+    "duplicates.list",
+    {
+      "limit": 500
+    }
+  ],
+  [
+    "duplicates.resolve",
+    {
+      "file_id_a": 11,
+      "file_id_b": 12,
+      "choice": "KeepBoth"
+    }
+  ],
+  [
+    "duplicates.resolve",
+    {
+      "file_id_a": 11,
+      "file_id_b": 12,
+      "choice": {
+        "KeepFile": {
+          "winner_file_id": 11
+        }
+      }
+    }
+  ],
+  [
+    "duplicates.resolve",
+    {
+      "file_id_a": 11,
+      "file_id_b": 12,
+      "choice": {
+        "KeepFile": {
+          "winner_file_id": 12
+        }
+      }
+    }
+  ],
+  [
+    "duplicates.resolve_automatically",
+    {
+      "file_id_a": 11,
+      "file_id_b": 12
+    }
+  ],
+  [
+    "duplicates.scan",
+    {
+      "distance_threshold": 16
+    }
+  ],
+  [
+    "duplicates.scan",
+    {
+      "distance_threshold": 8
+    }
+  ],
+  [
+    "folders.auto_tags.get",
+    {
+      "folder_id": 3
+    }
+  ],
+  [
+    "folders.auto_tags.set",
+    {
+      "folder_id": 3,
+      "tags": [
+        "cat"
+      ]
+    }
+  ],
+  [
+    "folders.auto_tags.set",
+    {
+      "folder_id": 3,
+      "tags": []
+    }
+  ],
+  [
+    "folders.cover.get",
+    {
+      "folder_id": 3
+    }
+  ],
+  [
+    "folders.cover.set",
+    {
+      "folder_id": 3,
+      "root_id": 1
+    }
+  ],
+  [
+    "folders.create",
+    {
+      "name": "Child",
+      "parent_id": 3,
+      "folder_key": null
+    }
+  ],
+  [
+    "folders.create",
+    {
+      "name": "Top",
+      "parent_id": null,
+      "folder_key": null
+    }
+  ],
+  [
+    "folders.delete",
+    {
+      "folder_ids": [
+        3,
+        4
+      ]
+    }
+  ],
+  [
+    "folders.delete",
+    {
+      "folder_ids": []
+    }
+  ],
+  [
+    "folders.duplicate",
+    {
+      "folder_id": 3
+    }
+  ],
+  [
+    "folders.items.reorder",
+    {
+      "folder_id": 3,
+      "root_ids": [
+        2,
+        1
+      ]
+    }
+  ],
+  [
+    "folders.items.reorder",
+    {
+      "folder_id": 3,
+      "root_ids": []
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "created_at"
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "imported_at"
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "modified_at"
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "name"
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "notes"
+    }
+  ],
+  [
+    "folders.items.sort",
+    {
+      "folder_id": 3,
+      "field": "size"
+    }
+  ],
+  [
+    "folders.metadata.set",
+    {
+      "folder_id": 3,
+      "icon": "star",
+      "color": "#ff0000",
+      "notes": "Notes"
+    }
+  ],
+  [
+    "folders.metadata.set",
+    {
+      "folder_id": 3,
+      "icon": null,
+      "color": null,
+      "notes": null
+    }
+  ],
+  [
+    "folders.move",
+    {
+      "folder_id": 4,
+      "parent_id": 3
+    }
+  ],
+  [
+    "folders.move",
+    {
+      "folder_id": 4,
+      "parent_id": null
+    }
+  ],
+  [
+    "folders.rename",
+    {
+      "folder_id": 3,
+      "name": "Renamed"
+    }
+  ],
+  [
+    "folders.reorder",
+    {
+      "parent_id": 3,
+      "folder_ids": [
+        5,
+        4
+      ]
+    }
+  ],
+  [
+    "folders.reorder",
+    {
+      "parent_id": null,
+      "folder_ids": [
+        3
+      ]
+    }
+  ],
+  [
+    "folders.sort_tree",
+    {
+      "folder_id": 3,
+      "descending": true,
+      "recursive": false
+    }
+  ],
+  [
+    "folders.watch.clear",
+    {
+      "folder_id": 3
+    }
+  ],
+  [
+    "folders.watch.set",
+    {
+      "folder_id": 3,
+      "path": "/picto-contract/watched",
+      "include_subfolders": true,
+      "lifecycle": "inbox"
+    }
+  ],
+  [
+    "history.redo",
+    {}
+  ],
+  [
+    "history.state",
+    {}
+  ],
+  [
+    "history.undo",
+    {}
+  ],
+  [
+    "imports.enqueue",
+    {
+      "paths": [
+        "/picto-contract/import/a.png"
+      ],
+      "tags": [],
+      "source_urls": [],
+      "lifecycle": "inbox",
+      "parent_folder_id": null,
+      "preserve_structure": false,
+      "include_subfolders": true,
+      "include_folders_without_media": false,
+      "watch_source_folder": false,
+      "delete_after_ingest": false,
+      "group_files": false
+    }
+  ],
+  [
+    "imports.enqueue",
+    {
+      "paths": [
+        "/picto-contract/import/dir"
+      ],
+      "tags": [
+        "cat"
+      ],
+      "source_urls": [
+        "https://example.com"
+      ],
+      "lifecycle": "active",
+      "parent_folder_id": 3,
+      "preserve_structure": true,
+      "include_subfolders": false,
+      "include_folders_without_media": true,
+      "watch_source_folder": true,
+      "delete_after_ingest": false,
+      "group_files": true
+    }
+  ],
+  [
+    "imports.folder.analyze",
+    {
+      "path": "/picto-contract/import/dir",
+      "destination_folder_id": null,
+      "include_subfolders": true,
+      "include_source_root": false
+    }
+  ],
+  [
+    "items.apply_tags",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "tags": [
+        "cat",
+        "character:alice"
+      ],
+      "add": true
+    }
+  ],
+  [
+    "items.apply_tags",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "tags": [
+        "cat"
+      ],
+      "add": false
+    }
+  ],
+  [
+    "items.apply_tags",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "tags": [],
+      "add": true
+    }
+  ],
+  [
+    "items.clear_recent_views",
+    {}
+  ],
+  [
+    "items.collection_note_draft",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.delete",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.detach",
+    {
+      "collection_id": 5,
+      "media_ids": [
+        10,
+        11
+      ],
+      "target_lifecycle": null
+    }
+  ],
+  [
+    "items.detach",
+    {
+      "collection_id": 5,
+      "media_ids": [
+        10
+      ],
+      "target_lifecycle": "inbox"
+    }
+  ],
+  [
+    "items.details",
+    {
+      "root_id": 1
+    }
+  ],
+  [
+    "items.membership",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      },
+      "root_ids": [
+        1,
+        2
+      ]
+    }
+  ],
+  [
+    "items.mime_facets",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      }
+    }
+  ],
+  [
+    "items.organize_into_collection",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "cover_root_id": 1,
+      "winning_collection_id": null,
+      "name": null,
+      "notes": null
+    }
+  ],
+  [
+    "items.organize_into_collection",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "cover_root_id": 1,
+      "winning_collection_id": 5,
+      "name": "Set",
+      "notes": "Collected"
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "notes": "A note"
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "notes": "Trimmed"
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "notes": null
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "rating": "four"
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "source_urls": [
+          "https://example.com/post/1"
+        ]
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "patch": {
+        "source_urls": []
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": []
+      },
+      "patch": {
+        "rating": "four"
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "patch": {
+        "rating": "four"
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "patch": {
+        "source_urls": []
+      }
+    }
+  ],
+  [
+    "items.patch_metadata",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "patch": {
+        "rating": "four"
+      }
+    }
+  ],
+  [
+    "items.positions",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      },
+      "root_ids": [
+        1,
+        2
+      ]
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "all"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "imported_at",
+            "direction": "descending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "cursor": null,
+        "limit": 100
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "cursor": null,
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      },
+      "page": {
+        "cursor": "opaque-cursor",
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "inbox"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "media_matches",
+          "item_id": 1
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "recently_viewed"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "smart_folder",
+          "smart_folder_id": 2
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "trash"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "uncategorized"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.query",
+    {
+      "query": {
+        "scope": {
+          "kind": "untagged"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "folder_order",
+            "direction": "ascending",
+            "random_seed": null
+          }
+        }
+      },
+      "page": {
+        "limit": 1
+      }
+    }
+  ],
+  [
+    "items.record_view",
+    {
+      "root_id": 1
+    }
+  ],
+  [
+    "items.rename",
+    {
+      "root_id": 1,
+      "name": "Renamed"
+    }
+  ],
+  [
+    "items.rename_many",
+    {
+      "renames": []
+    }
+  ],
+  [
+    "items.rename_many",
+    {
+      "renames": [
+        {
+          "root_id": 1,
+          "name": "One"
+        },
+        {
+          "root_id": 2,
+          "name": "Two"
+        }
+      ]
+    }
+  ],
+  [
+    "items.reorder_collection",
+    {
+      "collection_id": 5,
+      "media_ids": [
+        11,
+        10
+      ]
+    }
+  ],
+  [
+    "items.resolve_image_selection",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.selection_summary",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.selection_summary",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": []
+      }
+    }
+  ],
+  [
+    "items.selection_summary",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.selection_summary",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "items.set_folder",
+    {
+      "folder_id": 3,
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "present": false
+    }
+  ],
+  [
+    "items.set_folder",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "folder_id": 3,
+      "present": true
+    }
+  ],
+  [
+    "items.set_folder",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "folder_id": 3,
+      "present": false
+    }
+  ],
+  [
+    "items.set_lifecycle",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "lifecycle": "trash"
+    }
+  ],
+  [
+    "items.set_lifecycle",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "lifecycle": "active"
+    }
+  ],
+  [
+    "items.set_lifecycle",
+    {
+      "target": {
+        "kind": "range",
+        "query": {
+          "scope": {
+            "kind": "all"
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": []
+            },
+            "sort": {
+              "field": "imported_at",
+              "direction": "descending",
+              "random_seed": null
+            }
+          }
+        },
+        "spans": [
+          {
+            "anchor_root_id": 1,
+            "focus_root_id": 3,
+            "anchor_index": 0,
+            "focus_index": 2
+          }
+        ],
+        "included_root_ids": [
+          4
+        ],
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "lifecycle": "inbox"
+    }
+  ],
+  [
+    "items.supersede_window",
+    {
+      "channel": "grid",
+      "generation": 4
+    }
+  ],
+  [
+    "items.ungroup",
+    {
+      "collection_id": 5
+    }
+  ],
+  [
+    "items.window",
+    {
+      "query": {
+        "scope": {
+          "kind": "all"
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "imported_at",
+            "direction": "descending",
+            "random_seed": null
+          }
+        }
+      },
+      "window": {
+        "position": {
+          "kind": "ordinal",
+          "value": 0
+        },
+        "limit": 200
+      }
+    }
+  ],
+  [
+    "items.window",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      },
+      "window": {
+        "position": {
+          "kind": "fraction",
+          "value": 0.5
+        },
+        "limit": 50
+      },
+      "request": {
+        "channel": "grid",
+        "generation": 3
+      }
+    }
+  ],
+  [
+    "media.export",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "output_dir": "/picto-contract/export",
+      "format": "original",
+      "quality": 90,
+      "width": null,
+      "height": null,
+      "keep_aspect": true
+    }
+  ],
+  [
+    "media.export",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      },
+      "output_dir": "/picto-contract/export",
+      "format": "webp",
+      "quality": 80,
+      "width": 1024,
+      "height": null,
+      "keep_aspect": false
+    }
+  ],
+  [
+    "media.formats.list",
+    {}
+  ],
+  [
+    "media.regenerate_thumbnails",
+    {
+      "file_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
+  ],
+  [
+    "media.resolve_paths",
+    {
+      "file_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ],
+  [
+    "media.resolve_paths",
+    {
+      "file_hashes": [
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
+  ],
+  [
+    "media.resolve_target_paths",
+    {
+      "target": {
+        "kind": "query",
+        "query": {
+          "scope": {
+            "kind": "folder_tree",
+            "folder_id": 3
+          },
+          "view": {
+            "filter": {
+              "kind": "all",
+              "value": [
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      4
+                    ],
+                    "mode": "all"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "tags",
+                      "tag_ids": [
+                        5
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      6
+                    ],
+                    "mode": "any"
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "folders",
+                      "folder_ids": [
+                        7
+                      ],
+                      "mode": "any"
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "ratings",
+                    "ratings": [
+                      "unrated",
+                      "five"
+                    ]
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "video/mp4"
+                    ],
+                    "families": [
+                      "image"
+                    ]
+                  }
+                },
+                {
+                  "kind": "not",
+                  "value": {
+                    "kind": "clause",
+                    "value": {
+                      "clause": "mime",
+                      "values": [
+                        "image/gif"
+                      ],
+                      "families": []
+                    }
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "imported_at",
+                    "minimum_ms": 1704067200000,
+                    "maximum_ms": 1735603200000
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "modified_at",
+                    "minimum_ms": 1706745600000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "duration",
+                    "minimum_ms": 1000,
+                    "maximum_ms": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "total_size",
+                    "minimum_bytes": null,
+                    "maximum_bytes": 1048576
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "width",
+                    "minimum": 640,
+                    "maximum": null
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "height",
+                    "minimum": null,
+                    "maximum": 2160
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "text",
+                    "field": "global",
+                    "query": "sunset"
+                  }
+                },
+                {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "color",
+                    "color": {
+                      "l": 68.65577208167872,
+                      "a": 38.85052375564024,
+                      "b": 74.99022544139406,
+                      "weight": 1
+                    },
+                    "delta_e": 16
+                  }
+                }
+              ]
+            },
+            "sort": {
+              "field": "random",
+              "direction": "ascending",
+              "random_seed": "seed-1"
+            }
+          }
+        },
+        "excluded_root_ids": [
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "media.set_thumbnail",
+    {
+      "file_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "png_base64": "iVBORw0KGgo="
+    }
+  ],
+  [
+    "navigation.get",
+    {}
+  ],
+  [
+    "open_external_url",
+    {
+      "url": "https://example.com"
+    }
+  ],
+  [
+    "open_in_new_window",
+    {
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "width": 800,
+      "height": 600
+    }
+  ],
+  [
+    "open_in_new_window",
+    {
+      "item_id": 5
+    }
+  ],
+  [
+    "open_settings_window",
+    {
+      "panel": "subscriptions"
+    }
+  ],
+  [
+    "open_settings_window",
+    {}
+  ],
+  [
+    "picto_pack.export",
+    {
+      "source": {
+        "kind": "folder",
+        "folder_id": 3
+      },
+      "output_path": "/picto-contract/packs/folder.pictopack"
+    }
+  ],
+  [
+    "picto_pack.export",
+    {
+      "source": {
+        "kind": "items",
+        "target": {
+          "kind": "explicit",
+          "root_ids": [
+            1,
+            2
+          ]
+        }
+      },
+      "output_path": "/picto-contract/packs/items.pictopack"
+    }
+  ],
+  [
+    "picto_pack.export",
+    {
+      "source": {
+        "kind": "smart_folder",
+        "smart_folder_id": 2
+      },
+      "output_path": "/picto-contract/packs/smart.pictopack"
+    }
+  ],
+  [
+    "picto_pack.import",
+    {
+      "path": "/picto-contract/packs/in.pictopack"
+    }
+  ],
+  [
+    "picto_pack.inspect",
+    {
+      "path": "/picto-contract/packs/in.pictopack"
+    }
+  ],
+  [
+    "settings.get",
+    {}
+  ],
+  [
+    "settings.patch",
+    {
+      "value": {
+        "gridSpacing": "tight",
+        "zoomFactor": null,
+        "starredTags": []
+      }
+    }
+  ],
+  [
+    "settings.patch",
+    {
+      "value": {}
+    }
+  ],
+  [
+    "settings.replace",
+    {
+      "value": {
+        "gridSpacing": "wide",
+        "colorScheme": "dark",
+        "zoomFactor": null,
+        "showTreeGuides": true,
+        "showSidebarCounts": true,
+        "showSidebarInbox": true,
+        "showSidebarRecentlyViewed": true,
+        "showSidebarUncategorized": true,
+        "showSidebarUntagged": true,
+        "showSidebarTagManager": true,
+        "showSidebarRandom": true,
+        "showSidebarSubscriptions": true,
+        "showSidebarDuplicates": true,
+        "showSidebarQuickAccess": true,
+        "showSidebarFolders": true,
+        "showSidebarSmartFolders": true,
+        "sidebarDoubleClickAction": "collapse",
+        "gridWheelAction": "scroll",
+        "viewerTrackpadGestures": false,
+        "gridDoubleClickAction": "detail",
+        "gridMiddleClickAction": "new_window",
+        "spaceKeyAction": "quick_look",
+        "imageRendering": "smooth",
+        "imageDefaultZoom": "fit",
+        "showTransparencyGrid": false,
+        "videoAutoPlay": true,
+        "videoLoop": true,
+        "notificationPopupsEnabled": true,
+        "notificationPopupTones": [
+          "error",
+          "warning",
+          "info",
+          "success"
+        ],
+        "autoImportEnabled": true,
+        "multiFileImportBehavior": "ask",
+        "subscriptionDefaultSchedule": "daily",
+        "subscriptionDefaultPostsPerRun": 100,
+        "subscriptionDefaultGroupPosts": true,
+        "subscriptionInboxItemLimit": 1000,
+        "showTagGroups": true,
+        "showTagPrefixes": false,
+        "starredTags": [],
+        "tagGroupColors": {},
+        "sidebarQuickAccess": [],
+        "aiTaggerWd14Enabled": false,
+        "aiTaggerE621Enabled": false,
+        "aiTaggerEva02Enabled": false,
+        "aiTaggerOppaiOracleEnabled": false,
+        "aiTaggerManualModelSlugs": null,
+        "aiTaggerAutoOnImport": false,
+        "aiTaggerWriteRating": true,
+        "aiThresholdGeneral": 0.35,
+        "aiThresholdCharacter": 0.85,
+        "aiThresholdCopyright": 0.85,
+        "aiThresholdArtist": 0.85,
+        "aiThresholdSpecies": 0.35,
+        "aiThresholdRating": 0.5
+      }
+    }
+  ],
+  [
+    "settings.view.get",
+    {
+      "scope": "folder:3"
+    }
+  ],
+  [
+    "settings.view.get",
+    {
+      "scope": "grid:defaults"
+    }
+  ],
+  [
+    "settings.view.patch",
+    {
+      "scope": "folder:3",
+      "value": {
+        "sort_field": "name",
+        "target_size": 180,
+        "show_name": null
+      }
+    }
+  ],
+  [
+    "settings.view.patch",
+    {
+      "scope": "grid:defaults",
+      "value": {
+        "sort_field": null,
+        "sort_order": null,
+        "view_mode": null,
+        "target_size": null,
+        "spacing": null,
+        "show_name": null,
+        "show_resolution": null,
+        "show_extension": null,
+        "show_label": null,
+        "show_item_count": null,
+        "thumbnail_fit": null,
+        "show_subfolders": null
+      }
+    }
+  ],
+  [
+    "settings.view.reset",
+    {}
+  ],
+  [
+    "sidebar.counts",
+    {}
+  ],
+  [
+    "smart_folders.create",
+    {
+      "name": "Nested",
+      "parent_id": 2,
+      "icon": "star",
+      "color": "#00ff00",
+      "notes": "n",
+      "view": {
+        "filter": {
+          "kind": "all",
+          "value": [
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "tags",
+                "tag_ids": [
+                  4
+                ],
+                "mode": "all"
+              }
+            },
+            {
+              "kind": "not",
+              "value": {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    5
+                  ],
+                  "mode": "any"
+                }
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "folders",
+                "folder_ids": [
+                  6
+                ],
+                "mode": "any"
+              }
+            },
+            {
+              "kind": "not",
+              "value": {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    7
+                  ],
+                  "mode": "any"
+                }
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "ratings",
+                "ratings": [
+                  "unrated",
+                  "five"
+                ]
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "mime",
+                "values": [
+                  "video/mp4"
+                ],
+                "families": [
+                  "image"
+                ]
+              }
+            },
+            {
+              "kind": "not",
+              "value": {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "image/gif"
+                  ],
+                  "families": []
+                }
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "imported_at",
+                "minimum_ms": 1704067200000,
+                "maximum_ms": 1735603200000
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "modified_at",
+                "minimum_ms": 1706745600000,
+                "maximum_ms": null
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "duration",
+                "minimum_ms": 1000,
+                "maximum_ms": null
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "total_size",
+                "minimum_bytes": null,
+                "maximum_bytes": 1048576
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "width",
+                "minimum": 640,
+                "maximum": null
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "height",
+                "minimum": null,
+                "maximum": 2160
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "text",
+                "field": "global",
+                "query": "sunset"
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "color",
+                "color": {
+                  "l": 68.65577208167872,
+                  "a": 38.85052375564024,
+                  "b": 74.99022544139406,
+                  "weight": 1
+                },
+                "delta_e": 16
+              }
+            }
+          ]
+        },
+        "sort": {
+          "field": "random",
+          "direction": "ascending",
+          "random_seed": "seed-1"
+        }
+      }
+    }
+  ],
+  [
+    "smart_folders.create",
+    {
+      "name": "Smart",
+      "parent_id": null,
+      "icon": null,
+      "color": null,
+      "notes": null,
+      "view": {
+        "filter": {
+          "kind": "any",
+          "value": [
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "notes_present",
+                "present": true
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "source_urls_present",
+                "present": false
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "captured_at",
+                "minimum_ms": 0,
+                "maximum_ms": null
+              }
+            },
+            {
+              "kind": "clause",
+              "value": {
+                "clause": "text",
+                "field": "notes",
+                "query": "todo"
+              }
+            },
+            {
+              "kind": "not",
+              "value": {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "one"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "sort": {
+          "field": "name",
+          "direction": "ascending",
+          "random_seed": null
+        }
+      }
+    }
+  ],
+  [
+    "smart_folders.delete",
+    {
+      "smart_folder_id": 2
+    }
+  ],
+  [
+    "smart_folders.move",
+    {
+      "smart_folder_id": 2,
+      "parent_id": 8
+    }
+  ],
+  [
+    "smart_folders.move",
+    {
+      "smart_folder_id": 2,
+      "parent_id": null
+    }
+  ],
+  [
+    "smart_folders.reorder",
+    {
+      "parent_id": 8,
+      "smart_folder_ids": []
+    }
+  ],
+  [
+    "smart_folders.reorder",
+    {
+      "parent_id": null,
+      "smart_folder_ids": [
+        2,
+        8
+      ]
+    }
+  ],
+  [
+    "smart_folders.update",
+    {
+      "smart_folder_id": 2,
+      "value": {
+        "name": "Smart",
+        "parent_id": null,
+        "icon": null,
+        "color": null,
+        "notes": null,
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": []
+          },
+          "sort": {
+            "field": "imported_at",
+            "direction": "descending",
+            "random_seed": null
+          }
+        }
+      }
+    }
+  ],
+  [
+    "sources.list",
+    {}
+  ],
+  [
+    "subscriptions.cancel",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.cover.candidates",
+    {
+      "subscription_id": 1,
+      "cursor": null,
+      "limit": 200
+    }
+  ],
+  [
+    "subscriptions.cover.candidates",
+    {
+      "subscription_id": 1,
+      "cursor": {
+        "imported_at": "2024-01-01T00:00:00Z",
+        "media_item_id": 10
+      },
+      "limit": 50
+    }
+  ],
+  [
+    "subscriptions.cover.set",
+    {
+      "subscription_id": 1,
+      "cover": {
+        "media_item_id": 10,
+        "focus_x": 250,
+        "focus_y": 750,
+        "zoom_percent": 160
+      }
+    }
+  ],
+  [
+    "subscriptions.create",
+    {
+      "name": "Artist",
+      "schedule": "daily",
+      "initial_post_limit": 100,
+      "periodic_post_limit": 100,
+      "queries": []
+    }
+  ],
+  [
+    "subscriptions.delete",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.destination",
+    {
+      "subscription_id": 1,
+      "destination": {
+        "target_folder_ids": [
+          3
+        ],
+        "automatic_tags": [
+          "cat"
+        ]
+      }
+    }
+  ],
+  [
+    "subscriptions.destination",
+    {
+      "subscription_id": 1,
+      "destination": {
+        "target_folder_ids": [],
+        "automatic_tags": []
+      }
+    }
+  ],
+  [
+    "subscriptions.gallery.cleanup",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.gallery.start",
+    {
+      "url": "https://e-hentai.org/g/123456/0123456789/"
+    }
+  ],
+  [
+    "subscriptions.hold",
+    {
+      "subscription_id": 1,
+      "paused": true
+    }
+  ],
+  [
+    "subscriptions.issues.acknowledge",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.issues.list",
+    {
+      "subscription_id": 1,
+      "query_id": null,
+      "unresolved_only": true,
+      "cursor": null,
+      "limit": 50
+    }
+  ],
+  [
+    "subscriptions.issues.list",
+    {
+      "subscription_id": 1,
+      "query_id": null,
+      "unresolved_only": true,
+      "cursor": {
+        "last_seen_at": "2024-01-01T00:00:00Z",
+        "issue_id": 7
+      },
+      "limit": 10
+    }
+  ],
+  [
+    "subscriptions.list",
+    {}
+  ],
+  [
+    "subscriptions.pause_all",
+    {
+      "paused": false
+    }
+  ],
+  [
+    "subscriptions.posts_per_run",
+    {
+      "subscription_id": 1,
+      "posts_per_run": 250
+    }
+  ],
+  [
+    "subscriptions.progress.get",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.queries.add",
+    {
+      "subscription_id": 1,
+      "query": {
+        "site_id": "danbooru",
+        "query_text": "cat",
+        "display_name": null,
+        "notes": null,
+        "group_posts": true
+      }
+    }
+  ],
+  [
+    "subscriptions.queries.add",
+    {
+      "subscription_id": 1,
+      "query": {
+        "site_id": "danbooru",
+        "query_text": "dog",
+        "display_name": null,
+        "notes": "with notes",
+        "group_posts": true
+      }
+    }
+  ],
+  [
+    "subscriptions.queries.delete",
+    {
+      "query_id": 2
+    }
+  ],
+  [
+    "subscriptions.queries.grouping",
+    {
+      "query_id": 2,
+      "group_posts": false
+    }
+  ],
+  [
+    "subscriptions.queries.pause",
+    {
+      "query_id": 2,
+      "paused": true
+    }
+  ],
+  [
+    "subscriptions.queries.run",
+    {
+      "query_id": 2
+    }
+  ],
+  [
+    "subscriptions.queries.update",
+    {
+      "query_id": 2,
+      "query": {
+        "site_id": "danbooru",
+        "query_text": "cat",
+        "display_name": "Cats",
+        "notes": "notes",
+        "group_posts": true
+      }
+    }
+  ],
+  [
+    "subscriptions.queries.update",
+    {
+      "query_id": 2,
+      "query": {
+        "site_id": "danbooru",
+        "query_text": "cat",
+        "display_name": null,
+        "notes": null,
+        "group_posts": true
+      }
+    }
+  ],
+  [
+    "subscriptions.rename",
+    {
+      "subscription_id": 1,
+      "name": "Renamed"
+    }
+  ],
+  [
+    "subscriptions.reset",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.run",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.run.pause",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.run.resume",
+    {
+      "subscription_id": 1
+    }
+  ],
+  [
+    "subscriptions.runs.get",
+    {
+      "run_id": 9,
+      "source_item_limit": 100
+    }
+  ],
+  [
+    "subscriptions.runs.list",
+    {
+      "subscription_id": 1,
+      "limit": 20
+    }
+  ],
+  [
+    "subscriptions.runs.list",
+    {
+      "subscription_id": 1,
+      "limit": 5
+    }
+  ],
+  [
+    "subscriptions.schedule",
+    {
+      "subscription_id": 1,
+      "schedule": "weekly"
+    }
+  ],
+  [
+    "tags.delete",
+    {
+      "tag_id": 4
+    }
+  ],
+  [
+    "tags.delete_unused",
+    {}
+  ],
+  [
+    "tags.get_many",
+    {
+      "tag_ids": [
+        4,
+        5
+      ]
+    }
+  ],
+  [
+    "tags.get_many",
+    {
+      "tag_ids": []
+    }
+  ],
+  [
+    "tags.group.create",
+    {
+      "name": "species"
+    }
+  ],
+  [
+    "tags.group.delete",
+    {
+      "namespace_id": 2
+    }
+  ],
+  [
+    "tags.group.rename",
+    {
+      "namespace_id": 2,
+      "name": "creature"
+    }
+  ],
+  [
+    "tags.list",
+    {
+      "namespace": "character",
+      "search": "ali",
+      "cursor": "opaque",
+      "limit": 20
+    }
+  ],
+  [
+    "tags.list",
+    {
+      "namespace": null,
+      "search": null,
+      "cursor": null,
+      "limit": 100
+    }
+  ],
+  [
+    "tags.namespace_counts",
+    {}
+  ],
+  [
+    "tags.rename_or_merge",
+    {
+      "tag_id": 4,
+      "name": "character:alice"
+    }
+  ],
+  [
+    "tags.rename_or_merge",
+    {
+      "tag_id": 5,
+      "name": "cat"
+    }
+  ],
+  [
+    "tags.unused_count",
+    {}
+  ]
+]

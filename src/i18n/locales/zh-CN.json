@@ -1471,5 +1471,14 @@
   "Opening your library": "正在打开您的库",
   "Updating your library database": "正在更新您的库数据库",
   "Loading your library": "正在加载您的库",
-  "Starting library services": "正在启动库服务"
+  "Starting library services": "正在启动库服务",
+  "Library deleted.": "资料库已删除。",
+  "Move…": "移动…",
+  "Locate…": "定位…",
+  "Delete…": "删除…",
+  "Part of the selection left this view": "部分所选内容已不在此视图中",
+  "A selected range lost its first or last item, so that range is no longer selected.": "所选范围失去了第一项或最后一项，因此该范围不再被选中。",
+  "Could not preview smart folder rules": "无法预览智能文件夹规则",
+  "Could not restore smart folder rules": "无法恢复智能文件夹规则",
+  "Could not save smart folder": "无法保存智能文件夹"
 }

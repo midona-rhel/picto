@@ -1,6 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activeNodeIdAtom } from './navigation';
+import { gridController } from '../controllers/gridController';
 import {
   goBack,
   goForward,
@@ -35,6 +36,35 @@ afterEach(() => {
 });
 
 describe('navigateToNode', () => {
+  it('records the actual toolbar command so Back restores a numeric filter after leaving its scope', () => {
+    store.set(activeNodeIdAtom, 'system:active');
+    const filters = { ...createEmptyItemFilters(), min_width: 1024n };
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'all' }, filters: createEmptyItemFilters() });
+    gridController.setFilters(filters);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters });
+    navigateToNode('folder:7');
+    goBack();
+    expect(store.get(pendingGridNavigationAtom)).toMatchObject({
+      nodeId: 'system:active', filters, restoreScroll: true,
+    });
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters: createEmptyItemFilters() });
+    goForward();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters });
+  });
+
+  it('keeps the manager owner when the toolbar filters a drill-down', () => {
+    store.set(activeNodeIdAtom, 'system:tag_manager');
+    const filters = { ...createEmptyItemFilters(), min_width: 1024n };
+    store.set(gridDrilldownAtom, {
+      ownerNodeId: 'system:tag_manager', scopeNodeId: 'system:active', filters: createEmptyItemFilters(),
+    });
+    gridController.setFilters(filters);
+    expect(store.get(activeNodeIdAtom)).toBe('system:tag_manager');
+    expect(store.get(gridDrilldownAtom)).toMatchObject({ ownerNodeId: 'system:tag_manager', filters });
+    expect(store.get(pendingGridNavigationAtom)).toMatchObject({ nodeId: 'system:active', filters });
+  });
+
   it('keeps the outgoing viewer alive for the scope transition', () => {
     const session = { currentIndex: 2, currentItemId: 42 };
     store.set(viewerSessionAtom, session);
@@ -86,6 +116,37 @@ describe('navigateToNode', () => {
       type: 'filter',
       filters: before,
       restoreScroll: true,
+    });
+  });
+
+  it('records numeric filters in history and restores them through Back and Forward', () => {
+    const before = createEmptyItemFilters();
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: before });
+    // The grid applies each filter intent before the next navigation.
+    const visit = (filters: typeof before) => {
+      navigateWithGridFilters('system:active', filters);
+      store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: { ...filters } });
+    };
+    const wide = { ...before, min_width: 100n, max_size_bytes: 5_000_000n };
+    visit(wide);
+    // An equal value is the same visit; a different bound is a new one.
+    visit({ ...before, min_width: 100n, max_size_bytes: 5_000_000n });
+    visit({ ...wide, min_width: 200n });
+    wide.min_width = 999n; // the editor's object changing later does not rewrite history
+    store.set(pendingGridIntentAtom, null);
+
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toEqual({
+      type: 'filter',
+      filters: { ...before, min_width: 100n, max_size_bytes: 5_000_000n },
+      restoreScroll: true,
+    });
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters: before });
+    goForward();
+    goForward();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({
+      filters: { ...before, min_width: 200n, max_size_bytes: 5_000_000n },
     });
   });
 

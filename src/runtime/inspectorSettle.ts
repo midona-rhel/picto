@@ -22,9 +22,14 @@ export function startInspectorSettle(): () => void {
     // The delete command settles viewer/selection state after IPC success. Its
     // invalidation can arrive first, while the deleted item is still displayed.
     if (store.get(permanentDeletesInFlightAtom) > 0) return;
-    const itemId = store.get(displayedInspectorItemDetailsAtom)?.root.root_id ?? lastItemId;
-    if (payload?.item_ids.length && !payload.item_ids.includes(itemId ?? -1)) return;
-    if (itemId != null) void loadInspectorData(itemId);
+    // Cached item details survive selection transitions. They must not replace
+    // a multi-selection summary when an edit, Undo, or Redo invalidates the library.
+    const target = store.get(inspectorPinnedAtom)
+      ? store.get(displayedInspectorTargetAtom)
+      : store.get(liveInspectorTargetAtom);
+    if (target.kind !== 'item') return;
+    if (payload?.item_ids.length && !payload.item_ids.includes(target.itemId)) return;
+    void loadInspectorData(target.itemId);
   });
 
   const unsubTarget = store.sub(liveInspectorTargetAtom, () => {

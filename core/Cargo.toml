@@ -1,6 +1,6 @@
 [package]
 name = "picto_core"
-version = "0.6.15-alpha"
+version = "0.6.16-alpha"
 edition = "2021"
 license = "MIT"
 
@@ -100,3 +100,6 @@ ort = { version = "2.0.0-rc.12", features = ["webgpu"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }

@@ -1,6 +1,19 @@
 import { atom } from 'jotai';
 import type { EntityTarget, EntityViewQuery } from '../shared/types/canonical';
-import { currentGridQueryAtom, gridItemsAtom, gridTotalCountAtom } from './grid';
+import { currentGridQueryAtom, gridItemsAtom, gridSessionAtom, gridTotalCountAtom } from './grid';
+import {
+  addSpan,
+  rangeCount,
+  reconcileRange,
+  spansContain,
+  toggleInRange,
+  type RangeEnd,
+  type RangeSelection,
+  type RangeSpan,
+  type RootPositions,
+} from './rangeSelection';
+
+export type { RangeEnd, RangeSpan } from './rangeSelection';
 
 export type SelectionMode = 'explicit' | 'query_results';
 
@@ -11,19 +24,31 @@ export interface GridSelection {
   query?: EntityViewQuery | null;
   queryTotalCount?: number | null;
   folderNodeIds: Set<string>;
-  anchor: { kind: 'item'; id: number } | { kind: 'folder'; id: string } | null;
+  /** `index` is the anchor's position in the whole view, when known. */
+  anchor: { kind: 'item'; id: number; index?: number } | { kind: 'folder'; id: string } | null;
+  /**
+   * Shift-click spans that reach beyond the loaded window, with roots added
+   * outside them (see rangeSelection.ts). `excludedItemIds` holds the roots
+   * toggled off inside them. The backend resolves it.
+   */
+  range?: RangeSelection | null;
 }
 
 export type GridSelectionAction =
   | { type: 'clear' }
-  | { type: 'replace_items'; itemIds: Set<number>; anchor?: number | null }
-  | { type: 'toggle_item'; itemId: number }
+  | { type: 'replace_items'; itemIds: Set<number>; anchor?: number | null; anchorIndex?: number }
+  | { type: 'toggle_item'; itemId: number; index?: number }
   | { type: 'range_items'; itemIds: Set<number> }
+  | { type: 'range_query'; query: EntityViewQuery; anchor: RangeEnd; focus: RangeEnd }
+  /** Cmd/Ctrl+Shift-click: add a span to the current selection. */
+  | { type: 'range_add'; query: EntityViewQuery; span: RangeSpan; positions: RootPositions }
+  /** Backend positions after the view changed. */
+  | { type: 'range_reconcile'; positions: RootPositions }
   | { type: 'replace_folders'; ids: Set<string>; anchor?: string | null }
   | { type: 'toggle_folder'; id: string }
   | { type: 'marquee'; itemIds: Set<number>; folderNodeIds: Set<string>; additive: boolean }
   | { type: 'select_all'; totalCount: number; query?: EntityViewQuery }
-  | { type: 'toggle_query_item'; itemId: number; totalCount: number }
+  | { type: 'toggle_query_item'; itemId: number; totalCount: number; index?: number }
   | { type: 'set_anchor'; anchor: GridSelection['anchor'] };
 
 export const emptyGridSelection = (): GridSelection => ({
@@ -34,7 +59,12 @@ export const emptyGridSelection = (): GridSelection => ({
   queryTotalCount: null,
   folderNodeIds: new Set<string>(),
   anchor: null,
+  range: null,
 });
+
+function itemAnchor(id: number, index?: number): GridSelection['anchor'] {
+  return index == null ? { kind: 'item', id } : { kind: 'item', id, index };
+}
 
 export function reduceGridSelection(state: GridSelection, action: GridSelectionAction): GridSelection {
   switch (action.type) {
@@ -44,14 +74,14 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
       return {
         ...emptyGridSelection(),
         itemIds: new Set(action.itemIds),
-        anchor: action.anchor == null ? null : { kind: 'item', id: action.anchor },
+        anchor: action.anchor == null ? null : itemAnchor(action.anchor, action.anchorIndex),
       };
     case 'toggle_item': {
       if (state.mode === 'query_results') {
         const excludedItemIds = new Set(state.excludedItemIds);
         if (excludedItemIds.has(action.itemId)) excludedItemIds.delete(action.itemId);
         else excludedItemIds.add(action.itemId);
-        return { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
+        return { ...state, excludedItemIds, anchor: itemAnchor(action.itemId, action.index) };
       }
       const itemIds = state.folderNodeIds.size > 0 ? new Set<number>() : new Set(state.itemIds);
       if (itemIds.has(action.itemId)) itemIds.delete(action.itemId);
@@ -60,7 +90,7 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         ...state,
         itemIds,
         folderNodeIds: new Set(),
-        anchor: { kind: 'item', id: action.itemId },
+        anchor: itemAnchor(action.itemId, action.index),
       };
     }
     case 'range_items':
@@ -69,6 +99,38 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         itemIds: new Set(action.itemIds),
         anchor: state.anchor?.kind === 'item' ? state.anchor : null,
       };
+    case 'range_query':
+      return withRange(
+        emptyGridSelection(),
+        action.query,
+        { spans: [{ anchor: action.anchor, focus: action.focus }], includedItemIds: new Set() },
+        new Set(),
+        itemAnchor(action.anchor.id, action.anchor.index),
+      );
+    case 'range_add': {
+      const anchor = itemAnchor(action.span.anchor.id, action.span.anchor.index);
+      if (state.mode === 'query_results' && !state.range) {
+        // Select-all plus a span: only exclusions the span covers come back.
+        const covered = addSpan([], new Set(), state.excludedItemIds, action.span, action.positions);
+        return { ...state, excludedItemIds: covered.excluded, anchor };
+      }
+      const previous = state.range
+        ? state.range.includedItemIds
+        : state.folderNodeIds.size > 0 ? new Set<number>() : state.itemIds;
+      const next = addSpan(state.range?.spans ?? [], previous, state.excludedItemIds, action.span, action.positions);
+      return withRange(emptyGridSelection(), action.query, next.range, next.excluded, anchor);
+    }
+    case 'range_reconcile': {
+      if (!state.range || !state.query) return state;
+      const next = reconcileRange(state.range, state.excludedItemIds, action.positions);
+      if (next.range.spans.length === 0 && next.range.includedItemIds.size === 0) return emptyGridSelection();
+      let anchor = state.anchor;
+      if (anchor?.kind === 'item' && action.positions.has(anchor.id)) {
+        const index = action.positions.get(anchor.id);
+        anchor = index == null ? null : itemAnchor(anchor.id, index);
+      }
+      return withRange(state, state.query, next.range, next.excluded, anchor);
+    }
     case 'replace_folders':
       return { ...emptyGridSelection(), folderNodeIds: new Set(action.ids), anchor: action.anchor == null ? null : { kind: 'folder', id: action.anchor } };
     case 'toggle_folder': {
@@ -110,16 +172,42 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         : emptyGridSelection();
     case 'toggle_query_item': {
       if (state.mode !== 'query_results') return state;
+      if (state.range && state.query && action.index != null) {
+        const next = toggleInRange(state.range, state.excludedItemIds, action.itemId, action.index);
+        return rangeCount(next.range, next.excluded) <= 0
+          ? emptyGridSelection()
+          : withRange(state, state.query, next.range, next.excluded, state.anchor);
+      }
       const excludedItemIds = new Set(state.excludedItemIds);
       if (excludedItemIds.has(action.itemId)) excludedItemIds.delete(action.itemId);
       else excludedItemIds.add(action.itemId);
       return excludedItemIds.size >= (state.queryTotalCount ?? action.totalCount)
         ? emptyGridSelection()
-        : { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
+        : { ...state, excludedItemIds, anchor: state.range ? state.anchor : itemAnchor(action.itemId, action.index) };
     }
     case 'set_anchor':
       return { ...state, anchor: action.anchor };
   }
+}
+
+function withRange(
+  base: GridSelection,
+  query: EntityViewQuery,
+  range: RangeSelection,
+  excluded: Set<number>,
+  anchor: GridSelection['anchor'],
+): GridSelection {
+  return {
+    ...base,
+    mode: 'query_results',
+    itemIds: new Set(),
+    folderNodeIds: new Set(),
+    query,
+    range,
+    excludedItemIds: excluded,
+    queryTotalCount: rangeCount(range, excluded),
+    anchor,
+  };
 }
 
 export const gridSelectionAtom = atom<GridSelection>(emptyGridSelection());
@@ -128,14 +216,26 @@ export const gridSelectionActionAtom = atom(null, (get, set, action: GridSelecti
 });
 
 export const selectionModeAtom = atom((get) => get(gridSelectionAtom).mode);
-export const querySelectionActiveAtom = atom((get) => get(selectionModeAtom) === 'query_results');
 
 /** Loaded IDs are a viewport projection; query-wide selection remains canonical in the target. */
 export const loadedSelectedItemIdsAtom = atom((get) => {
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'explicit') return new Set(selection.itemIds);
+  const items = get(gridItemsAtom);
+  const range = selection.range;
+  if (range) {
+    // Loaded tiles inside a span (unless toggled off), plus added roots.
+    const start = get(gridSessionAtom).windowStart;
+    const selected = new Set<number>();
+    items.forEach((item, offset) => {
+      const id = item.root_id;
+      if (range.includedItemIds.has(id)) selected.add(id);
+      else if (spansContain(range.spans, start + offset) && !selection.excludedItemIds.has(id)) selected.add(id);
+    });
+    return selected;
+  }
   return new Set(
-    get(gridItemsAtom)
+    items
       .map((item) => item.root_id)
       .filter((itemId) => !selection.excludedItemIds.has(itemId)),
   );
@@ -153,15 +253,6 @@ export const selectedItemIdsAtom = atom<
     set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set(next) });
   },
 );
-
-export const toggleQuerySelectionItemIdAtom = atom(null, (get, set, itemId: number) => {
-  if (get(selectionModeAtom) !== 'query_results') return;
-  set(gridSelectionActionAtom, {
-    type: 'toggle_query_item',
-    itemId,
-    totalCount: get(gridTotalCountAtom) ?? get(gridItemsAtom).length,
-  });
-});
 
 export const selectedSubfolderNodeIdsAtom = atom<
   Set<string>,
@@ -190,6 +281,7 @@ export const selectedItemIdAtom = atom((get) => {
 
 export const selectionCountAtom = atom((get) => {
   const selection = get(gridSelectionAtom);
+  if (selection.range) return rangeCount(selection.range, selection.excludedItemIds);
   if (selection.mode === 'query_results') {
     const totalCount = selection.queryTotalCount
       ?? get(gridTotalCountAtom)
@@ -204,6 +296,20 @@ export const selectionTargetAtom = atom<EntityTarget | null>((get) => {
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'query_results') {
     if (selection.query == null) return null;
+    if (selection.range) {
+      return {
+        kind: 'range',
+        query: selection.query,
+        spans: selection.range.spans.map((span) => ({
+          anchor_root_id: span.anchor.id,
+          focus_root_id: span.focus.id,
+          anchor_index: span.anchor.index,
+          focus_index: span.focus.index,
+        })),
+        included_root_ids: [...selection.range.includedItemIds],
+        excluded_root_ids: [...selection.excludedItemIds],
+      };
+    }
     return {
       kind: 'query',
       query: selection.query,

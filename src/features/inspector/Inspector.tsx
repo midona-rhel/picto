@@ -454,7 +454,16 @@ function useSelectionSummary() {
   const summary = result?.summary ?? null;
   const needsSummary = Boolean(!pinned && target && selectionCount >= 2);
 
+  const targetRef = useRef(target);
+  targetRef.current = target;
   useEffect(() => libraryInvalidation.register('library', (payload) => {
+    // An explicit selection only changes when the event names one of its items
+    // (or is broad). Unrelated edits elsewhere no longer re-summarize it.
+    const current = targetRef.current;
+    if (current?.kind === 'explicit' && payload.item_ids.length > 0) {
+      const selected = new Set(current.root_ids);
+      if (!payload.item_ids.some((id) => selected.has(id))) return;
+    }
     setRefreshRevision(payload.revision);
   }), []);
 
@@ -478,7 +487,7 @@ function useSelectionSummary() {
       store.set(displayedInspectorTargetAtom, {
         kind: 'multi',
         count: selectionCount,
-        selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+        selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
       });
     }, 250);
     void entityMutations.getTargetSelectionSummary(target).then(async (s) => ({
@@ -496,7 +505,7 @@ function useSelectionSummary() {
         store.set(displayedInspectorTargetAtom, {
           kind: 'multi',
           count: s.selected_count,
-          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+          selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
         });
       }
     }).catch(() => {
@@ -510,7 +519,7 @@ function useSelectionSummary() {
         store.set(displayedInspectorTargetAtom, {
           kind: 'multi',
           count: selectionCount,
-          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+          selectionMode: target.kind === 'explicit' ? 'explicit' : 'query_results',
         });
       }
     });

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: User guide
+    url: https://github.com/midona-rhel/picto/tree/main/docs/user-guide
+    about: How Picto features work.

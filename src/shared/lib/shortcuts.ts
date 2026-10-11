@@ -14,6 +14,11 @@ export interface ShortcutDef {
   group: string;
   keys: string;
   keys2?: string;
+  /**
+   * Registered for a planned feature that has no handler yet. Deferred
+   * shortcuts are not shown in menus or in Settings until they work.
+   */
+  deferred?: true;
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -25,8 +30,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'nav.untagged',  label: t("Untagged"),         group: t("Navigation"), keys: 'Mod+3' },
   { id: 'nav.trash',     label: t("Trash"),            group: t("Navigation"), keys: 'Mod+4' },
   { id: 'nav.search',    label: t("Search"),           group: t("Navigation"), keys: 'Mod+F' },
-  { id: 'nav.commandPalette', label: t("Command Palette"), group: t("Navigation"), keys: 'Mod+K',            description: t("Open command palette") },
-  { id: 'nav.goToFolder',     label: t("Go to Folder"),    group: t("Navigation"), keys: 'Mod+J',            description: t("Quick-jump to a folder or smart folder") },
+  { id: 'nav.commandPalette', label: t("Command Palette"), group: t("Navigation"), keys: 'Mod+K',            description: t("Open command palette"), deferred: true },
+  { id: 'nav.goToFolder',     label: t("Go to Folder"),    group: t("Navigation"), keys: 'Mod+J',            description: t("Quick-jump to a folder or smart folder"), deferred: true },
   { id: 'nav.back',      label: t("Go Back"),          group: t("Navigation"), keys: 'Alt+ArrowLeft',  keys2: 'Mod+[' },
   { id: 'nav.forward',   label: t("Go Forward"),       group: t("Navigation"), keys: 'Alt+ArrowRight', keys2: 'Mod+]' },
 
@@ -42,8 +47,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'file.newSmartFolder',     label: t("New Smart Folder"),     group: t("File"), keys: 'Mod+Shift+Alt+N', description: t("Create a new smart folder") },
   { id: 'folder.autoTags',         label: t("Set Folder Auto Tags"), group: t("File"), keys: 'Mod+Shift+R',     description: t("Set tags applied when media enters the selected folder") },
   { id: 'file.addToFolder',        label: t("Add to Folder..."),     group: t("File"), keys: 'Mod+Shift+J',    description: t("Open folder picker to add selected files") },
-  { id: 'file.addToLastFolder',    label: t("Add to Last Folder"),   group: t("File"), keys: 'Shift+D',        description: t("Add selected files to the last used folder") },
-  { id: 'file.removeFromFolder',   label: t("Remove from Folder"),   group: t("File"), keys: 'Mod+Shift+Backspace' },
+  { id: 'file.addToLastFolder',    label: t("Add to Last Folder"),   group: t("File"), keys: 'Shift+D',        description: t("Add selected files to the last used folder"), deferred: true },
+  { id: 'file.removeFromFolder',   label: t("Remove from Folder"),   group: t("File"), keys: 'Mod+Backspace' },
   { id: 'file.regenerateThumbnail', label: t("Regenerate Thumbnail"), group: t("File"), keys: 'Mod+Shift+T',   description: t("Regenerate thumbnails for selected files") },
   { id: 'file.openDefaultApp',     label: t("Open with Default App"), group: t("File"), keys: 'Shift+Enter' },
   { id: 'file.revealInFolder',     label: t("Reveal in Folder"),     group: t("File"), keys: 'Mod+Enter' },
@@ -60,8 +65,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'edit.rename',        label: t("Rename"),          group: t("Edit"), keys: 'Ctrl+R',        description: t("Rename selected file") },
   { id: 'edit.copy',          label: t("Copy"),            group: t("Edit"), keys: 'Mod+C' },
   { id: 'edit.copyFilePath',  label: t("Copy File Path"),  group: t("Edit"), keys: 'Mod+Alt+C' },
-  { id: 'edit.copyTags',      label: t("Copy Tags"),       group: t("Edit"), keys: 'Mod+Shift+C' },
-  { id: 'edit.pasteTags',     label: t("Paste Tags"),      group: t("Edit"), keys: 'Mod+Shift+V' },
+  { id: 'edit.copyTags',      label: t("Copy Tags"),       group: t("Edit"), keys: 'Mod+Shift+C', deferred: true },
+  { id: 'edit.pasteTags',     label: t("Paste Tags"),      group: t("Edit"), keys: 'Mod+Shift+V', deferred: true },
   { id: 'edit.pasteImport',   label: t("Paste Import"),     group: t("Edit"), keys: 'Mod+V' },
 
   // ── Groups ──
@@ -79,20 +84,20 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'view.zoomIn',           label: t("Zoom In"),          group: t("View"), keys: '+',         keys2: '=' },
   { id: 'view.zoomOut',          label: t("Zoom Out"),         group: t("View"), keys: '-' },
   { id: 'view.grayscale',        label: t("Toggle Grayscale"), group: t("View"), keys: 'Mod+Alt+G', description: t("Toggle grayscale preview mode") },
-  { id: 'view.slideshow',        label: t("Slideshow"),        group: t("View"), keys: 'F5',        description: t("Start slideshow presentation mode") },
+  { id: 'view.slideshow',        label: t("Slideshow"),        group: t("View"), keys: 'F5',        description: t("Start slideshow presentation mode"), deferred: true },
   { id: 'view.prevImage',        label: t("Previous Image"),   group: t("View"), keys: 'ArrowLeft', keys2: 'A' },
   { id: 'view.nextImage',        label: t("Next Image"),       group: t("View"), keys: 'ArrowRight', keys2: 'D' },
   { id: 'view.closeDetail',      label: t("Close Media View"), group: t("View"), keys: 'Escape' },
   { id: 'view.alwaysOnTop',      label: t("Always on Top"),    group: t("View"), keys: 'Shift+T',    description: t("Toggle window always on top") },
-  { id: 'view.navigator',        label: t("Toggle Navigator"), group: t("View"), keys: 'Mod+Alt+8',  description: t("Toggle navigator overlay when zoomed") },
+  { id: 'view.navigator',        label: t("Toggle Navigator"), group: t("View"), keys: 'Mod+Alt+8',  description: t("Toggle navigator overlay when zoomed"), deferred: true },
   { id: 'view.toggleSidebar',    label: t("Toggle Sidebar"),   group: t("View"), keys: 'Mod+Alt+1' },
   { id: 'view.toggleInspector',  label: t("Toggle Inspector"), group: t("View"), keys: 'Mod+Alt+2' },
   { id: 'view.toggleBothPanels', label: t("Toggle Panels"),    group: t("View"), keys: 'Tab' },
-  { id: 'view.layoutGrid',       label: t("Grid Layout"),      group: t("View"), keys: 'Alt+1' },
-  { id: 'view.layoutWaterfall',  label: t("Waterfall Layout"),  group: t("View"), keys: 'Alt+2' },
-  { id: 'view.layoutJustified',  label: t("Justified Layout"),  group: t("View"), keys: 'Alt+3' },
-  { id: 'view.toggleTileName',   label: t("Toggle Tile Name"),  group: t("View"), keys: 'Mod+Alt+4' },
-  { id: 'view.toggleTileMetadata', label: t("Toggle Tile Info"), group: t("View"), keys: 'Mod+Alt+5', description: t("Show or hide resolution and extension on tiles") },
+  { id: 'view.layoutGrid',       label: t("Grid Layout"),      group: t("View"), keys: 'Alt+1', deferred: true },
+  { id: 'view.layoutWaterfall',  label: t("Waterfall Layout"),  group: t("View"), keys: 'Alt+2', deferred: true },
+  { id: 'view.layoutJustified',  label: t("Justified Layout"),  group: t("View"), keys: 'Alt+3', deferred: true },
+  { id: 'view.toggleTileName',   label: t("Toggle Tile Name"),  group: t("View"), keys: 'Mod+Alt+4', deferred: true },
+  { id: 'view.toggleTileMetadata', label: t("Toggle Tile Info"), group: t("View"), keys: 'Mod+Alt+5', description: t("Show or hide resolution and extension on tiles"), deferred: true },
   { id: 'view.toggleLogs',       label: t("Toggle Logs"),       group: t("View"), keys: 'Mod+L',     description: t("Show or hide the log viewer panel") },
   { id: 'document.previousPage', label: t("Previous Page"),     group: t("View"), keys: 'J',         description: t("Open the previous page in a document") },
   { id: 'document.nextPage',     label: t("Next Page"),         group: t("View"), keys: 'L',         description: t("Open the next page in a document") },
@@ -236,6 +241,7 @@ function resolveShortcut(def: ShortcutDef): ShortcutDef {
 export function getShortcutGroups(): ShortcutGroup[] {
   const map = new Map<string, ShortcutDef[]>();
   for (const source of SHORTCUT_DEFS) {
+    if (source.deferred) continue;
     const def = resolveShortcut(source);
     let list = map.get(def.group);
     if (!list) { list = []; map.set(def.group, list); }
@@ -276,9 +282,29 @@ export function formatKeysAsArray(keys: string): string[] {
   return parts.map((p) => lookup[p] ?? p);
 }
 
+/** Display text for a working shortcut, or undefined for unknown and deferred ones. */
+export function shortcutHint(id: string): string | undefined {
+  const def = getShortcut(id);
+  return def && !def.deferred ? formatKeysDisplay(def.keys) : undefined;
+}
+
 export function getShortcut(id: string): ShortcutDef | undefined {
   const def = SHORTCUT_DEFS.find((candidate) => candidate.id === id);
   return def ? resolveShortcut(def) : undefined;
+}
+
+/** Folder navigation owns removal; the same default key must not also trash. */
+export function gridRemovalAction(
+  event: KeyboardEvent,
+  inFolder: boolean,
+  inTrash: boolean,
+): 'remove-from-folder' | 'trash' | 'delete-permanently' | 'restore' | null {
+  const remove = getShortcut(inFolder && !inTrash ? 'file.removeFromFolder' : 'file.delete')!;
+  if (matchesShortcutDef(event, remove)) {
+    return inTrash ? 'delete-permanently' : inFolder ? 'remove-from-folder' : 'trash';
+  }
+  if (inTrash && matchesShortcutDef(event, getShortcut('file.restore')!)) return 'restore';
+  return null;
 }
 
 export function setShortcutBinding(id: string, slot: 'keys' | 'keys2', value: string, persist = true): void {
@@ -294,6 +320,7 @@ export function findShortcutConflict(id: string, value: string): ShortcutDef | u
   if (!value) return undefined;
   return SHORTCUT_DEFS
     .map(resolveShortcut)
+    .filter((def) => !([id, def.id].includes('file.removeFromFolder') && [id, def.id].includes('file.delete')))
     .find((def) => def.id !== id && (def.keys === value || def.keys2 === value));
 }
 
@@ -320,6 +347,9 @@ const APPLICATION_MENU_SHORTCUT_IDS = [
   'file.import',
   'file.export',
   'file.exportAs',
+  'file.delete',
+  'file.restore',
+  'file.removeFromFolder',
   'edit.undo',
   'edit.redo',
   'nav.allActive',

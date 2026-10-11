@@ -3,6 +3,7 @@ import { createMenuManager } from './menu.mjs';
 import { LIBRARY_OPEN_CANCELLED } from '../libraryOpenCancellation.mjs';
 
 function buildMenuTemplate(platform = 'linux', overrides = {}) {
+  const { commandContext, shortcutBindings, ...managerOverrides } = overrides;
   let template = null;
   const manager = createMenuManager({
     app: { name: 'Picto' },
@@ -27,11 +28,55 @@ function buildMenuTemplate(platform = 'linux', overrides = {}) {
     sendToMainWindow: () => {},
     checkForUpdates: () => {},
     platform,
-    ...overrides,
+    ...managerOverrides,
   });
   manager.buildAppMenu();
+  if (shortcutBindings) manager.setShortcutBindings(shortcutBindings);
+  if (commandContext) manager.setCommandContext(commandContext);
   return template;
 }
+
+test.each(['darwin', 'win32', 'linux'])('folder removal exclusively owns the delete accelerator on %s', (platform) => {
+  const sendToFocusedWindow = vi.fn();
+  const template = buildMenuTemplate(platform, {
+    sendToFocusedWindow,
+    commandContext: { scopeKind: 'folder', selectionCount: 1 },
+  });
+  const edit = template.find((item) => item.label === 'Edit').submenu;
+  const remove = edit.find((item) => item.label === 'Remove from Folder');
+  const trash = edit.find((item) => item.label === 'Move to Trash');
+  expect(remove.accelerator).toBe('CmdOrCtrl+Backspace');
+  expect(remove.enabled).toBe(true);
+  expect(trash.accelerator).toBeUndefined();
+  expect(trash.enabled).toBe(true);
+  remove.click();
+  expect(sendToFocusedWindow).toHaveBeenCalledOnce();
+  expect(sendToFocusedWindow).toHaveBeenCalledWith('menu:selection-action', { action: 'remove-from-folder' });
+});
+
+test.each(['all', 'inbox', 'smart_folder', 'trash'])('retains deletion behavior in %s without a competing folder accelerator', (scopeKind) => {
+  const template = buildMenuTemplate('darwin', {
+    commandContext: { scopeKind, selectionCount: 1, statusFilter: scopeKind === 'trash' ? 'trash' : null },
+  });
+  const edit = template.find((item) => item.label === 'Edit').submenu;
+  const remove = edit.find((item) => item.label === 'Remove from Folder');
+  expect(remove.accelerator).toBeUndefined();
+  expect(remove.enabled).toBe(false);
+  const deletion = edit.find((item) => item.label === (scopeKind === 'trash' ? 'Delete Permanently' : 'Move to Trash'));
+  expect(deletion.accelerator).toBe('CmdOrCtrl+Backspace');
+});
+
+test('folder removal uses custom and disabled registry bindings in the native menu', () => {
+  for (const binding of ['Alt+R', '']) {
+    const template = buildMenuTemplate('darwin', {
+      commandContext: { scopeKind: 'folder', selectionCount: 1 },
+      shortcutBindings: { 'file.removeFromFolder': binding },
+    });
+    const edit = template.find((item) => item.label === 'Edit').submenu;
+    expect(edit.find((item) => item.label === 'Remove from Folder').accelerator).toBe(binding || undefined);
+    expect(edit.find((item) => item.label === 'Move to Trash').accelerator).toBeUndefined();
+  }
+});
 
 test('groups existing Picto actions into library, file, and organize menus', () => {
   const template = buildMenuTemplate();

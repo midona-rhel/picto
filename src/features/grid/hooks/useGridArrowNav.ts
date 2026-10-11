@@ -31,6 +31,16 @@ const NAV_SHORTCUTS: ReadonlyArray<readonly [string, NavAction]> = [
   ['grid.pageDown', 'pageDown'],
 ];
 
+interface KeyboardRangeEndpoint {
+  anchorId: number;
+  endpointId: number;
+  itemIds: Set<number>;
+}
+
+function sameItems(left: ReadonlySet<number>, right: ReadonlySet<number>): boolean {
+  return left.size === right.size && [...left].every((itemId) => right.has(itemId));
+}
+
 export function useGridArrowNav(opts: {
   items: CanonicalEntityGridItem[];
   layoutRef: RefObject<LayoutResult | null>;
@@ -45,6 +55,7 @@ export function useGridArrowNav(opts: {
   const gap = gridGapForSpacing(useAtomValue(gridSpacingAtom));
   const optsRef = useRef(opts);
   optsRef.current = opts;
+  const rangeEndpointRef = useRef<KeyboardRangeEndpoint | null>(null);
 
   useShortcutScope((e) => {
       const { items, layoutRef, containerRef, selectedItemIds, selection, dispatchSelection, viewerOpen, containerWidth, targetSize } = optsRef.current;
@@ -71,15 +82,23 @@ export function useGridArrowNav(opts: {
       const minInnerWidth = fullWidth - 2 * gap;
       const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
 
-      // Find current position
-      let current = selection.anchor?.kind === 'item'
+      const anchorIndex = selection.anchor?.kind === 'item'
         ? items.findIndex((item) => item.root_id === selection.anchor!.id)
         : -1;
+      const previousRange = rangeEndpointRef.current;
+      const continuesKeyboardRange = e.shiftKey
+        && previousRange != null
+        && selection.anchor?.kind === 'item'
+        && selection.anchor.id === previousRange.anchorId
+        && sameItems(selectedItemIds, previousRange.itemIds);
+      let current = continuesKeyboardRange
+        ? items.findIndex((item) => item.root_id === previousRange.endpointId)
+        : anchorIndex;
       if (current == null || current < 0 || current >= items.length) {
         for (let i = 0; i < items.length; i++) {
           if (selectedItemIds.has(items[i].root_id)) { current = i; break; }
         }
-        if (current == null) current = 0;
+        if (current == null || current < 0) current = 0;
       }
 
       // Compute visible rows for page up/down
@@ -103,17 +122,22 @@ export function useGridArrowNav(opts: {
 
       if (e.shiftKey) {
         // Range select from anchor to target
-        const anchorIndex = selection.anchor?.kind === 'item'
-          ? items.findIndex((item) => item.root_id === selection.anchor!.id)
-          : current;
         const anchor = anchorIndex >= 0 ? anchorIndex : current;
         const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
         const next = new Set<number>();
         for (let i = lo; i <= hi; i++) {
           if (items[i]) next.add(items[i].root_id);
         }
-        dispatchSelection({ type: 'range_items', itemIds: next });
+        rangeEndpointRef.current = {
+          anchorId: items[anchor].root_id,
+          endpointId: items[target].root_id,
+          itemIds: next,
+        };
+        dispatchSelection(anchorIndex >= 0
+          ? { type: 'range_items', itemIds: next }
+          : { type: 'replace_items', itemIds: next, anchor: items[anchor].root_id });
       } else {
+        rangeEndpointRef.current = null;
         const itemId = items[target]?.root_id;
         if (itemId != null) dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId });
       }

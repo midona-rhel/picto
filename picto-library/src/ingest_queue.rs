@@ -149,6 +149,45 @@ impl Library {
         Ok(jobs)
     }
 
+    /// Hand claimed jobs that a batch could not settle back to the queue. A
+    /// job is retried at `retry_at` until it has been claimed
+    /// `max_attempts` times, then it fails with `error`. Jobs the batch
+    /// already completed or failed are not running and stay as they are.
+    pub fn release_ingest_jobs(
+        &self,
+        ingest_job_ids: &[i64],
+        error: &str,
+        now: &str,
+        retry_at: &str,
+        max_attempts: u32,
+    ) -> Result<Option<MutationReceipt>> {
+        if ingest_job_ids.is_empty() {
+            return Ok(None);
+        }
+        let Some(((), receipt)) = self.auxiliary_write_if_changed(
+            WorkPriority::CorrectnessRecovery,
+            [INGEST_RESOURCE.to_owned()],
+            [],
+            |transaction, _| {
+                let mut statement = transaction.prepare_cached(
+                    "UPDATE ingest_job
+                     SET status = CASE WHEN attempt_count >= ?1 THEN 'failed' ELSE 'pending' END,
+                         last_error = ?2, available_at = ?3, updated_at = ?4
+                     WHERE ingest_job_id = ?5 AND status = 'running'",
+                )?;
+                let mut changed = 0;
+                for ingest_job_id in ingest_job_ids {
+                    changed += statement
+                        .execute(params![max_attempts, error, retry_at, now, ingest_job_id])?;
+                }
+                Ok((changed != 0).then_some(()))
+            },
+        )? else {
+            return Ok(None);
+        };
+        Ok(Some(receipt))
+    }
+
     pub fn complete_ingest_jobs(
         &self,
         ingest_job_ids: &[i64],

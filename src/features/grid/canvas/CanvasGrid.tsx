@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
-import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
+import type { CanonicalEntityGridItem, EntityTarget } from '../../../shared/types/canonical';
 import { finishGridCommit } from '../gridBenchmarkTiming';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
@@ -74,7 +74,9 @@ import {
   gridGapForSpacing,
 } from '../gridAppearance';
 import { useScrollToTop } from '../../../shared/hooks/useScrollToTop';
+import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import { ScrollToTopButton } from '../../../shared/ui/ScrollToTopButton/ScrollToTopButton';
+import { resolveTargetFilePaths } from '../../../platform/shellApi';
 
 const RETURN_TO_TOP_THRESHOLD = 200;
 const EMPTY_ITEM_ID_SET = new Set<number>();
@@ -127,6 +129,22 @@ export function planFolderReorder(
   const insertAt = Math.max(0, Math.min(remaining.length, targetIndex - draggedBeforeTarget));
   const reordered = [...remaining.slice(0, insertAt), ...dragged, ...remaining.slice(insertAt)];
   return reordered.every((itemId, index) => itemId === orderedItemIds[index]) ? [] : reordered;
+}
+
+export async function resolveNativeDragHashes(
+  target: EntityTarget,
+  resolve = resolveTargetFilePaths,
+): Promise<string[]> {
+  const files = await resolve(target);
+  return [...new Set(files.map((file) => file.file_hash))];
+}
+
+export function localNativeDragHashes(
+  itemIds: readonly number[],
+  items: readonly Pick<CanonicalEntityGridItem, 'root_id' | 'content_hash'>[],
+): string[] {
+  const hashes = new Map(items.map((item) => [item.root_id, item.content_hash]));
+  return [...new Set(itemIds.flatMap((itemId) => hashes.get(itemId) ?? []))];
 }
 
 export function beginsGridScrollRestore(
@@ -198,6 +216,8 @@ export interface CanvasGridProps {
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
   dragSourceScope?: BaseScope | null;
+  /** Canonical selection captured when a selected tile starts dragging. */
+  dragSelectionTarget?: EntityTarget | null;
   /** Intentional layout changes, such as panel visibility or the filter row, commit immediately. */
   viewportCommitKey?: unknown;
   /** Optional local reorder owner for reusable grids such as group editing. */
@@ -246,6 +266,7 @@ export function CanvasGrid({
   selectedFolderNodeIds = EMPTY_FOLDER_NODE_SET,
   headerContent,
   dragSourceScope = null,
+  dragSelectionTarget = null,
   viewportCommitKey,
   onReorder,
   onContainerRef,
@@ -439,6 +460,19 @@ export function CanvasGrid({
   // handleScroll and the initial scroll restore).
   const selectedItemIdsRef = useRef(selectedItemIds);
   selectedItemIdsRef.current = selectedItemIds;
+  const dragSelectionTargetRef = useRef(dragSelectionTarget);
+  dragSelectionTargetRef.current = dragSelectionTarget;
+  const dragSourceScopeRef = useRef(dragSourceScope);
+  dragSourceScopeRef.current = dragSourceScope;
+  const dragWindowStartRef = useRef(windowStart);
+  dragWindowStartRef.current = windowStart;
+  const activeNativeDragTargetRef = useRef<EntityTarget | null>(null);
+  const activeNativeDragContextRef = useRef<{
+    items: CanonicalEntityGridItem[];
+    sourceScope: BaseScope | null;
+    windowStart: number;
+  } | null>(null);
+  const nativeDragRequestRef = useRef({ generation: 0, pending: false });
 
   useLayoutEffect(() => {
     const prev = prevLayoutRef.current;
@@ -1000,42 +1034,85 @@ export function CanvasGrid({
   }, [fitThumbnails, viewMode, surfaceVisible]);
 
   useEffect(() => {
+    const invalidateNativeDragRequest = () => {
+      nativeDragRequestRef.current.generation += 1;
+      nativeDragRequestRef.current.pending = false;
+    };
+    const requestIsCurrent = (generation: number, state: ReturnType<typeof getDragState>) => {
+      const context = activeNativeDragContextRef.current;
+      return nativeDragRequestRef.current.generation === generation
+        && getDragState() === state
+        && isDragOwnedBy(dragOwnerIdRef.current)
+        && context?.items === itemsRef.current
+        && context.sourceScope === dragSourceScopeRef.current
+        && context.windowStart === dragWindowStartRef.current;
+    };
+    const startResolvedNativeDrag = (fileHashes: string[]) => {
+      if (fileHashes.length === 0) {
+        cancelDrag();
+        return;
+      }
+      const iconUrl = createNativeDragImageUrl(
+        fileHashes.slice(0, 3),
+        fileHashes.length,
+        (fileHash) => {
+          const item = itemsRef.current.find((candidate) => candidate.content_hash === fileHash);
+          if (item?.mime.startsWith('font/')) return 'font';
+          const entry = pipelineRef.current?.get(fileHash);
+          return entry?.state === 'error' ? 'broken' : entry?.thumb ?? null;
+        },
+        cachedThemeRef.current.opaqueBg,
+        (fileHash) => itemsRef.current.find(
+          (candidate) => candidate.content_hash === fileHash,
+        )?.palette[0] ? labToHex(itemsRef.current.find(
+          (candidate) => candidate.content_hash === fileHash,
+        )?.palette[0]) : null,
+      );
+
+      setInternalDragOrigin(true);
+      startNativeDragFn(fileHashes, iconUrl);
+      dragJustEndedRef.current = true;
+      markDirtyRef.current('overlay');
+    };
     const onMove = (e: MouseEvent) => {
       if (!isDragOwnedBy(dragOwnerIdRef.current)) return;
 
       // If cursor exits the window during drag, initiate native OS file drag
       if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        if (nativeDragRequestRef.current.pending) return;
         const state = getDragState();
+        activeNativeDragContextRef.current ??= {
+          items: itemsRef.current,
+          sourceScope: dragSourceScopeRef.current,
+          windowStart: dragWindowStartRef.current,
+        };
         reorderDropRef.current = null;
         setDragGhost(null);
+        const target = activeNativeDragTargetRef.current
+          ?? (dragSourceScopeRef.current == null
+            ? null
+            : { kind: 'explicit' as const, root_ids: state.itemIds });
+        if (target == null) {
+          startResolvedNativeDrag(localNativeDragHashes(state.itemIds, itemsRef.current));
+          return;
+        }
 
-        const fileHashes = state.itemIds.slice(0, 3).map((itemId) =>
-          itemsRef.current.find((item) => item.root_id === itemId)?.content_hash ?? '',
-        );
-        const iconUrl = createNativeDragImageUrl(
-          fileHashes,
-          state.itemIds.length,
-          (fileHash) => {
-            const item = itemsRef.current.find((candidate) => candidate.content_hash === fileHash);
-            if (item?.mime.startsWith('font/')) return 'font';
-            const entry = pipelineRef.current?.get(fileHash);
-            return entry?.state === 'error' ? 'broken' : entry?.thumb ?? null;
-          },
-          cachedThemeRef.current.opaqueBg,
-          (fileHash) => itemsRef.current.find(
-            (candidate) => candidate.content_hash === fileHash,
-          )?.palette[0] ? labToHex(itemsRef.current.find(
-            (candidate) => candidate.content_hash === fileHash,
-          )?.palette[0]) : null,
-        );
-
-        setInternalDragOrigin(true);
-        startNativeDragFn(fileHashes, iconUrl);
-        dragJustEndedRef.current = true;
-        markDirtyRef.current('overlay');
+        const generation = ++nativeDragRequestRef.current.generation;
+        nativeDragRequestRef.current.pending = true;
+        void resolveNativeDragHashes(target).then((fileHashes) => {
+          if (!requestIsCurrent(generation, state)) return;
+          nativeDragRequestRef.current.pending = false;
+          startResolvedNativeDrag(fileHashes);
+        }).catch((error) => {
+          if (!requestIsCurrent(generation, state)) return;
+          nativeDragRequestRef.current.pending = false;
+          console.error('[drag] native drag failed:', error);
+          cancelDrag();
+        });
         return;
       }
 
+      if (nativeDragRequestRef.current.pending) invalidateNativeDragRequest();
       moveDrag(e.clientX, e.clientY);
       // A reusable grid with an onReorder owner is not a library-root drag
       // source. Never let sidebar lifecycle/folder targets reinterpret its IDs.
@@ -1067,6 +1144,12 @@ export function CanvasGrid({
     };
     const onUp = (e: MouseEvent) => {
       if (isDragOwnedBy(dragOwnerIdRef.current)) {
+        if (nativeDragRequestRef.current.pending) {
+          invalidateNativeDragRequest();
+          cancelDrag();
+          setDragGhost(null);
+          return;
+        }
         // If cursor is outside the window, the onMove handler already triggered native drag
         if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
           return;
@@ -1100,10 +1183,28 @@ export function CanvasGrid({
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      invalidateNativeDragRequest();
       reorderDropRef.current = null;
       if (isDragOwnedBy(dragOwnerIdRef.current)) cancelDrag();
     };
   }, []); // stable — never re-runs, uses refs for all mutable data
+
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape' || !isDragOwnedBy(dragOwnerIdRef.current)) return;
+    nativeDragRequestRef.current.generation += 1;
+    nativeDragRequestRef.current.pending = false;
+    cancelDrag();
+    setDragGhost(null);
+    return true;
+  }, { priority: 60 });
+
+  useEffect(() => {
+    if (!nativeDragRequestRef.current.pending) return;
+    nativeDragRequestRef.current.generation += 1;
+    nativeDragRequestRef.current.pending = false;
+    if (isDragOwnedBy(dragOwnerIdRef.current)) cancelDrag();
+    setDragGhost(null);
+  }, [dragSelectionTarget, dragSourceScope, items, windowStart]);
 
 
   const scheduleWindow = useCallback(() => {
@@ -1511,9 +1612,20 @@ export function CanvasGrid({
         if (item) {
           const itemId = item.root_id;
           const currentSelection = selectedItemIdsRef.current;
-          const itemIds = currentSelection.has(itemId)
+          const draggingSelection = currentSelection.has(itemId);
+          const itemIds = draggingSelection
             ? [...currentSelection]
             : [itemId];
+          activeNativeDragTargetRef.current = onReorderRef.current
+            ? null
+            : draggingSelection
+              ? dragSelectionTargetRef.current ?? { kind: 'explicit', root_ids: itemIds }
+              : { kind: 'explicit', root_ids: itemIds };
+          activeNativeDragContextRef.current = {
+            items: itemsRef.current,
+            sourceScope: dragSourceScopeRef.current,
+            windowStart: dragWindowStartRef.current,
+          };
           const thumbHashes = itemIds.slice(0, 3).map((id) => {
             return items.find((candidate) => candidate.root_id === id)?.content_hash ?? '';
           });

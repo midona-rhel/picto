@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { gridSelectionAtom } from '../state/selection';
+import { gridSessionAtom } from '../state/grid';
 import { exportModalAtom } from '../state/modals';
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   showInfo: vi.fn(),
   showSuccess: vi.fn(),
   setTargetRating: vi.fn().mockResolvedValue(undefined),
+  setTargetLifecycle: vi.fn().mockResolvedValue(undefined),
+  updateTargetFolderMembership: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../platform/ipc', () => ({
@@ -27,9 +30,9 @@ vi.mock('../controllers/filesController', () => ({
 }));
 vi.mock('../controllers/entityMutations', () => ({
   setTargetRating: mocks.setTargetRating,
-  setTargetLifecycle: vi.fn().mockResolvedValue(undefined),
+  setTargetLifecycle: mocks.setTargetLifecycle,
   permanentlyDeleteTarget: vi.fn().mockResolvedValue(undefined),
-  updateTargetFolderMembership: vi.fn().mockResolvedValue(undefined),
+  updateTargetFolderMembership: mocks.updateTargetFolderMembership,
   settleSelectionAfterMutation: vi.fn(),
 }));
 vi.mock('../shared/lib/notifications', () => ({
@@ -45,6 +48,7 @@ const store = getDefaultStore();
 describe('application menu runtime', () => {
   beforeEach(() => {
     mocks.listeners.clear();
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'all' } });
     store.set(gridSelectionAtom, {
       mode: 'explicit',
       itemIds: new Set([7]),
@@ -96,5 +100,18 @@ describe('application menu runtime', () => {
       { kind: 'explicit', root_ids: [7] },
       4,
     ));
+  });
+
+  it('removes only the navigated folder membership without trashing the item', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'folder', folder_id: 12 } });
+    const stop = startApplicationMenuRuntime();
+    await vi.waitFor(() => expect(mocks.listeners.has('menu:selection-action')).toBe(true));
+    mocks.listeners.get('menu:selection-action')?.({ payload: { action: 'remove-from-folder' } });
+    await vi.waitFor(() => expect(mocks.updateTargetFolderMembership).toHaveBeenCalledWith(
+      { kind: 'explicit', root_ids: [7] }, 12, 'remove',
+    ));
+    expect(mocks.updateTargetFolderMembership).toHaveBeenCalledOnce();
+    expect(mocks.setTargetLifecycle).not.toHaveBeenCalled();
+    stop();
   });
 });

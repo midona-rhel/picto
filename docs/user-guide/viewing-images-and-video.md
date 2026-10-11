@@ -2,76 +2,93 @@
 
 [← User Guide](README.md)
 
-## Detail View
+Picto has three ways to look at an item:
 
-Press `Enter` or double-click a thumbnail to open the detail view — a full-screen image viewer with carousel navigation.
+| Viewer | Open with | Close with |
+|--------|-----------|------------|
+| Media view (fills the grid area) | `Enter` or double-click | `Escape`, `Enter`, `Space`, or the back button |
+| Quick Look (overlay preview) | `Space` | `Space`, `Escape`, or `Enter` |
+| Separate window | `Mod+O`, **Open in New Window**, or middle-click | `Escape` or the window's close button |
 
-### Navigation
+Settings → Controls can make double-click open the default app and middle-click do nothing.
+
+## Navigate and rate
 
 | Key | Action |
 |-----|--------|
-| `Left Arrow` or `A` | Previous image |
-| `Right Arrow` or `D` | Next image |
-| `Escape` | Close detail view |
+| `Left` / `A` | Previous item |
+| `Right` / `D` | Next item |
+| `0`–`5` | Set the rating (media view and Quick Look) |
+| `Mod+C` | Copy the item |
 
-### Zoom and Pan
+At either end of the list a **First item** / **Last item** hint appears.
+
+In the Inbox, the media view and Quick Look show Accept and Reject buttons; see
+[Importing Files](importing-files.md#reviewing-the-inbox).
+
+## Zoom and pan (images, PDF, JPEG XL)
 
 | Action | How |
 |--------|-----|
-| Zoom in/out | Scroll wheel, or `+`/`-` keys |
-| Fit to window | `` ` `` (backtick) |
-| Actual size (100%) | `Ctrl+0` |
-| Pan | Click and drag the image |
+| Zoom in / out | Mouse wheel (toward the pointer), or `+` / `-` |
+| Fit to window | `` ` `` (EU layout: `Shift+F`) |
+| Actual size | `Mod+0` |
+| Pan | Drag the image |
 
-Zoom follows the cursor — scroll while pointing at a specific area to zoom into that spot.
+The title bar shows a zoom slider and percentage, with **Fit to window** and **Actual size** buttons.
+When the image is larger than the window, a navigator thumbnail appears; drag in it to pan.
 
-### Navigator Minimap
+On macOS, Settings → Controls → **Media view gestures** can switch to trackpad pan and pinch zoom.
+Settings → Preview sets **Scaling** (Smooth or Pixelated), **Default zoom** (Fit to window or Actual
+size), and **Show transparency grid**.
 
-When zoomed in, a minimap appears in the corner showing your current viewport position on the full image. Drag within the minimap to pan quickly.
-
-Toggle the navigator with `Ctrl+Alt+8`.
-
-### Image Adjustments
-
-- **Grayscale preview** — `Ctrl+Alt+G` toggles a grayscale filter for evaluating composition
-- **Rotation** — Rotate the image 90/180/270 degrees
-- **Mirror** — Flip the image horizontally
-
-Adjustments are per-image and cached during your session.
-
-## Quick Look
-
-Press `Space` on a selected thumbnail for a quick preview without entering the full detail view. Press `Space` again or `Escape` to dismiss.
-
-## Detail Window
-
-Press `Ctrl+O` to open the selected image in a separate floating window. The detail window has:
-
-- Independent zoom state from the main detail view
-- **Always-on-top** toggle (`Shift+T`) to keep it above other windows
-- Auto-hiding toolbar (appears on mouse movement)
-- Full zoom, pan, and navigator support
-
-## Slideshow
-
-Press `F5` to start a slideshow. Images advance automatically on a timer. Press `Escape` to stop.
-
-## Video Playback
-
-Picto includes a built-in video player for MP4, WebM, MKV, and other supported formats.
+## Video and audio
 
 | Key | Action |
 |-----|--------|
-| `Space` | Play / Pause |
-| `Arrow Up` | Volume up |
-| `Arrow Down` | Volume down |
-| `M` | Toggle mute |
-| `L` | Toggle loop |
-| `]` | Increase playback speed |
-| `[` | Decrease playback speed |
-| `Backspace` | Reset speed to 1x |
+| `K` | Play / pause (clicking the video also works) |
+| `J` / `L` | Seek back / forward 5 seconds |
+| `Up` / `Down` | Volume up / down |
+| `M` | Mute |
+| `O` | Loop on / off |
+| `]` / `[` | Faster / slower (EU layout: `Shift+.` / `Shift+,`) |
+| `\` | Reset speed to 1x (EU layout: `Shift+R`) |
+| `F` | Fullscreen (video only; double-click also works) |
 
-The video player shows a seek bar, current time, duration, and playback rate. Videos auto-play by default (configurable in [Settings](settings.md)).
+Speeds: 0.25x, 0.5x, 0.75x, 1x, 2x, 3x. The controls bar has a seek bar, play, loop, speed menu,
+volume, and fullscreen. **Autoplay videos** and **Loop videos** are on by default (Settings →
+Preview). Audio files show a visualization (None, Spectrum, Oscilloscope, or Orbit, set in
+Settings → Preview).
 
-The detail view navigates the current image or video result order. Multi-file source posts remain
-independent media; Picto does not create a hidden group or automatic folder for them.
+## Documents and comics
+
+PDF, DOCX, PPTX, EPUB, CBZ comic archives, DjVu, and text files (plain text, Markdown, JSON, RTF)
+open in a paged viewer with **Previous page** / **Next page** buttons and a page counter.
+
+| Key | Action |
+|-----|--------|
+| `J` | Previous page |
+| `L` | Next page |
+
+## Fonts
+
+Font files open in a font viewer with **Preview**, **Waterfall**, **Glyphs**, and **Information**
+tabs. The preview text is editable. `Mod+=` / `Mod+-` / `Mod+0` change the preview size.
+
+## Flash
+
+SWF files play in a built-in Flash player (Ruffle) with Play/Pause and Stop. `K` plays or pauses,
+`Up` / `Down` change the volume, `M` mutes.
+
+## Separate window
+
+**Open in New Window** opens the item in its own window. You can keep several open.
+
+- `Left` / `Right` move through the items that were selected when you opened it.
+- `Shift+T` (or the pin button) keeps the window **Always on top**.
+- `Mod+Alt+C` copies the file path; `Mod+C` copies the file.
+- Zoom keys work as in the media view.
+
+## Collections
+
+Opening a collection shows its members in a scrolling reader. See [Collections](collections.md).

@@ -2,58 +2,66 @@
 
 [← User Guide](README.md)
 
-Smart folders are dynamic, rule-based folders that automatically collect files matching tag predicates. Unlike regular [folders](folders.md), you don't manually add files — the contents update automatically as tags change.
+A smart folder shows every item that matches its rules. You never add items by hand; the results
+change as your library changes.
 
-## Creating a Smart Folder
+## Create a smart folder
 
-Press `Ctrl+Shift+Alt+N` or right-click in the Smart Folders section → **New Smart Folder**.
+1. Press `Mod+Shift+Alt+N`, or click **+** next to **Smart Folders** → **New Smart Folder**.
+2. Enter a name. Optionally pick an icon, a color and notes.
+3. Build the rules (below) and click **Create**.
 
-The creation dialog lets you configure:
+## Rules
 
-1. **Name** — A descriptive name for the smart folder
-2. **Icon** — Choose from the built-in icon picker
-3. **Color** — Set a color label for visual distinction
-4. **Predicates** — The rules that determine which files appear
+Rules live in groups. Each group reads as a sentence:
 
-## Predicates
+> Match **all / any** of the following, **included / excluded**
 
-Smart folders use three types of predicates:
+- **all** — an item must match every rule in the group.
+- **any** — one matching rule is enough.
+- **excluded** — items matching the group are removed from the results.
 
-### Include All (AND)
+When there are several groups, an item must satisfy every group. Use **+** and **−** to add or
+remove rules and groups. A smart folder can have at most **10 rules** in total.
 
-Files must have **every** tag in this list. For example, if you include `creator:john` AND `series:landscape`, only files with both tags appear.
+| Field | Operators | Value |
+|---|---|---|
+| Tags | include all, include any, do not include | One or more tags |
+| File Type | is, is not | Image, Video, Audio, or a specific accepted format |
+| Rating | equals, not equals, greater than, at least, less than, at most, between | Unrated to 5 stars |
+| File Size | same as Rating | Number with B, KB, MB or GB |
+| Date Imported, Date Created, Date Modified | is, after, on or after, before, on or before, between | Date |
+| Name | contains | Text |
+| Width, Height | same as Rating | Pixels |
+| Duration | same as Rating | Seconds |
+| Notes, Source URL | contains, is empty, is not empty | Text |
+| Color | contains | A color (matches items with a similar dominant color) |
 
-### Include Any (OR)
+While you edit the rules of an existing smart folder, the grid behind the dialog updates as you
+type. **Cancel** restores the previous rules.
 
-Files must have **at least one** tag from this list. For example, include `character:alice` OR `character:bob` to show files with either character.
+## Nest smart folders
 
-### Do Not Include (Exclude)
+Right-click a smart folder → **New Child Smart Folder**. A child only searches inside its parent's
+results, so its rules narrow the parent:
 
-Files with **any** of these tags are excluded. For example, excluding `meta:sketch` removes all sketches from the results, even if they match the include rules.
+- Parent: Tags include all `series:landscape`
+- Child: Tags include all `wallpaper`
+- Child shows: landscapes that are also wallpapers
 
-## Live Count Preview
+Smart folders nest up to 8 levels.
 
-While editing predicates, a live count shows how many files currently match your rules. This updates with a short delay as you add or remove predicates.
+A **smart folder group** (**+** → **New Smart Folder Group**, or right-click → **New Child Smart
+Folder Group**) has no rules of its own. Use it to organize smart folders in the sidebar.
 
-## Nesting Smart Folders
+## Manage smart folders
 
-Smart folders can be nested under other smart folders. A child inherits its parent's predicates and combines them with its own:
+Right-click a smart folder:
 
-- Parent: `Include All: series:landscape`
-- Child: `Include All: meta:wallpaper`
-- Result: Files that are BOTH landscapes AND wallpapers
+- **Edit Smart Folder…** (name, icon, color, notes) and **Edit Rules…**
+- **Add to Quick Access**, **Rename**, **Move to…**, **Duplicate**
+- **Refresh Results** and **Sort Results by Name**
+- **Expand/Collapse**, **Change Icon**, color picker
+- **Delete** — removes only the smart folder; media is not affected
 
-This lets you build increasingly specific filters without repeating rules.
-
-## Editing and Deleting
-
-- **Edit** — Double-click a smart folder or right-click → Edit to modify its predicates, name, icon, or color
-- **Delete** — Right-click → Delete. Files are not affected — only the smart folder definition is removed
-
-## Sort Override
-
-Each smart folder can optionally override the global sort field and order. This lets you sort one smart folder by rating while another sorts by date added.
-
-## Undo Support
-
-Creating, editing, and deleting smart folders all support undo (`Ctrl+Z`).
+Creating, editing and deleting smart folders can be undone with `Mod+Z`.

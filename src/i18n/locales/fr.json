@@ -1471,5 +1471,14 @@
   "Opening your library": "Ouverture de votre bibliothèque",
   "Updating your library database": "Mise à jour de la base de données de votre bibliothèque",
   "Loading your library": "Chargement de votre bibliothèque",
-  "Starting library services": "Démarrage des services de la bibliothèque"
+  "Starting library services": "Démarrage des services de la bibliothèque",
+  "Library deleted.": "Bibliothèque supprimée.",
+  "Move…": "Déplacer…",
+  "Locate…": "Localiser…",
+  "Delete…": "Supprimer…",
+  "Part of the selection left this view": "Une partie de la sélection a quitté cette vue",
+  "A selected range lost its first or last item, so that range is no longer selected.": "Une plage sélectionnée a perdu son premier ou son dernier élément ; elle n'est donc plus sélectionnée.",
+  "Could not preview smart folder rules": "Impossible de prévisualiser les règles du dossier intelligent",
+  "Could not restore smart folder rules": "Impossible de restaurer les règles du dossier intelligent",
+  "Could not save smart folder": "Impossible d'enregistrer le dossier intelligent"
 }

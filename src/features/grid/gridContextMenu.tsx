@@ -19,7 +19,7 @@ import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/Context
 import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
 import { IconFolderNewSelection } from '../../shared/ui/IconPicker/customIcons';
 import { buildContextMenuViewEntries } from './GridViewMenu';
-import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
+import { shortcutHint } from '../../shared/lib/shortcuts';
 import {
   GroupCreateIcon,
   GroupEditIcon,
@@ -36,10 +36,7 @@ import { t } from '../../i18n';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
-function kbd(id: string): string | undefined {
-  const def = getShortcut(id);
-  return def ? formatKeysDisplay(def.keys) : undefined;
-}
+const kbd = shortcutHint;
 
 export interface GridMenuContext {
   surface?: 'grid' | 'viewer';
@@ -584,7 +581,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       const trashLabel = selectionCount > 1 ? `Move ${selectionCount} to Trash` : 'Move to Trash';
       entries.push(item(trashLabel, {
         icon: <IconTrash size={15} />,
-        shortcut: kbd('file.delete'),
+        shortcut: scopeKind === 'folder' ? undefined : kbd('file.delete'),
         action: ctx.onMoveToTrash,
       }));
     }

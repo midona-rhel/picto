@@ -576,7 +576,12 @@ pub fn generate_thumbnail_from_ugoira(
 /// - 2 bytes: frame rate (8.8 fixed point)
 /// - 2 bytes: frame count
 pub fn get_flash_properties(path: &Path) -> FileResult<((u32, u32), u64, u32)> {
-    let data = std::fs::read(path).map_err(FileError::Io)?;
+    // The header is all we read: 8 bytes plus at most 21 of RECT and frame
+    // data, which a zlib stream yields from its first few hundred bytes.
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(64 * 1024).read_to_end(&mut data))
+        .map_err(FileError::Io)?;
 
     if data.len() < 8 {
         return Err(FileError::UnsupportedFile("SWF file too small".to_string()));
@@ -598,7 +603,7 @@ pub fn get_flash_properties(path: &Path) -> FileResult<((u32, u32), u64, u32)> {
     // For compressed SWF, we need to decompress the body
     let body_data = if is_compressed && sig == b"CWS" {
         // Zlib compressed: decompress everything after byte 8
-        let mut decoder = flate2::read::ZlibDecoder::new(&data[8..]);
+        let mut decoder = flate2::read::ZlibDecoder::new(&data[8..]).take(64);
         let mut decompressed = Vec::new();
         decoder
             .read_to_end(&mut decompressed)
@@ -703,14 +708,7 @@ fn read_zip_entry_string(archive_path: &Path, entry_path: &str) -> FileResult<St
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open ZIP archive: {}", e)))?;
 
-    let mut entry = zip.by_name(entry_path).map_err(|e| {
-        FileError::UnsupportedFile(format!("Could not find '{}' in ZIP: {}", entry_path, e))
-    })?;
-
-    let mut buf = String::new();
-    entry.read_to_string(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    super::archive::read_entry_text_bounded(&mut zip, entry_path)
 }
 
 /// Read a ZIP entry as bytes.
@@ -719,14 +717,7 @@ fn read_zip_entry_bytes(archive_path: &Path, entry_path: &str) -> FileResult<Vec
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open ZIP archive: {}", e)))?;
 
-    let mut entry = zip.by_name(entry_path).map_err(|e| {
-        FileError::UnsupportedFile(format!("Could not find '{}' in ZIP: {}", entry_path, e))
-    })?;
-
-    let mut buf = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut buf).map_err(FileError::Io)?;
-
-    Ok(buf)
+    super::archive::read_entry_bounded(&mut zip, entry_path, super::archive::MAX_PREVIEW_ENTRY_BYTES)
 }
 
 /// Resize image bytes to a thumbnail at the target resolution.

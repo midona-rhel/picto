@@ -91,6 +91,8 @@ CREATE TABLE folder_definition (
     watch_path TEXT UNIQUE,
     watch_enabled INTEGER NOT NULL DEFAULT 0 CHECK (watch_enabled IN (0, 1)),
     watch_subfolders INTEGER NOT NULL DEFAULT 0 CHECK (watch_subfolders IN (0, 1)),
+    -- Status of files imported by the watcher: 1 = Active, 2 = Inbox.
+    watch_lifecycle INTEGER NOT NULL DEFAULT 2 CHECK (watch_lifecycle IN (1, 2)),
     display_order INTEGER NOT NULL
 ) STRICT;
 
@@ -119,15 +121,15 @@ CREATE TABLE canonical_bitmap (
     PRIMARY KEY(domain, key_id, high_bits)
 ) WITHOUT ROWID, STRICT;
 
-CREATE TABLE ordered_membership (
+-- Folder and collection orders, ORDER_CHUNK_LEN ids per row (little-endian
+-- u32). An edit rewrites only the chunks it changes.
+CREATE TABLE ordered_membership_chunk (
     owner_kind INTEGER NOT NULL CHECK (owner_kind IN (1, 2)),
     owner_id INTEGER NOT NULL,
-    revision INTEGER NOT NULL,
-    cardinality INTEGER NOT NULL CHECK (cardinality >= 0),
-    format_version INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
     checksum BLOB NOT NULL,
     payload BLOB NOT NULL,
-    PRIMARY KEY(owner_kind, owner_id)
+    PRIMARY KEY(owner_kind, owner_id, chunk_index)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE recent_view (
@@ -381,61 +383,11 @@ CREATE TABLE cloud_state (
     retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":7,"full_media_history":false}'
 ) STRICT;
 
-CREATE TABLE cloud_outbox (
-    mutation_id TEXT PRIMARY KEY,
-    library_id TEXT NOT NULL,
-    device_id TEXT NOT NULL,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
-    causal_frontier_json TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    schema_generation INTEGER NOT NULL,
-    checksum TEXT NOT NULL,
-    byte_size INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    published_at TEXT,
-    current_epoch INTEGER NOT NULL DEFAULT 0 CHECK (current_epoch IN (0, 1))
-) WITHOUT ROWID, STRICT;
-
-CREATE TABLE cloud_applied_mutation (
-    mutation_id TEXT PRIMARY KEY,
-    device_id TEXT NOT NULL,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
-    checksum TEXT NOT NULL,
-    applied_at TEXT NOT NULL
-) WITHOUT ROWID, STRICT;
-
 CREATE TABLE cloud_device_frontier (
     device_id TEXT PRIMARY KEY,
     hlc_physical_ms INTEGER NOT NULL,
     hlc_logical INTEGER NOT NULL,
     updated_at TEXT NOT NULL
-) WITHOUT ROWID, STRICT;
-
-CREATE TABLE cloud_field_clock (
-    object_kind TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    field_name TEXT NOT NULL,
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
-    device_id TEXT NOT NULL,
-    mutation_id TEXT NOT NULL,
-    PRIMARY KEY(object_kind, object_key, field_name)
-) WITHOUT ROWID, STRICT;
-
-CREATE TABLE cloud_membership_clock (
-    relation_kind TEXT NOT NULL,
-    owner_key TEXT NOT NULL,
-    member_key TEXT NOT NULL,
-    present INTEGER NOT NULL CHECK (present IN (0, 1)),
-    hlc_physical_ms INTEGER NOT NULL,
-    hlc_logical INTEGER NOT NULL,
-    device_id TEXT NOT NULL,
-    mutation_id TEXT NOT NULL,
-    causal_frontier_json TEXT NOT NULL,
-    PRIMARY KEY(relation_kind, owner_key, member_key)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE cloud_tombstone (
@@ -564,4 +516,3 @@ CREATE UNIQUE INDEX idx_work_item_media_kind ON work_item(media_item_id, work_ty
 CREATE UNIQUE INDEX idx_work_item_root_kind ON work_item(root_id, work_type)
     WHERE root_id IS NOT NULL;
 CREATE INDEX idx_subscription_issue_open ON subscription_issue(status, last_seen_at, issue_id);
-CREATE INDEX idx_cloud_outbox_pending ON cloud_outbox(published_at, created_at, mutation_id);

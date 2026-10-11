@@ -98,11 +98,13 @@ export function setFolderWatchConfig(
   folderId: number,
   path: string,
   includeSubfolders: boolean,
+  lifecycle: 'inbox' | 'active',
 ): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.watch.set', {
     folder_id: folderId,
     path,
     include_subfolders: includeSubfolders,
+    lifecycle,
   });
 }
 
@@ -111,11 +113,11 @@ export function clearFolderWatchConfig(folderId: number): Promise<FolderMutation
 }
 
 export async function getFolderCover(folderId: number): Promise<{ entity_hash: string; mime_type: string } | null> {
-  const explicit = await invoke<{ entity_hash: string; mime_type: string } | null>(
+  const explicit = await invoke<{ root_id: number; content_hash: string; mime: string } | null>(
     'folders.cover.get',
     { folder_id: folderId },
   );
-  if (explicit) return explicit;
+  if (explicit) return { entity_hash: explicit.content_hash, mime_type: explicit.mime };
   const page = await queryItems(compileGridQuery(
     { kind: 'folder', folder_id: folderId },
     createEmptyItemFilters(),
@@ -128,7 +130,7 @@ export async function getFolderCover(folderId: number): Promise<{ entity_hash: s
 export function setFolderCover(folderId: number, itemId: number): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.cover.set', {
     folder_id: folderId,
-    item_id: itemId,
+    root_id: itemId,
   });
 }
 
@@ -189,11 +191,11 @@ export function exportMedia(target: EntityTarget, config: {
 
 export function reorderFolderMembers(
   folderId: number,
-  itemIds: number[],
+  rootIds: number[],
 ): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.items.reorder', {
     folder_id: folderId,
-    item_ids: itemIds,
+    root_ids: rootIds,
   });
 }
 

@@ -108,6 +108,9 @@ pub(crate) async fn populate_file_info(path: &Path, info: &mut FileInfo) {
                 let (_nw, (w, h)) = office::get_pptx_info(path);
                 info.width = w;
                 info.height = h;
+            } else if let Ok((width, height)) = office::preview_resolution(path) {
+                info.width = Some(width);
+                info.height = Some(height);
             }
         }
         MediaAdapterKind::Flash => {
