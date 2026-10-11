@@ -33,7 +33,25 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # The protected branches predate this policy. Use this reviewed immutable
+      # implementation only until the base carries its own policy, never a PR's
+      # candidate script. This also lets the bootstrap PR satisfy its own gate.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ hashFiles('scripts/ci/check-branch-policy.mjs') == '' }}
+        with:
+          repository: midona-rhel/picto
+          ref: 7bae5ea13e2a4ab76a58cdf1ee50e0da59b6264e
+          path: .branch-policy-bootstrap
+          persist-credentials: false
       - name: Enforce the release-only main branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/ci/check-branch-policy.mjs
+        run: |
+          if test -f scripts/ci/check-branch-policy.mjs; then
+            node scripts/ci/check-branch-policy.mjs
+          else
+            node .branch-policy-bootstrap/scripts/ci/check-branch-policy.mjs
+          fi
