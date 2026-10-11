@@ -76,6 +76,11 @@ interface CloudLibraryChoice {
   created_at: string;
 }
 
+interface CurrentLibraryStatistics {
+  path: string;
+  value: LibraryStatistics;
+}
+
 const pictoLibrary = () => (window as any).picto.library;
 const pictoShell = () => (window as any).picto.shell;
 
@@ -129,13 +134,14 @@ export function LibraryManager() {
   const [cloudRoots, setCloudRoots] = useState<DetectedCloudRoot[]>([]);
   const [cloudConfiguration, setCloudConfiguration] = useState<CloudConfiguration | null>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
-  const [libraryStatistics, setLibraryStatistics] = useState<LibraryStatistics | null>(null);
+  const [libraryStatistics, setLibraryStatistics] = useState<CurrentLibraryStatistics | null>(null);
   const [cloudLibraries, setCloudLibraries] = useState<CloudLibraryChoice[]>([]);
   const [syncEtaSeconds, setSyncEtaSeconds] = useState<number | null>(null);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const syncRateSamples = useRef<SyncRateSample[]>([]);
   const syncWorkKey = useRef<string | null>(null);
   const didRequestWindowShow = useRef(false);
+  const statisticsRequest = useRef(0);
   const libraryMenu = useContextMenu();
 
   const refresh = useCallback(async (): Promise<LibraryConfigResult | null> => {
@@ -165,10 +171,17 @@ export function LibraryManager() {
   }, []);
 
   const refreshLibraryStatistics = useCallback(async () => {
+    const request = ++statisticsRequest.current;
     try {
-      setLibraryStatistics(await invoke<LibraryStatistics>('library.stats'));
+      const currentPath = (await pictoLibrary().getConfig() as LibraryConfigResult).currentPath;
+      if (!currentPath) {
+        if (request === statisticsRequest.current) setLibraryStatistics(null);
+        return;
+      }
+      const value = await invoke<LibraryStatistics>('library.stats');
+      if (request === statisticsRequest.current) setLibraryStatistics({ path: currentPath, value });
     } catch {
-      setLibraryStatistics(null);
+      if (request === statisticsRequest.current) setLibraryStatistics(null);
     }
   }, []);
 
@@ -229,7 +242,7 @@ export function LibraryManager() {
         const history = nextConfig.libraryHistory ?? [];
         const paths = [...pinned, ...history.filter((path) => !pinned.includes(path))];
         const current = nextConfig.currentPath;
-        setSelectedPath(current && paths.includes(current) ? current : paths[0] ?? null);
+        setSelectedPath((selected) => selected ?? (current && paths.includes(current) ? current : paths[0] ?? null));
       }
       setInitialLoadComplete(true);
     });
@@ -252,10 +265,27 @@ export function LibraryManager() {
   }, [initialLoadComplete]);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listen('library-meta-changed', refresh).then((value) => { unlisten = value; });
-    return () => unlisten?.();
-  }, [refresh]);
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const subscribe = <T,>(name: string, callback: (event: { payload: T }) => void) => {
+      void listen<T>(name, callback).then((value) => {
+        if (disposed) value();
+        else unlisteners.push(value);
+      });
+    };
+    subscribe('library-meta-changed', () => { void refresh(); });
+    subscribe<{ path: string }>('library-switched', ({ payload }) => {
+      setSelectedPath(payload.path);
+      setLibraryStatistics(null);
+      void refreshLibraryStatistics();
+      void refresh();
+      void refreshCloudStatus();
+    });
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [refresh, refreshCloudStatus, refreshLibraryStatistics]);
 
   useEffect(() => {
     let disposed = false;
@@ -328,6 +358,10 @@ export function LibraryManager() {
     () => localEntries.find((entry) => entry.path === selectedPath) ?? null,
     [localEntries, selectedPath],
   );
+  const displayedLibraryStatistics = selectedEntry?.current
+    && libraryStatistics?.path === selectedEntry.path
+    ? libraryStatistics.value
+    : null;
 
   const syncPresentation = useMemo(
     () => presentCloudSync(cloudStatus),
@@ -845,16 +879,16 @@ export function LibraryManager() {
                   <div className={styles.cardTitle}>{t("Library")}</div>
                   {!selectedEntry.current ? (
                     <p className={styles.cardDescription}>{t("Open this library to view its statistics.")}</p>
-                  ) : libraryStatistics ? (
+                  ) : displayedLibraryStatistics ? (
                     <div className={styles.statisticsGrid}>
-                      <span><strong>{libraryStatistics.active_items.toLocaleString()}</strong><small>{t("All")}</small></span>
-                      <span><strong>{libraryStatistics.inbox_items.toLocaleString()}</strong><small>{t("Inbox")}</small></span>
-                      <span><strong>{libraryStatistics.trash_items.toLocaleString()}</strong><small>{t("Trash")}</small></span>
-                      <span><strong>{libraryStatistics.media_assets.toLocaleString()}</strong><small>{t("Media")}</small></span>
-                      <span><strong>{libraryStatistics.image_assets.toLocaleString()}</strong><small>{t("Images")}</small></span>
-                      <span><strong>{libraryStatistics.tags.toLocaleString()}</strong><small>{t("Tags")}</small></span>
-                      <span><strong>{libraryStatistics.subscriptions.toLocaleString()}</strong><small>{t("Subscriptions")}</small></span>
-                      <span><strong>{formatBytes(libraryStatistics.original_bytes)}</strong><small>{t("Size")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.active_items.toLocaleString()}</strong><small>{t("All")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.inbox_items.toLocaleString()}</strong><small>{t("Inbox")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.trash_items.toLocaleString()}</strong><small>{t("Trash")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.media_assets.toLocaleString()}</strong><small>{t("Media")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.image_assets.toLocaleString()}</strong><small>{t("Images")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.tags.toLocaleString()}</strong><small>{t("Tags")}</small></span>
+                      <span><strong>{displayedLibraryStatistics.subscriptions.toLocaleString()}</strong><small>{t("Subscriptions")}</small></span>
+                      <span><strong>{formatBytes(displayedLibraryStatistics.original_bytes)}</strong><small>{t("Size")}</small></span>
                     </div>
                   ) : <p className={styles.cardDescription}>{t("Loading library statistics…")}</p>}
                 </section>
