@@ -517,6 +517,7 @@ test.each([
   const rename = vi.fn(() => move);
   const { service, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => {
         if (value === '/Alias/A.library') return source;
         if (value === destination) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -614,6 +615,7 @@ test.each(['relocation', 'rename'])('%s refuses a source that is opening', async
   const source = '/Pictures/A.library';
   const { service } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async (value) => {
         if (value !== source) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -639,6 +641,7 @@ test('a failed current-library move can reopen its own reserved source', async (
   const native = createNativeOpenStub();
   const { service, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async (value) => {
         if (value !== source) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -742,6 +745,37 @@ test('a cross-volume relocation publishes a verified real copy before removing t
     await expect(fs.readFile(path.join(destination, 'blobs', 'aa', 'asset.bin'), 'utf8')).resolves.toBe('asset bytes');
     expect(updates).toHaveBeenCalledWith(source, destination);
     expect(blockedStages).toEqual(['cp', 'rm']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each(['rename', 'move', 'cross-volume move'])('%s refuses an unrelated remembered directory', async (operation) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-unowned-move-')));
+  const source = path.join(root, 'Remembered.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const updates = vi.fn();
+  try {
+    await fs.mkdir(source);
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'important.txt'), 'unrelated data');
+    const guardedFs = new Proxy(fs, { get(target, property) {
+      if (property !== 'rename' || operation !== 'cross-volume move') return target[property];
+      return async (from, to) => {
+        if (from === source) throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+        return target.rename(from, to);
+      };
+    } });
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs: guardedFs, path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+      updateLibraryPath: updates,
+    });
+    await expect(operation === 'rename' ? service.renameLibrary(source, 'B')
+      : service.relocateLibrary(source)).rejects.toThrow('no longer a Picto library');
+    await expect(fs.readFile(path.join(source, 'important.txt'), 'utf8')).resolves.toBe('unrelated data');
+    expect(await fs.readdir(destinationDirectory)).toEqual([]);
+    expect(updates).not.toHaveBeenCalled();
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -1439,12 +1473,21 @@ function tutorialOverrides() {
   };
 }
 
+async function libraryEntryStat(target) {
+  return {
+    isDirectory: () => target.endsWith('.library'),
+    isSymbolicLink: () => false,
+    isFile: () => target.endsWith('/library.sqlite'),
+  };
+}
+
 function renameOverrides() {
   const renames = [];
   return {
     renames,
     overrides: {
       fs: {
+        lstat: libraryEntryStat,
         realpath: async (value) => value,
         access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
         rename: async (...args) => { renames.push(args); },
@@ -1767,6 +1810,7 @@ test('a failed rename re-opens the library under its old name', async () => {
   const native = createNativeOpenStub();
   const { service, events, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
       rename: async () => { throw new Error('EPERM'); },
@@ -1794,6 +1838,7 @@ test('a cancelled relocation leaves nothing current and reports the cancellation
   const renames = [];
   const { service, events, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async (target) => {
         if (target !== '/Pictures/A.library') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -2143,6 +2188,7 @@ test('a rename superseded before its disk rename renames nothing and reports the
   const pendingCloses = [];
   const { service, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
       rename: async (...args) => { renames.push(args); },
@@ -2539,6 +2585,7 @@ test('a relocation superseded while its history update fails still reports the m
   let failUpdate = () => {};
   const { service, state } = createOpenService(native, {
     fs: {
+      lstat: libraryEntryStat,
       realpath: async (value) => value,
       access: async (target) => {
         if (target !== '/Pictures/A.library') throw Object.assign(new Error('missing'), { code: 'ENOENT' });

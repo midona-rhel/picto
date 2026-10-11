@@ -870,7 +870,7 @@ export function createLibraryHostService({
   }
 
   async function withRelocationReservation(oldPath, newPath, operation, flow) {
-    const sourcePath = await canonicalLibraryPath(oldPath);
+    const sourcePath = await ownedLibraryPath(await canonicalLibraryPath(oldPath));
     const destinationPath = await canonicalLibraryPath(newPath);
     const reservation = { operation };
     let isCurrent;

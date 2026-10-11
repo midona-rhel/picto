@@ -97,7 +97,7 @@ export function createLibraryFilesystem({ fs, path }) {
       if (!database.isFile()) throw new Error('missing library database');
       return resolved;
     } catch {
-      throw new Error('Refusing to delete a path that is no longer a Picto library.');
+      throw new Error('Refusing to modify a path that is no longer a Picto library.');
     }
   }
 
