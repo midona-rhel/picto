@@ -3083,6 +3083,44 @@ fn smart_folders_use_the_grid_predicate_and_settle_with_mutations() {
 }
 
 #[test]
+fn smart_folder_rating_undo_and_redo_publish_changed_counts() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library
+        .ingest(&imported("rating", Lifecycle::Active, &[]))
+        .unwrap();
+    library
+        .create_smart_folder(smart_input(
+            "Unrated",
+            None,
+            ViewQuerySpec {
+                filter: FilterExpr::Clause(FilterClause::Ratings {
+                    ratings: vec![Rating::Unrated],
+                }),
+                sort: ItemSort::default(),
+            },
+        ))
+        .unwrap();
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![root] }, Rating::Five)
+        .unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    let receipt = library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 1);
+    assert!(receipt.resources.iter().any(|resource| resource == "smart_folders"));
+    let receipt = library.redo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    assert!(receipt.resources.iter().any(|resource| resource == "smart_folders"));
+
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![root] }, Rating::Four)
+        .unwrap();
+    let receipt = library.undo().unwrap().unwrap();
+    assert_eq!(library.smart_folders().unwrap()[0].count, 0);
+    assert!(!receipt.resources.iter().any(|resource| resource == "smart_folders"));
+}
+
+#[test]
 fn nested_smart_folders_inherit_rules_with_bounded_depth_and_complexity() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");

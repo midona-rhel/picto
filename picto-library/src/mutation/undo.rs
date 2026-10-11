@@ -56,6 +56,11 @@ impl Library {
             let mut changes = Vec::new();
             history_dependencies(&change, &mut changes);
             crate::smart::settle_affected_for(transaction, &mut next, &affected, &changes)?;
+            if !Arc::ptr_eq(&snapshot.smart_results, &next.smart_results)
+                || !Arc::ptr_eq(&snapshot.smart_queries, &next.smart_queries)
+            {
+                resources.insert("smart_folders".into());
+            }
             insert_cloud_journal(
                 transaction,
                 revision,
