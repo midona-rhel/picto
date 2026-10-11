@@ -504,9 +504,11 @@ test.each([false, true])('deletion reserves its package until removal settles (f
   await retry;
 });
 
-test.each([false, true])('relocation reserves source and destination until it settles (failure=%s)', async (failMove) => {
+test.each([
+  ['relocation', false], ['relocation', true], ['rename', false], ['rename', true],
+])('%s reserves source and destination until it settles (failure=%s)', async (operation, failMove) => {
   const source = '/Pictures/A.library';
-  const destination = '/Archive/A.library';
+  const destination = operation === 'rename' ? '/Pictures/B.library' : '/Archive/A.library';
   const native = createNativeOpenStub();
   let finishMove;
   const move = new Promise((resolve, reject) => {
@@ -527,7 +529,9 @@ test.each([false, true])('relocation reserves source and destination until it se
     },
     dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ['/Archive'] }) },
   });
-  const moving = service.relocateLibrary(source).catch((error) => error.message);
+  const moving = (operation === 'rename'
+    ? service.renameLibrary(source, 'B')
+    : service.relocateLibrary(source)).catch((error) => error.message);
   await flush();
   expect(rename).toHaveBeenCalledOnce();
   try {
@@ -536,7 +540,7 @@ test.each([false, true])('relocation reserves source and destination until it se
       await flush();
       // Let a wrongly permitted open finish so the pre-fix test cannot hang.
       if (native.opening().includes(target)) native.complete(target);
-      expect(await opening).toMatch(/relocation/);
+      expect(await opening).toContain(operation);
     }
     expect(native.calls).toEqual([]);
     expect(state.updates).toEqual([]);
@@ -544,7 +548,9 @@ test.each([false, true])('relocation reserves source and destination until it se
     finishMove();
     await moving;
   }
-  expect(await moving).toEqual(failMove ? 'move failed' : { action: 'relocated', newPath: destination });
+  expect(await moving).toEqual(failMove ? 'move failed' : {
+    ...(operation === 'relocation' ? { action: 'relocated' } : {}), newPath: destination,
+  });
   const retryTarget = failMove ? source : destination;
   const retry = service.switchLibrary(retryTarget);
   await flush();
@@ -552,7 +558,56 @@ test.each([false, true])('relocation reserves source and destination until it se
   await retry;
 });
 
-test('relocation refuses a source that started opening while the destination dialog was open', async () => {
+test.each([
+  ['deletion', 'rename'], ['relocation', 'rename'], ['rename', 'rename'],
+  ['rename', 'deletion'], ['rename', 'relocation'],
+])('%s reservation refuses competing %s', async (operation, competitor) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-rename-race-')));
+  const source = path.join(root, 'A.library');
+  const archive = path.join(root, 'archive');
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const diskCalls = [];
+  const native = createNativeOpenStub();
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'library.sqlite'), 'test library');
+  await fs.mkdir(archive);
+  const { service } = createOpenService(native, {
+    fs: new Proxy(fs, { get(target, property) {
+      if (property !== 'rm' && property !== 'rename') return target[property];
+      return async (...args) => {
+        diskCalls.push(property);
+        await barrier;
+        return target[property](...args);
+      };
+    } }),
+    dialog: {
+      showMessageBox: async () => ({ response: 0 }),
+      showOpenDialog: async () => ({ canceled: false, filePaths: [archive] }),
+    },
+  });
+  const perform = (kind, name) => kind === 'deletion' ? service.deleteLibrary(source)
+    : kind === 'rename' ? service.renameLibrary(source, name) : service.relocateLibrary(source);
+  let pending;
+  let result;
+  try {
+    pending = perform(operation, 'B');
+    await vi.waitFor(() => expect(diskCalls).toHaveLength(1));
+    // Release even an incorrectly allowed rename so a failing regression cannot hang.
+    let refusal;
+    result = perform(competitor, 'C').then(() => 'allowed', (error) => error.message)
+      .then((message) => { refusal = message; });
+    await vi.waitFor(() => expect(refusal).toContain('operation is already in progress'));
+    expect(diskCalls).toHaveLength(1);
+  } finally {
+    release();
+    await pending;
+    await result;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each(['relocation', 'rename'])('%s refuses a source that is opening', async (operation) => {
   const native = createNativeOpenStub();
   const rename = vi.fn();
   let switching;
@@ -565,14 +620,13 @@ test('relocation refuses a source that started opening while the destination dia
       },
       rename,
     },
-    dialog: { showOpenDialog: async () => {
-      switching = service.switchLibrary(source);
-      await flush();
-      return { canceled: false, filePaths: ['/Archive'] };
-    } },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ['/Archive'] }) },
   });
   try {
-    await expect(service.relocateLibrary(source)).rejects.toThrow('opening');
+    switching = service.switchLibrary(source);
+    await flush();
+    await expect(operation === 'rename' ? service.renameLibrary(source, 'B')
+      : service.relocateLibrary(source)).rejects.toThrow('opening');
     expect(rename).not.toHaveBeenCalled();
   } finally {
     native.complete(source);
@@ -1391,6 +1445,7 @@ function renameOverrides() {
     renames,
     overrides: {
       fs: {
+        realpath: async (value) => value,
         access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
         rename: async (...args) => { renames.push(args); },
       },
@@ -1712,6 +1767,7 @@ test('a failed rename re-opens the library under its old name', async () => {
   const native = createNativeOpenStub();
   const { service, events, state } = createOpenService(native, {
     fs: {
+      realpath: async (value) => value,
       access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
       rename: async () => { throw new Error('EPERM'); },
     },
@@ -2087,6 +2143,7 @@ test('a rename superseded before its disk rename renames nothing and reports the
   const pendingCloses = [];
   const { service, state } = createOpenService(native, {
     fs: {
+      realpath: async (value) => value,
       access: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
       rename: async (...args) => { renames.push(args); },
     },
