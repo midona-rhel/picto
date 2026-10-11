@@ -143,9 +143,10 @@ function asStringArray(value: unknown): string[] {
 export const displayedSidebarNodeAtom = atom<SidebarNodeDto | null>((get) => {
   const snapshot = get(displayedGridSnapshotAtom);
   if (!snapshot) return null;
-  // If a subfolder tile is selected, show that folder's node instead of the scope
+  // Only a selected subfolder overrides the grid scope. A drill-down owner
+  // such as Tags has its own count, not the displayed media result count.
   const target = get(displayedInspectorTargetAtom);
-  const nodeId = (target.kind === 'scope' && target.nodeId !== snapshot.nodeId)
+  const nodeId = (target.kind === 'scope' && target.nodeId.startsWith('folder:') && target.nodeId !== snapshot.nodeId)
     ? target.nodeId
     : snapshot.nodeId;
   // Read LIVE sidebar node by ID — not the frozen snapshot copy.

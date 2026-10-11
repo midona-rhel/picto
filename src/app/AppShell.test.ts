@@ -1,6 +1,56 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isEditableTarget } from './editableTarget';
-import { buildPanelVisibilityContextEntries } from './AppShell';
+import { buildPanelVisibilityContextEntries, ScopeTitle } from './AppShell';
+import { createElement } from 'react';
+import { render } from '@testing-library/react';
+import { createStore, Provider } from 'jotai';
+import { displayedSurfaceNodeIdAtom } from '../state/navigation';
+import { displayedGridSnapshotAtom, displayedInspectorTargetAtom, scopeInspectorViewModelAtom } from '../state/inspector';
+import { gridSessionAtom } from '../state/grid';
+import { sidebarNodesAtom } from '../state/sidebar';
+import { createEmptyItemFilters } from '../shared/lib/itemFilters';
+
+describe('scope title', () => {
+  it('does not carry grid search results into the tag manager', () => {
+    const store = createStore();
+    store.set(displayedSurfaceNodeIdAtom, 'system:tag_manager');
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: false });
+    store.set(displayedGridSnapshotAtom, {
+      nodeId: 'system:active', previewItems: [], totalCount: 9,
+      totalSizeBytes: 0, searchText: 'previous search',
+      filters: createEmptyItemFilters(), sidebarNode: null,
+    });
+    const { container, unmount } = render(createElement(Provider, { store }, createElement(ScopeTitle)));
+    expect(container.textContent).toBe('Tags');
+    unmount();
+  });
+
+  it('keeps tag drill-down results and inspector counts tied to the displayed grid', () => {
+    const store = createStore();
+    store.set(displayedSurfaceNodeIdAtom, 'system:tag_manager');
+    store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: 'system:tag_manager' });
+    store.set(sidebarNodesAtom, [
+      { id: 'system:active', name: 'All', kind: 'system', parent_id: null, count: 1000000, sort_order: 0, freshness: 'fresh', selectable: true },
+      { id: 'system:tag_manager', name: 'Tags', kind: 'system', parent_id: null, count: 6, sort_order: 1, freshness: 'fresh', selectable: true },
+    ]);
+    store.set(displayedGridSnapshotAtom, {
+      nodeId: 'system:active', previewItems: [], totalCount: 10001,
+      totalSizeBytes: 2000, searchText: 'landscape',
+      filters: createEmptyItemFilters(), sidebarNode: null,
+    });
+    const { container, unmount } = render(createElement(Provider, { store }, createElement(ScopeTitle)));
+    expect(container.textContent).toContain('Tags');
+    expect(container.textContent).toContain('Search results');
+    expect(store.get(scopeInspectorViewModelAtom)).toMatchObject({ totalCount: 10001, totalSizeBytes: 2000 });
+    store.set(sidebarNodesAtom, [...store.get(sidebarNodesAtom), {
+      id: 'folder:7', name: 'Child', kind: 'folder', parent_id: null,
+      count: 3, freshness: 'fresh', selectable: true,
+    }]);
+    store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: 'folder:7' });
+    expect(store.get(scopeInspectorViewModelAtom)).toMatchObject({ totalCount: 3 });
+    unmount();
+  });
+});
 
 describe('isEditableTarget', () => {
   it('recognizes editable controls and contenteditable elements', () => {

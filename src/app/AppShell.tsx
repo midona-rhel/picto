@@ -169,7 +169,7 @@ function buildBreadcrumbPath(
 }
 
 /** Scope title — shows the full breadcrumb path for folders and smart folders. */
-function ScopeTitle() {
+export function ScopeTitle() {
   const gridActive = useAtomValue(gridActiveAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const frozenLabel = useAtomValue(displayedScopeLabelAtom);
@@ -216,6 +216,10 @@ function ScopeTitle() {
     return <span {...titleProps}>{t("Duplicates")}</span>;
   }
 
+  if (displayedSurfaceNodeId === 'system:tag_manager' && !gridActive) {
+    return <span {...titleProps}>{t("Tags")}</span>;
+  }
+
   const displayedNodeId = snapshot?.nodeId ?? '';
   const showsSearchResults = snapshot != null && (
     snapshot.searchText.length > 0
@@ -231,20 +235,12 @@ function ScopeTitle() {
   };
 
   if (displayedSurfaceNodeId === 'system:tag_manager') {
-    if (!showsSearchResults) return <span {...titleProps}>{t("Tags")}</span>;
     return (
       <span {...titleProps}>
-        <button
-          type="button"
-          className={styles.scopeCrumbLink}
-          onClick={() => {
-            gridController.setSearchText('');
-            navigateToNode('system:tag_manager');
-          }}
-        >
+        <button type="button" className={styles.scopeCrumbLink}
+          onClick={() => navigateToNode('system:tag_manager')}>
           {t("Tags")}</button>
-        {crumbSeparator}
-        {searchResultsLabel}
+        {showsSearchResults && <>{crumbSeparator}{searchResultsLabel}</>}
       </span>
     );
   }
