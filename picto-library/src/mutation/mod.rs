@@ -695,6 +695,27 @@ impl Library {
         )
     }
 
+    /// Current positions of `roots` in `query`'s order (`None` when absent).
+    pub fn root_positions(
+        &self,
+        query: &crate::query::RootQuery,
+        roots: &[RootId],
+    ) -> Result<Vec<Option<u64>>> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                crate::selection::root_positions(
+                    connection,
+                    &snapshot,
+                    query,
+                    roots,
+                    (&self.match_cache, &self.order_cache),
+                )
+            },
+        )
+    }
+
     pub fn selection_summary(&self, target: &SelectionTarget) -> Result<SelectionSummary> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,

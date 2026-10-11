@@ -10,7 +10,7 @@ use picto_library::predicate::{
     FilterClause, FilterExpr, ItemSort, SetMatchMode, TextField, ViewQuerySpec,
 };
 use picto_library::query::{ItemScope, RootQuery, WindowPosition, WindowRequest};
-use picto_library::selection::SelectionTarget;
+use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     LabColor,
     FolderId, GroupRequest, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating,
@@ -412,27 +412,22 @@ fn main() -> R<()> {
     // Shift-click range selection across 50k items of the main view.
     let first_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(100_000), 1))?;
     let far_page = library.query_window(&all(FilterExpr::All(Vec::new())), &WindowRequest::at(at(150_000), 1))?;
-    let range = SelectionTarget::Range {
-        query: all(FilterExpr::All(Vec::new())),
+    let span = |positions: bool| RangeSpan {
         anchor_root_id: first_page.page.items[0].root_id,
         focus_root_id: far_page.page.items[0].root_id,
-        anchor_index: None,
-        focus_index: None,
+        anchor_index: positions.then_some(first_page.start as u64),
+        focus_index: positions.then_some(far_page.start as u64),
+    };
+    let range_with = |positions: bool| SelectionTarget::Range {
+        query: all(FilterExpr::All(Vec::new())),
+        spans: vec![span(positions)],
+        included_root_ids: Vec::new(),
         excluded_root_ids: Vec::new(),
     };
+    let range = range_with(false);
     bench("selection summary of a 50k shift-click range", "50000", runs, || { library.selection_summary(&range)?; Ok(()) }, None::<fn() -> R<()>>)?;
     // The first range after an edit, by ids only and with the grid's positions.
-    let positioned = match range.clone() {
-        SelectionTarget::Range { query, anchor_root_id, focus_root_id, .. } => SelectionTarget::Range {
-            query,
-            anchor_root_id,
-            focus_root_id,
-            anchor_index: Some(first_page.start as u64),
-            focus_index: Some(far_page.start as u64),
-            excluded_root_ids: Vec::new(),
-        },
-        _ => unreachable!(),
-    };
+    let positioned = range_with(true);
     let touch = SelectionTarget::Explicit { root_ids: vec![first_page.page.items[0].root_id] };
     for (label, target) in [("first 50k range after an edit (ids only)", &range), ("first 50k range after an edit (grid positions)", &positioned)] {
         let mut samples = Vec::new();

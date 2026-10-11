@@ -1,14 +1,21 @@
 import { atom } from 'jotai';
 import type { EntityTarget, EntityViewQuery } from '../shared/types/canonical';
 import { currentGridQueryAtom, gridItemsAtom, gridSessionAtom, gridTotalCountAtom } from './grid';
+import {
+  addSpan,
+  rangeCount,
+  reconcileRange,
+  spansContain,
+  toggleInRange,
+  type RangeEnd,
+  type RangeSelection,
+  type RangeSpan,
+  type RootPositions,
+} from './rangeSelection';
+
+export type { RangeEnd, RangeSpan } from './rangeSelection';
 
 export type SelectionMode = 'explicit' | 'query_results';
-
-/** One end of a shift-click range: the root and where the grid showed it. */
-export interface RangeEnd {
-  id: number;
-  index: number;
-}
 
 export interface GridSelection {
   mode: SelectionMode;
@@ -20,10 +27,11 @@ export interface GridSelection {
   /** `index` is the anchor's position in the whole view, when known. */
   anchor: { kind: 'item'; id: number; index?: number } | { kind: 'folder'; id: string } | null;
   /**
-   * A query-wide selection limited to a shift-click range whose ends are not
-   * both loaded. The backend resolves it; the renderer only knows positions.
+   * Shift-click spans that reach beyond the loaded window, with roots added
+   * outside them (see rangeSelection.ts). `excludedItemIds` holds the roots
+   * toggled off inside them. The backend resolves it.
    */
-  range?: { anchor: RangeEnd; focus: RangeEnd } | null;
+  range?: RangeSelection | null;
 }
 
 export type GridSelectionAction =
@@ -32,6 +40,10 @@ export type GridSelectionAction =
   | { type: 'toggle_item'; itemId: number; index?: number }
   | { type: 'range_items'; itemIds: Set<number> }
   | { type: 'range_query'; query: EntityViewQuery; anchor: RangeEnd; focus: RangeEnd }
+  /** Cmd/Ctrl+Shift-click: add a span to the current selection. */
+  | { type: 'range_add'; query: EntityViewQuery; span: RangeSpan; positions: RootPositions }
+  /** Backend positions after the view changed. */
+  | { type: 'range_reconcile'; positions: RootPositions }
   | { type: 'replace_folders'; ids: Set<string>; anchor?: string | null }
   | { type: 'toggle_folder'; id: string }
   | { type: 'marquee'; itemIds: Set<number>; folderNodeIds: Set<string>; additive: boolean }
@@ -87,16 +99,32 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         itemIds: new Set(action.itemIds),
         anchor: state.anchor?.kind === 'item' ? state.anchor : null,
       };
-    case 'range_query': {
-      const count = Math.abs(action.focus.index - action.anchor.index) + 1;
-      return {
-        ...emptyGridSelection(),
-        mode: 'query_results',
-        query: action.query,
-        queryTotalCount: count,
-        range: { anchor: action.anchor, focus: action.focus },
-        anchor: itemAnchor(action.anchor.id, action.anchor.index),
-      };
+    case 'range_query':
+      return withRange(
+        emptyGridSelection(),
+        action.query,
+        { spans: [{ anchor: action.anchor, focus: action.focus }], includedItemIds: new Set() },
+        new Set(),
+        itemAnchor(action.anchor.id, action.anchor.index),
+      );
+    case 'range_add': {
+      const anchor = itemAnchor(action.span.anchor.id, action.span.anchor.index);
+      if (state.mode === 'query_results' && !state.range) {
+        // Select-all plus a span: only exclusions the span covers come back.
+        const covered = addSpan([], new Set(), state.excludedItemIds, action.span, action.positions);
+        return { ...state, excludedItemIds: covered.excluded, anchor };
+      }
+      const previous = state.range
+        ? state.range.includedItemIds
+        : state.folderNodeIds.size > 0 ? new Set<number>() : state.itemIds;
+      const next = addSpan(state.range?.spans ?? [], previous, state.excludedItemIds, action.span, action.positions);
+      return withRange(emptyGridSelection(), action.query, next.range, next.excluded, anchor);
+    }
+    case 'range_reconcile': {
+      if (!state.range || !state.query) return state;
+      const next = reconcileRange(state.range, state.excludedItemIds, action.positions);
+      if (next.range.spans.length === 0 && next.range.includedItemIds.size === 0) return emptyGridSelection();
+      return withRange(state, state.query, next.range, next.excluded, state.anchor);
     }
     case 'replace_folders':
       return { ...emptyGridSelection(), folderNodeIds: new Set(action.ids), anchor: action.anchor == null ? null : { kind: 'folder', id: action.anchor } };
@@ -139,6 +167,12 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         : emptyGridSelection();
     case 'toggle_query_item': {
       if (state.mode !== 'query_results') return state;
+      if (state.range && state.query && action.index != null) {
+        const next = toggleInRange(state.range, state.excludedItemIds, action.itemId, action.index);
+        return rangeCount(next.range, next.excluded) <= 0
+          ? emptyGridSelection()
+          : withRange(state, state.query, next.range, next.excluded, state.anchor);
+      }
       const excludedItemIds = new Set(state.excludedItemIds);
       if (excludedItemIds.has(action.itemId)) excludedItemIds.delete(action.itemId);
       else excludedItemIds.add(action.itemId);
@@ -149,6 +183,26 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
     case 'set_anchor':
       return { ...state, anchor: action.anchor };
   }
+}
+
+function withRange(
+  base: GridSelection,
+  query: EntityViewQuery,
+  range: RangeSelection,
+  excluded: Set<number>,
+  anchor: GridSelection['anchor'],
+): GridSelection {
+  return {
+    ...base,
+    mode: 'query_results',
+    itemIds: new Set(),
+    folderNodeIds: new Set(),
+    query,
+    range,
+    excludedItemIds: excluded,
+    queryTotalCount: rangeCount(range, excluded),
+    anchor,
+  };
 }
 
 export const gridSelectionAtom = atom<GridSelection>(emptyGridSelection());
@@ -165,15 +219,14 @@ export const loadedSelectedItemIdsAtom = atom((get) => {
   const items = get(gridItemsAtom);
   const range = selection.range;
   if (range) {
-    // Only the loaded tiles whose view position falls inside the range.
+    // Loaded tiles inside a span (unless toggled off), plus added roots.
     const start = get(gridSessionAtom).windowStart;
-    const low = Math.min(range.anchor.index, range.focus.index) - start;
-    const high = Math.max(range.anchor.index, range.focus.index) - start;
     const selected = new Set<number>();
-    for (let i = Math.max(0, low); i <= Math.min(items.length - 1, high); i++) {
-      const itemId = items[i]?.root_id;
-      if (itemId != null && !selection.excludedItemIds.has(itemId)) selected.add(itemId);
-    }
+    items.forEach((item, offset) => {
+      const id = item.root_id;
+      if (range.includedItemIds.has(id)) selected.add(id);
+      else if (spansContain(range.spans, start + offset) && !selection.excludedItemIds.has(id)) selected.add(id);
+    });
     return selected;
   }
   return new Set(
@@ -223,6 +276,7 @@ export const selectedItemIdAtom = atom((get) => {
 
 export const selectionCountAtom = atom((get) => {
   const selection = get(gridSelectionAtom);
+  if (selection.range) return rangeCount(selection.range, selection.excludedItemIds);
   if (selection.mode === 'query_results') {
     const totalCount = selection.queryTotalCount
       ?? get(gridTotalCountAtom)
@@ -241,10 +295,13 @@ export const selectionTargetAtom = atom<EntityTarget | null>((get) => {
       return {
         kind: 'range',
         query: selection.query,
-        anchor_root_id: selection.range.anchor.id,
-        focus_root_id: selection.range.focus.id,
-        anchor_index: selection.range.anchor.index,
-        focus_index: selection.range.focus.index,
+        spans: selection.range.spans.map((span) => ({
+          anchor_root_id: span.anchor.id,
+          focus_root_id: span.focus.id,
+          anchor_index: span.anchor.index,
+          focus_index: span.focus.index,
+        })),
+        included_root_ids: [...selection.range.includedItemIds],
         excluded_root_ids: [...selection.excludedItemIds],
       };
     }

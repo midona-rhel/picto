@@ -1475,5 +1475,7 @@
   "Library deleted.": "Library deleted.",
   "Move…": "Move…",
   "Locate…": "Locate…",
-  "Delete…": "Delete…"
+  "Delete…": "Delete…",
+  "Part of the selection left this view": "Part of the selection left this view",
+  "A selected range lost its first or last item, so that range is no longer selected.": "A selected range lost its first or last item, so that range is no longer selected."
 }

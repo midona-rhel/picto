@@ -223,6 +223,16 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn root_positions(
+        &self,
+        query: &picto_library::query::RootQuery,
+        roots: &[RootId],
+    ) -> Result<Vec<Option<u64>>, String> {
+        self.library
+            .root_positions(query, roots)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn selection_summary(
         &self,
         target: &picto_library::selection::SelectionTarget,

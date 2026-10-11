@@ -2,7 +2,7 @@ use picto_library::predicate::{
     FilterClause, FilterExpr, ItemSort, SetMatchMode, SortDirection, SortField, ViewQuerySpec,
 };
 use picto_library::query::{ItemScope, PageRequest, RootQuery, WindowRequest};
-use picto_library::selection::SelectionTarget;
+use picto_library::selection::{RangeSpan, SelectionTarget};
 use picto_library::{
     ContentSortField, GroupRequest, ImmutableMediaFacts, LabColor, Library, Lifecycle,
     PreparedImport, Rating, RootKind, RootTagAssignment, SmartFolderInput,
@@ -2811,13 +2811,17 @@ fn range_positions_are_trusted_only_when_both_ends_still_match() {
         .into_iter()
         .map(|item| item.root_id)
         .collect::<Vec<_>>();
+    let span = |anchor: usize, focus: usize, positions: Option<(u64, u64)>| RangeSpan {
+        anchor_root_id: order[anchor],
+        focus_root_id: order[focus],
+        anchor_index: positions.map(|(anchor, _)| anchor),
+        focus_index: positions.map(|(_, focus)| focus),
+    };
     let range = |anchor: usize, focus: usize, positions: Option<(u64, u64)>, excluded: Vec<_>| {
         SelectionTarget::Range {
             query: all.clone(),
-            anchor_root_id: order[anchor],
-            focus_root_id: order[focus],
-            anchor_index: positions.map(|(anchor, _)| anchor),
-            focus_index: positions.map(|(_, focus)| focus),
+            spans: vec![span(anchor, focus, positions)],
+            included_root_ids: Vec::new(),
             excluded_root_ids: excluded,
         }
     };
@@ -2843,6 +2847,42 @@ fn range_positions_are_trusted_only_when_both_ends_still_match() {
         vec![order[1], order[3], order[4]]
     );
     assert_eq!(library.selection_summary(&excluded).unwrap().selected_count, 3);
+
+    // Two spans, a root added outside them and one toggled off inside.
+    let union = SelectionTarget::Range {
+        query: all.clone(),
+        spans: vec![span(0, 1, Some((0, 1))), span(5, 4, None)],
+        included_root_ids: vec![order[2]],
+        excluded_root_ids: vec![order[5]],
+    };
+    assert_eq!(
+        library.ordered_image_selection(&union).unwrap(),
+        vec![order[0], order[1], order[2], order[4]]
+    );
+    assert_eq!(library.selection_summary(&union).unwrap().selected_count, 4);
+
+    // Positions follow the current order, and a root outside the view has none.
+    let mut positions = library
+        .root_positions(&all, &[order[3], order[0], picto_library::RootId(999_999)])
+        .unwrap();
+    assert_eq!(positions, vec![Some(3), Some(0), None]);
+    // After an edit reorders the view, positions move with the roots.
+    library
+        .set_rating(&SelectionTarget::Explicit { root_ids: vec![order[3]] }, Rating::Five)
+        .unwrap();
+    let by_rating = RootQuery {
+        view: ViewQuerySpec {
+            sort: ItemSort {
+                field: SortField::Rating,
+                direction: SortDirection::Descending,
+                random_seed: None,
+            },
+            ..all.view.clone()
+        },
+        ..all.clone()
+    };
+    positions = library.root_positions(&by_rating, &[order[3]]).unwrap();
+    assert_eq!(positions, vec![Some(0)]);
 }
 
 #[test]

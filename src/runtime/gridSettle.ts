@@ -1,6 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { gridActiveAtom, gridSessionAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { gridController } from '../controllers/gridController';
+import { reconcileSelectionRange } from '../controllers/rangeSelectionController';
 import { libraryInvalidation } from './libraryInvalidation';
 import { listenDominantColorChanged } from '../shared/lib/thumbnailChanges';
 import { hexToLab, labToHex } from '../shared/lib/labColor';
@@ -46,6 +47,14 @@ export function startGridSettle(): () => void {
   const unsubscribePhase = store.sub(gridTransitionPhaseAtom, () => {
     gridController.flushPendingRefresh();
   });
+  // A refreshed view can move a range selection's ends; keep it in step.
+  let revision = store.get(gridSessionAtom).revision;
+  const unsubscribeRange = store.sub(gridSessionAtom, () => {
+    const next = store.get(gridSessionAtom).revision;
+    if (next === revision) return;
+    revision = next;
+    void reconcileSelectionRange().catch((error) => console.warn('Could not update the range selection', error));
+  });
 
   return () => {
     cancelled = true;
@@ -53,5 +62,6 @@ export function startGridSettle(): () => void {
     unregisterRecentlyViewed();
     removeColorListener?.();
     unsubscribePhase();
+    unsubscribeRange();
   };
 }

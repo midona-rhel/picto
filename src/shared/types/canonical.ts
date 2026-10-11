@@ -324,13 +324,18 @@ export type EntityTarget =
   | {
       kind: 'range';
       query: EntityViewQuery;
-      anchor_root_id: number;
-      focus_root_id: number;
-      /** Grid positions of the two ends; the backend checks them against the ids. */
-      anchor_index?: number;
-      focus_index?: number;
+      spans: EntityRangeSpan[];
+      included_root_ids?: number[];
       excluded_root_ids?: number[];
     };
+
+/** A run of the view between two roots; the indices are where the grid showed them. */
+export interface EntityRangeSpan {
+  anchor_root_id: number;
+  focus_root_id: number;
+  anchor_index?: number;
+  focus_index?: number;
+}
 
 export interface OrganizeCollectionInput {
   target: EntityTarget;

@@ -40,6 +40,7 @@ import {
   currentGridQueryAtom,
   type GridTransitionPhase,
 } from '../../state/grid';
+import { addSelectionSpan } from '../../controllers/rangeSelectionController';
 import { gridController } from '../../controllers/gridController';
 import { foldersController } from '../../controllers/foldersController';
 import { isNativeDragPending, isDragActive as isDragActiveCheck, isInternalDragOrigin } from './dragState';
@@ -1270,17 +1271,22 @@ export function GridScreen({
             const anchor = selection.anchor;
             const anchorIndex = items.findIndex((entry) => entry.root_id === anchor.id);
             const additive = Boolean(event.metaKey || event.ctrlKey);
-            if (anchorIndex < 0 && anchor.index != null && !additive) {
-              // The anchor scrolled out of the loaded window: let the backend
-              // resolve the range from both positions instead of selecting
-              // only what happens to be loaded.
-              dispatchSelection({
-                type: 'range_query',
-                query: store.get(currentGridQueryAtom),
-                anchor: { id: anchor.id, index: anchor.index },
-                focus: { id: itemId, index: position },
-              });
-              return;
+            if (anchor.index != null) {
+              const query = store.get(currentGridQueryAtom);
+              const span = { anchor: { id: anchor.id, index: anchor.index }, focus: { id: itemId, index: position } };
+              if (additive && (anchorIndex < 0 || selectionMode !== 'explicit')) {
+                // Adding to a selection that reaches beyond the loaded window:
+                // the backend places the existing selection before merging.
+                void addSelectionSpan(query, span)
+                  .catch((error) => console.warn('Could not extend the selection', error));
+                return;
+              }
+              if (!additive && anchorIndex < 0) {
+                // The anchor scrolled out of the loaded window: the backend
+                // resolves the range instead of only the loaded tiles.
+                dispatchSelection({ type: 'range_query', query, ...span });
+                return;
+              }
             }
             const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
             const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);

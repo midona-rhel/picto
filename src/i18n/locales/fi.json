@@ -1475,5 +1475,7 @@
   "Library deleted.": "Kirjasto poistettu.",
   "Move…": "Siirrä…",
   "Locate…": "Etsi…",
-  "Delete…": "Poista…"
+  "Delete…": "Poista…",
+  "Part of the selection left this view": "Osa valinnasta poistui tästä näkymästä",
+  "A selected range lost its first or last item, so that range is no longer selected.": "Valittu alue menetti ensimmäisen tai viimeisen kohteensa, joten aluetta ei ole enää valittu."
 }

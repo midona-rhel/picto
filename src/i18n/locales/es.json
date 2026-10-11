@@ -1475,5 +1475,7 @@
   "Library deleted.": "Biblioteca eliminada.",
   "Move…": "Mover…",
   "Locate…": "Localizar…",
-  "Delete…": "Eliminar…"
+  "Delete…": "Eliminar…",
+  "Part of the selection left this view": "Parte de la selección ya no está en esta vista",
+  "A selected range lost its first or last item, so that range is no longer selected.": "Un rango seleccionado perdió su primer o último elemento, así que ese rango ya no está seleccionado."
 }

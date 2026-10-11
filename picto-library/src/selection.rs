@@ -18,21 +18,32 @@ pub enum SelectionTarget {
         #[serde(default)]
         excluded_root_ids: Vec<RootId>,
     },
+    /// Shift-click selections over a view the renderer only partly holds:
+    /// the union of `spans` in the query's order, plus roots added one by one,
+    /// minus roots toggled off.
     Range {
         query: RootQuery,
-        anchor_root_id: RootId,
-        focus_root_id: RootId,
-        /// Where the grid showed the anchor and focus. With both, the range
-        /// is read straight from the resident order and checked against the
-        /// two ids, instead of ordering the whole view to find them.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        anchor_index: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        focus_index: Option<u64>,
-        /// Roots toggled off inside the range after it was made.
+        spans: Vec<RangeSpan>,
+        /// Roots outside every span that were added with Cmd/Ctrl-click.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        included_root_ids: Vec<RootId>,
+        /// Roots inside a span that were toggled off.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         excluded_root_ids: Vec<RootId>,
     },
+}
+
+/// One contiguous run of a view, from the root clicked first to the root
+/// shift-clicked. Its ends are the roots; the indices are where the grid
+/// showed them, trusted only while both ends still hold those roots.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RangeSpan {
+    pub anchor_root_id: RootId,
+    pub focus_root_id: RootId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_index: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,68 +113,117 @@ pub(crate) fn resolve_with(
         }
         SelectionTarget::Range {
             query,
-            anchor_root_id,
-            focus_root_id,
-            anchor_index,
-            focus_index,
+            spans,
+            included_root_ids,
             excluded_root_ids,
         } => {
-            let excluded = excluded_root_ids
-                .iter()
-                .map(|id| id.0)
-                .collect::<RoaringBitmap>();
             let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
-            if let (Some(anchor), Some(focus)) = (anchor_index, focus_index) {
-                let (start, end, first, last) = if anchor <= focus {
-                    (*anchor, *focus, anchor_root_id, focus_root_id)
-                } else {
-                    (*focus, *anchor, focus_root_id, anchor_root_id)
+            let mut selected = RoaringBitmap::new();
+            // The complete order is built at most once, and only when a span's
+            // positions no longer hold its two roots.
+            let mut complete: Option<CompleteOrder> = None;
+            for span in spans {
+                if let Some(ids) = span_by_position(snapshot, query, &media, cache, span)? {
+                    selected.extend(ids.iter().map(|id| id.0));
+                    continue;
+                }
+                if complete.is_none() {
+                    complete = Some(match caches {
+                        Some((matches, orders)) => CompleteOrder::Cached(
+                            query::ordered_ids_cached(snapshot, query, &media, matches, orders)?,
+                        ),
+                        None => CompleteOrder::Owned(query::all_ordered_ids(snapshot, query, &media)?),
+                    });
+                }
+                let ordered = complete.as_ref().expect("complete order was just built").ids();
+                let locate = |root: RootId, end: &str| {
+                    ordered.iter().position(|id| *id == root).ok_or_else(|| {
+                        LibraryError::InvalidInput(format!("range {end} is outside query"))
+                    })
                 };
-                if let Some(ids) = query::ordinal_range(
-                    snapshot,
-                    query,
-                    &media,
-                    cache,
-                    start as usize,
-                    end as usize,
-                )? {
-                    // The view may have moved since the click; only trust the
-                    // positions when both ends still hold the clicked roots.
-                    if ids.first() == Some(first) && ids.last() == Some(last) {
-                        return Ok(ids.iter().map(|id| id.0).collect::<RoaringBitmap>() - &excluded);
-                    }
-                }
+                let anchor = locate(span.anchor_root_id, "anchor")?;
+                let focus = locate(span.focus_root_id, "focus")?;
+                let (start, end) = (anchor.min(focus), anchor.max(focus));
+                selected.extend(ordered[start..=end].iter().map(|id| id.0));
             }
-            let cached;
-            let computed;
-            let ordered: &[RootId] = match caches {
-                Some((matches, orders)) => {
-                    cached = query::ordered_ids_cached(snapshot, query, &media, matches, orders)?;
-                    &cached.ids
-                }
-                None => {
-                    computed = query::all_ordered_ids(snapshot, query, &media)?;
-                    &computed
-                }
-            };
-            let anchor = ordered
-                .iter()
-                .position(|id| id == anchor_root_id)
-                .ok_or_else(|| {
-                    LibraryError::InvalidInput("range anchor is outside query".into())
-                })?;
-            let focus = ordered
-                .iter()
-                .position(|id| id == focus_root_id)
-                .ok_or_else(|| LibraryError::InvalidInput("range focus is outside query".into()))?;
-            let (start, end) = if anchor <= focus {
-                (anchor, focus)
-            } else {
-                (focus, anchor)
-            };
-            ordered[start..=end].iter().map(|id| id.0).collect::<RoaringBitmap>() - &excluded
+            selected |= resolve(
+                connection,
+                snapshot,
+                &SelectionTarget::Explicit {
+                    root_ids: included_root_ids.clone(),
+                },
+            )?;
+            selected
+                - excluded_root_ids
+                    .iter()
+                    .map(|id| id.0)
+                    .collect::<RoaringBitmap>()
         }
     })
+}
+
+enum CompleteOrder {
+    Cached(std::sync::Arc<query::OrderedResult>),
+    Owned(Vec<RootId>),
+}
+
+impl CompleteOrder {
+    fn ids(&self) -> &[RootId] {
+        match self {
+            Self::Cached(order) => &order.ids,
+            Self::Owned(ids) => ids,
+        }
+    }
+}
+
+/// A span read straight from the resident order at its recorded positions,
+/// when both ends still hold the span's roots; `None` otherwise.
+fn span_by_position(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &query::MediaMatches,
+    cache: Option<&query::MatchCache>,
+    span: &RangeSpan,
+) -> Result<Option<Vec<RootId>>> {
+    let (Some(anchor), Some(focus)) = (span.anchor_index, span.focus_index) else {
+        return Ok(None);
+    };
+    let (start, end, first, last) = if anchor <= focus {
+        (anchor, focus, span.anchor_root_id, span.focus_root_id)
+    } else {
+        (focus, anchor, span.focus_root_id, span.anchor_root_id)
+    };
+    let ids = query::ordinal_range(snapshot, query, media, cache, start as usize, end as usize)?;
+    Ok(ids.filter(|ids| ids.first() == Some(&first) && ids.last() == Some(&last)))
+}
+
+/// Where each root sits in the query's current order, or `None` when the
+/// view no longer holds it. The grid uses this to keep a range's highlights,
+/// count and ends in step with what an operation on it would change.
+pub(crate) fn root_positions(
+    connection: &Connection,
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    roots: &[RootId],
+    caches: (&query::MatchCache, &query::OrderCache),
+) -> Result<Vec<Option<u64>>> {
+    if roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
+    let ordered = query::ordered_ids_cached(snapshot, query, &media, caches.0, caches.1)?;
+    let wanted = roots.iter().map(|id| id.0).collect::<RoaringBitmap>();
+    let dense = crate::bitmap::DenseIds::new(&wanted);
+    let mut found = std::collections::HashMap::with_capacity(roots.len());
+    for (index, id) in ordered.ids.iter().enumerate() {
+        if dense.contains(id.0) {
+            found.insert(id.0, index as u64);
+            if found.len() == wanted.len() as usize {
+                break;
+            }
+        }
+    }
+    Ok(roots.iter().map(|id| found.get(&id.0).copied()).collect())
 }
 
 pub fn resolve_ordered(
@@ -194,16 +254,25 @@ pub fn resolve_ordered(
                 .filter(|root_id| !excluded.contains(root_id.0))
                 .collect())
         }
-        SelectionTarget::Range { .. } => {
-            let selected = resolve(connection, snapshot, target)?;
-            let SelectionTarget::Range { query, .. } = target else {
-                unreachable!()
-            };
+        SelectionTarget::Range {
+            query,
+            included_root_ids,
+            ..
+        } => {
+            let mut selected = resolve(connection, snapshot, target)?;
             let media = query::MediaMatches::resolve(connection, snapshot, &query.scope)?;
-            Ok(query::all_ordered_ids(snapshot, query, &media)?
+            let mut ordered = query::all_ordered_ids(snapshot, query, &media)?
                 .into_iter()
-                .filter(|root_id| selected.contains(root_id.0))
-                .collect())
+                .filter(|root_id| selected.remove(root_id.0))
+                .collect::<Vec<_>>();
+            // Added roots that have since left the view keep their click order.
+            ordered.extend(
+                included_root_ids
+                    .iter()
+                    .copied()
+                    .filter(|root_id| selected.remove(root_id.0)),
+            );
+            Ok(ordered)
         }
     }
 }

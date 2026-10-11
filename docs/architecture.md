@@ -81,10 +81,14 @@ clamped keys; incompatible derived checkpoints rebuild from canonical SQLite dat
 
 The renderer holds only a ~1,500-tile window, so a selection is never expanded from loaded tiles
 when it reaches beyond them. Select-all is a `query` target with exclusions. A shift-click whose
-anchor has left the window is a `range` target carrying both roots and their view positions;
-the backend reads that ordinal span straight from the resident order and trusts it only when
-the roots at both ends still match, otherwise it locates the two roots in the complete order.
-A shift-click inside the loaded window stays an explicit list.
+anchor has left the window is a `range` target: spans between two roots with their view
+positions, plus roots added outside them and roots toggled off inside them. The backend reads a
+span straight from the resident order and trusts its positions only while both ends still hold
+the span's roots, otherwise it locates the two roots in the complete order. Adding a span
+(Cmd/Ctrl+Shift) first asks the backend (`items.positions`) where the earlier selection sits, and
+after every refresh the renderer moves the spans, additions and exclusions to their current
+positions, so highlights and the count match what an operation changes; a span whose end left the
+view is dropped with a notice. A shift-click inside the loaded window stays an explicit list.
 
 ### The resident library model
 
