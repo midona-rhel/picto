@@ -35,7 +35,11 @@ native addons, and downloaded native tools must not imply otherwise.
 
 ## Acceptance integration handoff (2026-10-11)
 
-- PR #88 is the review-only integration into `dev`; it must not be merged until review authorizes it.
+- PR #88 passed review and CI and was merged into `dev` as `18e22a82` after user approval.
+- PR #90 passed review and CI and was merged into `dev` as `747e5204`. This accepted commit is
+  the base for `0.6.16-alpha`; the user's uncommitted work on `main` is excluded.
+- The user smoke-tested the merged debug build. The detailed manual evidence below predates the
+  final review fixes; it must not be presented as a fresh full manual pass on the release head.
 - All available macOS manual rechecks passed against acceptance code commit `df9b2046`. The evidence
   index is `artifacts/acceptance/RESULTS.json`, with the final captures under
   `artifacts/acceptance/round7/`.
@@ -52,6 +56,37 @@ native addons, and downloaded native tools must not imply otherwise.
   active import indicator; native completion, modal closure, restored notes, and exact history state
   are recorded in `round7/pack-history-fixed.json`.
 
+## 0.6.16-alpha local preparation
+
+- `release/0.6.16-alpha` is based on accepted `dev` commit `747e5204`. Its additional
+  changes are version synchronization, release notes and the release-only packaging fix in #92.
+- Fresh `npm run alpha:verify` passed: 202 frontend/Electron test files, 1,340 tests passed and
+  one skipped; 633 Rust tests passed and four ignored; source audit, localization (1,482 messages
+  across eight languages), TypeScript, strict Clippy and command parity passed. Local Rust is
+  1.96; the accepted dev CI also passed with its pinned toolchain.
+- The initial sandboxed attempt could not bind local HTTP fixtures or access macOS network
+  configuration; the complete gate passed after rerunning with those permissions. No tests were
+  disabled to obtain the pass.
+- `npm run build` passed, including viewer assets and generated license notices.
+  `npm audit --omit=dev` reported zero known vulnerabilities. Non-failing output included React
+  `act(...)` warnings in GroupSurface/ScopeTitle tests and Vite's large-chunk warning.
+- The release branch was pushed at `2afd34c6`. Alpha Gate run `38154619086` passed verification,
+  all three package jobs and packaged smoke tests, but log inspection found an unacceptable
+  macOS ad-hoc signing and flat-icon fallback. Those artifacts are not publication candidates.
+  Issue #92 makes these requirements fail closed; all three platform gates must pass again on
+  the corrected release head. No tag or publication has been created.
+- The first corrected gate (`38156887199`, `adeb0fc4`) passed Windows/Linux packaging and smoke,
+  but macOS failed to resolve the signing identity and later timed out. The temporary keychain
+  must also be on the user's search list for certificate-chain resolution, then removed from it
+  during cleanup. A bounded signing preflight now checks actual key usability before packaging;
+  bounded keychain operations prevent cleanup from hanging until the CI timeout.
+- Gate `38159701393` proved the real signing preflight and app signature work. It exposed an
+  incorrect certificate-extraction argument and a macOS admin-trust removal prompt. The verifier
+  uses the joined `--extract-certificates=prefix` form, covered by a real macOS read-only test;
+  hosted VM disposal now owns the public trust record while private keychains are still deleted.
+- Issue reconciliation is tracked in #91; partial fixes and deferred work remain open rather than
+  being closed merely because the integration merged.
+
 ## Publication gates
 
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
@@ -59,19 +94,24 @@ native addons, and downloaded native tools must not imply otherwise.
   compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
 - Public Apple Developer ID signing and notarization are not part of the alpha gate. The macOS
   alpha packages are signed with the project's private self-signed certificate so packaged
-  binaries have one stable identity.
+  binaries have one stable identity. Packaging requires a valid signing identity, then verifies
+  the final app's signature, matching leaf certificate and compiled icon catalog before archiving.
+  Self-signed certificate trust is installed only on disposable GitHub-hosted macOS runners and
+  expires with that VM. Private keys and temporary keychains are deleted and the original keychain
+  search list is restored by the build. Local and self-hosted machines must already trust the identity.
 - Pull requests to `release/**` branches run verification. Release-branch pushes run verification
   and all three platform package/smoke jobs in parallel; manual runs can also exercise them. Tags
   only publish the exact artifacts from a successful release-branch push for the same commit; they
   never rebuild. Branch and pull-request rules are in [CONTRIBUTING](../CONTRIBUTING.md).
 - Every subscription provider is implemented by the native Rust source crate. Release packages
   contain no Python runtime, gallery-dl, OF-Scraper, bridge script, or provider-owned history store.
-- TypeScript, the production build, the complete frontend and Rust test suites, command parity,
-  strict Clippy, and source/artifact audits pass. React scheduling warnings are clean.
-- `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
-  and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.
-- The release candidate is separated into reviewed commits and the worktree is clean; generated
-  build output remains untracked.
+- Require TypeScript, the production build, the complete frontend and Rust test suites, command
+  parity, strict Clippy, and source/artifact audits on the candidate. Record non-failing warnings
+  separately rather than treating a passing exit code as a warning-free run.
+- Check current production dependency advisories with `npm audit --omit=dev` and run the source
+  license and repository-hygiene audit; packaged artifact licenses remain part of the platform gate.
+- Keep the release candidate in reviewed commits and its worktree clean; generated build output
+  remains untracked.
 - The public branch and tags have been rewritten to remove audited personal absolute paths,
   reference-product names, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.
