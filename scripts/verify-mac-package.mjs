@@ -14,7 +14,7 @@ export default function verifyMacPackage(context) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'picto-signature-check-'));
   try {
     const prefix = path.join(scratch, 'certificate-');
-    execFileSync('codesign', ['--display', '--extract-certificates', prefix, app], { stdio: 'pipe' });
+    execFileSync('codesign', ['--display', `--extract-certificates=${prefix}`, app], { stdio: 'pipe' });
     const certificate = new X509Certificate(readFileSync(`${prefix}0`));
     if (certificate.fingerprint.replaceAll(':', '').toLowerCase() !== expected.toLowerCase()) {
       throw new Error('Packaged app does not use the configured macOS signing certificate.');
@@ -23,7 +23,10 @@ export default function verifyMacPackage(context) {
       && statSync(path.join(app, 'Contents', 'Resources', 'Assets.car')).size === 0) {
       throw new Error('Packaged app is missing the compiled Icon Composer catalog.');
     }
-    console.log('[alpha-package] Verified macOS signing certificate and packaged icon.');
+    console.log('[alpha-package] Verified macOS signing certificate.');
+    if (process.env.PICTO_REQUIRE_MAC_SIGNING === 'true') {
+      console.log('[alpha-package] Verified packaged Icon Composer catalog.');
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

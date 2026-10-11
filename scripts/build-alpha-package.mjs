@@ -85,26 +85,18 @@ export function prepareMacSigning(env = process.env, platform = process.platform
   const keychainPath = path.join(temporaryDirectory, 'picto-build.keychain-db');
   const keychainPassword = randomBytes(24).toString('hex');
   const publicCertificate = path.join(temporaryDirectory, 'signing.cer');
-  let temporaryTrust = false;
   let originalKeychains = null;
   const cleanup = () => {
     try {
-      if (temporaryTrust) {
-        run('sudo', ['security', 'remove-trusted-cert', '-d', publicCertificate], { stdio: 'ignore' });
-        temporaryTrust = false;
+      if (originalKeychains !== null) {
+        run('security', ['list-keychains', '-d', 'user', '-s', ...originalKeychains]);
+        originalKeychains = null;
       }
     } finally {
       try {
-        if (originalKeychains !== null) {
-          run('security', ['list-keychains', '-d', 'user', '-s', ...originalKeychains]);
-          originalKeychains = null;
-        }
+        run('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
       } finally {
-        try {
-          run('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
-        } finally {
-          rmSync(temporaryDirectory, { recursive: true, force: true });
-        }
+        rmSync(temporaryDirectory, { recursive: true, force: true });
       }
     }
   };
@@ -145,12 +137,12 @@ export function prepareMacSigning(env = process.env, platform = process.platform
     ], { stdio: 'ignore' });
     identity = findIdentity();
     if (!identity && env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted') {
-      // Trust the existing self-signed identity only on a disposable hosted runner.
+      // Admin trust removal prompts on macOS. The disposable hosted VM owns this
+      // public-certificate trust; our cleanup still deletes the private keychain.
       const certificate = run('security', [
         'find-certificate', '-c', SIGNING_IDENTITY, '-p', keychainPath,
       ], { encoding: 'utf8', stdio: 'pipe' }).stdout;
       writeFileSync(publicCertificate, certificate);
-      temporaryTrust = true;
       run('sudo', ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot',
         '-p', 'codeSign', '-k', keychainPath, publicCertificate]);
       identity = findIdentity();

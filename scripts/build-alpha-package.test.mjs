@@ -83,19 +83,16 @@ it('fails before packaging and restores the keychain list when actual signing ti
   expect(existsSync(path.dirname(creation[1].at(-1)))).toBe(false);
 });
 
-it('still restores the keychain search list and deletes scratch data if temporary trust removal fails', () => {
-  let reads = 0;
-  spawnSync.mockImplementation((command, args) => {
-    if (command === 'sudo' && args[1] === 'remove-trusted-cert') return { status: null, error: { code: 'ETIMEDOUT' } };
-    return { status: 0, stdout: args[0] === 'find-identity' && ++reads === 1 ? '0 valid identities found' : valid };
-  });
-  const signing = prepareMacSigning({ ...credentials, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }, 'darwin');
+it('still deletes the private keychain and scratch data if search-list restoration fails', () => {
+  const signing = prepareMacSigning(credentials, 'darwin');
+  spawnSync.mockImplementation((command, args) => args[0] === 'list-keychains'
+    ? { status: null, error: { code: 'ETIMEDOUT' } } : { status: 0 });
   expect(() => signing.cleanup()).toThrow('ETIMEDOUT');
   expect(existsSync(path.dirname(signing.environment.CSC_KEYCHAIN))).toBe(false);
-  expect(spawnSync.mock.calls.some(([, a]) => a[0] === 'list-keychains' && a.length === 4)).toBe(true);
+  expect(spawnSync).toHaveBeenCalledWith('security', ['delete-keychain', signing.environment.CSC_KEYCHAIN], expect.anything());
 });
 
-it('temporarily trusts the self-signed certificate only on disposable GitHub-hosted runners', () => {
+it('leaves public-certificate trust to hosted VM disposal without a blocking removal prompt', () => {
   let reads = 0;
   spawnSync.mockImplementation((command, args) => ({ status: 0, stdout:
     command === 'security' && args[0] === 'find-identity'
@@ -105,7 +102,8 @@ it('temporarily trusts the self-signed certificate only on disposable GitHub-hos
   expect(signing.environment.CSC_NAME).toBe(hash);
   signing.cleanup();
   expect(spawnSync.mock.calls.filter(([c]) => c === 'sudo').map(([, a]) => a[1]))
-    .toEqual(['add-trusted-cert', 'remove-trusted-cert']);
+    .toEqual(['add-trusted-cert']);
+  expect(existsSync(path.dirname(signing.environment.CSC_KEYCHAIN))).toBe(false);
 });
 
 it('does not modify trust on self-hosted CI runners', () => {
@@ -114,10 +112,10 @@ it('does not modify trust on self-hosted CI runners', () => {
   expect(spawnSync.mock.calls.some(([c]) => c === 'sudo')).toBe(false);
 });
 
-it('cleans temporary trust even if the certificate remains invalid', () => {
+it('deletes the private keychain even if hosted trust cannot make the certificate valid', () => {
   spawnSync.mockReturnValue({ status: 0, stdout: '0 valid identities found' });
   expect(() => prepareMacSigning({ ...credentials, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }, 'darwin')).toThrow('refusing ad-hoc');
-  expect(spawnSync.mock.calls.some(([c, a]) => c === 'sudo' && a[1] === 'remove-trusted-cert')).toBe(true);
+  expect(spawnSync.mock.calls.some(([c, a]) => c === 'security' && a[0] === 'delete-keychain')).toBe(true);
 });
 
 it('uses the Xcode marketing version and requires actool instead of parsing its unrelated version format', () => {
@@ -152,7 +150,7 @@ describe('final packaged app check', () => {
     vi.stubEnv('PICTO_MAC_SIGNING_IDENTITY_HASH', hash);
     vi.stubEnv('PICTO_REQUIRE_MAC_SIGNING', 'true');
     execFileSync.mockImplementation((c, args) => {
-      if (args[1] === '--extract-certificates') writeFileSync(`${args[2]}0`, 'DER fixture');
+      if (args[1].startsWith('--extract-certificates=')) writeFileSync(`${args[1].split('=')[1]}0`, 'DER fixture');
     });
     return { electronPlatformName: 'darwin', appOutDir: dir, packager: { appInfo: { productFilename: 'Picto' } } };
   }

@@ -80,6 +80,10 @@ native addons, and downloaded native tools must not imply otherwise.
   must also be on the user's search list for certificate-chain resolution, then removed from it
   during cleanup. A bounded signing preflight now checks actual key usability before packaging;
   bounded keychain operations prevent cleanup from hanging until the CI timeout.
+- Gate `38159701393` proved the real signing preflight and app signature work. It exposed an
+  incorrect certificate-extraction argument and a macOS admin-trust removal prompt. The verifier
+  uses the joined `--extract-certificates=prefix` form, covered by a real macOS read-only test;
+  hosted VM disposal now owns the public trust record while private keychains are still deleted.
 - Issue reconciliation is tracked in #91; partial fixes and deferred work remain open rather than
   being closed merely because the integration merged.
 
@@ -92,8 +96,9 @@ native addons, and downloaded native tools must not imply otherwise.
   alpha packages are signed with the project's private self-signed certificate so packaged
   binaries have one stable identity. Packaging requires a valid signing identity, then verifies
   the final app's signature, matching leaf certificate and compiled icon catalog before archiving.
-  Temporary self-signed certificate trust is installed and removed only on disposable GitHub-hosted
-  macOS runners; local and self-hosted machines must already trust the signing identity.
+  Self-signed certificate trust is installed only on disposable GitHub-hosted macOS runners and
+  expires with that VM. Private keys and temporary keychains are deleted and the original keychain
+  search list is restored by the build. Local and self-hosted machines must already trust the identity.
 - Pull requests to `release/**` branches run verification. Release-branch pushes run verification
   and all three platform package/smoke jobs in parallel; manual runs can also exercise them. Tags
   only publish the exact artifacts from a successful release-branch push for the same commit; they
