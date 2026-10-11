@@ -1475,5 +1475,8 @@
   "Library deleted.": "Bibliothèque supprimée.",
   "Move…": "Déplacer…",
   "Locate…": "Localiser…",
-  "Delete…": "Supprimer…"
+  "Delete…": "Supprimer…",
+  "Could not preview smart folder rules": "Impossible de prévisualiser les règles du dossier intelligent",
+  "Could not restore smart folder rules": "Impossible de restaurer les règles du dossier intelligent",
+  "Could not save smart folder": "Impossible d'enregistrer le dossier intelligent"
 }

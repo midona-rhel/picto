@@ -1475,5 +1475,8 @@
   "Library deleted.": "Library deleted.",
   "Move…": "Move…",
   "Locate…": "Locate…",
-  "Delete…": "Delete…"
+  "Delete…": "Delete…",
+  "Could not preview smart folder rules": "Could not preview smart folder rules",
+  "Could not restore smart folder rules": "Could not restore smart folder rules",
+  "Could not save smart folder": "Could not save smart folder"
 }

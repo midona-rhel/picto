@@ -1475,5 +1475,8 @@
   "Library deleted.": "Biblioteca excluída.",
   "Move…": "Mover…",
   "Locate…": "Localizar…",
-  "Delete…": "Excluir…"
+  "Delete…": "Excluir…",
+  "Could not preview smart folder rules": "Não foi possível pré-visualizar as regras da pasta inteligente",
+  "Could not restore smart folder rules": "Não foi possível restaurar as regras da pasta inteligente",
+  "Could not save smart folder": "Não foi possível salvar a pasta inteligente"
 }

@@ -1475,5 +1475,8 @@
   "Library deleted.": "资料库已删除。",
   "Move…": "移动…",
   "Locate…": "定位…",
-  "Delete…": "删除…"
+  "Delete…": "删除…",
+  "Could not preview smart folder rules": "无法预览智能文件夹规则",
+  "Could not restore smart folder rules": "无法恢复智能文件夹规则",
+  "Could not save smart folder": "无法保存智能文件夹"
 }

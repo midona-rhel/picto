@@ -26,6 +26,7 @@ import { compileSmartFolderPredicate, editorPredicateFromFilter } from './smart-
 import { getFieldDef, defaultOperator, defaultValue, isListField, FIELD_DEFS } from './smart-folder/fieldConfig';
 import styles from './SmartFolderModal.module.css';
 import { t } from '../../i18n';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 const MAX_LOCAL_RULES = 10;
 
@@ -159,6 +160,14 @@ export interface SmartFolderModalProps {
   editor?: 'all' | 'details' | 'rules';
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function reportPreviewFailure(error: unknown): void {
+  showErrorNotification({ title: t('Could not preview smart folder rules'), message: errorMessage(error) });
+}
+
 // ── Component ────────────────────────────────────────────────────
 
 export function SmartFolderModal({
@@ -224,20 +233,24 @@ export function SmartFolderModal({
         sort: initial.view?.sort ?? { field: 'imported_at', direction: 'descending', random_seed: null },
       }).then((payload) => {
         if (version !== livePreviewVersionRef.current) return;
-        livePreviewQueueRef.current = livePreviewQueueRef.current
-          .catch(() => undefined)
-          .then(async () => {
-            if (version === livePreviewVersionRef.current) {
-              await smartFoldersController.preview(initial.id!, payload);
-            }
-          });
-      });
+        // The queue keeps previews in order and never rejects: each step
+        // reports its own failure.
+        livePreviewQueueRef.current = livePreviewQueueRef.current.then(async () => {
+          if (version === livePreviewVersionRef.current) {
+            await smartFoldersController.preview(initial.id!, payload);
+          }
+        }).catch(reportPreviewFailure);
+      }).catch(reportPreviewFailure);
     }, 100);
     return () => { if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current); };
   }, [predicate, open, mode, initial, name, icon, color, notes, showRules, editorReady]);
 
-  // Revert predicate on close without save (cancel)
-  const handleClose = useCallback(() => {
+  // Cancel restores the rules the editor opened with. The editor closes only
+  // once that restore is written; if it fails, the error is shown and the
+  // editor stays open, because the previewed rules are still saved.
+  const closingRef = useRef(false);
+  const handleClose = useCallback(async () => {
+    if (closingRef.current) return;
     ++livePreviewVersionRef.current;
     if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
     if (mode === 'edit' && showRules && initial?.id && originalViewRef.current) {
@@ -249,9 +262,18 @@ export function SmartFolderModal({
         notes: initial.notes ?? null,
         view: originalViewRef.current,
       };
-      livePreviewQueueRef.current = livePreviewQueueRef.current
-        .catch(() => undefined)
+      closingRef.current = true;
+      const restore = livePreviewQueueRef.current
         .then(() => smartFoldersController.preview(initial.id!, revertPayload));
+      livePreviewQueueRef.current = restore.catch(() => undefined);
+      try {
+        await restore;
+      } catch (error) {
+        showErrorNotification({ title: t('Could not restore smart folder rules'), message: errorMessage(error) });
+        return;
+      } finally {
+        closingRef.current = false;
+      }
     }
     onClose();
   }, [mode, showRules, initial, onClose]);
@@ -260,16 +282,22 @@ export function SmartFolderModal({
     if (!name.trim()) return;
     ++livePreviewVersionRef.current;
     if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
-    const payload = await buildPayload({
-      name: name.trim(),
-      parent_id: initial?.parent_id ?? null,
-      icon,
-      color,
-      notes: notes.trim() ? notes.trim() : null,
-      predicate,
-      sort: initial?.view?.sort ?? { field: 'imported_at', direction: 'descending', random_seed: null },
-    });
-    await livePreviewQueueRef.current.catch(() => undefined);
+    let payload: SmartFolderCommandPayload;
+    try {
+      payload = await buildPayload({
+        name: name.trim(),
+        parent_id: initial?.parent_id ?? null,
+        icon,
+        color,
+        notes: notes.trim() ? notes.trim() : null,
+        predicate,
+        sort: initial?.view?.sort ?? { field: 'imported_at', direction: 'descending', random_seed: null },
+      });
+    } catch (error) {
+      showErrorNotification({ title: t('Could not save smart folder'), message: errorMessage(error) });
+      return;
+    }
+    await livePreviewQueueRef.current;
     originalViewRef.current = payload.view;
     onSave(payload);
   }, [color, icon, initial, name, notes, onSave, predicate]);
@@ -298,7 +326,7 @@ export function SmartFolderModal({
   return (
     <GlassModal
       open={open}
-      onClose={handleClose}
+      onClose={() => { void handleClose(); }}
       title={title}
       size={showRules ? 'lg' : 'md'}
       panelClassName={`${styles.modal} ${showRules && !showDetails ? styles.rulesModal : ''}`}
@@ -313,7 +341,7 @@ export function SmartFolderModal({
           >
             {mode === 'create' ? t("Create") : t("Save Changes")}
           </button>
-          <button className={modalStyles.btn} onClick={handleClose} type="button">{t("Cancel")}</button>
+          <button className={modalStyles.btn} onClick={() => { void handleClose(); }} type="button">{t("Cancel")}</button>
         </>
       )}
     >

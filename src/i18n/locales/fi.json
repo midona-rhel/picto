@@ -1475,5 +1475,8 @@
   "Library deleted.": "Kirjasto poistettu.",
   "Move…": "Siirrä…",
   "Locate…": "Etsi…",
-  "Delete…": "Poista…"
+  "Delete…": "Poista…",
+  "Could not preview smart folder rules": "Älykansion sääntöjen esikatselu epäonnistui",
+  "Could not restore smart folder rules": "Älykansion sääntöjä ei voitu palauttaa",
+  "Could not save smart folder": "Älykansiota ei voitu tallentaa"
 }

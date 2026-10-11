@@ -1475,5 +1475,8 @@
   "Library deleted.": "ライブラリを削除しました。",
   "Move…": "移動…",
   "Locate…": "場所を指定…",
-  "Delete…": "削除…"
+  "Delete…": "削除…",
+  "Could not preview smart folder rules": "スマートフォルダのルールをプレビューできませんでした",
+  "Could not restore smart folder rules": "スマートフォルダのルールを元に戻せませんでした",
+  "Could not save smart folder": "スマートフォルダを保存できませんでした"
 }
