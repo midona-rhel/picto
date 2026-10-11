@@ -14,7 +14,37 @@ const store = getDefaultStore();
 describe('range selection controller', () => {
   beforeEach(() => {
     store.set(gridSelectionActionAtom, { type: 'clear' });
+    vi.mocked(getRootPositions).mockReset();
     vi.mocked(showWarningNotification).mockClear();
+  });
+
+  it('does not restore a range after the user clears selection during the lookup', async () => {
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, { type: 'replace_items', itemIds: new Set([7]), anchor: 7, anchorIndex: 0 });
+    let finish!: (positions: Array<number | null>) => void;
+    vi.mocked(getRootPositions).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const pending = addSelectionSpan(query, { anchor: { id: 7, index: 0 }, focus: { id: 9, index: 199 } });
+    store.set(gridSelectionActionAtom, { type: 'clear' });
+    finish([0]);
+    await pending;
+    expect(store.get(selectionCountAtom)).toBe(0);
+  });
+
+  it('settles the latest refresh when two position lookups overlap', async () => {
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, { type: 'range_query', query, anchor: { id: 1, index: 0 }, focus: { id: 5, index: 9 } });
+    let first!: (positions: Array<number | null>) => void;
+    let second!: (positions: Array<number | null>) => void;
+    vi.mocked(getRootPositions)
+      .mockReturnValueOnce(new Promise((resolve) => { first = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { second = resolve; }));
+    const older = reconcileSelectionRange();
+    const newer = reconcileSelectionRange();
+    first([0, 5]);
+    await older;
+    second([3, 4]);
+    await newer;
+    expect(store.get(selectionCountAtom)).toBe(2);
   });
 
   it('asks the backend where the earlier selection sits before adding a span', async () => {

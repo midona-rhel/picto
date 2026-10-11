@@ -7,6 +7,7 @@ import { rangeRootIds, type RangeSpan, type RootPositions } from '../state/range
 import { gridSelectionActionAtom, gridSelectionAtom } from '../state/selection';
 
 const store = getDefaultStore();
+let reconciliationGeneration = 0;
 
 async function positionsOf(query: EntityViewQuery, ids: number[]): Promise<RootPositions> {
   if (ids.length === 0) return new Map();
@@ -24,6 +25,7 @@ export async function addSelectionSpan(query: EntityViewQuery, span: RangeSpan):
   const ids = new Set<number>(selection.excludedItemIds);
   (selection.range ? selection.range.includedItemIds : selection.itemIds).forEach((id) => ids.add(id));
   const positions = await positionsOf(query, [...ids]);
+  if (store.get(gridSelectionAtom) !== selection) return;
   store.set(gridSelectionActionAtom, { type: 'range_add', query, span, positions });
 }
 
@@ -33,10 +35,11 @@ export async function addSelectionSpan(query: EntityViewQuery, span: RangeSpan):
  * match what an operation on the selection would change.
  */
 export async function reconcileSelectionRange(): Promise<void> {
+  const generation = ++reconciliationGeneration;
   const selection = store.get(gridSelectionAtom);
   if (!selection.range || !selection.query) return;
   const positions = await positionsOf(selection.query, rangeRootIds(selection.range, selection.excludedItemIds));
-  if (store.get(gridSelectionAtom).range !== selection.range) return;
+  if (generation !== reconciliationGeneration || store.get(gridSelectionAtom) !== selection) return;
   const lostEnd = selection.range.spans.some((span) => positions.get(span.anchor.id) === null
     || positions.get(span.focus.id) === null);
   store.set(gridSelectionActionAtom, { type: 'range_reconcile', positions });
