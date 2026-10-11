@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
-import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { getShortcut, gridRemovalAction, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import {
   activeNodeIdAtom,
   controlPreferencesAtom,
@@ -586,10 +586,7 @@ export function GridScreen({
       deselectAll:     getShortcut('edit.deselectAll')!,
       detailView:      getShortcut('view.detailView')!,
       quicklook:       getShortcut('view.quicklook')!,
-      delete_:         getShortcut('file.delete')!,
-      restore:         getShortcut('file.restore')!,
       addToFolder:     getShortcut('file.addToFolder')!,
-      removeFromFolder: getShortcut('file.removeFromFolder')!,
       openDefault:     getShortcut('file.openDefaultApp')!,
       revealInFolder:  getShortcut('file.revealInFolder')!,
       openNewWindow:   getShortcut('file.openNewWindow')!,
@@ -702,18 +699,13 @@ export function GridScreen({
         return;
       }
 
-      // Mod+Backspace: context-dependent destructive action
-      if (matchesShortcutDef(e, defs.delete_) && count > 0) {
+      const removalAction = gridRemovalAction(e, scope.kind === 'folder', isTrash);
+      if (removalAction && count > 0) {
         e.preventDefault();
-        if (isTrash) void permanentlyDeleteSelection();
+        if (removalAction === 'remove-from-folder') void removeSelectionFromCurrentFolder();
+        else if (removalAction === 'delete-permanently') void permanentlyDeleteSelection();
+        else if (removalAction === 'restore') void setSelectionLifecycle('active');
         else void setSelectionLifecycle('trash');
-        return;
-      }
-      // Mod+Shift+Backspace: context-dependent reverse action
-      if (matchesShortcutDef(e, defs.restore) && count > 0) {
-        e.preventDefault();
-        if (isTrash) void setSelectionLifecycle('active');
-        else if (scope.kind === 'folder') void removeSelectionFromCurrentFolder();
         return;
       }
 
