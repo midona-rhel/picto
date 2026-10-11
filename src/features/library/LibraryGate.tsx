@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { IconBooks } from '@tabler/icons-react';
+import { getDefaultStore } from 'jotai';
 import { invoke, listen } from '../../platform/ipc';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { WindowControls } from '../../shared/ui/WindowControls';
@@ -7,6 +8,9 @@ import styles from './LibraryGate.module.css';
 import { t } from '../../i18n';
 import { setRecentFoldersLibrary } from '../../shared/hooks/useRecentFolders';
 import { gridController } from '../../controllers/gridController';
+import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../../state/navigation';
+import { emptyGridSelection, gridSelectionAtom } from '../../state/selection';
+import { closeTransientViewers, resetNavigationHistory } from '../../state/navigationHistory';
 
 interface LibraryConfig {
   currentPath: string | null;
@@ -37,6 +41,15 @@ function getLibraryConfig(): Promise<LibraryConfig> {
 
 function openLibraryManager(): Promise<void> {
   return invoke('open_library_manager');
+}
+
+function resetLibraryWorkspace(): void {
+  const store = getDefaultStore();
+  closeTransientViewers();
+  store.set(gridSelectionAtom, emptyGridSelection());
+  resetNavigationHistory('system:active');
+  store.set(activeNodeIdAtom, 'system:active');
+  store.set(displayedSurfaceNodeIdAtom, 'system:active');
 }
 
 function openStageHeadline(stage: LibraryOpenStatus['stage'] | undefined): string {
@@ -72,6 +85,7 @@ export function LibraryGate({ children }: { children: ReactNode }) {
 
     void listen<{ path: string }>('library-switched', ({ payload }) => {
       if (!cancelled) {
+        resetLibraryWorkspace();
         setRecentFoldersLibrary(payload.path);
         transition({ kind: 'open', path: payload.path });
       }
