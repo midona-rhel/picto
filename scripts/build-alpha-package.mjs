@@ -11,7 +11,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SIGNING_IDENTITY = 'Picto Code Signing';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -27,9 +27,9 @@ function run(command, args, options = {}) {
   return result;
 }
 
-function signingCredentials(tempDirectory) {
-  const configuredLink = process.env.MAC_CSC_LINK;
-  const configuredPassword = process.env.MAC_CSC_KEY_PASSWORD;
+function signingCredentials(tempDirectory, env) {
+  const configuredLink = env.MAC_CSC_LINK;
+  const configuredPassword = env.MAC_CSC_KEY_PASSWORD;
   if (configuredLink || configuredPassword) {
     if (!configuredLink || !configuredPassword) {
       throw new Error('MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD must be provided together.');
@@ -56,14 +56,24 @@ function signingCredentials(tempDirectory) {
   };
 }
 
-function prepareMacSigning() {
-  if (process.platform !== 'darwin') return null;
+export function signingIdentity(output) {
+  return output.match(/^\s*\d+\)\s+([A-Fa-f0-9]{40})\s+"Picto Code Signing"\s*$/m)?.[1] ?? null;
+}
+
+export function prepareMacSigning(env = process.env, platform = process.platform) {
+  if (platform !== 'darwin') return null;
 
   const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'picto-signing-'));
-  const credentials = signingCredentials(temporaryDirectory);
+  let credentials;
+  try {
+    credentials = signingCredentials(temporaryDirectory, env);
+  } catch (error) {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+    throw error;
+  }
   if (!credentials) {
     rmSync(temporaryDirectory, { recursive: true, force: true });
-    if (process.env.PICTO_REQUIRE_MAC_SIGNING === 'true') {
+    if (env.PICTO_REQUIRE_MAC_SIGNING === 'true') {
       throw new Error('A signed macOS build requires MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD.');
     }
     return null;
@@ -71,6 +81,23 @@ function prepareMacSigning() {
 
   const keychainPath = path.join(temporaryDirectory, 'picto-build.keychain-db');
   const keychainPassword = randomBytes(24).toString('hex');
+  const publicCertificate = path.join(temporaryDirectory, 'signing.cer');
+  let temporaryTrust = false;
+  const cleanup = () => {
+    try {
+      if (temporaryTrust) {
+        run('sudo', ['security', 'remove-trusted-cert', '-d', publicCertificate], { stdio: 'ignore' });
+        temporaryTrust = false;
+      }
+    } finally {
+      spawnSync('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  };
+  let identity;
+  const findIdentity = () => signingIdentity(run('security', [
+    'find-identity', '-v', '-p', 'codesigning', keychainPath,
+  ], { encoding: 'utf8', stdio: 'pipe' }).stdout);
 
   try {
     run('security', ['create-keychain', '-p', keychainPassword, keychainPath]);
@@ -96,67 +123,92 @@ function prepareMacSigning() {
       keychainPassword,
       keychainPath,
     ], { stdio: 'ignore' });
-    run('security', ['find-identity', '-v', '-p', 'codesigning', keychainPath]);
+    identity = findIdentity();
+    if (!identity && env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted') {
+      // Trust the existing self-signed identity only on a disposable hosted runner.
+      const certificate = run('security', [
+        'find-certificate', '-c', SIGNING_IDENTITY, '-p', keychainPath,
+      ], { encoding: 'utf8', stdio: 'pipe' }).stdout;
+      writeFileSync(publicCertificate, certificate);
+      temporaryTrust = true;
+      run('sudo', ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot',
+        '-p', 'codeSign', '-k', keychainPath, publicCertificate]);
+      identity = findIdentity();
+    }
+    if (!identity) throw new Error(`No valid ${SIGNING_IDENTITY} identity; refusing ad-hoc signing.`);
   } catch (error) {
-    spawnSync('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
-    rmSync(temporaryDirectory, { recursive: true, force: true });
+    cleanup();
     throw error;
   }
 
   return {
     environment: {
-      ...process.env,
+      ...env,
       CSC_IDENTITY_AUTO_DISCOVERY: 'true',
       CSC_KEYCHAIN: keychainPath,
-      CSC_NAME: SIGNING_IDENTITY,
+      CSC_NAME: identity,
+      PICTO_MAC_SIGNING_IDENTITY_HASH: identity,
     },
-    cleanup() {
-      spawnSync('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
-      rmSync(temporaryDirectory, { recursive: true, force: true });
-    },
+    cleanup,
   };
 }
 
-function supportsIconComposer() {
-  if (process.platform !== 'darwin') return true;
+export function supportsIconComposer(platform = process.platform) {
+  if (platform !== 'darwin') return true;
 
-  const result = spawnSync('xcrun', ['actool', '--version'], {
+  const result = spawnSync('xcodebuild', ['-version'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   if (result.status !== 0) return false;
 
-  const match = result.stdout.match(/(?:actool|version)\s+(\d+)/i);
-  return match !== null && Number(match[1]) >= 26;
+  const match = result.stdout.match(/^Xcode\s+(\d+)/m);
+  return match !== null && Number(match[1]) >= 26
+    && spawnSync('xcrun', ['--find', 'actool'], { stdio: 'ignore' }).status === 0;
 }
 
-const args = [
-  path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'),
-  '--publish=never',
-  ...process.argv.slice(2),
-];
-if (!supportsIconComposer()) {
-  console.log('Xcode 26 Icon Composer is unavailable; packaging with the generated flat macOS icon.');
-  args.push('--config.mac.icon=build/icon-flat.png');
+export function packageArguments({ platform, env, iconComposer, signing, extra = [] }) {
+  const args = [
+    path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'),
+    '--publish=never',
+    ...extra,
+  ];
+  if (platform === 'darwin' && !iconComposer) {
+    if (env.PICTO_REQUIRE_MAC_SIGNING === 'true') {
+      throw new Error('Release packaging requires Xcode 26+ and actool for the Icon Composer icon.');
+    }
+    console.log('Xcode 26 Icon Composer is unavailable; packaging with the generated flat macOS icon.');
+    args.push('--config.mac.icon=build/icon-flat.png');
+  }
+  if (signing) args.push('--config.forceCodeSigning=true',
+    `--config.mac.identity=${signing.environment.PICTO_MAC_SIGNING_IDENTITY_HASH}`,
+    `--config.afterSign=${path.join(root, 'scripts/verify-mac-package.mjs')}`);
+  return args;
 }
 
-const command = process.execPath;
-const signing = prepareMacSigning();
-const stop = (exitCode) => {
-  signing?.cleanup();
-  process.exit(exitCode);
-};
-process.once('SIGINT', () => stop(130));
-process.once('SIGTERM', () => stop(143));
-try {
-  const result = spawnSync(command, args, {
-    stdio: 'inherit',
-    env: signing?.environment ?? process.env,
-  });
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
-} finally {
-  process.removeAllListeners('SIGINT');
-  process.removeAllListeners('SIGTERM');
-  signing?.cleanup();
+export function main() {
+  const command = process.execPath;
+  const signing = prepareMacSigning();
+  const stop = (exitCode) => {
+    signing?.cleanup();
+    process.exit(exitCode);
+  };
+  process.once('SIGINT', () => stop(130));
+  process.once('SIGTERM', () => stop(143));
+  try {
+    const args = packageArguments({ platform: process.platform, env: process.env,
+      iconComposer: supportsIconComposer(), signing, extra: process.argv.slice(2) });
+    const result = spawnSync(command, args, {
+      stdio: 'inherit',
+      env: signing?.environment ?? process.env,
+    });
+    if (result.error) throw result.error;
+    process.exitCode = result.status ?? 1;
+  } finally {
+    process.removeAllListeners('SIGINT');
+    process.removeAllListeners('SIGTERM');
+    signing?.cleanup();
+  }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main();
