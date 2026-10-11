@@ -48,7 +48,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'folder.autoTags',         label: t("Set Folder Auto Tags"), group: t("File"), keys: 'Mod+Shift+R',     description: t("Set tags applied when media enters the selected folder") },
   { id: 'file.addToFolder',        label: t("Add to Folder..."),     group: t("File"), keys: 'Mod+Shift+J',    description: t("Open folder picker to add selected files") },
   { id: 'file.addToLastFolder',    label: t("Add to Last Folder"),   group: t("File"), keys: 'Shift+D',        description: t("Add selected files to the last used folder"), deferred: true },
-  { id: 'file.removeFromFolder',   label: t("Remove from Folder"),   group: t("File"), keys: 'Mod+Shift+Backspace' },
+  { id: 'file.removeFromFolder',   label: t("Remove from Folder"),   group: t("File"), keys: 'Mod+Backspace' },
   { id: 'file.regenerateThumbnail', label: t("Regenerate Thumbnail"), group: t("File"), keys: 'Mod+Shift+T',   description: t("Regenerate thumbnails for selected files") },
   { id: 'file.openDefaultApp',     label: t("Open with Default App"), group: t("File"), keys: 'Shift+Enter' },
   { id: 'file.revealInFolder',     label: t("Reveal in Folder"),     group: t("File"), keys: 'Mod+Enter' },
@@ -293,6 +293,20 @@ export function getShortcut(id: string): ShortcutDef | undefined {
   return def ? resolveShortcut(def) : undefined;
 }
 
+/** Folder navigation owns removal; the same default key must not also trash. */
+export function gridRemovalAction(
+  event: KeyboardEvent,
+  inFolder: boolean,
+  inTrash: boolean,
+): 'remove-from-folder' | 'trash' | 'delete-permanently' | 'restore' | null {
+  const remove = getShortcut(inFolder && !inTrash ? 'file.removeFromFolder' : 'file.delete')!;
+  if (matchesShortcutDef(event, remove)) {
+    return inTrash ? 'delete-permanently' : inFolder ? 'remove-from-folder' : 'trash';
+  }
+  if (inTrash && matchesShortcutDef(event, getShortcut('file.restore')!)) return 'restore';
+  return null;
+}
+
 export function setShortcutBinding(id: string, slot: 'keys' | 'keys2', value: string, persist = true): void {
   if (!SHORTCUT_DEFS.some((def) => def.id === id)) return;
   shortcutOverrides = {
@@ -306,6 +320,7 @@ export function findShortcutConflict(id: string, value: string): ShortcutDef | u
   if (!value) return undefined;
   return SHORTCUT_DEFS
     .map(resolveShortcut)
+    .filter((def) => !([id, def.id].includes('file.removeFromFolder') && [id, def.id].includes('file.delete')))
     .find((def) => def.id !== id && (def.keys === value || def.keys2 === value));
 }
 
@@ -332,6 +347,9 @@ const APPLICATION_MENU_SHORTCUT_IDS = [
   'file.import',
   'file.export',
   'file.exportAs',
+  'file.delete',
+  'file.restore',
+  'file.removeFromFolder',
   'edit.undo',
   'edit.redo',
   'nav.allActive',

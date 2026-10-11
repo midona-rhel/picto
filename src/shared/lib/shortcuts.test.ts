@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getKeyboardPreset,
+  findShortcutConflict,
+  getApplicationMenuShortcutBindings,
   getShortcut,
+  gridRemovalAction,
   matchesShortcutDef,
   reloadShortcutStateFromStorage,
   setKeyboardPreset,
@@ -67,5 +70,48 @@ describe('keyboard presets', () => {
     expect(getShortcut('dup.keepLeft')?.keys).toBe('Z');
     expect(getShortcut('dup.keepRight')?.keys).toBe('X');
     expect(getShortcut('dup.keepBoth')?.keys).toBe('B');
+  });
+});
+
+describe('folder removal shortcuts', () => {
+  const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+  const key = (shiftKey = false) => new KeyboardEvent('keydown', { key: 'Backspace', ...mod, shiftKey });
+
+  afterEach(() => {
+    localStorage.setItem('picto-shortcut-overrides', '{}');
+    reloadShortcutStateFromStorage();
+  });
+
+  it('removes only folder membership in folder navigation, not library lifecycle', () => {
+    expect(findShortcutConflict('file.removeFromFolder', 'Mod+Backspace')).toBeUndefined();
+    expect(findShortcutConflict('file.delete', 'Mod+Backspace')).toBeUndefined();
+    expect(gridRemovalAction(key(), true, false)).toBe('remove-from-folder');
+    expect(gridRemovalAction(key(true), true, false)).toBeNull();
+    expect(gridRemovalAction(new KeyboardEvent('keydown', { key: 'Backspace' }), true, false)).toBeNull();
+  });
+
+  it('keeps trash, permanent deletion and restore behavior outside folders', () => {
+    expect(gridRemovalAction(key(), false, false)).toBe('trash');
+    expect(gridRemovalAction(key(), false, true)).toBe('delete-permanently');
+    expect(gridRemovalAction(key(true), false, true)).toBe('restore');
+    expect(gridRemovalAction(key(true), false, false)).toBeNull();
+  });
+
+  it('honors independent remapping without falling through to trash in folders', () => {
+    setShortcutBinding('file.removeFromFolder', 'keys', 'Alt+R');
+    expect(gridRemovalAction(key(), true, false)).toBeNull();
+    expect(gridRemovalAction(new KeyboardEvent('keydown', { key: 'r', altKey: true }), true, false)).toBe('remove-from-folder');
+    expect(gridRemovalAction(key(), false, false)).toBe('trash');
+    expect(getApplicationMenuShortcutBindings()).toMatchObject({
+      'file.removeFromFolder': 'Alt+R',
+      'file.delete': 'Mod+Backspace',
+      'file.restore': 'Mod+Shift+Backspace',
+    });
+  });
+
+  it('allows the folder removal binding to be disabled without enabling trash', () => {
+    setShortcutBinding('file.removeFromFolder', 'keys', '');
+    expect(gridRemovalAction(key(), true, false)).toBeNull();
+    expect(getApplicationMenuShortcutBindings()['file.removeFromFolder']).toBe('');
   });
 });

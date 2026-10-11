@@ -581,7 +581,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       const trashLabel = selectionCount > 1 ? `Move ${selectionCount} to Trash` : 'Move to Trash';
       entries.push(item(trashLabel, {
         icon: <IconTrash size={15} />,
-        shortcut: kbd('file.delete'),
+        shortcut: scopeKind === 'folder' ? undefined : kbd('file.delete'),
         action: ctx.onMoveToTrash,
       }));
     }
