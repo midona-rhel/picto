@@ -1477,5 +1477,8 @@
   "Locate…": "Localizar…",
   "Delete…": "Eliminar…",
   "Part of the selection left this view": "Parte de la selección ya no está en esta vista",
-  "A selected range lost its first or last item, so that range is no longer selected.": "Un rango seleccionado perdió su primer o último elemento, así que ese rango ya no está seleccionado."
+  "A selected range lost its first or last item, so that range is no longer selected.": "Un rango seleccionado perdió su primer o último elemento, así que ese rango ya no está seleccionado.",
+  "Could not preview smart folder rules": "No se pudieron previsualizar las reglas de la carpeta inteligente",
+  "Could not restore smart folder rules": "No se pudieron restaurar las reglas de la carpeta inteligente",
+  "Could not save smart folder": "No se pudo guardar la carpeta inteligente"
 }

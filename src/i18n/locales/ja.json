@@ -1477,5 +1477,8 @@
   "Locate…": "場所を指定…",
   "Delete…": "削除…",
   "Part of the selection left this view": "選択の一部がこのビューから外れました",
-  "A selected range lost its first or last item, so that range is no longer selected.": "選択した範囲の最初または最後の項目がなくなったため、その範囲は選択されなくなりました。"
+  "A selected range lost its first or last item, so that range is no longer selected.": "選択した範囲の最初または最後の項目がなくなったため、その範囲は選択されなくなりました。",
+  "Could not preview smart folder rules": "スマートフォルダのルールをプレビューできませんでした",
+  "Could not restore smart folder rules": "スマートフォルダのルールを元に戻せませんでした",
+  "Could not save smart folder": "スマートフォルダを保存できませんでした"
 }
