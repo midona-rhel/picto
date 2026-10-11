@@ -699,6 +699,28 @@ describe('gridController pagination', () => {
     expect(reconciled[reconciled.length - 1]?.root_id).toBe(502);
   });
 
+  it('drops an explicitly selected loaded root when reconciliation removes it', async () => {
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [item(1), item(2)],
+      queryHeadItems: [item(1), item(2)],
+      totalCount: 2,
+    });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([1, 2]),
+      anchor: { kind: 'item', id: 1 },
+    });
+    queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
+
+    await gridController.reconcile([1]);
+
+    expect(store.get(gridSelectionAtom)).toEqual({
+      ...emptyGridSelection(),
+      itemIds: new Set([2]),
+    });
+  });
+
   it('settles search after 250 ms of inactivity', async () => {
     vi.useFakeTimers();
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));

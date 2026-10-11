@@ -13,9 +13,9 @@ export function startGridSettle(): () => void {
   let cancelled = false;
   let removeColorListener: (() => void) | undefined;
 
-  const scheduleReconcile = () => {
+  const scheduleReconcile = (payload?: { item_ids: number[] }) => {
     if (cancelled || !store.get(gridActiveAtom)) return;
-    gridController.requestReconcile();
+    gridController.requestReconcile(payload?.item_ids ?? []);
   };
 
   const unregister = libraryInvalidation.register('library', scheduleReconcile);

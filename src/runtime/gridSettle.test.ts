@@ -2,18 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { gridController } from '../controllers/gridController';
 import { gridSessionAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
 import { startGridSettle } from './gridSettle';
 import { labToHex } from '../shared/lib/labColor';
 import type { CanonicalEntityGridItem } from '../shared/types/canonical';
 
 const { callbacks, derivative, queryMock } = vi.hoisted(() => ({
-  callbacks: new Map<string, () => void>(), queryMock: vi.fn(),
+  callbacks: new Map<string, (payload?: { item_ids: number[] }) => void>(), queryMock: vi.fn(),
   derivative: { onColor: undefined as undefined | ((payload: { fileHash: string; dominantColorHex: string | null }) => void) },
 }));
 vi.mock('../platform/entityApi', () => ({ queryItemWindow: queryMock, supersedeItemWindow: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./libraryInvalidation', () => ({ libraryInvalidation: {
   latestRevision: () => -Infinity,
-  register: (resource: string, callback: () => void) => {
+  register: (resource: string, callback: (payload?: { item_ids: number[] }) => void) => {
     callbacks.set(resource, callback); return () => callbacks.delete(resource);
   },
 } }));
@@ -43,6 +44,7 @@ beforeEach(() => {
   store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'all' },
     active: true, status: 'idle', items: [item(1)], queryHeadItems: [item(1)], windowStart: 0,
     totalCount: 1, revision: 1, error: null });
+  store.set(gridSelectionAtom, emptyGridSelection());
   stop = startGridSettle();
 });
 afterEach(() => {
@@ -57,6 +59,16 @@ describe('grid invalidation', () => {
     expect(store.get(gridSessionAtom).items[0].root_id).toBe(2);
     expect(store.get(gridSessionAtom).queryHeadItems[0].root_id).toBe(2);
     expect(store.get(gridSessionAtom).status).toBe('idle');
+  });
+  it('clears a selected root removed by the invalidation refresh', async () => {
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([1]),
+      anchor: { kind: 'item', id: 1 },
+    });
+    callbacks.get('library')?.({ item_ids: [1] });
+    await vi.advanceTimersByTimeAsync(40);
+    expect(store.get(gridSelectionAtom)).toEqual(emptyGridSelection());
   });
   it('ignores recent-view invalidation outside the recent scope', async () => {
     callbacks.get('recently_viewed')?.();

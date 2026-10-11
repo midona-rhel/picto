@@ -5,7 +5,7 @@ import { queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
-import { clearSelectionAtom } from '../state/selection';
+import { clearSelectionAtom, gridSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
 import { navigateWithGridFilters } from '../state/navigationHistory';
 import {
@@ -205,6 +205,7 @@ class GridSessionController {
   private refreshWanted = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshRunning: Promise<boolean> | null = null;
+  private readonly refreshAffectedItemIds = new Set<number>();
   private lastRefreshTarget = -Infinity;
   private lastRefreshCompletedAt = -Infinity;
   private lastRefreshDurationMs = 0;
@@ -383,6 +384,7 @@ class GridSessionController {
     this.lastRefreshTarget = -Infinity;
     this.lastRefreshCompletedAt = -Infinity;
     this.lastRefreshDurationMs = 0;
+    this.refreshAffectedItemIds.clear();
     this.cancelWindowRequest();
     this.queryVersion += 1;
     this.navigationRequest += 1;
@@ -399,6 +401,7 @@ class GridSessionController {
     this.lastRefreshTarget = -Infinity;
     this.lastRefreshCompletedAt = -Infinity;
     this.lastRefreshDurationMs = 0;
+    this.refreshAffectedItemIds.clear();
     this.cancelWindowRequest();
     this.queryVersion += 1;
     this.cancelSearch();
@@ -622,7 +625,8 @@ class GridSessionController {
     }
   }
 
-  reconcile(_affectedItemIds: readonly number[] = []): Promise<boolean> {
+  reconcile(affectedItemIds: readonly number[] = []): Promise<boolean> {
+    affectedItemIds.forEach((itemId) => this.refreshAffectedItemIds.add(itemId));
     this.refreshWanted = true;
     if (this.refreshRunning) return this.refreshRunning;
     if (this.pendingNavigationVersion != null) return Promise.resolve(false);
@@ -631,8 +635,10 @@ class GridSessionController {
     if (phase === 'fading_out' || phase === 'waiting') return Promise.resolve(false);
     if (!current.active || current.status === 'loading' || current.status === 'appending') return Promise.resolve(false);
     this.refreshWanted = false;
+    const affected = new Set(this.refreshAffectedItemIds);
+    this.refreshAffectedItemIds.clear();
     const started = Date.now();
-    this.refreshRunning = this.reconcileSnapshot().finally(() => {
+    this.refreshRunning = this.reconcileSnapshot(affected).finally(() => {
       this.refreshRunning = null;
       this.lastRefreshCompletedAt = Date.now();
       this.lastRefreshDurationMs = Math.max(0, this.lastRefreshCompletedAt - started);
@@ -641,7 +647,7 @@ class GridSessionController {
     return this.refreshRunning;
   }
 
-  private async reconcileSnapshot(): Promise<boolean> {
+  private async reconcileSnapshot(affectedItemIds: ReadonlySet<number>): Promise<boolean> {
     const before = store.get(gridSessionAtom);
     if (!before.active || before.status === 'loading' || before.status === 'appending') return false;
     const generation = before.generation;
@@ -666,6 +672,7 @@ class GridSessionController {
         const previous = previousById.get(item.root_id);
         return previous != null && itemSummaryEqual(previous, item) ? previous : item;
       });
+      reconcileExplicitSelection(current.items, items, affectedItemIds);
       updateSession({
         items,
         queryHeadItems: reuseStablePageItems(current.queryHeadItems, result.head_items),
@@ -736,7 +743,8 @@ class GridSessionController {
   }
 
   /** Committed invalidations coalesce here; the event adapter owns no scheduler. */
-  requestReconcile(): void {
+  requestReconcile(affectedItemIds: readonly number[] = []): void {
+    affectedItemIds.forEach((itemId) => this.refreshAffectedItemIds.add(itemId));
     this.refreshWanted = true;
     this.scheduleRefresh();
   }
@@ -761,6 +769,34 @@ class GridSessionController {
     }, Math.max(40, Math.min(1_000, this.lastRefreshDurationMs * 3)
       - (Date.now() - this.lastRefreshCompletedAt)));
   }
+}
+
+function reconcileExplicitSelection(
+  previousItems: GridSessionSnapshot['items'],
+  nextItems: GridSessionSnapshot['items'],
+  affectedItemIds: ReadonlySet<number>,
+): void {
+  if (affectedItemIds.size === 0) return;
+  const selection = store.get(gridSelectionAtom);
+  if (selection.mode !== 'explicit' || selection.itemIds.size === 0) return;
+  const previousIds = new Set(previousItems.map((item) => item.root_id));
+  const nextIds = new Set(nextItems.map((item) => item.root_id));
+  const itemIds = new Set(selection.itemIds);
+  let changed = false;
+  for (const itemId of selection.itemIds) {
+    if (affectedItemIds.has(itemId) && previousIds.has(itemId) && !nextIds.has(itemId)) {
+      itemIds.delete(itemId);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  store.set(gridSelectionAtom, {
+    ...selection,
+    itemIds,
+    anchor: selection.anchor?.kind === 'item' && !itemIds.has(selection.anchor.id)
+      ? null
+      : selection.anchor,
+  });
 }
 
 function itemSummaryEqual(
