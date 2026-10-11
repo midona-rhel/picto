@@ -469,10 +469,18 @@ impl Default for Stacks {
 #[derive(Default)]
 pub struct SessionHistory {
     stacks: Mutex<Stacks>,
+    suppressed_threads: Mutex<HashMap<std::thread::ThreadId, usize>>,
 }
 
 impl SessionHistory {
     pub fn push(&self, mut entry: HistoryEntry) -> bool {
+        if self
+            .suppressed_threads
+            .lock()
+            .contains_key(&std::thread::current().id())
+        {
+            return false;
+        }
         if entry.estimated_bytes > HISTORY_BYTE_LIMIT {
             return false;
         }
@@ -494,6 +502,16 @@ impl SessionHistory {
         }
         stacks.refresh_cleanup_protections();
         true
+    }
+
+    pub fn without_recording<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let thread_id = std::thread::current().id();
+        *self.suppressed_threads.lock().entry(thread_id).or_default() += 1;
+        let _suppression = RecordingSuppression {
+            history: self,
+            thread_id,
+        };
+        operation()
     }
 
     pub fn take_undo(&self) -> Option<HistoryEntry> {
@@ -543,6 +561,24 @@ impl SessionHistory {
     }
 }
 
+struct RecordingSuppression<'a> {
+    history: &'a SessionHistory,
+    thread_id: std::thread::ThreadId,
+}
+
+impl Drop for RecordingSuppression<'_> {
+    fn drop(&mut self) {
+        let mut threads = self.history.suppressed_threads.lock();
+        let Some(depth) = threads.get_mut(&self.thread_id) else {
+            return;
+        };
+        *depth -= 1;
+        if *depth == 0 {
+            threads.remove(&self.thread_id);
+        }
+    }
+}
+
 impl Stacks {
     fn refresh_cleanup_protections(&mut self) {
         let mut protected = BTreeSet::new();
@@ -586,5 +622,49 @@ mod tests {
         assert!(!state.can_redo);
         assert_eq!(state.entries, 1);
         assert!(state.bytes <= redo_bytes);
+    }
+
+    #[test]
+    fn recording_suppression_preserves_existing_undo_and_redo() {
+        let history = SessionHistory::default();
+        history.push(entry("one", 1));
+        history.push(entry("two", 2));
+        let second = history.take_undo().unwrap();
+        history.complete_undo(second);
+        let before = history.state();
+
+        assert!(!history.without_recording(|| history.push(entry("automatic", 3))));
+
+        assert_eq!(history.state(), before);
+    }
+
+    #[test]
+    fn recording_suppression_is_nested_and_restored_after_unwind() {
+        let history = SessionHistory::default();
+        history.without_recording(|| {
+            assert!(!history.without_recording(|| history.push(entry("nested", 1))));
+            assert!(!history.push(entry("outer", 2)));
+        });
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            history.without_recording(|| panic!("stop"));
+        }));
+
+        assert!(panic.is_err());
+        assert!(history.push(entry("after", 3)));
+        assert_eq!(history.state().undo.unwrap().label, "after");
+    }
+
+    #[test]
+    fn recording_suppression_does_not_block_other_threads() {
+        let history = Arc::new(SessionHistory::default());
+        history.without_recording(|| {
+            let other = Arc::clone(&history);
+            assert!(std::thread::spawn(move || other.push(entry("other", 1)))
+                .join()
+                .unwrap());
+            assert!(!history.push(entry("current", 2)));
+        });
+
+        assert_eq!(history.state().undo.unwrap().label, "other");
     }
 }

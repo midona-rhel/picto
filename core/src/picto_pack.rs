@@ -222,7 +222,12 @@ pub fn import(
         let worker = std::thread::Builder::new()
             .name("picto-pack-import".into())
             .stack_size(IMPORT_STACK_BYTES)
-            .spawn_scoped(scope, || import_on_current_thread(application, request))
+            .spawn_scoped(scope, || {
+                application
+                    .library()
+                    .history()
+                    .without_recording(|| import_on_current_thread(application, request))
+            })
             .map_err(|error| format!("Could not start Picto Pack import: {error}"))?;
         worker
             .join()
@@ -706,7 +711,10 @@ fn ingest_pack_media(
         return Ok(());
     }
     let batch = std::mem::take(pending);
-    let inputs = batch.iter().map(|(_, input)| input.clone()).collect::<Vec<_>>();
+    let inputs = batch
+        .iter()
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
     let outputs = application
         .library()
         .ingest_batch(&inputs)
@@ -1272,5 +1280,81 @@ mod tests {
             .smart_folders()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn reimport_restores_metadata_without_changing_session_history() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = LibraryApplication::create(temporary.path().join("source.library")).unwrap();
+        let destination =
+            LibraryApplication::create(temporary.path().join("destination.library")).unwrap();
+        let (folder_id, _) = source.library().create_folder("Pack", None).unwrap();
+        let input = prepared(&source, "portable-item", "One", b"one-original", folder_id);
+        let (source_root, _) = source.library().ingest(&input).unwrap();
+        let pack = temporary.path().join("history.picto-pack");
+        export(
+            &source,
+            &PictoPackExportRequest {
+                source: PictoPackSource::Items {
+                    target: SelectionTarget::Explicit {
+                        root_ids: vec![source_root],
+                    },
+                },
+                output_path: pack.clone(),
+            },
+        )
+        .unwrap();
+        import(&destination, &PictoPackImportRequest { path: pack.clone() }).unwrap();
+
+        let destination_root = destination
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    connection
+                        .query_row(
+                            "SELECT local_id FROM library_item WHERE stable_key = ?1",
+                            ["portable-item"],
+                            |row| row.get::<_, u32>(0).map(RootId),
+                        )
+                        .map_err(Into::into)
+                },
+            )
+            .unwrap();
+        let target = SelectionTarget::Explicit {
+            root_ids: vec![destination_root],
+        };
+        destination.library().history().clear();
+        destination
+            .library()
+            .set_notes(&target, Some("local notes".into()), 1_720_000_000_000)
+            .unwrap();
+        destination
+            .library()
+            .set_lifecycle(&target, Lifecycle::Active)
+            .unwrap();
+        destination.library().undo().unwrap();
+        let history_before = destination.library().history().state();
+        assert_eq!(
+            history_before.undo.as_ref().unwrap().command,
+            "items.patch_metadata"
+        );
+        assert_eq!(
+            history_before.redo.as_ref().unwrap().command,
+            "items.set_lifecycle"
+        );
+
+        import(&destination, &PictoPackImportRequest { path: pack }).unwrap();
+
+        assert_eq!(destination.library().history().state(), history_before);
+        assert_eq!(
+            destination
+                .library()
+                .details(destination_root)
+                .unwrap()
+                .root
+                .notes,
+            Some("notes for One".into())
+        );
     }
 }
