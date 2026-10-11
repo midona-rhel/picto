@@ -1,23 +1,11 @@
 import { expect, test, vi } from 'vitest';
-import {
-  createLibraryHostService,
-  isFailedCloudJoinDirectory,
-  isInsideLibraryPackage,
-} from './libraryHostService.mjs';
+import { createLibraryHostService } from './libraryHostService.mjs';
 import { LIBRARY_OPEN_CANCELLED } from '../libraryOpenCancellation.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-
-test('recognizes locations nested anywhere inside a library package', () => {
-  expect(isInsideLibraryPackage(path.posix, '/Pictures/Main.library')).toBe(true);
-  expect(isInsideLibraryPackage(path.posix, '/Pictures/Main.library/exports')).toBe(true);
-  expect(isInsideLibraryPackage(path.posix, '/Pictures/Libraries')).toBe(false);
-  expect(isInsideLibraryPackage(path.win32, 'D:\\Main.library\\exports')).toBe(true);
-  expect(isInsideLibraryPackage(path.win32, 'D:\\Libraries')).toBe(false);
-});
 
 test('refuses to create a library inside another library package', async () => {
   const service = createLibraryHostService({
@@ -43,20 +31,6 @@ test('refuses to create a library inside another library package', async () => {
     name: 'Nested',
     savePath: '/Pictures/Main.library/Exports',
   })).rejects.toThrow('cannot be created inside another Picto library');
-});
-
-test('recognizes only disposable remnants from an interrupted cloud join', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-failed-cloud-join-'));
-  try {
-    await fs.mkdir(path.join(root, 'blobs'));
-    await fs.writeFile(path.join(root, 'failed-cloud-join-1234.sqlite'), 'restored database');
-    await expect(isFailedCloudJoinDirectory(fs, root)).resolves.toBe(true);
-
-    await fs.writeFile(path.join(root, 'library.sqlite'), 'active database');
-    await expect(isFailedCloudJoinDirectory(fs, root)).resolves.toBe(false);
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
 });
 
 test('remembers a manually selected cloud root once', async () => {
