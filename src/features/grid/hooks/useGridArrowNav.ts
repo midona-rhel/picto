@@ -71,10 +71,23 @@ export function useGridArrowNav(opts: {
       const minInnerWidth = fullWidth - 2 * gap;
       const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
 
-      // Find current position
-      let current = selection.anchor?.kind === 'item'
+      // Find the active end of a keyboard range. range_items intentionally
+      // keeps the original anchor, so repeated Shift+Arrow must move from the
+      // selected edge rather than restarting from that anchor.
+      const anchorIndex = selection.anchor?.kind === 'item'
         ? items.findIndex((item) => item.root_id === selection.anchor!.id)
         : -1;
+      let current = anchorIndex;
+      if (e.shiftKey && anchorIndex >= 0) {
+        let firstSelected = anchorIndex;
+        let lastSelected = anchorIndex;
+        for (let i = 0; i < items.length; i++) {
+          if (!selectedItemIds.has(items[i].root_id)) continue;
+          firstSelected = Math.min(firstSelected, i);
+          lastSelected = Math.max(lastSelected, i);
+        }
+        current = lastSelected > anchorIndex ? lastSelected : firstSelected;
+      }
       if (current == null || current < 0 || current >= items.length) {
         for (let i = 0; i < items.length; i++) {
           if (selectedItemIds.has(items[i].root_id)) { current = i; break; }
@@ -103,9 +116,6 @@ export function useGridArrowNav(opts: {
 
       if (e.shiftKey) {
         // Range select from anchor to target
-        const anchorIndex = selection.anchor?.kind === 'item'
-          ? items.findIndex((item) => item.root_id === selection.anchor!.id)
-          : current;
         const anchor = anchorIndex >= 0 ? anchorIndex : current;
         const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
         const next = new Set<number>();
