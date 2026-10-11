@@ -7,6 +7,7 @@ import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
 import { libraryInvalidation } from '../runtime/libraryInvalidation';
+import { navigateWithGridFilters } from '../state/navigationHistory';
 import {
   compileGridQuery,
   createEmptyItemFilters,
@@ -16,6 +17,7 @@ import {
 import {
   currentGridQueryAtom,
   gridSessionAtom,
+  gridDrilldownAtom,
   gridTransitionPhaseAtom,
   initialGridFilters,
   initialGridView,
@@ -199,6 +201,7 @@ class GridSessionController {
   private activeWindow: { start: number; generation: number; request: number } | null = null;
   private preparationRequest: number | null = null;
   private pendingNavigationVersion: number | null = null;
+  private pendingSearchText: string | null = null;
   private refreshWanted = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshRunning: Promise<boolean> | null = null;
@@ -220,6 +223,7 @@ class GridSessionController {
   ): Promise<PreparedGridNavigation> {
     this.cancelWindowRequest();
     this.cancelSearch();
+    this.pendingSearchText = null;
     const queryVersion = ++this.queryVersion;
     const current = store.get(gridSessionAtom);
     const scopeKey = scopeToKey(scope);
@@ -353,17 +357,21 @@ class GridSessionController {
   /** Commit every grid-facing value synchronously while the workspace is hidden. */
   commitNavigation(prepared: PreparedGridNavigation): void {
     if (prepared.queryVersion !== this.queryVersion) return;
+    const pendingSearchText = this.pendingSearchText;
+    this.pendingSearchText = null;
     this.pendingNavigationVersion = null;
     this.navigationRequest += 1;
     this.scopeKey = prepared.scopeKey;
     if (!prepared.preserveSelection) store.set(clearSelectionAtom);
     store.set(gridSessionAtom, prepared.session);
+    if (pendingSearchText !== null) this.setSearchText(pendingSearchText);
     this.observeNewerRevision(prepared.session.revision);
     if (prepared.preferencePatch) this.saveViewPref(prepared.preferencePatch);
   }
 
   cancelPreparation(): void {
     this.pendingNavigationVersion = null;
+    this.pendingSearchText = null;
     if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.refreshWanted = false;
@@ -379,6 +387,7 @@ class GridSessionController {
   deactivate(): void {
     this.flushPreferences();
     this.pendingNavigationVersion = null;
+    this.pendingSearchText = null;
     if (this.refreshTimer != null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.refreshWanted = false;
@@ -401,10 +410,16 @@ class GridSessionController {
     const previousQuery = textSearchQuery(store.get(gridSessionAtom).searchText);
     const nextQuery = textSearchQuery(text);
     updateSession({ searchText: text });
+    // Typing targets the destination, not the outgoing scope. Do not
+    // invalidate a prepared navigation that the workspace is waiting on.
+    if (this.pendingNavigationVersion !== null) {
+      this.pendingSearchText = text;
+      return;
+    }
+    if (previousQuery === nextQuery) return;
     this.queryVersion += 1;
     store.set(clearSelectionAtom);
     this.cancelSearch();
-    if (previousQuery == null && nextQuery == null) return;
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
       this.runSettledSearch();
@@ -431,7 +446,12 @@ class GridSessionController {
   }
 
   setFilters(filters: QueryFilters): void {
-    this.requestIntent({ type: 'filter', filters });
+    const drilldown = store.get(gridDrilldownAtom);
+    navigateWithGridFilters(
+      drilldown?.scopeNodeId ?? scopeToKey(store.get(gridSessionAtom).scope),
+      filters,
+      drilldown?.ownerNodeId,
+    );
   }
 
   setSort(field: SortField, direction: SortDirection): void {

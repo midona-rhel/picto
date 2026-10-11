@@ -1,6 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activeNodeIdAtom } from './navigation';
+import { gridController } from '../controllers/gridController';
 import {
   goBack,
   goForward,
@@ -35,6 +36,35 @@ afterEach(() => {
 });
 
 describe('navigateToNode', () => {
+  it('records the actual toolbar command so Back restores a numeric filter after leaving its scope', () => {
+    store.set(activeNodeIdAtom, 'system:active');
+    const filters = { ...createEmptyItemFilters(), min_width: 1024n };
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'all' }, filters: createEmptyItemFilters() });
+    gridController.setFilters(filters);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters });
+    navigateToNode('folder:7');
+    goBack();
+    expect(store.get(pendingGridNavigationAtom)).toMatchObject({
+      nodeId: 'system:active', filters, restoreScroll: true,
+    });
+    goBack();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters: createEmptyItemFilters() });
+    goForward();
+    expect(store.get(pendingGridIntentAtom)).toMatchObject({ filters });
+  });
+
+  it('keeps the manager owner when the toolbar filters a drill-down', () => {
+    store.set(activeNodeIdAtom, 'system:tag_manager');
+    const filters = { ...createEmptyItemFilters(), min_width: 1024n };
+    store.set(gridDrilldownAtom, {
+      ownerNodeId: 'system:tag_manager', scopeNodeId: 'system:active', filters: createEmptyItemFilters(),
+    });
+    gridController.setFilters(filters);
+    expect(store.get(activeNodeIdAtom)).toBe('system:tag_manager');
+    expect(store.get(gridDrilldownAtom)).toMatchObject({ ownerNodeId: 'system:tag_manager', filters });
+    expect(store.get(pendingGridNavigationAtom)).toMatchObject({ nodeId: 'system:active', filters });
+  });
+
   it('keeps the outgoing viewer alive for the scope transition', () => {
     const session = { currentIndex: 2, currentItemId: 42 };
     store.set(viewerSessionAtom, session);

@@ -694,6 +694,34 @@ describe('gridController pagination', () => {
     vi.useRealTimers();
   });
 
+  it.each(['ne', 'needle'])('keeps navigation alive when typing %s before it commits', async (text) => {
+    vi.useFakeTimers();
+    try {
+      queryItemsMock.mockResolvedValue(page([item(9)], 1));
+      const pending = gridController.prepareNavigation({ kind: 'folder', folder_id: 9 });
+      gridController.setSearchText(text);
+      const prepared = await pending;
+      gridController.commitNavigation(prepared);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'folder', folder_id: 9 });
+      expect(store.get(gridSessionAtom).searchText).toBe(text);
+      expect(store.get(gridSessionAtom).status).toBe('idle');
+      expect(queryText(queryItemsMock.mock.lastCall![0])).toBe(text.length >= 3 ? text : null);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not discard an in-flight page for a below-minimum search change', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), searchText: '' });
+    let resolve!: (value: ReturnType<typeof page>) => void;
+    queryItemsMock.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const pending = gridController.loadFirstPage();
+    gridController.setSearchText('ne');
+    resolve(page([item(9)], 1));
+    await pending;
+    expect(store.get(gridSessionAtom).status).toBe('idle');
+    expect(store.get(gridItemsAtom).map(item => item.root_id)).toEqual([9]);
+  });
+
   it('settles text below three characters as an unfiltered query', async () => {
     vi.useFakeTimers();
     queryItemsMock
