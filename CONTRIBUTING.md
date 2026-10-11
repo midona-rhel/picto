@@ -72,6 +72,10 @@ The full procedure and its gates live in
 - **Tests protect user-visible behavior and data-safety invariants**, not
   internal mechanisms: a different correct implementation should still pass,
   and the expected result must not come from the code under test.
+- **IPC payloads are a tested contract.** A new or changed command needs its
+  payload in `core/tests/fixtures/ipc_payloads.json`: add a call to
+  `src/platform/ipcContract.test.ts` and run it with `-u`; `cargo test`
+  feeds every recorded payload through the core dispatcher.
 - **Durable concepts get one normative doc home**; others link to it.
   `docs/architecture.md` describes the shipped system, not plans.
 
