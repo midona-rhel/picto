@@ -1007,7 +1007,7 @@ export function createLibraryHostService({
             await closeUnderAttempt(attempt);
             ensureOwned(attempt);
             try {
-              await moveLibraryDirectory(oldPath, newPath);
+              await moveLibraryDirectory(sourcePath, newPath);
             } catch (err) {
               const moveError = new Error(`Failed to move library: ${err.message}`);
               await reopenUnderAttempt(attempt, oldPath);
@@ -1033,7 +1033,7 @@ export function createLibraryHostService({
             },
           });
         } else {
-          await moveLibraryDirectory(oldPath, newPath);
+          await moveLibraryDirectory(sourcePath, newPath);
           await updateLibraryPath(oldPath, newPath);
         }
       } finally {

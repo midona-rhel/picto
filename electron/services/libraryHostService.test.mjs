@@ -693,6 +693,47 @@ test('a cross-volume relocation publishes a verified real copy before removing t
   }
 });
 
+test.each([false, true])('relocation moves the real package behind a relative symlink (cross-volume=%s)', async (crossVolume) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-move-alias-')));
+  const source = path.join(root, 'actual', 'Owned.library');
+  const alias = path.join(root, 'links', 'Remembered.library');
+  const destinationDirectory = path.join(root, 'destination');
+  const destination = path.join(destinationDirectory, 'Remembered.library');
+  const updates = vi.fn();
+  try {
+    await fs.mkdir(source, { recursive: true });
+    await fs.mkdir(path.dirname(alias));
+    await fs.mkdir(destinationDirectory);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'database bytes');
+    await fs.symlink(path.relative(path.dirname(alias), source), alias, 'junction');
+    const moveFs = new Proxy(fs, {
+      get(target, property) {
+        if (property !== 'rename') return target[property];
+        return async (from, to) => {
+          if (crossVolume && (from === source || from === alias)) {
+            throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+          }
+          return target.rename(from, to);
+        };
+      },
+    });
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs: moveFs,
+      path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
+      updateLibraryPath: updates,
+    });
+
+    await expect(service.relocateLibrary(alias)).resolves.toEqual({ action: 'relocated', newPath: destination });
+    expect((await fs.lstat(destination)).isDirectory()).toBe(true);
+    await expect(fs.readFile(path.join(destination, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
+    await expect(fs.access(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(updates).toHaveBeenCalledWith(alias, destination);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a failed cross-volume copy leaves the source intact and removes staging', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-copy-failure-')));
   const source = path.join(root, 'source', 'A.library');
