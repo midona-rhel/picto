@@ -106,9 +106,15 @@ pub fn get_pptx_info(path: &Path) -> (Option<u32>, (Option<u32>, Option<u32>)) {
     (num_words, (width, height))
 }
 
-/// Generate a thumbnail from an OOXML document.
-///
-/// Extracts `docProps/thumbnail.jpeg` from the archive and resizes it.
+/// Read the embedded preview dimensions through the bounded archive reader.
+pub fn preview_resolution(path: &Path) -> FileResult<(u32, u32)> {
+    let bytes = read_ooxml_entry_bytes(path, "docProps/thumbnail.jpeg")?;
+    Ok(image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_dimensions()?)
+}
+
+/// Generate a thumbnail from the embedded OOXML preview.
 pub fn generate_thumbnail_from_office(
     path: &Path,
     target_resolution: (u32, u32),
@@ -151,5 +157,9 @@ fn read_ooxml_entry_bytes(path: &Path, entry_path: &str) -> FileResult<Vec<u8>> 
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|e| FileError::UnsupportedFile(format!("Could not open OOXML archive: {}", e)))?;
 
-    super::archive::read_entry_bounded(&mut zip, entry_path, super::archive::MAX_PREVIEW_ENTRY_BYTES)
+    super::archive::read_entry_bounded(
+        &mut zip,
+        entry_path,
+        super::archive::MAX_PREVIEW_ENTRY_BYTES,
+    )
 }
