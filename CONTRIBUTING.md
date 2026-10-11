@@ -48,6 +48,11 @@ only issue-owned changes.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
 - Merge commits are also enabled on `dev` for the post-release `main` sync.
 - Do not merge before review. Resolve every review thread first.
+- The required `branch-policy` check is a guard for trusted maintainers, not
+  tamper-proof enforcement: a same-repository PR can change its Actions job.
+  Zero required approvals therefore do not mechanically guarantee release-only
+  changes to `main`. Review workflow changes explicitly; stronger enforcement
+  needs an independently controlled required check or organization workflow.
 
 ## 4. Release
 

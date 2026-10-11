@@ -28,6 +28,16 @@ describe('protected branch policy', () => {
   it.each(['feature/no-ticket', 'random', 'release/1.0.0-alpha'])('rejects an untracked work branch %s', head => {
     expect(() => checkBranchPolicy(pr('dev', head), repository, noApi)).toThrow('issue number');
   });
+  it.each(['main', 'dependabot/npm/x'])('rejects a fork borrowing the maintenance name %s', head => {
+    const pull = pr('dev', head);
+    pull.head.repo.full_name = 'fork/picto';
+    expect(() => checkBranchPolicy(pull, repository, noApi)).toThrow('issue number');
+  });
+  it('accepts a numbered work branch from a fork', () => {
+    const pull = pr('dev', 'bug/123-fix');
+    pull.head.repo.full_name = 'fork/picto';
+    expect(() => checkBranchPolicy(pull, repository, noApi)).not.toThrow();
+  });
   it('permits the existing workflow PR during bootstrap but rejects it after retargeting to main', () => {
     const pull = pr('dev', 'chore/contribution-workflow', 55);
     expect(() => checkBranchPolicy(pull, repository, noApi)).not.toThrow();

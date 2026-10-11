@@ -18,8 +18,10 @@ export function checkBranchPolicy(pr, repository, api) {
   } else if (pr.base.ref === 'dev') {
     // These existing PRs predate issue-number names. Preserve their identities
     // during the transition, not a wildcard naming exception for future work.
-    const bootstrap = pr.head.repo?.full_name === repository && pr.number >= 55 && pr.number <= 76;
-    if (!bootstrap && !/^(?:(?:feature|bug|ui|perf|refactor|docs|test|chore|deps)\/\d+-[^/]+|dependabot\/.+|main)$/.test(pr.head.ref)) {
+    const sameRepository = pr.head.repo?.full_name === repository;
+    const bootstrap = sameRepository && pr.number >= 55 && pr.number <= 76;
+    const maintenance = sameRepository && /^(?:dependabot\/.+|main)$/.test(pr.head.ref);
+    if (!bootstrap && !maintenance && !/^(?:feature|bug|ui|perf|refactor|docs|test|chore|deps)\/\d+-[^/]+$/.test(pr.head.ref)) {
       throw new Error('Work branches into dev need a purpose and issue number, for example bug/123-fix.');
     }
   }
