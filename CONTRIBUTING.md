@@ -64,6 +64,24 @@ The full procedure and its gates live in
 
 ## Engineering rules
 
+### Authorship
+
+Picto is maintained by Midona. AI assistants are tools, not project authors
+or contributors. When working on Midona's behalf, use the configured Midona
+Git identity; do not add AI author identities, `Co-Authored-By` credits,
+generated-by signatures, or assistant session links to commits or PRs.
+Preserve genuine human contributor attribution and third-party license notices.
+
+Before squash-merging, remove AI attribution from the final commit message,
+including trailers copied from the branch's commits. Do not rewrite published
+history just to change attribution. `.mailmap` normalizes existing AI identities
+in Git reports without changing the underlying commits.
+
+The shared `.claude/settings.json` disables Claude Code's automatic commit,
+PR, and session attribution. Keep that configuration when using the tool.
+
+### Implementation
+
 - **One owner per fact.** Before adding a table, cache, queue, status string,
   helper or document, find the existing owner and extend it. A second copy of
   the same fact needs a written reason in the PR.
