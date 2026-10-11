@@ -23,45 +23,32 @@ export function isInsideLibraryPackage(pathApi, candidatePath) {
   }
 }
 
-async function directoryManifest(fs, pathApi, root, relative = '') {
-  const manifest = [];
-  const entries = await fs.readdir(relative ? pathApi.join(root, relative) : root, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const child = relative ? pathApi.join(relative, entry.name) : entry.name;
-    const absolute = pathApi.join(root, child);
-    if (entry.isDirectory()) {
-      manifest.push(['directory', child]);
-      for (const item of await directoryManifest(fs, pathApi, root, child)) manifest.push(item);
-    } else if (entry.isFile()) {
-      const stat = await fs.stat(absolute);
-      manifest.push(['file', child, stat.size]);
-    } else if (entry.isSymbolicLink()) {
-      manifest.push(['symlink', child, await fs.readlink(absolute)]);
-    } else {
-      throw new Error(`Unsupported library entry: ${child}`);
-    }
-  }
-  return manifest;
-}
-
 async function verifyDirectoryCopy(fs, pathApi, source, destination) {
-  const [sourceManifest, destinationManifest] = await Promise.all([
-    directoryManifest(fs, pathApi, source),
-    directoryManifest(fs, pathApi, destination),
-  ]);
-  if (JSON.stringify(sourceManifest) !== JSON.stringify(destinationManifest)) {
-    throw new Error('Copied library verification failed');
-  }
-  for (const [kind, relative] of sourceManifest) {
-    if (kind !== 'file') continue;
-    if (!await filesEqual(
-      fs,
-      pathApi.join(source, relative),
-      pathApi.join(destination, relative),
-    )) {
-      throw new Error('Copied library verification failed');
+  let sourceCount = 0;
+  // Stream one directory at a time; library-sized manifests can exhaust the main-process heap.
+  for await (const entry of await fs.opendir(source)) {
+    sourceCount += 1;
+    const original = pathApi.join(source, entry.name);
+    const copied = pathApi.join(destination, entry.name);
+    const copiedStat = await fs.lstat(copied);
+    let matches = false;
+    if (entry.isDirectory()) {
+      matches = copiedStat.isDirectory();
+      if (matches) await verifyDirectoryCopy(fs, pathApi, original, copied);
+    } else if (entry.isFile()) {
+      matches = copiedStat.isFile()
+        && (await fs.stat(original)).size === copiedStat.size
+        && await filesEqual(fs, original, copied);
+    } else if (entry.isSymbolicLink()) {
+      matches = copiedStat.isSymbolicLink()
+        && await fs.readlink(original) === await fs.readlink(copied);
     }
+    if (!matches) throw new Error('Copied library verification failed');
+  }
+  let destinationCount = 0;
+  for await (const _entry of await fs.opendir(destination)) destinationCount += 1;
+  if (destinationCount !== sourceCount) {
+    throw new Error('Copied library verification failed');
   }
 }
 
@@ -976,12 +963,18 @@ export function createLibraryHostService({
     });
     if (result.response !== 0) return { deleted: false };
     const deletionPath = await ownedLibraryPath(libraryPath);
-    const currentPath = getCurrentLibraryRoot();
-    if (currentPath) {
-      const currentRealPath = await fs.realpath(currentPath).catch(() => null);
-      if (currentRealPath === deletionPath) {
-        throw new Error('Cannot delete the currently open library. Switch to a different library first.');
+    while (true) {
+      const currentPath = getCurrentLibraryRoot();
+      const pendingPath = openingPath();
+      for (const activePath of [currentPath, pendingPath]) {
+        if (!activePath) continue;
+        const resolved = await fs.realpath(activePath).catch(() => path.resolve(activePath));
+        if (resolved === deletionPath) {
+          throw new Error('Cannot delete the currently open or opening library. Switch to a different library first.');
+        }
       }
+      // Opening can settle or change during realpath; validate the new state before unlinking.
+      if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
     }
     await fs.rm(deletionPath, { recursive: true, force: false });
     await recordLibrary(libraryPath, () => removeLibraryFromHistory(libraryPath));
@@ -1072,6 +1065,9 @@ export function createLibraryHostService({
     }
 
     const destDir = picked.filePaths[0];
+    if (oldExists && isInsideLibraryPackage(path, destDir)) {
+      throw new Error('A library cannot be moved inside another Picto library.');
+    }
     const newPath = oldExists
       ? path.join(destDir, basename)
       : await locatedLibraryPath(destDir, basename);

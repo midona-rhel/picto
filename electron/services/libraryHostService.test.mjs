@@ -434,7 +434,7 @@ test('delete rechecks the current library by real path after the confirmation di
     getCurrentLibraryRoot: () => currentPath,
   });
 
-  await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('currently open library');
+  await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('currently open');
   expect(removed).not.toHaveBeenCalled();
 });
 
@@ -461,6 +461,53 @@ test('delete removes a revalidated Picto library and then forgets it', async () 
   }
 });
 
+test('delete refuses a library whose native open is still pending after confirmation', async () => {
+  const libraryPath = '/Pictures/Owned.library';
+  const aliasPath = '/Volumes/Alias/Owned.library';
+  const native = createNativeOpenStub();
+  const removed = vi.fn();
+  let switching;
+  const { service, state } = createOpenService(native, {
+    fs: {
+      lstat: async (target) => (target === libraryPath
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : { isFile: () => true }),
+      realpath: async (target) => target === aliasPath ? libraryPath : target,
+      rm: removed,
+    },
+    dialog: { showMessageBox: async () => {
+      switching = service.switchLibrary(aliasPath);
+      await flush();
+      return { response: 0 };
+    } },
+  });
+  try {
+    await expect(service.deleteLibrary(libraryPath)).rejects.toThrow('currently open');
+    expect(state.current).toBeNull();
+    expect(native.opening()).toEqual([aliasPath]);
+    expect(removed).not.toHaveBeenCalled();
+  } finally {
+    native.complete(aliasPath);
+    await switching;
+  }
+});
+
+test.each([
+  [path.posix, '/Pictures/A.library', '/Pictures/B.library/exports'],
+  [path.win32, 'C:\\Pictures\\A.library', 'D:\\B.library\\exports'],
+])('relocation refuses a destination inside a library package (case %#)', async (pathApi, source, destination) => {
+  const rename = vi.fn();
+  const { service } = createOpenService(createNativeOpenStub(), {
+    path: pathApi,
+    fs: { access: async (target) => {
+      if (target !== source) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    }, rename },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destination] }) },
+  });
+  await expect(service.relocateLibrary(source)).rejects.toThrow('inside another Picto library');
+  expect(rename).not.toHaveBeenCalled();
+});
+
 test('a cross-volume relocation publishes a verified real copy before removing the source', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-move-'));
   const source = path.join(root, 'source', 'A.library');
@@ -474,6 +521,8 @@ test('a cross-volume relocation publishes a verified real copy before removing t
     await fs.writeFile(path.join(source, 'blobs', 'aa', 'asset.bin'), 'asset bytes');
     const crossVolumeFs = new Proxy(fs, {
       get(target, property) {
+        // Verification must not materialize file lists for the whole library.
+        if (property === 'readdir') return () => { throw new Error('use bounded directory iteration'); };
         if (property !== 'rename') return target[property];
         return async (from, to) => {
           if (from === source && to === destination) {
@@ -547,7 +596,8 @@ test('a failed cross-volume copy leaves the source intact and removes staging', 
   }
 });
 
-test('a failed cross-volume verification leaves the source intact and removes staging', async () => {
+test.each(['changed bytes', 'extra entry', 'wrong entry type'])(
+  'cross-volume verification rejects %s, preserves the source and removes staging', async (fault) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-verify-failure-'));
   const source = path.join(root, 'source', 'A.library');
   const destinationDirectory = path.join(root, 'destination');
@@ -570,9 +620,16 @@ test('a failed cross-volume verification leaves the source intact and removes st
           return async (from, to, options) => {
             await target.cp(from, to, options);
             const database = path.join(to, 'library.sqlite');
-            const bytes = await target.readFile(database);
-            bytes[0] ^= 0xff;
-            await target.writeFile(database, bytes);
+            if (fault === 'extra entry') {
+              await target.writeFile(path.join(to, 'unexpected'), 'extra');
+            } else if (fault === 'wrong entry type') {
+              await target.rm(database);
+              await target.mkdir(database);
+            } else {
+              const bytes = await target.readFile(database);
+              bytes[0] ^= 0xff;
+              await target.writeFile(database, bytes);
+            }
           };
         }
         return target[property];
