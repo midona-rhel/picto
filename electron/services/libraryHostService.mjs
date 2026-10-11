@@ -47,7 +47,7 @@ export function createLibraryHostService({
   let currentAttempt = null;
   let shuttingDown = false;
   const { isValidLibrary, ownedLibraryPath, moveLibraryDirectory } = createLibraryFilesystem({ fs, path });
-  const deletingLibraries = new Set();
+  const libraryReservations = new Map();
   const coverExtensions = ['jpg', 'png'];
 
   function markShuttingDown() {
@@ -103,16 +103,23 @@ export function createLibraryHostService({
    * `settleFailedOpen` classifies the refusal as 'shutdown' or 'superseded'.
    */
   async function startNativeOpen(attempt, open) {
-    if (deletingLibraries.size) await assertNotDeleting(attempt.path);
+    if (libraryReservations.size) await assertLibraryAvailable(attempt.path, attempt.reservation);
     if (shuttingDown || !ownsAttempt(attempt)) throw new Error(LIBRARY_OPEN_CANCELLED);
     return open();
   }
 
-  async function assertNotDeleting(libraryPath) {
-    const reserved = new Set(deletingLibraries);
-    const resolved = await fs.realpath(libraryPath).catch(() => null);
-    if (!resolved || reserved.has(resolved)) {
-      throw new Error('Cannot open this library while deletion is in progress.');
+  async function canonicalLibraryPath(libraryPath) {
+    // A move destination does not exist yet; its parent still resolves aliases.
+    return fs.realpath(libraryPath).catch(async () => path.join(
+      await fs.realpath(path.dirname(libraryPath)), path.basename(libraryPath),
+    ));
+  }
+
+  async function assertLibraryAvailable(libraryPath, ownedReservation) {
+    const resolved = await canonicalLibraryPath(libraryPath);
+    const reservation = libraryReservations.get(resolved);
+    if (reservation && reservation !== ownedReservation) {
+      throw new Error(`Cannot open this library while ${reservation.operation} is in progress.`);
     }
   }
 
@@ -178,9 +185,10 @@ export function createLibraryHostService({
    * resolves with `onSuperseded(error)` when given, else rejects with the
    * cancellation sentinel whatever error the takeover surfaced as.
    */
-  async function runAttempt(libraryPath, flow, { onSuperseded } = {}) {
-    if (deletingLibraries.size) await assertNotDeleting(libraryPath);
+  async function runAttempt(libraryPath, flow, { onSuperseded, reservation } = {}) {
+    if (libraryReservations.size) await assertLibraryAvailable(libraryPath, reservation);
     const attempt = beginAttempt(libraryPath);
+    attempt.reservation = reservation;
     try {
       return await flow(attempt);
     } catch (error) {
@@ -844,12 +852,12 @@ export function createLibraryHostService({
       // Opening can settle or change during realpath; validate the new state before unlinking.
       if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
     }
-    if (deletingLibraries.has(deletionPath)) throw new Error('Library deletion is already in progress.');
-    deletingLibraries.add(deletionPath);
+    if (libraryReservations.has(deletionPath)) throw new Error('A library operation is already in progress.');
+    libraryReservations.set(deletionPath, { operation: 'deletion' });
     try {
       await fs.rm(deletionPath, { recursive: true, force: false });
     } finally {
-      deletingLibraries.delete(deletionPath);
+      libraryReservations.delete(deletionPath);
     }
     await recordLibrary(libraryPath, () => removeLibraryFromHistory(libraryPath));
     buildAppMenu();
@@ -971,40 +979,66 @@ export function createLibraryHostService({
     }
 
     if (oldExists) {
-      if (oldPath === getCurrentLibraryRoot()) {
-        let moved = false;
-        return runAttempt(newPath, async (attempt) => {
-          sendToAllWindows('library-switching', { path: newPath });
-          await closeUnderAttempt(attempt);
-          ensureOwned(attempt);
-          try {
-            await moveLibraryDirectory(oldPath, newPath);
-          } catch (err) {
-            const moveError = new Error(`Failed to move library: ${err.message}`);
-            await reopenUnderAttempt(attempt, oldPath);
-            throw moveError;
+      const sourcePath = await canonicalLibraryPath(oldPath);
+      const reservation = { operation: 'relocation' };
+      let isCurrent;
+      while (true) {
+        const currentPath = getCurrentLibraryRoot();
+        const pendingPath = openingPath();
+        isCurrent = currentPath && await canonicalLibraryPath(currentPath) === sourcePath;
+        if (pendingPath) {
+          const pending = await canonicalLibraryPath(pendingPath);
+          if (pending === sourcePath || pending === newPath) {
+            throw new Error('Cannot move a library while it is opening.');
           }
-          // The move happened: the library exists at its new place whatever
-          // happens next. Recording it in the history is bookkeeping that
-          // can only be logged, never turned into an open failure.
-          moved = true;
-          await recordLibrary(newPath, () => updateLibraryPath(oldPath, newPath));
-          await startNativeOpen(attempt, () => openLibrary(newPath));
-          publishOpen(attempt);
-          buildAppMenu();
-          return { action: 'relocated', newPath };
-        }, {
-          // Superseded after the move reached the disk, the library exists
-          // at its new place; before that, the caller learns why nothing
-          // was moved.
-          onSuperseded: (error) => {
-            if (moved) return { action: 'relocated', newPath };
-            throw error;
-          },
-        });
-      } else {
-        await moveLibraryDirectory(oldPath, newPath);
-        await updateLibraryPath(oldPath, newPath);
+        }
+        if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
+      }
+      for (const target of [sourcePath, newPath]) {
+        if (libraryReservations.has(target)) throw new Error('A library operation is already in progress.');
+      }
+      libraryReservations.set(sourcePath, reservation);
+      libraryReservations.set(newPath, reservation);
+      try {
+        if (isCurrent) {
+          let moved = false;
+          return await runAttempt(newPath, async (attempt) => {
+            sendToAllWindows('library-switching', { path: newPath });
+            await closeUnderAttempt(attempt);
+            ensureOwned(attempt);
+            try {
+              await moveLibraryDirectory(oldPath, newPath);
+            } catch (err) {
+              const moveError = new Error(`Failed to move library: ${err.message}`);
+              await reopenUnderAttempt(attempt, oldPath);
+              throw moveError;
+            }
+            // The move happened: the library exists at its new place whatever
+            // happens next. Recording it in the history is bookkeeping that
+            // can only be logged, never turned into an open failure.
+            moved = true;
+            await recordLibrary(newPath, () => updateLibraryPath(oldPath, newPath));
+            await startNativeOpen(attempt, () => openLibrary(newPath));
+            publishOpen(attempt);
+            buildAppMenu();
+            return { action: 'relocated', newPath };
+          }, {
+            reservation,
+            // Superseded after the move reached the disk, the library exists
+            // at its new place; before that, the caller learns why nothing
+            // was moved.
+            onSuperseded: (error) => {
+              if (moved) return { action: 'relocated', newPath };
+              throw error;
+            },
+          });
+        } else {
+          await moveLibraryDirectory(oldPath, newPath);
+          await updateLibraryPath(oldPath, newPath);
+        }
+      } finally {
+        libraryReservations.delete(sourcePath);
+        libraryReservations.delete(newPath);
       }
     } else {
       await updateLibraryPath(oldPath, newPath);

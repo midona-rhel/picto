@@ -504,6 +504,105 @@ test.each([false, true])('deletion reserves its package until removal settles (f
   await retry;
 });
 
+test.each([false, true])('relocation reserves source and destination until it settles (failure=%s)', async (failMove) => {
+  const source = '/Pictures/A.library';
+  const destination = '/Archive/A.library';
+  const native = createNativeOpenStub();
+  let finishMove;
+  const move = new Promise((resolve, reject) => {
+    finishMove = () => failMove ? reject(new Error('move failed')) : resolve();
+  });
+  const rename = vi.fn(() => move);
+  const { service, state } = createOpenService(native, {
+    fs: {
+      realpath: async (value) => {
+        if (value === '/Alias/A.library') return source;
+        if (value === destination) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return value;
+      },
+      access: async (value) => {
+        if (value === destination) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      },
+      rename,
+    },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ['/Archive'] }) },
+  });
+  const moving = service.relocateLibrary(source).catch((error) => error.message);
+  await flush();
+  expect(rename).toHaveBeenCalledOnce();
+  try {
+    for (const target of ['/Alias/A.library', destination]) {
+      const opening = service.switchLibrary(target).catch((error) => error.message);
+      await flush();
+      // Let a wrongly permitted open finish so the pre-fix test cannot hang.
+      if (native.opening().includes(target)) native.complete(target);
+      expect(await opening).toMatch(/relocation/);
+    }
+    expect(native.calls).toEqual([]);
+    expect(state.updates).toEqual([]);
+  } finally {
+    finishMove();
+    await moving;
+  }
+  expect(await moving).toEqual(failMove ? 'move failed' : { action: 'relocated', newPath: destination });
+  const retryTarget = failMove ? source : destination;
+  const retry = service.switchLibrary(retryTarget);
+  await flush();
+  native.complete(retryTarget);
+  await retry;
+});
+
+test('relocation refuses a source that started opening while the destination dialog was open', async () => {
+  const native = createNativeOpenStub();
+  const rename = vi.fn();
+  let switching;
+  const source = '/Pictures/A.library';
+  const { service } = createOpenService(native, {
+    fs: {
+      realpath: async (value) => value,
+      access: async (value) => {
+        if (value !== source) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      },
+      rename,
+    },
+    dialog: { showOpenDialog: async () => {
+      switching = service.switchLibrary(source);
+      await flush();
+      return { canceled: false, filePaths: ['/Archive'] };
+    } },
+  });
+  try {
+    await expect(service.relocateLibrary(source)).rejects.toThrow('opening');
+    expect(rename).not.toHaveBeenCalled();
+  } finally {
+    native.complete(source);
+    await switching;
+  }
+});
+
+test('a failed current-library move can reopen its own reserved source', async () => {
+  const source = '/Pictures/A.library';
+  const native = createNativeOpenStub();
+  const { service, state } = createOpenService(native, {
+    fs: {
+      realpath: async (value) => value,
+      access: async (value) => {
+        if (value !== source) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      },
+      rename: async () => { throw new Error('move failed'); },
+    },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ['/Archive'] }) },
+  });
+  state.current = source;
+  const moving = service.relocateLibrary(source).catch((error) => error.message);
+  await flush();
+  expect(native.opening()).toEqual([source]);
+  native.complete(source);
+  expect(await moving).toBe('Failed to move library: move failed');
+  expect(state.current).toBe(source);
+  expect(state.updates).toEqual([]);
+});
+
 test('relocation rejects a symlink destination inside another library', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-move-nested-alias-'));
   try {
@@ -548,6 +647,8 @@ test('a cross-volume relocation publishes a verified real copy before removing t
   const destinationDirectory = path.join(root, 'destination');
   const destination = path.join(destinationDirectory, 'A.library');
   const updates = vi.fn();
+  let service;
+  const blockedStages = [];
   try {
     await fs.mkdir(path.join(source, 'blobs', 'aa'), { recursive: true });
     await fs.mkdir(destinationDirectory);
@@ -555,6 +656,14 @@ test('a cross-volume relocation publishes a verified real copy before removing t
     await fs.writeFile(path.join(source, 'blobs', 'aa', 'asset.bin'), 'asset bytes');
     const crossVolumeFs = new Proxy(fs, {
       get(target, property) {
+        if (property === 'cp' || property === 'rm') return async (...args) => {
+          if (args[0] === source) {
+            await expect(service.switchLibrary(source)).rejects.toThrow('relocation');
+            await expect(service.switchLibrary(destination)).rejects.toThrow('relocation');
+            blockedStages.push(property);
+          }
+          return target[property](...args);
+        };
         // Verification must not materialize file lists for the whole library.
         if (property === 'readdir') return () => { throw new Error('use bounded directory iteration'); };
         if (property !== 'rename') return target[property];
@@ -566,18 +675,19 @@ test('a cross-volume relocation publishes a verified real copy before removing t
         };
       },
     });
-    const { service } = createOpenService(createNativeOpenStub(), {
+    ({ service } = createOpenService(createNativeOpenStub(), {
       fs: crossVolumeFs,
       path,
       dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [destinationDirectory] }) },
       updateLibraryPath: updates,
-    });
+    }));
 
     await expect(service.relocateLibrary(source)).resolves.toEqual({ action: 'relocated', newPath: destination });
     await expect(fs.access(source)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.readFile(path.join(destination, 'library.sqlite'), 'utf8')).resolves.toBe('database bytes');
     await expect(fs.readFile(path.join(destination, 'blobs', 'aa', 'asset.bin'), 'utf8')).resolves.toBe('asset bytes');
     expect(updates).toHaveBeenCalledWith(source, destination);
+    expect(blockedStages).toEqual(['cp', 'rm']);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
