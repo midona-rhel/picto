@@ -42,6 +42,8 @@ describe('inspector invalidation', () => {
   });
 
   it('reloads the displayed item after a library invalidation', () => {
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 17 });
+    store.set(inspectorPinnedAtom, true);
     store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
     const stop = startInspectorSettle();
 
@@ -52,14 +54,50 @@ describe('inspector invalidation', () => {
   });
 
   it('does not reload an item while its permanent deletion is settling', () => {
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 17 });
+    store.set(inspectorPinnedAtom, true);
     store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
     store.set(permanentDeletesInFlightAtom, 1);
     const stop = startInspectorSettle();
 
     callbacks.get('library')?.();
-
-    expect(loadInspectorData).not.toHaveBeenCalled();
     stop();
+    expect(loadInspectorData).not.toHaveBeenCalled();
+  });
+
+  it.each(['item', 'multi'] as const)('does not refresh stale item details when a multi-selection is displaying %s', (kind) => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([17, 18]),
+      anchor: { kind: 'item', id: 17 },
+    });
+    store.set(displayedInspectorTargetAtom, kind === 'item'
+      ? { kind: 'item', itemId: 17 }
+      : { kind: 'multi', count: 2, selectionMode: 'explicit' });
+    store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
+    const stop = startInspectorSettle();
+
+    callbacks.get('library')?.();
+    stop();
+    expect(loadInspectorData).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the newly selected item, not the stale details still displayed', () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([18]),
+      anchor: { kind: 'item', id: 18 },
+    });
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 17 });
+    store.set(displayedInspectorItemDetailsAtom, { root: { root_id: 17 } } as never);
+    const stop = startInspectorSettle();
+
+    callbacks.get('library')?.();
+    stop();
+    expect(loadInspectorData).toHaveBeenCalledTimes(1);
+    expect(loadInspectorData).toHaveBeenCalledWith(18);
   });
 
   it('keeps the committed scope until a query summary is ready and returns when cleared', () => {
