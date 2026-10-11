@@ -43,13 +43,15 @@ impl WorkWake {
     }
 
     /// Wait at least `pace` (to coalesce bursts), then until the library
-    /// publishes again or `fallback` elapses. Returns false when cancelled.
+    /// publishes again or `fallback` elapses from entry, including that pace.
+    /// Returns false when cancelled.
     pub async fn next(
         &mut self,
         cancel: &CancellationToken,
         pace: Duration,
         fallback: Duration,
     ) -> bool {
+        let deadline = tokio::time::Instant::now() + fallback;
         tokio::select! {
             _ = cancel.cancelled() => return false,
             _ = tokio::time::sleep(pace) => {}
@@ -57,7 +59,7 @@ impl WorkWake {
         tokio::select! {
             _ = cancel.cancelled() => false,
             _ = self.revisions.changed() => true,
-            _ = tokio::time::sleep(fallback) => true,
+            _ = tokio::time::sleep_until(deadline) => true,
         }
     }
 }
@@ -75,7 +77,7 @@ mod tests {
 
         let started = tokio::time::Instant::now();
         assert!(wake.next(&cancel, Duration::from_millis(10), Duration::from_secs(5)).await);
-        assert!(started.elapsed() >= Duration::from_secs(5), "an idle worker waits for the fallback");
+        assert_eq!(started.elapsed(), Duration::from_secs(5), "the fallback includes the coalescing pace");
 
         wake.mark_seen();
         sender.send_replace(7);
