@@ -75,6 +75,11 @@ native addons, and downloaded native tools must not imply otherwise.
   macOS ad-hoc signing and flat-icon fallback. Those artifacts are not publication candidates.
   Issue #92 makes these requirements fail closed; all three platform gates must pass again on
   the corrected release head. No tag or publication has been created.
+- The first corrected gate (`38156887199`, `adeb0fc4`) passed Windows/Linux packaging and smoke,
+  but macOS failed to resolve the signing identity and later timed out. The temporary keychain
+  must also be on the user's search list for certificate-chain resolution, then removed from it
+  during cleanup. A bounded signing preflight now checks actual key usability before packaging;
+  bounded keychain operations prevent cleanup from hanging until the CI timeout.
 - Issue reconciliation is tracked in #91; partial fixes and deferred work remain open rather than
   being closed merely because the integration merged.
 
