@@ -452,12 +452,28 @@ impl LibraryDatabase {
     }
 
     /// Copy committed WAL pages into the database without blocking readers or
-    /// waiting for them. Autocheckpoint is off, so this bounds WAL growth
-    /// during long sessions; `checkpoint_wal` truncates on close.
+    /// waiting for them. Trim an oversized, fully checkpointed WAL only when
+    /// SQLite can acquire the required reader locks immediately.
     pub fn checkpoint_wal_passive(&self) -> Result<()> {
         let _scheduler_lease = self.scheduler.acquire(WorkPriority::Maintenance);
         let writer = self.writer.lock();
-        writer.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))?;
+        let (frames, copied): (i64, i64) =
+            writer.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((row.get(1)?, row.get(2)?))
+            })?;
+        let mut wal_path = self.path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        if frames == copied
+            && std::fs::metadata(wal_path).is_ok_and(|m| m.len() >= 64 * 1024 * 1024)
+        {
+            // journal_size_limit applies when WAL is reused, not when PASSIVE
+            // completes. An idle library may otherwise retain a large WAL forever.
+            let timeout: u32 = writer.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            let trimmed = writer.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            writer.busy_timeout(std::time::Duration::from_millis(timeout.into()))?;
+            trimmed?;
+        }
         Ok(())
     }
 
@@ -516,6 +532,36 @@ fn open_connection(path: &Path, create: bool, cache_kib: i64) -> Result<Connecti
 mod tests {
     use super::*;
     use crate::query_request::{QueryRequest, WindowRequests};
+
+    #[test]
+    fn idle_checkpoint_trims_large_wal_without_waiting_for_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = LibraryDatabase::create(directory.path().join("library.sqlite")).unwrap();
+        database.writer.lock().execute_batch(
+            "CREATE TABLE wal_test(value BLOB); INSERT INTO wal_test VALUES(zeroblob(73400320));",
+        ).unwrap();
+        let wal = directory.path().join("library.sqlite-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 64 * 1024 * 1024);
+        let reader = Connection::open(database.path()).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT length(value) FROM wal_test;")
+            .unwrap();
+        let start = std::time::Instant::now();
+        database.checkpoint_wal_passive().unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        reader.execute_batch("COMMIT").unwrap();
+        database.checkpoint_wal_passive().unwrap();
+        assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
+        assert_eq!(
+            database
+                .writer
+                .lock()
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5000
+        );
+    }
 
     fn unopenable_pool() -> Arc<ReadPool> {
         // A file in a directory that does not exist can neither be opened nor
