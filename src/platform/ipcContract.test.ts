@@ -129,7 +129,11 @@ const scopeQueries: EntityViewQuery[] = scopes.map((scope) => compileGridQuery(s
 const explicitTarget: EntityTarget = { kind: 'explicit', root_ids: [1, 2] };
 const emptyTarget: EntityTarget = { kind: 'explicit', root_ids: [] };
 const queryTarget: EntityTarget = { kind: 'query', query: filteredQuery, excluded_root_ids: [2] };
-const rangeTarget: EntityTarget = { kind: 'range', query: allQuery, anchor_root_id: 1, focus_root_id: 3 };
+const rangeTarget: EntityTarget = {
+  kind: 'range', query: allQuery,
+  spans: [{ anchor_root_id: 1, focus_root_id: 3, anchor_index: 0, focus_index: 2 }],
+  included_root_ids: [4], excluded_root_ids: [2],
+};
 const ALL_TARGETS = [explicitTarget, emptyTarget, queryTarget, rangeTarget];
 
 const smartFolderView: ViewQuerySpec = {
@@ -275,6 +279,7 @@ const CASES: Record<string, () => unknown> = {
     );
   },
   'entityApi.supersedeItemWindow': () => entityApi.supersedeItemWindow({ channel: 'grid', generation: 4 }),
+  'entityApi.getRootPositions': () => entityApi.getRootPositions(filteredQuery, [1, 2]),
   'entityApi.queryMimeFacets': () => entityApi.queryMimeFacets(filteredQuery),
   'entityApi.recordMediaView': () => entityApi.recordMediaView(1),
   'entityApi.clearRecentViews': () => entityApi.clearRecentViews(),
