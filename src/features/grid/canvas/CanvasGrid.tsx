@@ -74,6 +74,7 @@ import {
   gridGapForSpacing,
 } from '../gridAppearance';
 import { useScrollToTop } from '../../../shared/hooks/useScrollToTop';
+import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import { ScrollToTopButton } from '../../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 import { resolveTargetFilePaths } from '../../../platform/shellApi';
 
@@ -1177,24 +1178,25 @@ export function CanvasGrid({
       }
       setDragGhost(null);
     };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !isDragOwnedBy(dragOwnerIdRef.current)) return;
-      invalidateNativeDragRequest();
-      cancelDrag();
-      setDragGhost(null);
-    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-    window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('keydown', onKeyDown);
       invalidateNativeDragRequest();
       reorderDropRef.current = null;
       if (isDragOwnedBy(dragOwnerIdRef.current)) cancelDrag();
     };
   }, []); // stable — never re-runs, uses refs for all mutable data
+
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape' || !isDragOwnedBy(dragOwnerIdRef.current)) return;
+    nativeDragRequestRef.current.generation += 1;
+    nativeDragRequestRef.current.pending = false;
+    cancelDrag();
+    setDragGhost(null);
+    return true;
+  }, { priority: 60 });
 
   useEffect(() => {
     if (!nativeDragRequestRef.current.pending) return;
