@@ -129,6 +129,14 @@ export function planFolderReorder(
   return reordered.every((itemId, index) => itemId === orderedItemIds[index]) ? [] : reordered;
 }
 
+export function nativeDragHashes(
+  itemIds: readonly number[],
+  items: readonly Pick<CanonicalEntityGridItem, 'root_id' | 'content_hash'>[],
+): string[] {
+  const hashes = new Map(items.map(item => [item.root_id, item.content_hash]));
+  return [...new Set(itemIds.flatMap(id => hashes.get(id) ? [hashes.get(id)!] : []))];
+}
+
 export function beginsGridScrollRestore(
   initial: GridScrollPosition | null,
   previousInitial: GridScrollPosition | null,
@@ -1009,11 +1017,9 @@ export function CanvasGrid({
         reorderDropRef.current = null;
         setDragGhost(null);
 
-        const fileHashes = state.itemIds.slice(0, 3).map((itemId) =>
-          itemsRef.current.find((item) => item.root_id === itemId)?.content_hash ?? '',
-        );
+        const fileHashes = nativeDragHashes(state.itemIds, itemsRef.current);
         const iconUrl = createNativeDragImageUrl(
-          fileHashes,
+          fileHashes.slice(0, 3),
           state.itemIds.length,
           (fileHash) => {
             const item = itemsRef.current.find((candidate) => candidate.content_hash === fileHash);

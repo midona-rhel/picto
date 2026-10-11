@@ -284,6 +284,8 @@ class GridSessionController {
     const queryVersion = ++this.queryVersion;
     this.pendingNavigationVersion = queryVersion;
     const current = store.get(gridSessionAtom);
+    const manualFolderOrder = intent.type === 'sort' && intent.field === 'folder_order'
+      && current.scope.kind === 'folder';
     const session: GridSessionSnapshot = {
       ...current,
       generation: current.generation + 1,
@@ -291,6 +293,8 @@ class GridSessionController {
       ...(intent.type === 'sort' ? {
         sort: { field: intent.field, direction: intent.direction,
           randomSeed: intent.field === 'random' ? createRandomSeed() : null },
+        // A folder's manual order applies to its own members, not descendants.
+        ...(manualFolderOrder ? { view: { ...current.view, showSubfolders: false } } : {}),
       } : { view: { ...current.view, ...intent.patch } }),
     };
     const changesQuery = intent.type === 'sort'
@@ -298,9 +302,10 @@ class GridSessionController {
     const prepared = changesQuery
       ? await this.prepareSession(this.scopeKey, session, queryVersion)
       : { scopeKey: this.scopeKey, session, queryVersion };
-    return { ...prepared, preserveSelection: intent.type === 'view',
+    return { ...prepared, preserveSelection: intent.type === 'view' || manualFolderOrder,
       preferencePatch: intent.type === 'sort'
-        ? { sort_field: intent.field, sort_order: intent.direction } : undefined };
+        ? { sort_field: intent.field, sort_order: intent.direction,
+          ...(manualFolderOrder ? { show_subfolders: false } : {}) } : undefined };
   }
 
   private async prepareSession(

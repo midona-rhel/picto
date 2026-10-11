@@ -14,7 +14,30 @@
 
 @end
 
+// Each physical file needs its own pasteboard writer. Only the first item
+// carries the composite preview; transparent followers avoid stacked icons.
+static NSArray<NSDraggingItem *> *picto_file_drag_items(
+    NSArray<NSURL *> *urls, NSImage *icon, NSPoint position
+) {
+    NSMutableArray<NSDraggingItem *> *items = [NSMutableArray arrayWithCapacity:urls.count];
+    NSImage *transparent = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
+    for (NSURL *url in urls) {
+        NSDraggingItem *item = [[NSDraggingItem alloc] initWithPasteboardWriter:url];
+        NSImage *image = items.count == 0 ? icon : transparent;
+        NSSize size = image.size;
+        [item setDraggingFrame:NSMakeRect(position.x - size.width / 2,
+                                         position.y - size.height / 2,
+                                         size.width, size.height) contents:image];
+        [items addObject:item];
+    }
+    return items;
+}
+
 // ── Public C entry point ─────────────────────────────────────────────────
+
+static BOOL picto_drag_source_ready(NSUInteger buttons, BOOL appActive, BOOL keyWindow) {
+    return (buttons & 1) != 0 && appActive && keyWindow;
+}
 
 void picto_start_file_drag(
     void *ns_view_ptr,
@@ -25,9 +48,13 @@ void picto_start_file_drag(
     int icon_height
 ) {
     if (!ns_view_ptr || path_count <= 0 || !paths) return;
+    // IPC can arrive after mouse-up. Starting an OS drag then has no matching
+    // release event and can leave a floating drag image blocking other apps.
+    if (([NSEvent pressedMouseButtons] & 1) == 0) return;
 
     NSView *view = (__bridge NSView *)ns_view_ptr;
-    if (!view.window) return;
+    // Never steal input from another app or another Picto window.
+    if (!picto_drag_source_ready([NSEvent pressedMouseButtons], NSApp.isActive, view.window.isKeyWindow)) return;
 
     // ── Build composite icon from RGBA buffer ──────────────────────────
     NSImage *compositeIcon = nil;
@@ -58,41 +85,9 @@ void picto_start_file_drag(
         [fileURLs addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:paths[i]]]];
     }
 
-    // ── Create ONE pasteboard item with all file URLs ──────────────────
-    // Using NSPasteboardItem so there's only ONE NSDraggingItem = ONE icon.
-    NSPasteboardItem *pbItem = [[NSPasteboardItem alloc] init];
-
-    // Write file URLs as a newline-separated string for NSPasteboardTypeFileURL
-    NSMutableString *urlList = [NSMutableString string];
-    for (NSURL *url in fileURLs) {
-        if (urlList.length > 0) [urlList appendString:@"\n"];
-        [urlList appendString:url.absoluteString];
-    }
-    [pbItem setString:urlList forType:NSPasteboardTypeFileURL];
-
-    // Also write as legacy NSFilenamesPboardType for older apps
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    NSMutableArray<NSString *> *pathStrings = [NSMutableArray arrayWithCapacity:path_count];
-    for (int i = 0; i < path_count; i++) {
-        [pathStrings addObject:[NSString stringWithUTF8String:paths[i]]];
-    }
-    [pbItem setPropertyList:pathStrings forType:NSFilenamesPboardType];
-#pragma clang diagnostic pop
-
-    // ── Create ONE dragging item with our composite icon ───────────────
-    NSDraggingItem *dragItem = [[NSDraggingItem alloc] initWithPasteboardWriter:pbItem];
-
     NSPoint windowPos = [view.window mouseLocationOutsideOfEventStream];
     NSPoint viewPos = [view convertPoint:windowPos fromView:nil];
-    NSSize imgSize = compositeIcon.size;
-    NSRect dragFrame = NSMakeRect(
-        viewPos.x - imgSize.width / 2,
-        viewPos.y - imgSize.height / 2,
-        imgSize.width,
-        imgSize.height);
-
-    [dragItem setDraggingFrame:dragFrame contents:compositeIcon];
+    NSArray<NSDraggingItem *> *dragItems = picto_file_drag_items(fileURLs, compositeIcon, viewPos);
 
     // ── Synthetic mouse event ──────────────────────────────────────────
     NSEvent *dragEvent = [NSEvent
@@ -106,9 +101,9 @@ void picto_start_file_drag(
         clickCount:1
         pressure:1.0];
 
-    // ── Begin drag session with ONE item ────────────────────────────────
+    // ── Begin drag session with one writer per file ────────────────────────────────
     PictoDragSource *source = [[PictoDragSource alloc] init];
-    NSDraggingSession *session = [view beginDraggingSessionWithItems:@[dragItem]
+    NSDraggingSession *session = [view beginDraggingSessionWithItems:dragItems
                                                               event:dragEvent
                                                              source:source];
     session.animatesToStartingPositionsOnCancelOrFail = YES;

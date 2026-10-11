@@ -458,6 +458,25 @@ describe('gridController pagination', () => {
     expect(store.get(gridSessionAtom).view.mode).toBe('justified');
   });
 
+  it('displays a dragged folder order rather than falling back to recursive import order', async () => {
+    const current = store.get(gridSessionAtom);
+    store.set(gridSessionAtom, { ...current, scope: { kind: 'folder', folder_id: 7 },
+      view: { ...current.view, showSubfolders: true }, items: [item(1), item(2)] });
+    const selection = { ...emptyGridSelection(), itemIds: new Set([1]) };
+    store.set(gridSelectionAtom, selection);
+    queryItemsMock.mockResolvedValueOnce(page([item(2), item(1)], 2));
+
+    const prepared = await gridController.prepareIntent({ type: 'sort', field: 'folder_order', direction: 'ascending' });
+    expect(queryItemsMock.mock.calls[0][0]).toMatchObject({
+      scope: { kind: 'folder', folder_id: 7 },
+      view: { sort: { field: 'folder_order', direction: 'ascending' } },
+    });
+    expect(prepared.preferencePatch).toMatchObject({ show_subfolders: false, sort_field: 'folder_order' });
+    gridController.commitNavigation(prepared);
+    expect(store.get(gridItemsAtom).map(value => value.root_id)).toEqual([2, 1]);
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+  });
+
   it('drops an obsolete result and requests only the latest queued destination', async () => {
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 1_000_000 });
     let finish: ((value: EntityViewPage & { start: number }) => void) | undefined;
