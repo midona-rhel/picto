@@ -17,18 +17,24 @@ import {
   emptyGridSelection,
   gridSelectionAtom,
   reduceGridSelection,
+  selectionCountAtom,
   selectionTargetAtom,
   selectAllResultsAtom,
 } from '../state/selection';
 
-const { queryItemsMock, supersedeWindowMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
+const { queryItemsMock, getRootPositionsMock, supersedeWindowMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
   queryItemsMock: vi.fn(),
+  getRootPositionsMock: vi.fn(),
   supersedeWindowMock: vi.fn().mockResolvedValue(undefined),
   getViewPrefsMock: vi.fn(),
   revisionState: { library: -Infinity },
 }));
 
-vi.mock('../platform/entityApi', () => ({ queryItemWindow: queryItemsMock, supersedeItemWindow: supersedeWindowMock }));
+vi.mock('../platform/entityApi', () => ({
+  queryItemWindow: queryItemsMock,
+  getRootPositions: getRootPositionsMock,
+  supersedeItemWindow: supersedeWindowMock,
+}));
 vi.mock('../platform/settingsApi', () => ({
   GRID_DEFAULTS_SCOPE: 'grid:defaults',
   getViewPrefs: getViewPrefsMock,
@@ -114,6 +120,7 @@ describe('gridController pagination', () => {
   beforeEach(() => {
     gridController.deactivate();
     queryItemsMock.mockReset();
+    getRootPositionsMock.mockReset();
     getViewPrefsMock.mockReset();
     getViewPrefsMock.mockResolvedValue({});
     revisionState.library = -Infinity;
@@ -712,6 +719,7 @@ describe('gridController pagination', () => {
       anchor: { kind: 'item', id: 1 },
     });
     queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
+    getRootPositionsMock.mockResolvedValueOnce([null]);
 
     await gridController.reconcile([1]);
 
@@ -719,6 +727,150 @@ describe('gridController pagination', () => {
       ...emptyGridSelection(),
       itemIds: new Set([2]),
     });
+  });
+
+  it.each([
+    { kind: 'all' } as const,
+    { kind: 'folder', folder_id: 7 } as const,
+    { kind: 'smart_folder', smart_folder_id: 9 } as const,
+  ])('drops an offscreen selected root deleted or removed from $kind', async (scope) => {
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom), scope, items: [item(1), item(2)], totalCount: 1_000_000,
+    });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(), itemIds: new Set([1, 2]), anchor: { kind: 'item', id: 1, index: 0 },
+    });
+    queryItemsMock.mockResolvedValueOnce({ ...page([item(500001)], 1_000_000), start: 500000 });
+    await gridController.requestWindowAt(500500);
+    expect(store.get(selectionCountAtom)).toBe(2);
+
+    queryItemsMock.mockResolvedValueOnce({ ...page([item(500001)], 999999), start: 500000 });
+    getRootPositionsMock.mockResolvedValueOnce([null]);
+    await expect(gridController.reconcile([1, 99])).resolves.toBe(true);
+
+    expect(store.get(selectionTargetAtom)).toEqual({ kind: 'explicit', root_ids: [2] });
+    expect(store.get(selectionCountAtom)).toBe(1);
+    expect(store.get(gridSelectionAtom).anchor).toBeNull();
+    expect(getRootPositionsMock).toHaveBeenCalledOnce();
+    expect(getRootPositionsMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
+    expect(store.get(gridSessionAtom).windowStart).toBe(500000);
+    expect(queryItemsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('keeps a valid selected root outside the refreshed window (previously loaded: %s)', async (wasLoaded) => {
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom), items: [item(wasLoaded ? 1 : 500001)], totalCount: 1_000_000,
+      windowStart: 500000,
+    });
+    const selection = {
+      ...emptyGridSelection(), itemIds: new Set([1]), anchor: { kind: 'item' as const, id: 1, index: 0 },
+    };
+    store.set(gridSelectionAtom, selection);
+    queryItemsMock.mockResolvedValueOnce({ ...page([item(500001)], 1_000_000), start: 500000 });
+    getRootPositionsMock.mockResolvedValueOnce([0]);
+
+    await gridController.reconcile([1]);
+
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+    expect(store.get(selectionCountAtom)).toBe(1);
+    expect(getRootPositionsMock).toHaveBeenCalledOnce();
+    expect(getRootPositionsMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
+  });
+
+  it('does not look up unaffected, visible, or query-wide selections', async () => {
+    queryItemsMock.mockResolvedValue(page([item(1)], 1_000_000));
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([1, 2]) });
+
+    await gridController.reconcile([1, 99]);
+    await gridController.reconcile();
+    expect(store.get(selectionCountAtom)).toBe(2);
+    store.set(selectAllResultsAtom);
+    const selection = store.get(gridSelectionAtom);
+    await gridController.reconcile([2]);
+
+    expect(getRootPositionsMock).not.toHaveBeenCalled();
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+  });
+
+  it.each(['scope', 'filter'] as const)('ignores a late position response after a %s change', async (change) => {
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([2]) });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+    let finish!: (positions: Array<number | null>) => void;
+    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = gridController.reconcile([2]);
+    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+
+    queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
+    if (change === 'scope') {
+      await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
+    } else {
+      gridController.applyIntent({
+        type: 'filter', filters: { ...store.get(gridSessionAtom).filters, text: 'new filter' },
+      });
+      await vi.waitFor(() => expect(store.get(gridLoadingAtom)).toBe(false));
+    }
+    const selection = {
+      ...emptyGridSelection(), itemIds: new Set([2]), anchor: { kind: 'item' as const, id: 2 },
+    };
+    store.set(gridSelectionAtom, selection);
+    const destination = store.get(gridSessionAtom);
+    finish([null]);
+
+    await expect(pending).resolves.toBe(false);
+    expect(store.get(gridSessionAtom)).toBe(destination);
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+  });
+
+  it('removes a missing candidate while preserving selection edits made during the lookup', async () => {
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([2]) });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+    let finish!: (positions: Array<number | null>) => void;
+    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = gridController.reconcile([2]);
+    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+    const selection = {
+      ...emptyGridSelection(), itemIds: new Set([2, 3]), anchor: { kind: 'item' as const, id: 3 },
+    };
+    store.set(gridSelectionAtom, selection);
+    finish([null]);
+
+    await expect(pending).resolves.toBe(true);
+    expect(store.get(gridSelectionAtom)).toEqual({ ...selection, itemIds: new Set([3]) });
+    expect(store.get(selectionCountAtom)).toBe(1);
+  });
+
+  it('ignores old positions as soon as navigation starts, before selection is cleared', async () => {
+    const selection = {
+      ...emptyGridSelection(), itemIds: new Set([2]), anchor: { kind: 'item' as const, id: 2 },
+    };
+    store.set(gridSelectionAtom, selection);
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+    let finish!: (positions: Array<number | null>) => void;
+    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = gridController.reconcile([2]);
+    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+
+    queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
+    const navigation = gridController.prepareNavigation({ kind: 'folder', folder_id: 7 });
+    finish([null]);
+
+    await expect(pending).resolves.toBe(false);
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+    gridController.commitNavigation(await navigation);
+  });
+
+  it('keeps selection intact when the positions lookup fails', async () => {
+    const selection = {
+      ...emptyGridSelection(), itemIds: new Set([2]), anchor: { kind: 'item' as const, id: 2 },
+    };
+    store.set(gridSelectionAtom, selection);
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+    getRootPositionsMock.mockRejectedValueOnce(new Error('Positions unavailable'));
+
+    await expect(gridController.reconcile([2])).resolves.toBe(false);
+
+    expect(store.get(gridSelectionAtom)).toBe(selection);
+    expect(store.get(gridErrorAtom)).toBe('Positions unavailable');
   });
 
   it('settles search after 250 ms of inactivity', async () => {

@@ -1,7 +1,7 @@
 /** Single command owner for the canonical grid session. */
 
 import { getDefaultStore } from 'jotai';
-import { queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
+import { getRootPositions, queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
@@ -663,16 +663,20 @@ class GridSessionController {
         limit: Math.min(GRID_WINDOW_SIZE, Math.max(PAGE_SIZE, before.items.length)),
       }, { channel: this.windowChannel, generation: request });
       if (this.preparationRequest === request) this.preparationRequest = null;
-      if (queryVersion !== this.queryVersion || request !== this.windowRequest) return false;
+      const canReconcile = () => {
+        const current = store.get(gridSessionAtom);
+        return queryVersion === this.queryVersion && request === this.windowRequest
+          && current.generation === generation && current.active && result.revision >= current.revision;
+      };
+      if (!canReconcile()) return false;
+      await reconcileExplicitSelection(query, result.items, affectedItemIds, canReconcile);
+      if (!canReconcile()) return false;
       const current = store.get(gridSessionAtom);
-      if (current.generation !== generation || !current.active) return false;
-      if (result.revision < current.revision) return false;
       const previousById = new Map(current.items.map((item) => [item.root_id, item]));
       const items = result.items.map((item) => {
         const previous = previousById.get(item.root_id);
         return previous != null && itemSummaryEqual(previous, item) ? previous : item;
       });
-      reconcileExplicitSelection(current.items, items, affectedItemIds);
       updateSession({
         items,
         queryHeadItems: reuseStablePageItems(current.queryHeadItems, result.head_items),
@@ -771,31 +775,33 @@ class GridSessionController {
   }
 }
 
-function reconcileExplicitSelection(
-  previousItems: GridSessionSnapshot['items'],
+async function reconcileExplicitSelection(
+  query: EntityViewQuery,
   nextItems: GridSessionSnapshot['items'],
   affectedItemIds: ReadonlySet<number>,
-): void {
+  isCurrent: () => boolean,
+): Promise<void> {
   if (affectedItemIds.size === 0) return;
   const selection = store.get(gridSelectionAtom);
   if (selection.mode !== 'explicit' || selection.itemIds.size === 0) return;
-  const previousIds = new Set(previousItems.map((item) => item.root_id));
   const nextIds = new Set(nextItems.map((item) => item.root_id));
-  const itemIds = new Set(selection.itemIds);
-  let changed = false;
-  for (const itemId of selection.itemIds) {
-    if (affectedItemIds.has(itemId) && previousIds.has(itemId) && !nextIds.has(itemId)) {
-      itemIds.delete(itemId);
-      changed = true;
-    }
-  }
-  if (!changed) return;
+  // Absence from the window is not absence from the query, even for a previously loaded root.
+  const candidates = [...affectedItemIds].filter((id) => selection.itemIds.has(id) && !nextIds.has(id));
+  if (candidates.length === 0) return;
+  const positions = await getRootPositions(query, candidates);
+  if (!isCurrent()) return;
+  const current = store.get(gridSelectionAtom);
+  if (current.mode !== 'explicit') return;
+  const removed = candidates.filter((id, index) => positions[index] === null && current.itemIds.has(id));
+  if (removed.length === 0) return;
+  const itemIds = new Set(current.itemIds);
+  removed.forEach((id) => itemIds.delete(id));
   store.set(gridSelectionAtom, {
-    ...selection,
+    ...current,
     itemIds,
-    anchor: selection.anchor?.kind === 'item' && !itemIds.has(selection.anchor.id)
+    anchor: current.anchor?.kind === 'item' && removed.includes(current.anchor.id)
       ? null
-      : selection.anchor,
+      : current.anchor,
   });
 }
 

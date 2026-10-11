@@ -7,11 +7,16 @@ import { startGridSettle } from './gridSettle';
 import { labToHex } from '../shared/lib/labColor';
 import type { CanonicalEntityGridItem } from '../shared/types/canonical';
 
-const { callbacks, derivative, queryMock } = vi.hoisted(() => ({
+const { callbacks, derivative, queryMock, positionsMock } = vi.hoisted(() => ({
   callbacks: new Map<string, (payload?: { item_ids: number[] }) => void>(), queryMock: vi.fn(),
+  positionsMock: vi.fn(),
   derivative: { onColor: undefined as undefined | ((payload: { fileHash: string; dominantColorHex: string | null }) => void) },
 }));
-vi.mock('../platform/entityApi', () => ({ queryItemWindow: queryMock, supersedeItemWindow: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../platform/entityApi', () => ({
+  queryItemWindow: queryMock,
+  getRootPositions: positionsMock,
+  supersedeItemWindow: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('./libraryInvalidation', () => ({ libraryInvalidation: {
   latestRevision: () => -Infinity,
   register: (resource: string, callback: (payload?: { item_ids: number[] }) => void) => {
@@ -40,6 +45,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   gridController.deactivate();
   queryMock.mockReset().mockResolvedValue(result(2));
+  positionsMock.mockReset();
   store.set(gridTransitionPhaseAtom, 'idle');
   store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope: { kind: 'all' },
     active: true, status: 'idle', items: [item(1)], queryHeadItems: [item(1)], windowStart: 0,
@@ -61,6 +67,7 @@ describe('grid invalidation', () => {
     expect(store.get(gridSessionAtom).status).toBe('idle');
   });
   it('clears a selected root removed by the invalidation refresh', async () => {
+    positionsMock.mockResolvedValueOnce([null]);
     store.set(gridSelectionAtom, {
       ...emptyGridSelection(),
       itemIds: new Set([1]),
@@ -69,6 +76,7 @@ describe('grid invalidation', () => {
     callbacks.get('library')?.({ item_ids: [1] });
     await vi.advanceTimersByTimeAsync(40);
     expect(store.get(gridSelectionAtom)).toEqual(emptyGridSelection());
+    expect(positionsMock).toHaveBeenCalledWith(expect.objectContaining({ scope: { kind: 'all' } }), [1]);
   });
   it('ignores recent-view invalidation outside the recent scope', async () => {
     callbacks.get('recently_viewed')?.();
