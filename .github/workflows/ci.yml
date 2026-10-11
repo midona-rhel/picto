@@ -43,7 +43,7 @@ jobs:
         if: ${{ hashFiles('scripts/ci/check-branch-policy.mjs') == '' }}
         with:
           repository: midona-rhel/picto
-          ref: 7bae5ea13e2a4ab76a58cdf1ee50e0da59b6264e
+          ref: 4ef23325093f6e0c55b9db925643f26251d20ed9
           path: .branch-policy-bootstrap
           persist-credentials: false
       - name: Enforce the release-only main branch
