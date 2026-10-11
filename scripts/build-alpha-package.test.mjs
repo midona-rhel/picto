@@ -15,6 +15,10 @@ vi.mock('node:crypto', async (original) => {
   const mock = { ...await original(), X509Certificate: class { fingerprint = state.fingerprint; } };
   return { ...mock, default: mock };
 });
+vi.mock('node:fs', async (original) => {
+  const mock = { ...await original(), copyFileSync: vi.fn() };
+  return { ...mock, default: mock };
+});
 const hash = 'AB'.repeat(20);
 const valid = `  1) ${hash} "Picto Code Signing"\n     1 valid identities found`;
 const credentials = { MAC_CSC_LINK: 'ZmFrZQ==', MAC_CSC_KEY_PASSWORD: 'fixture-password', PICTO_REQUIRE_MAC_SIGNING: 'true' };
@@ -52,6 +56,43 @@ it('passes the exact configured certificate fingerprint and cleans up after a va
   signing.cleanup();
   expect(existsSync(path.dirname(keychain))).toBe(false);
   expect(spawnSync.mock.calls.some(([c]) => c === 'sudo')).toBe(false);
+});
+
+it('keeps existing keychains searchable and restores the exact search list after signing', () => {
+  const existing = ['/fixture/login.keychain-db', '/fixture/another.keychain-db'];
+  spawnSync.mockImplementation((command, args) => ({ status: 0, stdout:
+    args[0] === 'list-keychains' && args.length === 3
+      ? existing.map(p => `    "${p}"`).join('\n') : valid,
+  }));
+  const signing = prepareMacSigning(credentials, 'darwin');
+  const keychain = signing.environment.CSC_KEYCHAIN;
+  expect(spawnSync).toHaveBeenCalledWith('security', ['list-keychains', '-d', 'user', '-s', keychain, ...existing], expect.anything());
+  expect(spawnSync).toHaveBeenCalledWith('codesign', ['--force', '--sign', 'Picto Code Signing', '--keychain', keychain,
+    '--timestamp=none', path.join(path.dirname(keychain), 'signing-probe')], expect.objectContaining({ timeout: 30_000, killSignal: 'SIGKILL' }));
+  signing.cleanup();
+  expect(spawnSync).toHaveBeenCalledWith('security', ['list-keychains', '-d', 'user', '-s', ...existing], expect.anything());
+});
+
+it('fails before packaging and restores the keychain list when actual signing times out', () => {
+  spawnSync.mockImplementation((command, args) => command === 'codesign'
+    ? { status: null, error: { code: 'ETIMEDOUT' } }
+    : { status: 0, stdout: args[0] === 'list-keychains' ? '"/fixture/login.keychain-db"' : valid });
+  expect(() => prepareMacSigning(credentials, 'darwin')).toThrow('codesign --force failed: ETIMEDOUT');
+  expect(spawnSync).toHaveBeenCalledWith('security', ['list-keychains', '-d', 'user', '-s', '/fixture/login.keychain-db'], expect.anything());
+  const creation = spawnSync.mock.calls.find(([c, a]) => c === 'security' && a[0] === 'create-keychain');
+  expect(existsSync(path.dirname(creation[1].at(-1)))).toBe(false);
+});
+
+it('still restores the keychain search list and deletes scratch data if temporary trust removal fails', () => {
+  let reads = 0;
+  spawnSync.mockImplementation((command, args) => {
+    if (command === 'sudo' && args[1] === 'remove-trusted-cert') return { status: null, error: { code: 'ETIMEDOUT' } };
+    return { status: 0, stdout: args[0] === 'find-identity' && ++reads === 1 ? '0 valid identities found' : valid };
+  });
+  const signing = prepareMacSigning({ ...credentials, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }, 'darwin');
+  expect(() => signing.cleanup()).toThrow('ETIMEDOUT');
+  expect(existsSync(path.dirname(signing.environment.CSC_KEYCHAIN))).toBe(false);
+  expect(spawnSync.mock.calls.some(([, a]) => a[0] === 'list-keychains' && a.length === 4)).toBe(true);
 });
 
 it('temporarily trusts the self-signed certificate only on disposable GitHub-hosted runners', () => {

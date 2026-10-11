@@ -2,6 +2,7 @@
 
 import { randomBytes } from 'node:crypto';
 import {
+  copyFileSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -19,10 +20,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
+    timeout: 30_000,
+    killSignal: 'SIGKILL',
     ...options,
   });
   if (result.status !== 0) {
-    throw new Error(`${command} exited with status ${result.status ?? 'unknown'}`);
+    throw new Error(`${command} ${args[0]} failed: ${result.error?.code ?? `exit ${result.status ?? 'unknown'}`}`);
   }
   return result;
 }
@@ -83,6 +86,7 @@ export function prepareMacSigning(env = process.env, platform = process.platform
   const keychainPassword = randomBytes(24).toString('hex');
   const publicCertificate = path.join(temporaryDirectory, 'signing.cer');
   let temporaryTrust = false;
+  let originalKeychains = null;
   const cleanup = () => {
     try {
       if (temporaryTrust) {
@@ -90,8 +94,18 @@ export function prepareMacSigning(env = process.env, platform = process.platform
         temporaryTrust = false;
       }
     } finally {
-      spawnSync('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
-      rmSync(temporaryDirectory, { recursive: true, force: true });
+      try {
+        if (originalKeychains !== null) {
+          run('security', ['list-keychains', '-d', 'user', '-s', ...originalKeychains]);
+          originalKeychains = null;
+        }
+      } finally {
+        try {
+          run('security', ['delete-keychain', keychainPath], { stdio: 'ignore' });
+        } finally {
+          rmSync(temporaryDirectory, { recursive: true, force: true });
+        }
+      }
     }
   };
   let identity;
@@ -100,9 +114,15 @@ export function prepareMacSigning(env = process.env, platform = process.platform
   ], { encoding: 'utf8', stdio: 'pipe' }).stdout);
 
   try {
+    const keychains = run('security', ['list-keychains', '-d', 'user'], {
+      encoding: 'utf8', stdio: 'pipe',
+    }).stdout;
+    originalKeychains = [...keychains.matchAll(/^\s*"(.+)"\s*$/gm)].map(match => match[1]);
     run('security', ['create-keychain', '-p', keychainPassword, keychainPath]);
     run('security', ['unlock-keychain', '-p', keychainPassword, keychainPath]);
     run('security', ['set-keychain-settings', '-lut', '21600', keychainPath]);
+    // codesign resolves certificate chains through the search list even with --keychain.
+    run('security', ['list-keychains', '-d', 'user', '-s', keychainPath, ...originalKeychains]);
     run('security', [
       'import',
       credentials.certificatePath,
@@ -136,6 +156,12 @@ export function prepareMacSigning(env = process.env, platform = process.platform
       identity = findIdentity();
     }
     if (!identity) throw new Error(`No valid ${SIGNING_IDENTITY} identity; refusing ad-hoc signing.`);
+    const probe = path.join(temporaryDirectory, 'signing-probe');
+    copyFileSync(process.execPath, probe);
+    run('codesign', ['--force', '--sign', SIGNING_IDENTITY, '--keychain', keychainPath,
+      '--timestamp=none', probe]);
+    run('codesign', ['--verify', '--strict', probe]);
+    console.log('[alpha-package] Signing preflight passed.');
   } catch (error) {
     cleanup();
     throw error;
