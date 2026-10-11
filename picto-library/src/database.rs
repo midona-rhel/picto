@@ -546,10 +546,35 @@ mod tests {
         reader
             .execute_batch("BEGIN; SELECT length(value) FROM wal_test;")
             .unwrap();
-        let start = std::time::Instant::now();
         database.checkpoint_wal_passive().unwrap();
-        assert!(start.elapsed() < std::time::Duration::from_secs(1));
         assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        assert_eq!(
+            database
+                .writer
+                .lock()
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5000
+        );
+        // Observe lock retries directly: copying a large WAL can take over a
+        // second on CI even when SQLite never waits for the pinned reader.
+        static BUSY_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        BUSY_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        database
+            .writer
+            .lock()
+            .busy_handler(Some(|_| {
+                BUSY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                false
+            }))
+            .unwrap();
+        database.checkpoint_wal_passive().unwrap();
+        assert_eq!(BUSY_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+        database
+            .writer
+            .lock()
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
         reader.execute_batch("COMMIT").unwrap();
         database.checkpoint_wal_passive().unwrap();
         assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
