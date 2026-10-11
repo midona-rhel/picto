@@ -6,7 +6,7 @@ import { resetShortcutRuntimeForTests } from '../../../runtime/shortcutRuntime';
 import { emptyGridSelection, reduceGridSelection } from '../../../state/selection';
 import { useGridArrowNav } from './useGridArrowNav';
 
-const items = Array.from({ length: 5 }, (_, index): CanonicalEntityGridItem => ({
+const items = Array.from({ length: 10 }, (_, index): CanonicalEntityGridItem => ({
   root_id: index + 1,
   kind: 'media',
   lifecycle: 'active',
@@ -27,14 +27,16 @@ const items = Array.from({ length: 5 }, (_, index): CanonicalEntityGridItem => (
   total_size_bytes: 100,
 }));
 
-function GridArrowNavHarness() {
+function GridArrowNavHarness({ initiallySelected = true }: { initiallySelected?: boolean }) {
   const [selection, dispatchSelection] = useReducer(
     reduceGridSelection,
-    reduceGridSelection(emptyGridSelection(), {
-      type: 'replace_items',
-      itemIds: new Set([2]),
-      anchor: 2,
-    }),
+    initiallySelected
+      ? reduceGridSelection(emptyGridSelection(), {
+          type: 'replace_items',
+          itemIds: new Set([2]),
+          anchor: 2,
+        })
+      : emptyGridSelection(),
   );
   const layoutRef = useRef({
     positions: items.map((_, index) => ({ x: index * 100, y: 0, w: 100, h: 100 })),
@@ -56,6 +58,12 @@ function GridArrowNavHarness() {
 
   return (
     <div ref={containerRef}>
+      <button type="button" onClick={() => dispatchSelection({ type: 'toggle_item', itemId: 2 })}>
+        Toggle 2
+      </button>
+      <button type="button" onClick={() => dispatchSelection({ type: 'toggle_item', itemId: 8 })}>
+        Toggle 8
+      </button>
       <output data-testid="selection">
         {[...selection.itemIds].sort((left, right) => left - right).join(',')}|{selection.anchor?.kind === 'item' ? selection.anchor.id : ''}
       </output>
@@ -77,9 +85,28 @@ describe('useGridArrowNav', () => {
     fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
     fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
     fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
-    expect(screen.getByTestId('selection')).toHaveTextContent('2,3,4,5|2');
+    expect(screen.getByTestId('selection')).toHaveTextContent('2,3,4,5,6|2');
 
     fireEvent.keyDown(window, { key: 'ArrowLeft', shiftKey: true });
-    expect(screen.getByTestId('selection')).toHaveTextContent('2,3,4|2');
+    expect(screen.getByTestId('selection')).toHaveTextContent('2,3,4,5|2');
+  });
+
+  it('starts a keyboard range from the last Ctrl-clicked item, not selected extremes', () => {
+    render(<GridArrowNavHarness initiallySelected={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle 2' }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle 8' }), { ctrlKey: true });
+    expect(screen.getByTestId('selection')).toHaveTextContent('2,8|8');
+
+    fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
+    expect(screen.getByTestId('selection')).toHaveTextContent('8,9|8');
+  });
+
+  it('starts Shift+Arrow from a valid anchor when the selection is empty', () => {
+    render(<GridArrowNavHarness initiallySelected={false} />);
+
+    fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
+
+    expect(screen.getByTestId('selection')).toHaveTextContent('1,2|1');
   });
 });

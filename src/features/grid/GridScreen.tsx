@@ -1233,6 +1233,7 @@ export function GridScreen({
         items={items}
         headerContent={subfolderHeader}
         dragSourceScope={gridScope}
+        dragSelectionTarget={selectionTarget}
         viewportCommitKey={viewportCommitKey}
         viewMode={viewMode}
         targetSize={targetSize}
