@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getRootPositions } from '../platform/entityApi';
 import { showWarningNotification } from '../shared/lib/notifications';
 import { currentGridQueryAtom } from '../state/grid';
-import { gridSelectionActionAtom, selectionCountAtom, selectionTargetAtom } from '../state/selection';
+import { gridSelectionActionAtom, gridSelectionAtom, selectionCountAtom, selectionTargetAtom } from '../state/selection';
 import { addSelectionSpan, reconcileSelectionRange } from './rangeSelectionController';
 
 vi.mock('../platform/entityApi', () => ({ getRootPositions: vi.fn() }));
@@ -56,6 +56,25 @@ describe('range selection controller', () => {
     // Root 8 sits inside the new span, so it is not counted twice.
     expect(store.get(selectionCountAtom)).toBe(101);
     expect(store.get(selectionTargetAtom)).toMatchObject({ included_root_ids: [7] });
+  });
+
+  it('checks an anchor inside merged spans even when it is no longer an endpoint', async () => {
+    const query = store.get(currentGridQueryAtom);
+    store.set(gridSelectionActionAtom, {
+      type: 'range_query', query, anchor: { id: 1, index: 0 }, focus: { id: 5, index: 4 },
+    });
+    store.set(gridSelectionActionAtom, {
+      type: 'range_add', query,
+      span: { anchor: { id: 3, index: 2 }, focus: { id: 9, index: 8 } },
+      positions: new Map(),
+    });
+    vi.mocked(getRootPositions).mockResolvedValueOnce([0, 7, null]);
+
+    await reconcileSelectionRange();
+
+    expect(getRootPositions).toHaveBeenCalledWith(query, [1, 9, 3]);
+    expect(store.get(selectionCountAtom)).toBe(8);
+    expect(store.get(gridSelectionAtom).anchor).toBeNull();
   });
 
   it('moves a range to the backend positions and warns when an end left the view', async () => {

@@ -124,7 +124,12 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
       if (!state.range || !state.query) return state;
       const next = reconcileRange(state.range, state.excludedItemIds, action.positions);
       if (next.range.spans.length === 0 && next.range.includedItemIds.size === 0) return emptyGridSelection();
-      return withRange(state, state.query, next.range, next.excluded, state.anchor);
+      let anchor = state.anchor;
+      if (anchor?.kind === 'item' && action.positions.has(anchor.id)) {
+        const index = action.positions.get(anchor.id);
+        anchor = index == null ? null : itemAnchor(anchor.id, index);
+      }
+      return withRange(state, state.query, next.range, next.excluded, anchor);
     }
     case 'replace_folders':
       return { ...emptyGridSelection(), folderNodeIds: new Set(action.ids), anchor: action.anchor == null ? null : { kind: 'folder', id: action.anchor } };

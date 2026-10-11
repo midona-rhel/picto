@@ -38,7 +38,10 @@ export async function reconcileSelectionRange(): Promise<void> {
   const generation = ++reconciliationGeneration;
   const selection = store.get(gridSelectionAtom);
   if (!selection.range || !selection.query) return;
-  const positions = await positionsOf(selection.query, rangeRootIds(selection.range, selection.excludedItemIds));
+  const ids = new Set(rangeRootIds(selection.range, selection.excludedItemIds));
+  // Merging spans can leave the next Shift-click anchor inside a span.
+  if (selection.anchor?.kind === 'item') ids.add(selection.anchor.id);
+  const positions = await positionsOf(selection.query, [...ids]);
   if (generation !== reconciliationGeneration || store.get(gridSelectionAtom) !== selection) return;
   const lostEnd = selection.range.spans.some((span) => positions.get(span.anchor.id) === null
     || positions.get(span.focus.id) === null);
