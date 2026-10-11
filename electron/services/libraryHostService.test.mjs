@@ -492,6 +492,66 @@ test('delete refuses a library whose native open is still pending after confirma
   }
 });
 
+test.each([false, true])('deletion reserves its package until removal settles (failure=%s)', async (failRemoval) => {
+  const libraryPath = '/Pictures/Owned.library';
+  const aliasPath = '/Volumes/Alias/Owned.library';
+  const native = createNativeOpenStub();
+  let finishRemoval;
+  const removal = new Promise((resolve, reject) => {
+    finishRemoval = () => failRemoval ? reject(new Error('removal failed')) : resolve();
+  });
+  const rm = vi.fn(() => removal);
+  const { service } = createOpenService(native, {
+    fs: {
+      lstat: async (target) => (target === libraryPath
+        ? { isDirectory: () => true, isSymbolicLink: () => false }
+        : { isFile: () => true }),
+      realpath: async (target) => target === aliasPath ? libraryPath : target,
+      rm,
+    },
+    dialog: { showMessageBox: async () => ({ response: 0 }) },
+  });
+  const deleting = service.deleteLibrary(libraryPath);
+  const outcome = deleting.catch((error) => error.message);
+  await flush();
+  expect(rm).toHaveBeenCalledOnce();
+  const switching = service.switchLibrary(aliasPath).catch((error) => error.message);
+  await flush();
+  // Settle a wrongly allowed native open too, so the pre-fix regression cannot hang.
+  if (native.opening().length) native.complete(aliasPath);
+  expect(await switching).toMatch(/deletion/);
+  expect(native.calls).toEqual([]);
+  finishRemoval();
+  expect(await outcome).toEqual(failRemoval ? 'removal failed' : { deleted: true });
+  // No stale reservation may block a subsequent open after success or failure.
+  const retry = service.switchLibrary(aliasPath);
+  await flush();
+  native.complete(aliasPath);
+  await retry;
+});
+
+test('relocation rejects a symlink destination inside another library', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-move-nested-alias-'));
+  try {
+    const source = path.join(root, 'A.library');
+    const nested = path.join(root, 'B.library', 'exports');
+    const alias = path.join(root, 'export');
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, 'library.sqlite'), 'source');
+    await fs.mkdir(nested, { recursive: true });
+    await fs.symlink(nested, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const { service } = createOpenService(createNativeOpenStub(), {
+      fs, path,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [alias] }) },
+    });
+    await expect(service.relocateLibrary(source)).rejects.toThrow('inside another Picto library');
+    await expect(fs.readFile(path.join(source, 'library.sqlite'), 'utf8')).resolves.toBe('source');
+    await expect(fs.readdir(nested)).resolves.toEqual([]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test.each([
   [path.posix, '/Pictures/A.library', '/Pictures/B.library/exports'],
   [path.win32, 'C:\\Pictures\\A.library', 'D:\\B.library\\exports'],
@@ -509,7 +569,7 @@ test.each([
 });
 
 test('a cross-volume relocation publishes a verified real copy before removing the source', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-move-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-move-')));
   const source = path.join(root, 'source', 'A.library');
   const destinationDirectory = path.join(root, 'destination');
   const destination = path.join(destinationDirectory, 'A.library');
@@ -550,7 +610,7 @@ test('a cross-volume relocation publishes a verified real copy before removing t
 });
 
 test('a failed cross-volume copy leaves the source intact and removes staging', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-copy-failure-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-copy-failure-')));
   const source = path.join(root, 'source', 'A.library');
   const destinationDirectory = path.join(root, 'destination');
   const destination = path.join(destinationDirectory, 'A.library');
@@ -598,7 +658,7 @@ test('a failed cross-volume copy leaves the source intact and removes staging', 
 
 test.each(['changed bytes', 'extra entry', 'wrong entry type'])(
   'cross-volume verification rejects %s, preserves the source and removes staging', async (fault) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-verify-failure-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-verify-failure-')));
   const source = path.join(root, 'source', 'A.library');
   const destinationDirectory = path.join(root, 'destination');
   const destination = path.join(destinationDirectory, 'A.library');
@@ -651,7 +711,7 @@ test.each(['changed bytes', 'extra entry', 'wrong entry type'])(
 });
 
 test('a failed source cleanup keeps the verified cross-volume copy and reports the move', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-cleanup-failure-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'picto-cross-volume-cleanup-failure-')));
   const source = path.join(root, 'source', 'A.library');
   const destinationDirectory = path.join(root, 'destination');
   const destination = path.join(destinationDirectory, 'A.library');
@@ -1553,6 +1613,7 @@ test('a cancelled relocation leaves nothing current and reports the cancellation
   const renames = [];
   const { service, events, state } = createOpenService(native, {
     fs: {
+      realpath: async (value) => value,
       access: async (target) => {
         if (target !== '/Pictures/A.library') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       },
@@ -2296,6 +2357,7 @@ test('a relocation superseded while its history update fails still reports the m
   let failUpdate = () => {};
   const { service, state } = createOpenService(native, {
     fs: {
+      realpath: async (value) => value,
       access: async (target) => {
         if (target !== '/Pictures/A.library') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       },

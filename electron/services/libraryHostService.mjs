@@ -121,6 +121,7 @@ export function createLibraryHostService({
   let currentAttempt = null;
   let shuttingDown = false;
   let relocationSequence = 0;
+  const deletingLibraries = new Set();
   const coverExtensions = ['jpg', 'png'];
 
   function markShuttingDown() {
@@ -176,8 +177,17 @@ export function createLibraryHostService({
    * `settleFailedOpen` classifies the refusal as 'shutdown' or 'superseded'.
    */
   async function startNativeOpen(attempt, open) {
+    if (deletingLibraries.size) await assertNotDeleting(attempt.path);
     if (shuttingDown || !ownsAttempt(attempt)) throw new Error(LIBRARY_OPEN_CANCELLED);
     return open();
+  }
+
+  async function assertNotDeleting(libraryPath) {
+    const reserved = new Set(deletingLibraries);
+    const resolved = await fs.realpath(libraryPath).catch(() => null);
+    if (!resolved || reserved.has(resolved)) {
+      throw new Error('Cannot open this library while deletion is in progress.');
+    }
   }
 
   function reportOpenFailure(libraryPath, error, cancelled = false) {
@@ -243,6 +253,7 @@ export function createLibraryHostService({
    * cancellation sentinel whatever error the takeover surfaced as.
    */
   async function runAttempt(libraryPath, flow, { onSuperseded } = {}) {
+    if (deletingLibraries.size) await assertNotDeleting(libraryPath);
     const attempt = beginAttempt(libraryPath);
     try {
       return await flow(attempt);
@@ -976,7 +987,13 @@ export function createLibraryHostService({
       // Opening can settle or change during realpath; validate the new state before unlinking.
       if (currentPath === getCurrentLibraryRoot() && pendingPath === openingPath()) break;
     }
-    await fs.rm(deletionPath, { recursive: true, force: false });
+    if (deletingLibraries.has(deletionPath)) throw new Error('Library deletion is already in progress.');
+    deletingLibraries.add(deletionPath);
+    try {
+      await fs.rm(deletionPath, { recursive: true, force: false });
+    } finally {
+      deletingLibraries.delete(deletionPath);
+    }
     await recordLibrary(libraryPath, () => removeLibraryFromHistory(libraryPath));
     buildAppMenu();
     return { deleted: true };
@@ -1064,7 +1081,11 @@ export function createLibraryHostService({
       return { action: 'cancelled' };
     }
 
-    const destDir = picked.filePaths[0];
+    const pickedDir = picked.filePaths[0];
+    if (oldExists && isInsideLibraryPackage(path, pickedDir)) {
+      throw new Error('A library cannot be moved inside another Picto library.');
+    }
+    const destDir = oldExists ? await fs.realpath(pickedDir) : pickedDir;
     if (oldExists && isInsideLibraryPackage(path, destDir)) {
       throw new Error('A library cannot be moved inside another Picto library.');
     }
