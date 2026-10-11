@@ -892,7 +892,16 @@ pub fn matching_roots(
     query: &RootQuery,
     media: &MediaMatches,
 ) -> Result<RoaringBitmap> {
-    let universe = scope_bitmap(snapshot, &query.scope, media)?;
+    matching_roots_within(snapshot, query, media, None)
+}
+
+pub(crate) fn matching_roots_within(
+    snapshot: &ProjectionSnapshot,
+    query: &RootQuery,
+    media: &MediaMatches,
+    candidates: Option<&RoaringBitmap>,
+) -> Result<RoaringBitmap> {
+    let universe = scope_bitmap(snapshot, &query.scope, media, candidates)?;
     let mut text = |field, value: &str, candidates: &RoaringBitmap| {
         snapshot.text_index.search(field, value, candidates)
     };
@@ -1207,27 +1216,28 @@ fn scope_bitmap(
     snapshot: &ProjectionSnapshot,
     scope: &ItemScope,
     media: &MediaMatches,
+    candidates: Option<&RoaringBitmap>,
 ) -> Result<RoaringBitmap> {
+    let within = |values: &RoaringBitmap| match candidates {
+        Some(candidates) => candidates & values,
+        None => values.clone(),
+    };
     Ok(match scope {
-        ItemScope::All => snapshot.active().clone(),
-        ItemScope::Inbox => snapshot.lifecycle(Lifecycle::Inbox).clone(),
-        ItemScope::Trash => snapshot.lifecycle(Lifecycle::Trash).clone(),
-        ItemScope::MediaMatches { .. } => media.roots()?.clone(),
+        ItemScope::All => within(snapshot.active()),
+        ItemScope::Inbox => within(snapshot.lifecycle(Lifecycle::Inbox)),
+        ItemScope::Trash => within(snapshot.lifecycle(Lifecycle::Trash)),
+        ItemScope::MediaMatches { .. } => within(media.roots()?),
         ItemScope::Untagged => {
-            let mut values = snapshot.active().clone();
-            values &= snapshot.tag_count.between(Some(0), Some(0));
-            values
+            snapshot.tag_count.between_within(Some(0), Some(0), &within(snapshot.active()))
         }
         ItemScope::Uncategorized => {
-            let mut values = snapshot.active().clone();
-            values &= snapshot.folder_count.between(Some(0), Some(0));
-            values
+            snapshot.folder_count.between_within(Some(0), Some(0), &within(snapshot.active()))
         }
         ItemScope::Folder { folder_id } => {
             let mut values = snapshot
                 .folders
                 .get(folder_id)
-                .map(|values| values.to_bitmap())
+                .map(|values| within(values))
                 .unwrap_or_default();
             values &= snapshot.active();
             values
@@ -1241,7 +1251,7 @@ fn scope_bitmap(
                     continue;
                 }
                 if let Some(members) = snapshot.folders.get(&folder_id) {
-                    values |= members;
+                    values |= within(members);
                 }
                 pending.extend(
                     snapshot
@@ -1258,7 +1268,7 @@ fn scope_bitmap(
             let mut values = snapshot
                 .smart_results
                 .get(&smart_folder_id.0)
-                .map(|values| values.to_bitmap())
+                .map(|values| within(values))
                 .unwrap_or_default();
             values &= snapshot.active();
             values
@@ -1268,6 +1278,7 @@ fn scope_bitmap(
                 .recent_views
                 .iter()
                 .map(|(id, _)| id.0)
+                .filter(|id| candidates.is_none_or(|candidates| candidates.contains(*id)))
                 .collect::<RoaringBitmap>();
             values &= snapshot.active();
             values
@@ -1928,6 +1939,7 @@ mod tests {
                     folder_id: folder(id),
                 },
                 &MediaMatches::default(),
+                None,
             )
             .unwrap()
             .iter()
@@ -1942,7 +1954,8 @@ mod tests {
             scope_bitmap(
                 &snapshot,
                 &ItemScope::MediaMatches { item_id: 1 },
-                &MediaMatches::default()
+                &MediaMatches::default(),
+                None
             ),
             Err(LibraryError::InvalidState(_))
         ));

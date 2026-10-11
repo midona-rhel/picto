@@ -280,6 +280,7 @@ const CASES: Record<string, () => unknown> = {
   },
   'entityApi.supersedeItemWindow': () => entityApi.supersedeItemWindow({ channel: 'grid', generation: 4 }),
   'entityApi.getRootPositions': () => entityApi.getRootPositions(filteredQuery, [1, 2]),
+  'entityApi.getRootMembership': () => entityApi.getRootMembership(filteredQuery, [1, 2]),
   'entityApi.queryMimeFacets': () => entityApi.queryMimeFacets(filteredQuery),
   'entityApi.recordMediaView': () => entityApi.recordMediaView(1),
   'entityApi.clearRecentViews': () => entityApi.clearRecentViews(),
@@ -591,6 +592,16 @@ function normalise(command: unknown, args: unknown): [string, unknown] {
 }
 
 describe('IPC argument contract', () => {
+  it('preserves candidate order in the membership request and response', async () => {
+    vi.mocked(invoke).mockReset().mockResolvedValueOnce([false, true, false]);
+
+    await expect(entityApi.getRootMembership(filteredQuery, [2, 1, 2])).resolves.toEqual([false, true, false]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith('items.membership', {
+      query: filteredQuery, root_ids: [2, 1, 2],
+    });
+  });
+
   it('covers every exported platform function', () => {
     const exported = Object.entries(MODULES).flatMap(([moduleName, module]) =>
       Object.entries(module)

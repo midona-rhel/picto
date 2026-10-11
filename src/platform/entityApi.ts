@@ -100,6 +100,11 @@ export function getRootPositions(query: EntityViewQuery, rootIds: number[]): Pro
   return invoke<Array<number | null>>('items.positions', { query, root_ids: rootIds });
 }
 
+/** Whether each candidate root still belongs to the view, without resolving its order. */
+export function getRootMembership(query: EntityViewQuery, rootIds: number[]): Promise<boolean[]> {
+  return invoke<boolean[]>('items.membership', { query, root_ids: rootIds });
+}
+
 export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return invoke<SelectionSummary>('items.selection_summary', { target });
 }

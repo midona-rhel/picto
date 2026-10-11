@@ -22,9 +22,9 @@ import {
   selectAllResultsAtom,
 } from '../state/selection';
 
-const { queryItemsMock, getRootPositionsMock, supersedeWindowMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
+const { queryItemsMock, getRootMembershipMock, supersedeWindowMock, getViewPrefsMock, revisionState } = vi.hoisted(() => ({
   queryItemsMock: vi.fn(),
-  getRootPositionsMock: vi.fn(),
+  getRootMembershipMock: vi.fn(),
   supersedeWindowMock: vi.fn().mockResolvedValue(undefined),
   getViewPrefsMock: vi.fn(),
   revisionState: { library: -Infinity },
@@ -32,7 +32,7 @@ const { queryItemsMock, getRootPositionsMock, supersedeWindowMock, getViewPrefsM
 
 vi.mock('../platform/entityApi', () => ({
   queryItemWindow: queryItemsMock,
-  getRootPositions: getRootPositionsMock,
+  getRootMembership: getRootMembershipMock,
   supersedeItemWindow: supersedeWindowMock,
 }));
 vi.mock('../platform/settingsApi', () => ({
@@ -120,7 +120,7 @@ describe('gridController pagination', () => {
   beforeEach(() => {
     gridController.deactivate();
     queryItemsMock.mockReset();
-    getRootPositionsMock.mockReset();
+    getRootMembershipMock.mockReset();
     getViewPrefsMock.mockReset();
     getViewPrefsMock.mockResolvedValue({});
     revisionState.library = -Infinity;
@@ -719,7 +719,7 @@ describe('gridController pagination', () => {
       anchor: { kind: 'item', id: 1 },
     });
     queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
-    getRootPositionsMock.mockResolvedValueOnce([null]);
+    getRootMembershipMock.mockResolvedValueOnce([false]);
 
     await gridController.reconcile([1]);
 
@@ -745,14 +745,14 @@ describe('gridController pagination', () => {
     expect(store.get(selectionCountAtom)).toBe(2);
 
     queryItemsMock.mockResolvedValueOnce({ ...page([item(500001)], 999999), start: 500000 });
-    getRootPositionsMock.mockResolvedValueOnce([null]);
+    getRootMembershipMock.mockResolvedValueOnce([false]);
     await expect(gridController.reconcile([1, 99])).resolves.toBe(true);
 
     expect(store.get(selectionTargetAtom)).toEqual({ kind: 'explicit', root_ids: [2] });
     expect(store.get(selectionCountAtom)).toBe(1);
     expect(store.get(gridSelectionAtom).anchor).toBeNull();
-    expect(getRootPositionsMock).toHaveBeenCalledOnce();
-    expect(getRootPositionsMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
+    expect(getRootMembershipMock).toHaveBeenCalledOnce();
+    expect(getRootMembershipMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
     expect(store.get(gridSessionAtom).windowStart).toBe(500000);
     expect(queryItemsMock).toHaveBeenCalledTimes(2);
   });
@@ -767,14 +767,29 @@ describe('gridController pagination', () => {
     };
     store.set(gridSelectionAtom, selection);
     queryItemsMock.mockResolvedValueOnce({ ...page([item(500001)], 1_000_000), start: 500000 });
-    getRootPositionsMock.mockResolvedValueOnce([0]);
+    getRootMembershipMock.mockResolvedValueOnce([true]);
 
     await gridController.reconcile([1]);
 
     expect(store.get(gridSelectionAtom)).toBe(selection);
     expect(store.get(selectionCountAtom)).toBe(1);
-    expect(getRootPositionsMock).toHaveBeenCalledOnce();
-    expect(getRootPositionsMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
+    expect(getRootMembershipMock).toHaveBeenCalledOnce();
+    expect(getRootMembershipMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [1]);
+  });
+
+  it('removes only candidates with an explicit false membership result', async () => {
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(), itemIds: new Set([2, 3, 4]), anchor: { kind: 'item', id: 3 },
+    });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1_000_000));
+    getRootMembershipMock.mockResolvedValueOnce([true, false]);
+
+    await gridController.reconcile([2, 3, 4]);
+
+    expect(getRootMembershipMock).toHaveBeenCalledWith(store.get(currentGridQueryAtom), [2, 3, 4]);
+    expect(store.get(selectionTargetAtom)).toEqual({ kind: 'explicit', root_ids: [2, 4] });
+    expect(store.get(selectionCountAtom)).toBe(2);
+    expect(store.get(gridSelectionAtom).anchor).toBeNull();
   });
 
   it('does not look up unaffected, visible, or query-wide selections', async () => {
@@ -788,17 +803,17 @@ describe('gridController pagination', () => {
     const selection = store.get(gridSelectionAtom);
     await gridController.reconcile([2]);
 
-    expect(getRootPositionsMock).not.toHaveBeenCalled();
+    expect(getRootMembershipMock).not.toHaveBeenCalled();
     expect(store.get(gridSelectionAtom)).toBe(selection);
   });
 
-  it.each(['scope', 'filter'] as const)('ignores a late position response after a %s change', async (change) => {
+  it.each(['scope', 'filter'] as const)('ignores a late membership response after a %s change', async (change) => {
     store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([2]) });
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
-    let finish!: (positions: Array<number | null>) => void;
-    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    let finish!: (membership: boolean[]) => void;
+    getRootMembershipMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const pending = gridController.reconcile([2]);
-    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(getRootMembershipMock).toHaveBeenCalledOnce());
 
     queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
     if (change === 'scope') {
@@ -814,7 +829,7 @@ describe('gridController pagination', () => {
     };
     store.set(gridSelectionAtom, selection);
     const destination = store.get(gridSessionAtom);
-    finish([null]);
+    finish([false]);
 
     await expect(pending).resolves.toBe(false);
     expect(store.get(gridSessionAtom)).toBe(destination);
@@ -824,53 +839,53 @@ describe('gridController pagination', () => {
   it('removes a missing candidate while preserving selection edits made during the lookup', async () => {
     store.set(gridSelectionAtom, { ...emptyGridSelection(), itemIds: new Set([2]) });
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
-    let finish!: (positions: Array<number | null>) => void;
-    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    let finish!: (membership: boolean[]) => void;
+    getRootMembershipMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const pending = gridController.reconcile([2]);
-    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(getRootMembershipMock).toHaveBeenCalledOnce());
     const selection = {
       ...emptyGridSelection(), itemIds: new Set([2, 3]), anchor: { kind: 'item' as const, id: 3 },
     };
     store.set(gridSelectionAtom, selection);
-    finish([null]);
+    finish([false]);
 
     await expect(pending).resolves.toBe(true);
     expect(store.get(gridSelectionAtom)).toEqual({ ...selection, itemIds: new Set([3]) });
     expect(store.get(selectionCountAtom)).toBe(1);
   });
 
-  it('ignores old positions as soon as navigation starts, before selection is cleared', async () => {
+  it('ignores old membership as soon as navigation starts, before selection is cleared', async () => {
     const selection = {
       ...emptyGridSelection(), itemIds: new Set([2]), anchor: { kind: 'item' as const, id: 2 },
     };
     store.set(gridSelectionAtom, selection);
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
-    let finish!: (positions: Array<number | null>) => void;
-    getRootPositionsMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    let finish!: (membership: boolean[]) => void;
+    getRootMembershipMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const pending = gridController.reconcile([2]);
-    await vi.waitFor(() => expect(getRootPositionsMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(getRootMembershipMock).toHaveBeenCalledOnce());
 
     queryItemsMock.mockResolvedValueOnce(page([item(2)], 1));
     const navigation = gridController.prepareNavigation({ kind: 'folder', folder_id: 7 });
-    finish([null]);
+    finish([false]);
 
     await expect(pending).resolves.toBe(false);
     expect(store.get(gridSelectionAtom)).toBe(selection);
     gridController.commitNavigation(await navigation);
   });
 
-  it('keeps selection intact when the positions lookup fails', async () => {
+  it('keeps selection intact when the membership lookup fails', async () => {
     const selection = {
       ...emptyGridSelection(), itemIds: new Set([2]), anchor: { kind: 'item' as const, id: 2 },
     };
     store.set(gridSelectionAtom, selection);
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
-    getRootPositionsMock.mockRejectedValueOnce(new Error('Positions unavailable'));
+    getRootMembershipMock.mockRejectedValueOnce(new Error('Membership unavailable'));
 
     await expect(gridController.reconcile([2])).resolves.toBe(false);
 
     expect(store.get(gridSelectionAtom)).toBe(selection);
-    expect(store.get(gridErrorAtom)).toBe('Positions unavailable');
+    expect(store.get(gridErrorAtom)).toBe('Membership unavailable');
   });
 
   it('settles search after 250 ms of inactivity', async () => {

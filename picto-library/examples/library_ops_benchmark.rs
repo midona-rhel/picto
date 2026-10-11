@@ -4,6 +4,7 @@
 //! (defaults: 1,000,000 roots, 5 runs, 100 smart folders; up to 1,000 smart folders).
 //! Prints `ROW|operation|size|median ms|p90 ms|samples`. Local measurement only:
 //! never commit its output.
+//! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -47,6 +48,29 @@ fn main() -> R<()> {
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
+
+    // Missing candidates must not force a walk through the complete query order.
+    let last = *ids.last().expect("non-empty fixture");
+    let target = explicit(&[last]);
+    let candidates = [ids[0], last, RootId(u32::MAX)];
+    let before = library.query_statistics();
+    for (label, filter) in [
+        ("offscreen membership after edit", FilterExpr::default()),
+        ("text-filtered offscreen membership after edit", name_filter("image")),
+    ] {
+        let query = RootQuery { scope: ItemScope::All, view: ViewQuerySpec { filter, sort: ItemSort::default() } };
+        bench(label, "3 candidates", runs, || {
+            assert_eq!(library.root_membership(&query, &candidates)?, [true, false, false]);
+            Ok(())
+        }, Some(|| {
+            library.set_lifecycle(&target, Lifecycle::Active)?;
+            library.set_lifecycle(&target, Lifecycle::Trash)?;
+            Ok(())
+        }))?;
+    }
+    assert_eq!(library.query_statistics().order_builds, before.order_builds);
+    library.set_lifecycle(&target, Lifecycle::Active)?;
+    if std::env::args().any(|arg| arg == "--membership-only") { return Ok(()); }
 
     // --- fixture: folders ---
     let t = Instant::now();

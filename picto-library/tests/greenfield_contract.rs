@@ -2794,6 +2794,54 @@ fn explicit_and_query_selections_have_identical_summaries() {
 }
 
 #[test]
+fn root_membership_checks_only_candidates_without_building_query_order() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let first = library.ingest(&imported("needle-first", Lifecycle::Active, &["chosen"])).unwrap().0;
+    let second = library.ingest(&imported("other-second", Lifecycle::Active, &[])).unwrap().0;
+    let inbox = library.ingest(&imported("needle-inbox", Lifecycle::Inbox, &[])).unwrap().0;
+    let trash = library.ingest(&imported("needle-trash", Lifecycle::Trash, &[])).unwrap().0;
+    library.settle_fts(100).unwrap();
+    let candidates = [first, second, inbox, trash, picto_library::RootId(u32::MAX), first];
+    let all = query(ItemScope::All);
+    let before = library.query_statistics();
+    assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, true, false, false, false, true]);
+    let target = SelectionTarget::Explicit { root_ids: vec![second] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.permanently_delete(&target, 1_700_000_001_000).unwrap();
+    assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, false, false, false, false, true]);
+    assert_eq!(library.query_statistics().order_builds, before.order_builds);
+    assert!(library.root_membership(&all, &[]).unwrap().is_empty());
+
+    let (parent, _) = library.create_folder("Parent", None).unwrap();
+    let (child, _) = library.create_folder("Child", Some(parent)).unwrap();
+    library.add_to_folder(&SelectionTarget::Explicit { root_ids: vec![first] }, child).unwrap();
+    library.record_recent_view(first, 1_700_000_001_001).unwrap();
+    let text = FilterExpr::Clause(FilterClause::Text {
+        field: picto_library::predicate::TextField::Name, query: "needle".into(),
+    });
+    let smart = library.create_smart_folder(SmartFolderInput {
+        name: "Needles".into(), parent_id: None, icon: None, color: None, notes: None,
+        view: ViewQuerySpec { filter: text.clone(), sort: ItemSort::default() },
+    }).unwrap().0;
+    for scope in [
+        ItemScope::All, ItemScope::Inbox, ItemScope::Trash, ItemScope::Untagged,
+        ItemScope::Uncategorized, ItemScope::RecentlyViewed,
+        ItemScope::Folder { folder_id: child }, ItemScope::FolderTree { folder_id: parent },
+        ItemScope::SmartFolder { smart_folder_id: smart }, ItemScope::MediaMatches { item_id: first.0 },
+    ] {
+        for filter in [FilterExpr::default(), text.clone(), FilterExpr::Not(Box::new(text.clone()))] {
+            let query = RootQuery { scope: scope.clone(), view: ViewQuerySpec { filter, sort: ItemSort::default() } };
+            let before = library.query_statistics();
+            let membership = library.root_membership(&query, &candidates).unwrap();
+            assert_eq!(library.query_statistics().order_builds, before.order_builds);
+            let expected = library.query(&query, &PageRequest { limit: 100, cursor: None }).unwrap();
+            assert_eq!(membership, candidates.iter().map(|id| expected.items.iter().any(|item| item.root_id == *id)).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
 fn range_positions_are_trusted_only_when_both_ends_still_match() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

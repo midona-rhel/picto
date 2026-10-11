@@ -695,6 +695,29 @@ impl Library {
         )
     }
 
+    /// Query membership for only the supplied roots, without building a result order.
+    pub fn root_membership(
+        &self,
+        query: &crate::query::RootQuery,
+        roots: &[RootId],
+    ) -> Result<Vec<bool>> {
+        if roots.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let candidates = roots.iter().map(|id| id.0).collect();
+                let media = crate::query::MediaMatches::resolve(connection, &snapshot, &query.scope)?;
+                let matches = crate::query::matching_roots_within(
+                    &snapshot, query, &media, Some(&candidates),
+                )?;
+                Ok(roots.iter().map(|id| matches.contains(id.0)).collect())
+            },
+        )
+    }
+
     /// Current positions of `roots` in `query`'s order (`None` when absent).
     pub fn root_positions(
         &self,

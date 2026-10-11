@@ -921,6 +921,183 @@
     }
   ],
   [
+    "items.membership",
+    {
+      "query": {
+        "scope": {
+          "kind": "folder_tree",
+          "folder_id": 3
+        },
+        "view": {
+          "filter": {
+            "kind": "all",
+            "value": [
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "tags",
+                  "tag_ids": [
+                    4
+                  ],
+                  "mode": "all"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "tags",
+                    "tag_ids": [
+                      5
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "folders",
+                  "folder_ids": [
+                    6
+                  ],
+                  "mode": "any"
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "folders",
+                    "folder_ids": [
+                      7
+                    ],
+                    "mode": "any"
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "ratings",
+                  "ratings": [
+                    "unrated",
+                    "five"
+                  ]
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "mime",
+                  "values": [
+                    "video/mp4"
+                  ],
+                  "families": [
+                    "image"
+                  ]
+                }
+              },
+              {
+                "kind": "not",
+                "value": {
+                  "kind": "clause",
+                  "value": {
+                    "clause": "mime",
+                    "values": [
+                      "image/gif"
+                    ],
+                    "families": []
+                  }
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "imported_at",
+                  "minimum_ms": 1704067200000,
+                  "maximum_ms": 1735603200000
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "modified_at",
+                  "minimum_ms": 1706745600000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "duration",
+                  "minimum_ms": 1000,
+                  "maximum_ms": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "total_size",
+                  "minimum_bytes": null,
+                  "maximum_bytes": 1048576
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "width",
+                  "minimum": 640,
+                  "maximum": null
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "height",
+                  "minimum": null,
+                  "maximum": 2160
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "text",
+                  "field": "global",
+                  "query": "sunset"
+                }
+              },
+              {
+                "kind": "clause",
+                "value": {
+                  "clause": "color",
+                  "color": {
+                    "l": 68.65577208167872,
+                    "a": 38.85052375564024,
+                    "b": 74.99022544139406,
+                    "weight": 1
+                  },
+                  "delta_e": 16
+                }
+              }
+            ]
+          },
+          "sort": {
+            "field": "random",
+            "direction": "ascending",
+            "random_seed": "seed-1"
+          }
+        }
+      },
+      "root_ids": [
+        1,
+        2
+      ]
+    }
+  ],
+  [
     "items.mime_facets",
     {
       "query": {

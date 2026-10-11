@@ -1,7 +1,7 @@
 /** Single command owner for the canonical grid session. */
 
 import { getDefaultStore } from 'jotai';
-import { getRootPositions, queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
+import { getRootMembership, queryItemWindow, supersedeItemWindow } from '../platform/entityApi';
 import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { EntityViewQuery, ItemSort } from '../shared/types/canonical';
@@ -788,11 +788,11 @@ async function reconcileExplicitSelection(
   // Absence from the window is not absence from the query, even for a previously loaded root.
   const candidates = [...affectedItemIds].filter((id) => selection.itemIds.has(id) && !nextIds.has(id));
   if (candidates.length === 0) return;
-  const positions = await getRootPositions(query, candidates);
+  const membership = await getRootMembership(query, candidates);
   if (!isCurrent()) return;
   const current = store.get(gridSelectionAtom);
   if (current.mode !== 'explicit') return;
-  const removed = candidates.filter((id, index) => positions[index] === null && current.itemIds.has(id));
+  const removed = candidates.filter((id, index) => membership[index] === false && current.itemIds.has(id));
   if (removed.length === 0) return;
   const itemIds = new Set(current.itemIds);
   removed.forEach((id) => itemIds.delete(id));
