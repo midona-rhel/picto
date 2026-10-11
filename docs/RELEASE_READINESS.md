@@ -33,6 +33,23 @@ native addons, and downloaded native tools must not imply otherwise.
 - Release commits must contain no personal absolute paths, private-key markers, or reference-source
   references. Run the source audit before publishing history.
 
+## Acceptance integration handoff (2026-10-11)
+
+- PR #88 is the review-only integration into `dev`; it must not be merged until review authorizes it.
+- All available macOS manual rechecks passed against acceptance code commit `df9b2046`. The evidence
+  index is `artifacts/acceptance/RESULTS.json`, with the final captures under
+  `artifacts/acceptance/round7/`.
+- The Google Drive check used a real remote round trip: all 502 uploaded, downloaded, and restored
+  blobs matched by hash. Dropbox was not checked because it is not installed on the test host.
+- Windows memory remains untested because the acceptance host is macOS. This is an unavailable
+  platform check, not a pass or a waiver of the Windows gate.
+- The six-filter UI check used Date Imported because the UI has no capture-date control;
+  `captured_at` remains covered by runtime evidence only.
+- Picto Pack reimport through the native chooser restored conflicting metadata without changing
+  existing undo or redo entries. The always-rendered, hidden CloudSyncBar fallback text was not an
+  active import indicator; native completion, modal closure, restored notes, and exact history state
+  are recorded in `round7/pack-history-fixed.json`.
+
 ## Publication gates
 
 - The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
