@@ -212,7 +212,8 @@ async fn publish_library_inner(
                 transaction.execute(
                     "UPDATE cloud_state
                      SET last_snapshot_at = ?1, last_sync_at = ?1,
-                         state = 'idle', phase = 'idle', message = ''
+                         state = CASE WHEN paused THEN 'paused' ELSE 'idle' END,
+                         phase = 'idle', message = ''
                      WHERE singleton = 1",
                     [manifest.created_at.as_str()],
                 )?;

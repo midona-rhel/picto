@@ -237,7 +237,8 @@ pub fn recover_interrupted_sync_library(application: &LibraryApplication) -> Res
             |transaction| {
                 transaction.execute(
                     "UPDATE cloud_state
-                     SET state = 'idle', phase = 'idle', message = ''
+                     SET state = CASE WHEN paused THEN 'paused' ELSE 'idle' END,
+                         phase = 'idle', message = ''
                      WHERE singleton = 1 AND state = 'reconciling'",
                     [],
                 )?;
@@ -492,6 +493,51 @@ fn json_sql_error(error: serde_json::Error) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn manual_snapshot_and_restart_recovery_preserve_pause() {
+        let temp = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(temp.path().join("Paused.library")).unwrap();
+        let provider = provider::DirectoryProvider::open(temp.path().join("provider")).unwrap();
+        application
+            .library()
+            .database()
+            .maintenance_write(
+                picto_library::database::WorkPriority::Cloud,
+                |transaction| {
+                    transaction.execute(
+                        "UPDATE cloud_state SET provider = 'dropbox' WHERE singleton = 1",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        for paused in [true, false] {
+            set_paused_library(&application, paused).unwrap();
+            snapshot::publish_library(&application, &provider)
+                .await
+                .unwrap();
+            let expected = if paused { "paused" } else { "idle" };
+            assert_eq!(status_library(&application).unwrap().state, expected);
+            application
+                .library()
+                .database()
+                .maintenance_write(
+                    picto_library::database::WorkPriority::Cloud,
+                    |transaction| {
+                        transaction.execute(
+                            "UPDATE cloud_state SET state = 'reconciling' WHERE singleton = 1",
+                            [],
+                        )?;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            recover_interrupted_sync_library(&application).unwrap();
+            assert_eq!(status_library(&application).unwrap().state, expected);
+        }
+    }
 
     #[test]
     fn disabling_cloud_clears_binding_and_preserves_pending_journal() {
