@@ -35,14 +35,18 @@ only issue-owned changes.
 - Fill in the template; start with `Closes #<issue>`.
 - CI runs `verify` (renderer typecheck/tests, localization, command parity,
   Rust clippy `-D warnings` and tests). It must be green before merge.
-- Every pull request gets an automated review (`code-review` workflow)
-  against the review guidelines in [AGENTS.md](AGENTS.md); mention `@claude`
-  in a comment to ask it a follow-up. It advises; a person still approves.
+- Pull requests use the Codex GitHub integration, as in Poser, against the
+  review guidelines in [AGENTS.md](AGENTS.md). Enable Automatic review for
+  this repository in Codex settings, including review after new pushes.
+  Use `@codex review` to request another pass. No AI-provider Actions secret
+  or review workflow is needed. Wait for that review and resolve its findings
+  before merging; conversation resolution alone cannot enforce that it ran.
 - Review the actual diff before asking for review. For a refactor, report net
   production lines and name the superseded code you deleted.
 - Schema changes need a migration with backup, a reopen test, and the
   `schema change` label.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
+- Merge commits are also enabled on `dev` for the post-release `main` sync.
 - Do not merge before review. Resolve every review thread first.
 
 ## 4. Release

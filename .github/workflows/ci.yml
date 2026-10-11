@@ -6,6 +6,7 @@ name: CI
 # Stacked pull requests (based on another work branch) are verified too.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [dev]
   merge_group:
@@ -27,19 +28,12 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Enforce the release-only main branch
         env:
-          BASE: ${{ github.base_ref }}
-          HEAD: ${{ github.head_ref }}
-        run: |
-          # main only ever receives a finished release branch. Everything else
-          # lands on dev and reaches main inside the next release.
-          if [ "$BASE" = "main" ] && ! printf '%s' "$HEAD" | grep -Eq '^release/[0-9]+\.[0-9]+\.[0-9]+(-(alpha|rc)([.-][0-9]+)?)?$'; then
-            echo "::error::Pull requests into main must come from release/<version>. Target dev instead."
-            exit 1
-          fi
-          if [ "$BASE" = "dev" ] && ! printf '%s' "$HEAD" | grep -Eq '^(feature|bug|ui|perf|refactor|docs|test|chore|deps|dependabot|release)/|^main$'; then
-            echo "::error::Name the branch by purpose: feature/, bug/, ui/, perf/, refactor/, docs/, test/, chore/ or deps/."
-            exit 1
-          fi
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/check-branch-policy.mjs

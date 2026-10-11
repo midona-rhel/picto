@@ -73,9 +73,9 @@ upsert_ruleset() {
 }
 
 checks='[
-  {"context": "verify / verify:renderer"},
-  {"context": "verify / verify:rust"},
-  {"context": "branch-policy"}
+  {"context": "verify / verify:renderer", "integration_id": 15368},
+  {"context": "verify / verify:rust", "integration_id": 15368},
+  {"context": "branch-policy", "integration_id": 15368}
 ]'
 
 branch_ruleset() { # name ref merge_method
@@ -92,14 +92,14 @@ branch_ruleset() { # name ref merge_method
         require_code_owner_review: false,
         require_last_push_approval: false,
         required_review_thread_resolution: true,
-        allowed_merge_methods: [$method]}},
+        allowed_merge_methods: ($method | split(","))}},
       {type: "required_status_checks", parameters: {
         strict_required_status_checks_policy: true,
         required_status_checks: $checks}}
     ]}'
 }
 
-upsert_ruleset "dev: reviewed squash merges" "$(branch_ruleset "dev: reviewed squash merges" refs/heads/dev squash)"
+upsert_ruleset "dev: reviewed squash merges" "$(branch_ruleset "dev: reviewed squash merges" refs/heads/dev squash,merge)"
 upsert_ruleset "main: releases only" "$(branch_ruleset "main: releases only" refs/heads/main merge)"
 
 # Release branches are the release record and must still exist when the tag
@@ -111,12 +111,16 @@ upsert_ruleset "release branches" "$(jq -n '{
   bypass_actors: [],
   rules: [{type: "deletion"}, {type: "non_fast_forward"}]}')"
 
-# Release tags are immutable once pushed. Repository admins (role 5) may still
-# create them; nobody may move or delete them.
+# Keep creation bypass separate from immutable-tag rules.
 upsert_ruleset "release tags" "$(jq -n '{
   name: "release tags", target: "tag", enforcement: "active",
   conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
+  bypass_actors: [],
+  rules: [{type: "deletion"}, {type: "update"}]}')"
+upsert_ruleset "release tag creation" "$(jq -n '{
+  name: "release tag creation", target: "tag", enforcement: "active",
+  conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
   bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
-  rules: [{type: "deletion"}, {type: "update"}, {type: "creation"}]}')"
+  rules: [{type: "creation"}]}')"
 
 echo "done: default branch is dev; main accepts release/<version> PRs only."

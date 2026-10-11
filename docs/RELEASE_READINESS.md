@@ -112,8 +112,11 @@ campaign; preserve meaningful correctness and data-safety coverage.
    package versions and the versioned notes on that branch. Keep issue references in commits, not
    release notes. Every push to the branch runs the Alpha Gate: renderer tests, Rust lint/tests, and
    macOS/Windows/Linux packaging and smoke together. Every job must pass on the final head.
-2. Open a pull request from `release/<version>` into `main` and merge it with a **merge commit**
+2. After the final release-branch gate passes, open a pull request from `release/<version>` into `main`
+   and merge it with a **merge commit**
    (squash is disabled for `main`), so the gated release commit stays in `main`'s ancestry.
+   The required `branch-policy` check verifies the exact package/smoke artifacts before merge.
+   If the PR was opened before the gate finished, rerun its CI after the gate succeeds.
 3. Tag the release-branch head (not the merge commit) as `v<version>` and push the tag. Publication
    checks the matching release branch, main ancestry, successful gate commit, and all three
    package/smoke artifact sets. It downloads those package artifacts by ID with digest verification
