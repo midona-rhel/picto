@@ -36,11 +36,14 @@ mod smart_folders;
 mod imports;
 mod duplicates;
 mod structure;
+mod merge;
 mod undo;
 use tags::*;
 use folders::*;
 use smart_folders::*;
 use structure::*;
+use merge::*;
+pub use merge::SharedFileMerge;
 use undo::*;
 
 struct PublishedDelta {

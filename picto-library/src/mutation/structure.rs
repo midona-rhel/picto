@@ -890,6 +890,18 @@ pub(super) fn restore_deleted_roots(
             "cannot undo the delete because its files were already removed".into(),
         ));
     }
+    // One file is one item: a file imported again since cannot come back
+    // as a second one.
+    let reimported: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM media_item WHERE file_id IN (SELECT value FROM json_each(?1))",
+        [&files_json],
+        |row| row.get(0),
+    )?;
+    if reimported != 0 {
+        return Err(LibraryError::InvalidState(
+            "cannot undo the delete because its files are in the library again".into(),
+        ));
+    }
 
     let mut insert_item = transaction
         .prepare_cached("INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, ?3)")?;

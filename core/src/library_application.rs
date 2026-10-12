@@ -116,6 +116,20 @@ impl LibraryApplication {
     }
 
     fn from_library(root: PathBuf, library: Library) -> Result<Self, String> {
+        // One file is one item. Libraries from before the rule merge the
+        // items that share a file, once; the schema migration took a backup.
+        // A failed merge commits nothing and is retried at the next open; the
+        // library stays usable meanwhile.
+        match library.merge_shared_files() {
+            Ok(merged) if merged.files != 0 => tracing::info!(
+                files = merged.files,
+                merged_items = merged.merged_items,
+                removed_collections = merged.removed_collections,
+                "Merged items that shared a file into one item each"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Could not merge items that share a file"),
+        }
         if let Some(receipt) = library
             .canonicalize_general_tag_namespace()
             .map_err(|error| format!("Failed to canonicalize General tags: {error}"))?

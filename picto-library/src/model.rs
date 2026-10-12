@@ -97,6 +97,16 @@ impl Lifecycle {
             Self::Trash => 3,
         }
     }
+
+    /// Which lifecycle wins when two items for one file become one: an item
+    /// kept in the library beats one waiting in the Inbox, which beats Trash.
+    pub(crate) const fn keep_rank(self) -> u8 {
+        match self {
+            Self::Active => 2,
+            Self::Inbox => 1,
+            Self::Trash => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

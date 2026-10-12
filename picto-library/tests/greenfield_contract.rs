@@ -4052,7 +4052,7 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
 }
 
 #[test]
-fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
+fn a_file_another_collection_holds_stays_there_and_keeps_its_tags() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut first_member = imported(
@@ -4093,13 +4093,17 @@ fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
         })
         .unwrap();
 
+    // The shared file stays in the first collection; the second post leaves
+    // it out, which leaves one item: no collection.
     let snapshot = library.projections().snapshot();
+    assert_eq!(snapshot.collection_orders[&first_collection].len(), 2);
+    assert!(!snapshot.collection_orders.contains_key(&second_collection));
     let first_tag = snapshot.tag_ids_by_name["collection:first"];
-    let second_tag = snapshot.tag_ids_by_name["collection:second"];
     assert!(snapshot.tags[&first_tag].contains(first_collection.0));
     assert!(!snapshot.tags[&first_tag].contains(second_collection.0));
-    assert!(snapshot.tags[&second_tag].contains(second_collection.0));
-    assert!(!snapshot.tags[&second_tag].contains(first_collection.0));
+    if let Some(second_tag) = snapshot.tag_ids_by_name.get("collection:second") {
+        assert!(!snapshot.tags[second_tag].contains(first_collection.0));
+    }
 }
 
 #[test]
@@ -4144,100 +4148,6 @@ fn exact_hash_standalone_import_collapses_into_collection_and_donates_its_tags()
     let snapshot = library.projections().snapshot();
     let donated = snapshot.tag_ids_by_name["standalone:donated"];
     assert!(snapshot.tags[&donated].contains(collection.0));
-}
-
-#[test]
-fn exact_hash_standalone_tags_fan_out_to_every_owner_across_lifecycles() {
-    let directory = TempDir::new().unwrap();
-    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let shared_hash = "shared-owner-fan-out-hash";
-    let standalone_inputs = [
-        ("fan-out-active", Lifecycle::Active),
-        ("fan-out-inbox", Lifecycle::Inbox),
-        ("fan-out-trash", Lifecycle::Trash),
-    ]
-    .map(|(key, lifecycle)| {
-        let mut input = imported(key, lifecycle, &[]);
-        input.facts.content_hash = shared_hash.into();
-        input
-    });
-    let standalone_roots = library
-        .ingest_conversion_batch(&standalone_inputs)
-        .unwrap()
-        .into_iter()
-        .map(|(root_id, _)| root_id)
-        .collect::<Vec<_>>();
-
-    let mut collection_member = imported(
-        "fan-out-collection-member",
-        Lifecycle::Inbox,
-        &["collection:local"],
-    );
-    collection_member.facts.content_hash = shared_hash.into();
-    let (collection, _) = library
-        .ingest_collection(&picto_library::PreparedCollectionImport {
-            members: vec![
-                collection_member,
-                imported("fan-out-collection-support", Lifecycle::Inbox, &[]),
-            ],
-            cover_index: 0,
-            existing_root_id: None,
-            name: Some("Fan-out collection".into()),
-            modified_at_ms: 1_700_000_007_000,
-        })
-        .unwrap();
-    let (unrelated, _) = library
-        .ingest(&imported("fan-out-unrelated", Lifecycle::Active, &[]))
-        .unwrap();
-
-    let visible_roots_before = library
-        .database()
-        .read(
-            picto_library::database::WorkPriority::VisibleRead,
-            |connection| {
-                Ok(
-                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                )
-            },
-        )
-        .unwrap();
-    let mut incoming = imported(
-        "fan-out-incoming-standalone",
-        Lifecycle::Inbox,
-        &["standalone:incoming"],
-    );
-    incoming.facts.content_hash = shared_hash.into();
-    let (retained, _) = library.ingest(&incoming).unwrap();
-
-    assert_eq!(retained, standalone_roots[0]);
-    assert_eq!(
-        library
-            .database()
-            .read(
-                picto_library::database::WorkPriority::VisibleRead,
-                |connection| {
-                    Ok(
-                        connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
-                            row.get::<_, i64>(0)
-                        })?,
-                    )
-                },
-            )
-            .unwrap(),
-        visible_roots_before
-    );
-    let snapshot = library.projections().snapshot();
-    let incoming_tag = snapshot.tag_ids_by_name["standalone:incoming"];
-    for owner in standalone_roots.iter().copied().chain([collection]) {
-        assert!(snapshot.tags[&incoming_tag].contains(owner.0));
-    }
-    assert!(!snapshot.tags[&incoming_tag].contains(unrelated.0));
-    let collection_tag = snapshot.tag_ids_by_name["collection:local"];
-    for standalone in standalone_roots {
-        assert!(!snapshot.tags[&collection_tag].contains(standalone.0));
-    }
 }
 
 #[test]
@@ -5429,7 +5339,7 @@ fn collection_members_retain_notes_through_group_cover_undo_and_ungroup() {
     let mut second_import = imported("noted-two", Lifecycle::Active, &[]);
     second_import.notes = Some("Second member note".into());
     let converted = library
-        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .ingest_batch(&[first_import.clone(), second_import.clone()])
         .unwrap();
     let first = converted[0].0;
     let second = converted[1].0;
@@ -5599,17 +5509,17 @@ fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable(
 }
 
 #[test]
-fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
+fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
     let library = Library::create(&path).unwrap();
     let shared_hash = "shared-content";
     let mut first_import = imported("delete-first", Lifecycle::Active, &["creator:one"]);
-    first_import.facts.content_hash = shared_hash.into();
+    first_import.facts.content_hash = "first-content".into();
     let mut second_import = imported("delete-second", Lifecycle::Active, &["creator:two"]);
     second_import.facts.content_hash = shared_hash.into();
     let converted = library
-        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .ingest_batch(&[first_import.clone(), second_import.clone()])
         .unwrap();
     library
         .database()
@@ -5639,7 +5549,8 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     let (_, cleanup) = library
         .permanently_delete(&first_target, 1_700_000_000_500, 0)
         .unwrap();
-    assert!(cleanup.is_empty());
+    assert_eq!(cleanup.len(), 1);
+    assert_eq!(cleanup[0].file_path, first_import.file_path);
     assert_eq!(library.history().state().entries, history_before_delete);
 
     let second_target = SelectionTarget::Explicit {
@@ -5684,7 +5595,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
                     connection.query_row("SELECT COUNT(*) FROM blob_cleanup_queue", [], |row| {
                         row.get::<_, i64>(0)
                     })?,
-                    1
+                    2
                 );
                 let (object_key, retention_days): (String, i64) = connection.query_row(
                     "SELECT object_key,
@@ -5712,9 +5623,9 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
                 Ok(())
             })
             .unwrap(),
-        1
+        2
     );
-    assert_eq!(removed, vec![shared_hash]);
+    assert_eq!(removed, vec!["first-content", shared_hash]);
     assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
 }
 

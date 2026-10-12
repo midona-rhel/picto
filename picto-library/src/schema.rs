@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-12-media-aliases";
+const NO_CLOUD_CLOCKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
 const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
 const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
 const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
@@ -26,6 +27,11 @@ const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-s
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
+const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
+/// One file is one media item. Created with a new library; an existing one
+/// gets it once its shared files are merged (`Library::merge_shared_files`).
+pub(crate) const ONE_ITEM_PER_FILE: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_item_one_per_file ON media_item(file_id)";
 
 /// Create any missing accelerator index. Idempotent; runs at create and open.
 pub fn ensure_accelerator_indexes(connection: &Connection) -> Result<()> {
@@ -37,6 +43,8 @@ pub fn create(connection: &mut Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;")?;
     let result = (|| {
         connection.execute_batch(SCHEMA)?;
+        connection.execute_batch(ALIAS_SCHEMA)?;
+        connection.execute_batch(ONE_ITEM_PER_FILE)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
         connection.execute_batch(ACCELERATOR_INDEXES)?;
         connection.execute(
@@ -113,7 +121,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            CHUNKED_ORDERS_PREDECESSOR
+            NO_CLOUD_CLOCKS_PREDECESSOR
+                | CHUNKED_ORDERS_PREDECESSOR
                 | WATCH_LIFECYCLE_PREDECESSOR
                 | SOURCE_ROOTS_PREDECESSOR
                 | RESIDENT_PREDECESSOR
@@ -188,6 +197,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -236,6 +246,7 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
@@ -268,6 +279,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -336,6 +348,10 @@ pub fn migrate_for_open(
             if !has_table(connection, "ordered_membership_chunk")? {
                 crate::ordering::migrate_single_blob_orders(connection)?;
             }
+            // Merged-away items keep their stable key as an alias. The
+            // merge itself, and the one-item-per-file index after it, run
+            // once the library is open (`Library::merge_shared_files`).
+            connection.execute_batch(ALIAS_SCHEMA)?;
             // The per-field CRDT design was replaced by snapshot sync; nothing
             // ever wrote these tables.
             connection.execute_batch(
