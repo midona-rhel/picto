@@ -393,6 +393,12 @@ pub struct HistoryEntry {
     pub entry_id: u64,
     pub command: String,
     pub label: String,
+    /// How many items the change touched (0 when it is not about items), so
+    /// the renderer can describe it in plain words.
+    pub count: u64,
+    /// What the change set, where the command alone does not say: the status
+    /// moved to, the rating given, or whether something was added or removed.
+    pub detail: Option<String>,
     pub change: SemanticChange,
     pub estimated_bytes: usize,
 }
@@ -413,9 +419,18 @@ impl HistoryEntry {
             entry_id: 0,
             command: command.into(),
             label: label.into(),
+            count: 0,
+            detail: None,
             change,
             estimated_bytes,
         }
+    }
+
+    /// Say how many items the change touched and, optionally, what it set.
+    pub fn about(mut self, count: u64, detail: Option<&str>) -> Self {
+        self.count = count;
+        self.detail = detail.map(str::to_owned);
+        self
     }
 
     fn summary(&self) -> HistoryEntrySummary {
@@ -423,6 +438,8 @@ impl HistoryEntry {
             entry_id: self.entry_id,
             command: self.command.clone(),
             label: self.label.clone(),
+            count: self.count,
+            detail: self.detail.clone(),
         }
     }
 }
@@ -431,7 +448,13 @@ impl HistoryEntry {
 pub struct HistoryEntrySummary {
     pub entry_id: u64,
     pub command: String,
+    /// A developer-facing fallback; the renderer words the change itself from
+    /// `command`, `count` and `detail`.
     pub label: String,
+    #[serde(default)]
+    pub count: u64,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

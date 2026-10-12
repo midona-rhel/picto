@@ -49,6 +49,8 @@ pub struct LibraryHistoryEntrySummary {
     pub entry_id: u64,
     pub command: String,
     pub label: String,
+    pub count: u64,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1115,6 +1117,8 @@ fn map_history_entry(
         entry_id: value.entry_id,
         command: value.command,
         label: value.label,
+        count: value.count,
+        detail: value.detail,
     }
 }
 

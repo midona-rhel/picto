@@ -27,7 +27,7 @@ import {
   startHistoryRuntime,
 } from './historyRuntime';
 
-const renameEntry = { entry_id: 4, command: 'items.rename', label: 'Rename item' };
+const renameEntry = { entry_id: 4, command: 'items.rename', label: 'Rename item', count: 1, detail: null };
 
 describe('historyRuntime', () => {
   beforeEach(() => {
@@ -47,10 +47,10 @@ describe('historyRuntime', () => {
   });
 
   it('announces consequential mutations only when they own the newest history entry', async () => {
-    const deleteEntry = { entry_id: 5, command: 'folders.delete', label: 'Delete folders' };
+    const deleteEntry = { entry_id: 5, command: 'folders.delete', label: 'Delete folders', count: 2, detail: null };
     mocks.state.mockResolvedValue({ undo: deleteEntry, redo: null });
     await announceUndoableMutation('folders.delete');
-    expect(getCurrentNotification()?.title).toBe('Delete folders');
+    expect(getCurrentNotification()?.title).toBe('Deleted 2 folders');
     expect(getCurrentNotification()?.action?.label).toBe('Undo');
 
     clearNotifications();
@@ -75,6 +75,8 @@ describe('historyRuntime', () => {
     mocks.handlers.get('menu:undo')?.();
     await vi.waitFor(() => expect(mocks.undo).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(getCurrentNotification()?.action?.label).toBe('Redo'));
+    expect(getCurrentNotification()?.title).toBe('Undone');
+    expect(getCurrentNotification()?.message).toBe('Renamed an item');
 
     getCurrentNotification()?.action?.onClick();
     await vi.waitFor(() => expect(mocks.redo).toHaveBeenCalledTimes(1));
