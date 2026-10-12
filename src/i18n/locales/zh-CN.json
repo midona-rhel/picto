@@ -1541,5 +1541,21 @@
   "Renamed a tag group": "已重命名标签组",
   "Undone": "已撤销",
   "Redone": "已重做",
-  "Changed source links": "已更改来源链接"
+  "Changed source links": "已更改来源链接",
+  "You can undo this until Picto closes. After that the files are removed.": "在关闭 Picto 之前可以撤销。之后文件将被删除。",
+  "Deleting up to {value0} items can be undone until Picto closes. A larger delete cannot be undone.": "删除不超过 {value0} 个项目可在关闭 Picto 前撤销。更大的删除无法撤销。",
+  "This is more than the {value0} items Picto keeps for undo, so it cannot be undone.": "这超过了 Picto 为撤销保留的 {value0} 个项目，因此无法撤销。",
+  "Inbox & Deleting": "收件箱与删除",
+  "What rejecting does, and how much a delete can be undone.": "拒绝的行为，以及删除可撤销的范围。",
+  "Rejecting": "拒绝",
+  "Rejected items": "被拒绝的项目",
+  "Delete permanently": "永久删除",
+  "Deleting skips Trash. Like any delete, it can be undone until Picto closes.": "删除会跳过废纸篓。与其他删除一样，可在关闭 Picto 前撤销。",
+  "Undoing deletes": "撤销删除",
+  "Undo deletes of up to": "可撤销删除的上限",
+  "A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.": "不超过此数量的永久删除会保留文件直到关闭 Picto，因此可以撤销。更大的删除会立即移除文件，并事先询问。",
+  "Deleted an item permanently": "已永久删除 1 个项目",
+  "Deleted {value0} items permanently": "已永久删除 {value0} 个项目",
+  "Rejected an item": "已拒绝 1 个项目",
+  "Rejected {value0} items": "已拒绝 {value0} 个项目"
 }

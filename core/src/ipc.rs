@@ -369,6 +369,10 @@ pub fn dispatch_library(
             let input: TargetInput = parse(args_json)?;
             read(application.delete_items(&input.target)?)
         }
+        "items.reject_delete" => {
+            let input: TargetInput = parse(args_json)?;
+            read(application.reject_items(&input.target)?)
+        }
         "items.organize_into_collection" => {
             let input: picto_library::OrganizeCollectionInput = parse(args_json)?;
             read(application.organize_into_collection(input)?)

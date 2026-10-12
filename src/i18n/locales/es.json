@@ -1541,5 +1541,21 @@
   "Renamed a tag group": "Se renombró un grupo de etiquetas",
   "Undone": "Deshecho",
   "Redone": "Rehecho",
-  "Changed source links": "Se cambiaron los enlaces de origen"
+  "Changed source links": "Se cambiaron los enlaces de origen",
+  "You can undo this until Picto closes. After that the files are removed.": "Puedes deshacerlo hasta que cierres Picto. Después, los archivos se eliminan.",
+  "Deleting up to {value0} items can be undone until Picto closes. A larger delete cannot be undone.": "Eliminar hasta {value0} elementos se puede deshacer hasta que cierres Picto. Una eliminación mayor no se puede deshacer.",
+  "This is more than the {value0} items Picto keeps for undo, so it cannot be undone.": "Son más de los {value0} elementos que Picto guarda para deshacer, así que no se puede deshacer.",
+  "Inbox & Deleting": "Bandeja de entrada y eliminación",
+  "What rejecting does, and how much a delete can be undone.": "Qué hace rechazar y cuánto se puede deshacer al eliminar.",
+  "Rejecting": "Rechazar",
+  "Rejected items": "Elementos rechazados",
+  "Delete permanently": "Eliminar permanentemente",
+  "Deleting skips Trash. Like any delete, it can be undone until Picto closes.": "Eliminar omite la papelera. Como cualquier eliminación, se puede deshacer hasta cerrar Picto.",
+  "Undoing deletes": "Deshacer eliminaciones",
+  "Undo deletes of up to": "Deshacer eliminaciones de hasta",
+  "A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.": "Una eliminación permanente de hasta esta cantidad de elementos conserva los archivos hasta cerrar Picto, así que se puede deshacer. Una mayor los elimina al instante y pregunta antes.",
+  "Deleted an item permanently": "Se eliminó un elemento permanentemente",
+  "Deleted {value0} items permanently": "Se eliminaron {value0} elementos permanentemente",
+  "Rejected an item": "Se rechazó un elemento",
+  "Rejected {value0} items": "Se rechazaron {value0} elementos"
 }

@@ -1541,5 +1541,21 @@
   "Renamed a tag group": "Eine Tag-Gruppe umbenannt",
   "Undone": "Rückgängig gemacht",
   "Redone": "Wiederhergestellt",
-  "Changed source links": "Quelllinks geändert"
+  "Changed source links": "Quelllinks geändert",
+  "You can undo this until Picto closes. After that the files are removed.": "Das kannst du rückgängig machen, bis Picto beendet wird. Danach werden die Dateien entfernt.",
+  "Deleting up to {value0} items can be undone until Picto closes. A larger delete cannot be undone.": "Das Löschen von bis zu {value0} Elementen lässt sich bis zum Beenden von Picto rückgängig machen. Größere Löschvorgänge nicht.",
+  "This is more than the {value0} items Picto keeps for undo, so it cannot be undone.": "Das sind mehr als die {value0} Elemente, die Picto zum Rückgängigmachen behält. Dies kann nicht rückgängig gemacht werden.",
+  "Inbox & Deleting": "Eingang & Löschen",
+  "What rejecting does, and how much a delete can be undone.": "Was Ablehnen bewirkt und wie viel sich beim Löschen rückgängig machen lässt.",
+  "Rejecting": "Ablehnen",
+  "Rejected items": "Abgelehnte Elemente",
+  "Delete permanently": "Endgültig löschen",
+  "Deleting skips Trash. Like any delete, it can be undone until Picto closes.": "Löschen umgeht den Papierkorb. Wie jedes Löschen lässt es sich bis zum Beenden von Picto rückgängig machen.",
+  "Undoing deletes": "Löschen rückgängig machen",
+  "Undo deletes of up to": "Löschen rückgängig machen bis zu",
+  "A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.": "Ein endgültiges Löschen von bis zu so vielen Elementen behält die Dateien, bis Picto beendet wird, und lässt sich rückgängig machen. Größere Löschvorgänge entfernen sie sofort und fragen vorher.",
+  "Deleted an item permanently": "Ein Element endgültig gelöscht",
+  "Deleted {value0} items permanently": "{value0} Elemente endgültig gelöscht",
+  "Rejected an item": "Ein Element abgelehnt",
+  "Rejected {value0} items": "{value0} Elemente abgelehnt"
 }

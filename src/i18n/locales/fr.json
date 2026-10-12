@@ -1541,5 +1541,21 @@
   "Renamed a tag group": "Groupe de tags renommé",
   "Undone": "Annulé",
   "Redone": "Rétabli",
-  "Changed source links": "Liens sources modifiés"
+  "Changed source links": "Liens sources modifiés",
+  "You can undo this until Picto closes. After that the files are removed.": "Vous pouvez annuler jusqu’à la fermeture de Picto. Ensuite, les fichiers sont supprimés.",
+  "Deleting up to {value0} items can be undone until Picto closes. A larger delete cannot be undone.": "La suppression de {value0} éléments au plus peut être annulée jusqu’à la fermeture de Picto. Une suppression plus grande ne peut pas l’être.",
+  "This is more than the {value0} items Picto keeps for undo, so it cannot be undone.": "C’est plus que les {value0} éléments que Picto conserve pour l’annulation : cette action est définitive.",
+  "Inbox & Deleting": "Boîte de réception et suppression",
+  "What rejecting does, and how much a delete can be undone.": "Ce que fait le refus, et ce qu’une suppression permet d’annuler.",
+  "Rejecting": "Refus",
+  "Rejected items": "Éléments refusés",
+  "Delete permanently": "Supprimer définitivement",
+  "Deleting skips Trash. Like any delete, it can be undone until Picto closes.": "La suppression contourne la corbeille. Comme toute suppression, elle peut être annulée jusqu’à la fermeture de Picto.",
+  "Undoing deletes": "Annuler les suppressions",
+  "Undo deletes of up to": "Annuler les suppressions jusqu’à",
+  "A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.": "Une suppression définitive d’au plus ce nombre d’éléments conserve les fichiers jusqu’à la fermeture de Picto, elle peut donc être annulée. Une suppression plus grande les retire aussitôt et demande d’abord.",
+  "Deleted an item permanently": "Un élément supprimé définitivement",
+  "Deleted {value0} items permanently": "{value0} éléments supprimés définitivement",
+  "Rejected an item": "Un élément refusé",
+  "Rejected {value0} items": "{value0} éléments refusés"
 }

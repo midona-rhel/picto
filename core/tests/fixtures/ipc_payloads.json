@@ -2560,6 +2560,18 @@
     }
   ],
   [
+    "items.reject_delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      }
+    }
+  ],
+  [
     "items.rename",
     {
       "root_id": 1,
@@ -3958,6 +3970,8 @@
         ],
         "autoImportEnabled": true,
         "multiFileImportBehavior": "ask",
+        "rejectAction": "trash",
+        "undoDeleteLimit": 500,
         "subscriptionDefaultSchedule": "daily",
         "subscriptionDefaultPostsPerRun": 100,
         "subscriptionDefaultGroupPosts": true,

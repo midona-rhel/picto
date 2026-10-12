@@ -11,6 +11,7 @@ import { getDefaultStore } from 'jotai';
 import {
   applyEntityTags,
   deleteItems,
+  rejectDeleteItems,
   getSelectionSummary,
   getCollectionNoteDraft,
   patchMediaEntities,
@@ -19,6 +20,7 @@ import {
   setItemLifecycle,
 } from '../platform/entityApi';
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
+import { getSettings } from '../platform/settingsApi';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
 import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 import type { CollectionNoteDraft, EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
@@ -83,9 +85,31 @@ export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecy
 }
 
 export async function permanentlyDeleteTarget(target: EntityTarget): Promise<void> {
+  await deleteTarget(target, deleteItems, 'items.delete');
+}
+
+/**
+ * Reject Inbox items: to Trash, or straight out of the library when the
+ * "Rejected items" setting says so. Both can be undone.
+ */
+export async function rejectTarget(target: EntityTarget): Promise<void> {
+  const action = await getSettings().then((settings) => settings.rejectAction).catch(() => 'trash' as const);
+  if (action === 'delete') {
+    await deleteTarget(target, rejectDeleteItems, 'items.reject');
+    return;
+  }
+  await setTargetLifecycle(target, 'trash');
+}
+
+async function deleteTarget(
+  target: EntityTarget,
+  remove: (target: EntityTarget) => Promise<unknown>,
+  command: string,
+): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
-    await deleteItems(target);
+    await remove(target);
+    await announceUndoableMutation(command);
 
     if (target.kind === 'explicit') {
       const deletedIds = new Set(target.root_ids);

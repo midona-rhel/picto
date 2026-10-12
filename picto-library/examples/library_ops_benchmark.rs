@@ -326,7 +326,7 @@ fn main() -> R<()> {
         let target = explicit(&ids[start..start + 1_000]);
         library.set_lifecycle(&target, Lifecycle::Trash)?;
         let t = Instant::now();
-        library.permanently_delete(&target, now())?;
+        library.permanently_delete(&target, now(), 0)?;
         del_ms.push(ms(t));
     }
     emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);

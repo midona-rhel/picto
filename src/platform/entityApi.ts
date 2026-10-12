@@ -95,6 +95,11 @@ export function deleteItems(target: EntityTarget): Promise<unknown> {
   return invoke('items.delete', { target });
 }
 
+/** Reject Inbox items straight out of the library (undoable like a delete). */
+export function rejectDeleteItems(target: EntityTarget): Promise<unknown> {
+  return invoke('items.reject_delete', { target });
+}
+
 /** Current positions of roots in a view's order; null for a root the view no longer holds. */
 export function getRootPositions(query: EntityViewQuery, rootIds: number[]): Promise<Array<number | null>> {
   return invoke<Array<number | null>>('items.positions', { query, root_ids: rootIds });

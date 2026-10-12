@@ -574,7 +574,7 @@ fn alphabetical_projection_is_current_before_fts_and_survives_root_history_and_r
     drop(library);
     let library = Library::open(&path).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 104).unwrap();
+    library.permanently_delete(&target, 104, 0).unwrap();
     verify(&library);
     drop(library);
     verify(&Library::open(&path).unwrap());
@@ -1401,7 +1401,7 @@ fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     library
-        .permanently_delete(&target, 1_700_000_000_100)
+        .permanently_delete(&target, 1_700_000_000_100, 0)
         .unwrap();
     assert!(library.ingest(&input).is_err());
 
@@ -2811,7 +2811,7 @@ fn recent_view_membership_tracks_clear_undo_deletion_and_reopen() {
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![first] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 3).unwrap();
+    library.permanently_delete(&target, 3, 0).unwrap();
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, true]);
     drop(library);
     let reopened = Library::open(&path).unwrap();
@@ -2833,7 +2833,7 @@ fn root_membership_checks_only_candidates_without_building_query_order() {
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, true, false, false, false, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![second] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 1_700_000_001_000).unwrap();
+    library.permanently_delete(&target, 1_700_000_001_000, 0).unwrap();
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, false, false, false, false, true]);
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     assert!(library.root_membership(&all, &[]).unwrap().is_empty());
@@ -4548,7 +4548,7 @@ fn text_projection_tracks_sqlite_through_structural_history_and_checkpoint_reope
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 44).unwrap();
+    library.permanently_delete(&target, 44, 0).unwrap();
     verify(&library);
 }
 
@@ -5637,7 +5637,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&first_target, 1_700_000_000_500)
+        .permanently_delete(&first_target, 1_700_000_000_500, 0)
         .unwrap();
     assert!(cleanup.is_empty());
     assert_eq!(library.history().state().entries, history_before_delete);
@@ -5650,7 +5650,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&second_target, 1_700_000_000_600)
+        .permanently_delete(&second_target, 1_700_000_000_600, 0)
         .unwrap();
     assert_eq!(cleanup.len(), 1);
     assert_eq!(cleanup[0].file_path, second_import.file_path);
@@ -5716,4 +5716,131 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     );
     assert_eq!(removed, vec![shared_hash]);
     assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
+}
+
+/// Everything a user can see of the library that a delete and its undo touch.
+fn observable(library: &Library, folder: picto_library::FolderId) -> String {
+    let snapshot = library.projections().snapshot();
+    let mut roots = Vec::new();
+    for kind in [picto_library::RootKind::Media, picto_library::RootKind::Collection] {
+        if let Some(members) = snapshot.root_kinds.get(&kind) {
+            roots.extend(members.iter());
+        }
+    }
+    roots.sort_unstable();
+    let mut out = String::new();
+    for root in roots {
+        let mut details = library.details(picto_library::RootId(root)).unwrap();
+        details.revision = 0;
+        out.push_str(&format!("{details:?}\n"));
+    }
+    let counts = library.counts().unwrap();
+    out.push_str(&format!("all={} inbox={} trash={}\n", counts.all, counts.inbox, counts.trash));
+    let provenance = library
+        .database()
+        .read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT media_id) FROM source_provenance",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )?)
+        })
+        .unwrap();
+    out.push_str(&format!("provenance={provenance:?}\n"));
+    out.push_str(&format!("folder={:?}\n", snapshot.folder_orders.get(&folder)));
+    for scope in [ItemScope::All, ItemScope::Trash, ItemScope::Folder { folder_id: folder }] {
+        let page = library
+            .query(&query(scope.clone()), &PageRequest { cursor: None, limit: 100 })
+            .unwrap();
+        out.push_str(&format!(
+            "{scope:?}={:?}\n",
+            page.items.iter().map(|item| item.root_id.0).collect::<Vec<_>>()
+        ));
+    }
+    out
+}
+
+#[test]
+fn a_permanent_delete_within_the_limit_can_be_undone_and_redone_exactly() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (folder, _) = library.create_folder("Kept", None).unwrap();
+    let mut roots = Vec::new();
+    for key in ["delete-a", "delete-b", "delete-c", "keep-d"] {
+        let mut input = imported(key, Lifecycle::Active, &["shared", key]);
+        input.folders = vec![folder];
+        input.rating = Rating::Four;
+        roots.push(library.ingest(&input).unwrap().0);
+    }
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit { root_ids: vec![roots[1], roots[2]] },
+            cover_root_id: roots[2],
+            winning_collection_id: None,
+            name: Some("pair".into()),
+            notes: None,
+            modified_at_ms: 2,
+        })
+        .unwrap();
+    let doomed = SelectionTarget::Explicit { root_ids: vec![roots[0], collection] };
+    library.set_lifecycle(&doomed, Lifecycle::Trash).unwrap();
+    library.history().clear();
+    let before = observable(&library, folder);
+
+    library.permanently_delete(&doomed, 10, 500).unwrap();
+    let deleted = observable(&library, folder);
+    assert_ne!(deleted, before);
+    assert_eq!(library.history().state().undo.unwrap().command, "items.delete");
+    // The files are kept while the delete can be undone.
+    assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), before);
+    library.redo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), deleted);
+    library.undo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), before);
+
+    // The restored library is what its rows say: a reopen rebuilds the same.
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(observable(&library, folder), before);
+}
+
+#[test]
+fn a_permanent_delete_past_the_limit_cannot_be_undone_and_frees_its_files() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut roots = Vec::new();
+    for key in ["over-a", "over-b"] {
+        roots.push(library.ingest(&imported(key, Lifecycle::Trash, &[])).unwrap().0);
+    }
+    library.history().clear();
+    let target = SelectionTarget::Explicit { root_ids: roots };
+
+    library.permanently_delete(&target, 10, 1).unwrap();
+    assert!(library.history().state().undo.is_none());
+    assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), 2);
+}
+
+#[test]
+fn rejecting_deletes_inbox_items_and_can_be_undone() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let inbox = library.ingest(&imported("rejected", Lifecycle::Inbox, &["x"])).unwrap().0;
+    let active = library.ingest(&imported("accepted", Lifecycle::Active, &["x"])).unwrap().0;
+    library.history().clear();
+
+    let only_active = SelectionTarget::Explicit { root_ids: vec![active] };
+    assert!(library.delete_rejected(&only_active, 10, 500).is_err());
+    let target = SelectionTarget::Explicit { root_ids: vec![inbox] };
+    library.delete_rejected(&target, 10, 500).unwrap();
+    assert!(library.details(inbox).is_err());
+    assert_eq!(library.history().state().undo.unwrap().command, "items.reject");
+
+    library.undo().unwrap().unwrap();
+    let restored = library.details(inbox).unwrap();
+    assert_eq!(restored.lifecycle, Lifecycle::Inbox);
+    assert_eq!(restored.tag_ids.len(), 1);
 }

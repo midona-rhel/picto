@@ -24,6 +24,8 @@ const DESCRIPTIONS: Record<string, Describe> = {
     ? (count === 1 ? t('Removed tags from an item') : t('Removed tags from {value0} items', { value0: count.toLocaleString() }))
     : (count === 1 ? t('Added tags to an item') : t('Added tags to {value0} items', { value0: count.toLocaleString() }))),
   'items.apply_ai_tags': () => t('Added AI tags'),
+  'items.delete': (count) => (count === 1 ? t('Deleted an item permanently') : t('Deleted {value0} items permanently', { value0: count.toLocaleString() })),
+  'items.reject': (count) => (count === 1 ? t('Rejected an item') : t('Rejected {value0} items', { value0: count.toLocaleString() })),
   'items.set_folder': (count, detail) => (detail === 'remove'
     ? (count === 1 ? t('Removed an item from a folder') : t('Removed {value0} items from a folder', { value0: count.toLocaleString() }))
     : (count === 1 ? t('Added an item to a folder') : t('Added {value0} items to a folder', { value0: count.toLocaleString() }))),

@@ -24,6 +24,8 @@ const ANNOUNCED_MUTATIONS = new Set([
   'collections.ungroup',
   'folders.delete',
   'items.apply_ai_tags',
+  'items.delete',
+  'items.reject',
   'items.rename_many',
   'smart_folders.delete',
   'tags.delete',

@@ -172,6 +172,13 @@ entry for a bitmap keeps only the members it changed, and replay checks and rest
 members: later edits to other roots never block an undo, while a later edit to the same roots
 does. Replay re-checks only the smart folders the replayed change can affect.
 
+A permanent delete (emptying Trash, or rejecting with the "Rejected items: Delete permanently"
+setting) is undoable when it holds at most `undoDeleteLimit` items (default 500). Its history entry
+keeps the deleted roots' structure and every row that pointed at them, and its files stay on disk
+while the entry is in history: `protected_cleanup_files` keeps them out of the blob cleanup, which
+removes them once the entry leaves history, at the latest when the app closes. A larger delete
+records no entry and frees its files at once; the renderer says so before it runs.
+
 Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
 subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
 when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual

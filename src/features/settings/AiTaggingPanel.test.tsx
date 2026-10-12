@@ -46,6 +46,8 @@ const settings = {
   notificationPopupTones: ['error', 'warning', 'info', 'success'] as Array<'error' | 'warning' | 'info' | 'success'>,
   autoImportEnabled: true,
   multiFileImportBehavior: 'ask' as const,
+  rejectAction: 'trash' as const,
+  undoDeleteLimit: 500,
   subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
   subscriptionInboxItemLimit: 1000,
   subscriptionDefaultGroupPosts: true,
