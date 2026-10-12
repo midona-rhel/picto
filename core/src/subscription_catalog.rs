@@ -262,13 +262,17 @@ fn query_subscription_views(
                  FROM subscription_run
                  GROUP BY subscription_id
              ),
+             -- Posts the subscription's runs imported. Run records, not the
+             -- library: trashing or deleting an item does not lower it.
              root_totals AS (
-                 SELECT ssp.subscription_id,
-                        COUNT(DISTINCT post.root_item_id) AS root_count
-                 FROM subscription_source_post ssp
-                 JOIN source_post post ON post.source_post_id = ssp.source_post_id
-                 WHERE post.root_item_id IS NOT NULL
-                 GROUP BY ssp.subscription_id
+                 SELECT query.subscription_id,
+                        COUNT(DISTINCT attempt.source_post_id) AS root_count
+                 FROM subscription_query query
+                 JOIN subscription_run_query run_query ON run_query.query_id = query.query_id
+                 JOIN source_post_attempt attempt
+                   ON attempt.run_query_id = run_query.run_query_id
+                  AND attempt.state = 'added'
+                 GROUP BY query.subscription_id
              ),
              issue_totals AS (
                  SELECT subscription_id, COUNT(*) AS issue_count
@@ -1712,20 +1716,18 @@ fn query_views_by_subscription(
              WHERE attempt.state = 'added'
              GROUP BY run_query.query_id, attempt.source_post_id
          ),
+         -- What the query's runs imported, from the run records: an item
+         -- deleted from the library afterwards still counts. An ingested
+         -- source item keeps its state when its media is deleted.
          source_counts AS (
-             SELECT ssp.query_id,
-                    COUNT(DISTINCT post.source_post_id) AS post_count,
-                    COUNT(DISTINCT si.media_item_id) AS media_count
-             FROM subscription_source_post ssp
-             JOIN added_source_posts added
-               ON added.query_id = ssp.query_id
-              AND added.source_post_id = ssp.source_post_id
-             JOIN source_post post ON post.source_post_id = ssp.source_post_id
+             SELECT added.query_id,
+                    COUNT(DISTINCT added.source_post_id) AS post_count,
+                    COUNT(DISTINCT si.source_item_id) AS media_count
+             FROM added_source_posts added
              LEFT JOIN source_item si
-               ON si.source_post_id = ssp.source_post_id
+               ON si.source_post_id = added.source_post_id
               AND si.state = 'ingested'
-             WHERE post.root_item_id IS NOT NULL
-             GROUP BY ssp.query_id
+             GROUP BY added.query_id
          ),
          successful_runs AS (
              SELECT query_id, COUNT(*) AS run_count
@@ -2064,7 +2066,7 @@ mod tests {
     use rusqlite::params;
 
     #[test]
-    fn query_counts_exclude_skipped_posts_linked_by_duplicate_metadata() {
+    fn query_counts_are_what_runs_imported_not_what_remains_in_the_library() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let definition = NewSubscription {
@@ -2193,6 +2195,34 @@ mod tests {
             .unwrap();
         assert_eq!(query.post_count, 1);
         assert_eq!(query.media_count, 1);
+
+        // Emptying the trash deletes the imported item; what the run imported
+        // does not change.
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _revision| {
+                    transaction.execute_batch(
+                        "DELETE FROM library_root WHERE root_id = 5000;
+                         DELETE FROM media_item WHERE media_id = 5000;
+                         DELETE FROM library_item WHERE local_id = 5000;",
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let subscription = super::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.subscription_id == subscription_id)
+            .unwrap();
+        assert_eq!(subscription.root_count, 1);
+        assert_eq!(subscription.queries[0].post_count, 1);
+        assert_eq!(subscription.queries[0].media_count, 1);
     }
 
     #[test]
