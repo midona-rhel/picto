@@ -1480,5 +1480,6 @@
   "A selected range lost its first or last item, so that range is no longer selected.": "選択した範囲の最初または最後の項目がなくなったため、その範囲は選択されなくなりました。",
   "Could not preview smart folder rules": "スマートフォルダのルールをプレビューできませんでした",
   "Could not restore smart folder rules": "スマートフォルダのルールを元に戻せませんでした",
-  "Could not save smart folder": "スマートフォルダを保存できませんでした"
+  "Could not save smart folder": "スマートフォルダを保存できませんでした",
+  "Matches": "一致"
 }

@@ -48,6 +48,7 @@ import {
 } from './tagPreferences';
 import { t } from '../../i18n';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { rankMatches } from '../../shared/lib/searchRank';
 
 type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
 type TagLayout = 'grid' | 'list';
@@ -298,15 +299,15 @@ export function TagSelectPanel() {
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
     const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLocaleLowerCase();
     const seen = new Set<string>();
-    return candidates.filter((tag) => {
+    const unique = candidates.filter((tag) => {
       const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
       if (seen.has(visibleName)) return false;
       seen.add(visibleName);
-      const searchableName = normalizedQuery.includes(':')
-        ? formatTag(tag).toLocaleLowerCase()
-        : visibleName;
-      return !normalizedQuery || searchableName.includes(normalizedQuery);
+      return true;
     });
+    return rankMatches(unique, normalizedQuery, (tag) => (
+      normalizedQuery.includes(':') ? [formatTag(tag)] : [tag.subname || formatTag(tag)]
+    ));
   }, [activeNamespace, entityTagKeys, entityTagRecords, openingSelectedTagNames, query, selectedTagFilters, settledRemoteView.query, sidebarMode, tagPreferences.starredTags, tags]);
 
   const createTag = useMemo(() => {

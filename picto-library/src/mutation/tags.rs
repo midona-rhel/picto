@@ -64,8 +64,11 @@ impl Library {
         )
     }
 
-    /// One page of tags, filtered by namespace and subname substring and sorted
-    /// by subname, then namespace, then id (case-insensitive). Counts are
+    /// One page of tags, filtered by namespace and search text. Without a
+    /// search, tags are sorted by subname, then namespace, then id
+    /// (case-insensitive). With one, matches are ranked by [`match_rank`]
+    /// (exact, prefix, word start, substring), keeping that order within a
+    /// rank; `namespace:subname` text also matches the namespace. Counts are
     /// computed only for the returned page, not for every tag in the library.
     pub fn tag_page(
         &self,
@@ -83,20 +86,30 @@ impl Library {
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
                 let sorted = self.tag_list.sorted(connection, snapshot.revision)?;
-                let mut matching = sorted.iter().filter(|entry| {
+                let in_namespace = |entry: &&SortedTag| {
                     namespace.is_none_or(|namespace| entry.row.namespace == namespace)
-                        && search
-                            .as_ref()
-                            .is_none_or(|search| entry.subname_key.contains(search.as_str()))
-                });
+                };
+                let matching: Vec<&SortedTag> = match search.as_deref() {
+                    None => sorted.iter().filter(in_namespace).collect(),
+                    Some(search) => {
+                        let mut ranked = sorted
+                            .iter()
+                            .filter(in_namespace)
+                            .filter_map(|entry| entry.search_rank(search).map(|rank| (rank, entry)))
+                            .collect::<Vec<_>>();
+                        // Stable: tags of one rank keep the alphabetical order.
+                        ranked.sort_by_key(|(rank, _)| *rank);
+                        ranked.into_iter().map(|(_, entry)| entry).collect()
+                    }
+                };
                 let page = matching
-                    .by_ref()
+                    .iter()
                     .skip(offset)
                     .take(limit)
                     .map(|entry| entry.row.clone().with_counts(&snapshot))
                     .collect::<Vec<_>>();
                 let next = offset.saturating_add(limit);
-                let next = matching.next().is_some().then_some(next);
+                let next = (matching.len() > next).then_some(next);
                 Ok((page, next, snapshot.revision))
             },
         )
@@ -1447,7 +1460,49 @@ pub(crate) struct TagListCache(parking_lot::Mutex<Option<(u64, Arc<Vec<SortedTag
 
 pub(super) struct SortedTag {
     subname_key: String,
+    namespace_key: String,
     row: TagDefinitionRow,
+}
+
+impl SortedTag {
+    /// How well `search` (lowercased) matches this tag, best first. Text with
+    /// a colon also matches `namespace:subname`, so `character:twok` finds
+    /// `character:twokinds` while a subname containing a colon still matches
+    /// literally.
+    fn search_rank(&self, search: &str) -> Option<u8> {
+        let plain = match_rank(&self.subname_key, search);
+        let qualified = search.split_once(':').and_then(|(namespace, subname)| {
+            (self.namespace_key == namespace)
+                .then(|| match_rank(&self.subname_key, subname))
+                .flatten()
+        });
+        match (plain, qualified) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        }
+    }
+}
+
+/// Rank of `needle` in `text`, both lowercased: 0 exact, 1 prefix, 2 at the
+/// start of a word (after a character that is not a letter or digit), 3 any
+/// other substring, `None` when absent. The renderer's `rankMatches` uses the
+/// same rule.
+pub(crate) fn match_rank(text: &str, needle: &str) -> Option<u8> {
+    if text == needle {
+        return Some(0);
+    }
+    if text.starts_with(needle) {
+        return Some(1);
+    }
+    let mut found = false;
+    for (index, _) in text.match_indices(needle) {
+        found = true;
+        let before = text[..index].chars().next_back();
+        if before.is_some_and(|character| !character.is_alphanumeric()) {
+            return Some(2);
+        }
+    }
+    found.then_some(3)
 }
 
 impl TagListCache {
@@ -1459,7 +1514,17 @@ impl TagListCache {
         }
         let mut rows = tag_definition_rows(connection, None)?
             .into_iter()
-            .map(|row| (row.namespace.to_lowercase(), SortedTag { subname_key: row.subname.to_lowercase(), row }))
+            .map(|row| {
+                let namespace_key = row.namespace.to_lowercase();
+                (
+                    namespace_key.clone(),
+                    SortedTag {
+                        subname_key: row.subname.to_lowercase(),
+                        namespace_key,
+                        row,
+                    },
+                )
+            })
             .collect::<Vec<_>>();
         rows.sort_by(|(left_namespace, left), (right_namespace, right)| {
             (&left.subname_key, left_namespace, left.row.tag_id.0)
