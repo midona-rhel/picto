@@ -133,12 +133,7 @@ describe('multi-file import choice', () => {
     vi.spyOn(settingsApi, 'getSettings').mockResolvedValue({
       multiFileImportBehavior: behavior,
     } as settingsApi.AppSettings);
-    const addMedia = vi.spyOn(folderApi, 'addMedia').mockResolvedValue({
-      discovered: 2,
-      queued: 2,
-      already_queued: 0,
-      skipped: 0,
-    });
+    const addMedia = vi.spyOn(folderApi, 'addMedia').mockResolvedValue({ task_id: 1 });
 
     await requestMediaImport(['/tmp/one.png', '/tmp/two.png'], { lifecycle: 'active' });
 

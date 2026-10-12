@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-12-import-tasks";
+const NO_CLOUD_CLOCKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
 const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
 const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
 const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
@@ -25,6 +26,7 @@ const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-nat
 const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
+const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
 
 /// Create any missing accelerator index. Idempotent; runs at create and open.
@@ -37,6 +39,7 @@ pub fn create(connection: &mut Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;")?;
     let result = (|| {
         connection.execute_batch(SCHEMA)?;
+        connection.execute_batch(TASK_SCHEMA)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
         connection.execute_batch(ACCELERATOR_INDEXES)?;
         connection.execute(
@@ -113,7 +116,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            CHUNKED_ORDERS_PREDECESSOR
+            NO_CLOUD_CLOCKS_PREDECESSOR
+                | CHUNKED_ORDERS_PREDECESSOR
                 | WATCH_LIFECYCLE_PREDECESSOR
                 | SOURCE_ROOTS_PREDECESSOR
                 | RESIDENT_PREDECESSOR
@@ -188,6 +192,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -236,6 +241,7 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
@@ -268,6 +274,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -336,6 +343,16 @@ pub fn migrate_for_open(
             if !has_table(connection, "ordered_membership_chunk")? {
                 crate::ordering::migrate_single_blob_orders(connection)?;
             }
+            // Foreground tasks: imports record their task on each queued job.
+            connection.execute_batch(TASK_SCHEMA)?;
+            if !has_column(connection, "ingest_job", "task_id")? {
+                connection.execute_batch(
+                    "ALTER TABLE ingest_job ADD COLUMN task_id INTEGER REFERENCES task(task_id) ON DELETE SET NULL;
+                     ALTER TABLE ingest_job ADD COLUMN units INTEGER NOT NULL DEFAULT 1;
+                     ALTER TABLE ingest_job ADD COLUMN prepared INTEGER NOT NULL DEFAULT 1 CHECK (prepared IN (0, 1));",
+                )?;
+            }
+            require_columns(connection, "ingest_job", &["task_id", "units", "prepared"])?;
             // The per-field CRDT design was replaced by snapshot sync; nothing
             // ever wrote these tables.
             connection.execute_batch(
@@ -822,6 +839,69 @@ mod tests {
             count(&connection, "SELECT COUNT(*) FROM browsing_dirty_root"),
             1
         );
+    }
+
+    #[test]
+    fn open_adds_import_tasks_to_the_previous_schema_and_keeps_queued_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+
+        // The predecessor had no task tables and no task columns on jobs.
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP INDEX IF EXISTS idx_ingest_job_task;
+                 DROP INDEX IF EXISTS idx_ingest_job_claim;
+                 ALTER TABLE ingest_job DROP COLUMN task_id;
+                 ALTER TABLE ingest_job DROP COLUMN units;
+                 ALTER TABLE ingest_job DROP COLUMN prepared;
+                 DROP TABLE task_added_tag;
+                 DROP TABLE task_created_root;
+                 DROP TABLE task;
+                 INSERT INTO ingest_job
+                     (job_key, source_kind, source_path, payload_json, status,
+                      attempt_count, available_at, created_at, updated_at)
+                 VALUES ('queued', 'manual', '/a.png', '{}', 'pending', 0, 'now', 'now', 'now');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                [super::NO_CLOUD_CLOCKS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&database_path).unwrap());
+        let migrated = Connection::open(&database_path).unwrap();
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            SCHEMA_FINGERPRINT,
+        );
+        // A job queued before the upgrade stays claimable: no task, read already.
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT task_id IS NULL, units, prepared FROM ingest_job WHERE job_key = 'queued'",
+                    [],
+                    |row| Ok((row.get::<_, bool>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                )
+                .unwrap(),
+            (true, 1, 1),
+        );
+        for table in ["task", "task_created_root", "task_added_tag"] {
+            assert!(super::has_table(&migrated, table).unwrap(), "{table} was not created");
+        }
+        // Reopening the migrated file needs no further migration.
+        drop(migrated);
+        drop(LibraryDatabase::open(&database_path).unwrap());
     }
 
     #[test]

@@ -419,6 +419,41 @@ pub struct PreparedCollectionImport {
 pub enum PreparedIngestPayload {
     Item(PreparedImport),
     Collection(PreparedCollectionImport),
+    /// A file a task's scan found but has not inspected: the ingest worker
+    /// reads, hashes and probes it when it claims the job, so queueing a large
+    /// folder is quick and every file is recorded before any is read.
+    Pending(PendingImport),
+    /// Files a task imports as one collection, likewise not yet inspected.
+    PendingCollection(PendingCollectionImport),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingImport {
+    pub stable_key: String,
+    pub path: String,
+    pub lifecycle: Lifecycle,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The destination folder, or the parent of `folder_path`.
+    #[serde(default)]
+    pub folders: Vec<FolderId>,
+    /// A folder path below that destination (kept source structure), created
+    /// once the file is read successfully.
+    #[serde(default)]
+    pub folder_path: Option<String>,
+    #[serde(default)]
+    pub source_urls: Vec<String>,
+    pub imported_at_ms: i64,
+    /// A zip archive, imported as a collection of its files.
+    #[serde(default)]
+    pub archive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingCollectionImport {
+    pub members: Vec<PendingImport>,
+    pub name: Option<String>,
+    pub modified_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -438,6 +473,9 @@ pub struct ClaimedIngestJob {
     pub delete_after_ingest: bool,
     pub attempt_count: u32,
     pub payload: PreparedIngestPayload,
+    /// The foreground task that queued the job, if any.
+    #[serde(default)]
+    pub task_id: Option<TaskId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -711,4 +749,91 @@ mod tests {
             assert_eq!(round_trip, patch);
         }
     }
+}
+
+/// A foreground task: a long user-started job (an import) that reports
+/// progress and can be paused, stopped, or stopped and undone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskId(pub i64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    Running,
+    Paused,
+    /// Stop-and-undo is removing what the task added.
+    Reverting,
+    Finished,
+    /// Stopped by the user; what it added stays.
+    Stopped,
+    /// Stopped and undone.
+    Reverted,
+}
+
+impl TaskState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Reverting => "reverting",
+            Self::Finished => "finished",
+            Self::Stopped => "stopped",
+            Self::Reverted => "reverted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "running" => Self::Running,
+            "paused" => Self::Paused,
+            "reverting" => Self::Reverting,
+            "finished" => Self::Finished,
+            "stopped" => Self::Stopped,
+            "reverted" => Self::Reverted,
+            _ => return None,
+        })
+    }
+
+    /// Running or paused: the task can still do work.
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Running | Self::Paused)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRecord {
+    pub task_id: TaskId,
+    pub kind: String,
+    pub title: String,
+    pub state: TaskState,
+    pub scan_complete: bool,
+    /// Files found so far (final once the scan is complete).
+    pub total_units: u64,
+    /// Files that became new library items.
+    pub added_units: u64,
+    /// Files that were already in the library.
+    pub existing_units: u64,
+    pub failed_units: u64,
+    /// Files queued or being imported.
+    pub remaining_units: u64,
+    pub revertible: bool,
+    pub created_at_ms: i64,
+    pub finished_at_ms: Option<i64>,
+    pub input_json: String,
+    /// Why the task stopped on its own, if it did.
+    pub error: Option<String>,
+}
+
+impl TaskRecord {
+    pub fn done_units(&self) -> u64 {
+        self.added_units + self.existing_units + self.failed_units
+    }
+}
+
+/// One job a task queues: its job and how many files it stands for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskIngestJob {
+    pub job: PreparedIngestJob,
+    pub units: u64,
 }

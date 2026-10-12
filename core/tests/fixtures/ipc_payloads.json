@@ -4703,5 +4703,47 @@
   [
     "tags.unused_count",
     {}
+  ],
+  [
+    "tasks.dismiss",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.failures",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.list",
+    {}
+  ],
+  [
+    "tasks.pause",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.resume",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.stop",
+    {
+      "task_id": 1,
+      "undo": false
+    }
+  ],
+  [
+    "tasks.stop",
+    {
+      "task_id": 1,
+      "undo": true
+    }
   ]
 ]

@@ -367,271 +367,14 @@ impl Library {
                 ));
             }
 
-            let mut media_ids = RoaringBitmap::new();
-            let mut collection_ids = Vec::new();
-            for root_id in &roots {
-                let root_id = RootId(root_id);
-                if let Some(members) = snapshot.collection_orders.get(&root_id) {
-                    collection_ids.push(root_id);
-                    media_ids.extend(members.iter().map(|media| media.0));
-                } else {
-                    media_ids.insert(root_id.0);
-                }
-            }
-            let mut item_ids = roots.clone();
-            item_ids |= &media_ids;
-            stage_delete_ids(transaction, "delete_root", &roots)?;
-            stage_delete_ids(transaction, "delete_media", &media_ids)?;
-            stage_delete_ids(transaction, "delete_item", &item_ids)?;
-
-            // One set-based read of the deleted media's files. CROSS JOIN keeps
-            // SQLite walking the staged ids rather than every media item.
-            let mut files = std::collections::HashMap::new();
-            {
-                let mut statement = transaction.prepare_cached(
-                    "SELECT file.file_id, file.content_hash, file.file_path,
-                            CASE WHEN cloud.remote_present = 1
-                                 THEN cloud.remote_extension ELSE NULL END
-                     FROM temp.delete_media selected
-                     CROSS JOIN media_item media ON media.media_id = selected.local_id
-                     JOIN media_file file ON file.file_id = media.file_id
-                     LEFT JOIN cloud_blob_state cloud
-                       ON cloud.file_hash = file.content_hash",
-                )?;
-                let rows = statement.query_map([], |row| {
-                    Ok((
-                        row.get::<_, u32>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })?;
-                for row in rows {
-                    let (file_id, content_hash, file_path, remote_extension) = row?;
-                    files
-                        .entry(file_id)
-                        .or_insert((content_hash, file_path, remote_extension));
-                }
-            }
-            transaction.execute(
-                "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
-                 SELECT item.stable_key, ?1, ?2
-                 FROM temp.delete_item selected CROSS JOIN library_item item
-                     ON item.local_id = selected.local_id
-                 WHERE true
-                 ON CONFLICT(stable_key) DO UPDATE SET
-                     revision = excluded.revision,
-                     deleted_at_ms = excluded.deleted_at_ms",
-                rusqlite::params![revision as i64, deleted_at_ms],
-            )?;
-            transaction.execute(
-                "DELETE FROM root_fts WHERE rowid IN
-                     (SELECT local_id FROM temp.delete_root)",
-                [],
-            )?;
-            transaction.execute(
-                "DELETE FROM library_root WHERE root_id IN
-                     (SELECT local_id FROM temp.delete_root)",
-                [],
-            )?;
-            for collection_id in &collection_ids {
-                ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
-            }
-            transaction.execute(
-                "DELETE FROM media_item WHERE media_id IN
-                     (SELECT local_id FROM temp.delete_media)",
-                [],
-            )?;
-            transaction.execute(
-                "DELETE FROM library_item WHERE local_id IN
-                     (SELECT local_id FROM temp.delete_item)",
-                [],
-            )?;
-
-            let mut cleanup = Vec::new();
-            let (device_id, retention_json) = transaction.query_row(
-                "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
-                [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )?;
-            let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
-                .ok()
-                .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
-                .unwrap_or(7)
-                .clamp(0, 3_650);
-            let deleted_at =
-                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
-                    .ok_or_else(|| {
-                        LibraryError::InvalidInput("deletion timestamp is outside range".into())
-                    })?;
-            let purge_after = deleted_at + chrono::Duration::days(retention_days);
-
-            // Files another media item still uses survive; one query finds them.
-            let still_referenced = {
-                let ids = serde_json::to_string(&files.keys().collect::<Vec<_>>())?;
-                let mut statement = transaction.prepare_cached(
-                    "SELECT DISTINCT media.file_id FROM media_item media
-                     WHERE media.file_id IN (SELECT value FROM json_each(?1))",
-                )?;
-                let rows = statement.query_map([ids], |row| row.get::<_, u32>(0))?;
-                rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
-            };
-            for (file_id, (content_hash, file_path, remote_extension)) in files {
-                if !still_referenced.contains(&file_id) {
-                    if let Some(remote_extension) = remote_extension {
-                        transaction.execute(
-                            "INSERT INTO cloud_tombstone
-                                 (object_kind, object_key, mutation_id, hlc_physical_ms,
-                                  hlc_logical, device_id, causal_frontier_json,
-                                  deleted_at, purge_after)
-                             VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
-                             ON CONFLICT(object_kind, object_key) DO UPDATE SET
-                                 mutation_id = excluded.mutation_id,
-                                 hlc_physical_ms = excluded.hlc_physical_ms,
-                                 hlc_logical = excluded.hlc_logical,
-                                 device_id = excluded.device_id,
-                                 causal_frontier_json = excluded.causal_frontier_json,
-                                 deleted_at = excluded.deleted_at,
-                                 purge_after = excluded.purge_after",
-                            rusqlite::params![
-                                format!("{content_hash}.{remote_extension}"),
-                                uuid::Uuid::new_v4().to_string(),
-                                deleted_at_ms,
-                                device_id,
-                                deleted_at.to_rfc3339(),
-                                purge_after.to_rfc3339(),
-                            ],
-                        )?;
-                    }
-                    transaction.execute(
-                        "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
-                         VALUES (?1, ?2, ?3)
-                         ON CONFLICT(file_id) DO NOTHING",
-                        rusqlite::params![file_id, file_path, revision as i64],
-                    )?;
-                    let file_id = crate::FileId(file_id);
-                    if !protected_cleanup_files.contains(&file_id) {
-                        cleanup.push(crate::PendingBlobCleanup {
-                            file_id,
-                            content_hash,
-                            file_path,
-                        });
-                    }
-                }
-            }
-
-            let mut next = (*snapshot).clone();
-            for lifecycle in Lifecycle::ALL {
-                let values = Arc::make_mut(&mut next.lifecycle)
-                    .entry(lifecycle)
-                    .or_default();
-                if !values.is_disjoint(&roots) {
-                    *values -= &roots;
-                    bitmap::replace_changed(
-                        transaction,
-                        revision,
-                        BitmapKey {
-                            domain: BitmapDomain::Lifecycle,
-                            key_id: lifecycle.bitmap_key(),
-                        },
-                        values,
-                        &roots,
-                    )?;
-                }
-            }
-            for rating in Rating::ALL {
-                let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
-                if !values.is_disjoint(&roots) {
-                    *values -= &roots;
-                    bitmap::replace_changed(
-                        transaction,
-                        revision,
-                        BitmapKey {
-                            domain: BitmapDomain::Rating,
-                            key_id: rating.bitmap_key(),
-                        },
-                        values,
-                        &roots,
-                    )?;
-                }
-            }
-            let changed_tags = next
-                .tags
-                .iter()
-                .filter_map(|(tag_id, members)| {
-                    (!members.is_disjoint(&roots)).then_some(*tag_id)
-                })
-                .collect::<Vec<_>>();
-            for tag_id in changed_tags {
-                let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
-                *members -= &roots;
-                bitmap::replace_changed(
-                    transaction,
-                    revision,
-                    BitmapKey {
-                        domain: BitmapDomain::Tag,
-                        key_id: tag_id.0,
-                    },
-                    members,
-                    &roots,
-                )?;
-            }
-            // Folder bitmaps say which orders hold a deleted root; scanning
-            // every order instead walked every membership in the library.
-            let changed_folders = next
-                .folders
-                .iter()
-                .filter_map(|(folder_id, members)| {
-                    (!members.is_disjoint(&roots)).then_some(*folder_id)
-                })
-                .collect::<Vec<_>>();
-            for folder_id in changed_folders {
-                let mut order = next.folder_orders[&folder_id].as_ref().clone();
-                order.retain(|root| !roots.contains(root.0));
-                ordering::replace(
-                    transaction,
-                    revision,
-                    OrderOwnerKind::Folder,
-                    folder_id.0,
-                    &order.iter().map(|root| root.0).collect::<Vec<_>>(),
-                )?;
-                Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(order));
-                if let Some(members) = Arc::make_mut(&mut next.folders).get_mut(&folder_id) {
-                    members.subtract(&roots);
-                }
-            }
-            for collection_id in &collection_ids {
-                Arc::make_mut(&mut next.collection_orders).remove(collection_id);
-            }
-            for media_id in &media_ids {
-                Arc::make_mut(&mut next.media_owner).remove(media_id);
-                Arc::make_mut(&mut next.image_media).remove(media_id);
-            }
-            crate::group::remove_root_projections(&mut next, &roots);
-            crate::smart::settle_affected(transaction, &mut next, &roots)?;
-            transaction.execute(
-                "INSERT INTO cloud_journal
-                     (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
-                 VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
-                rusqlite::params![
-                    revision as i64,
-                    crate::bitmap::encode(&roots)?,
-                    deleted_at_ms
-                ],
-            )?;
-            next.revision = revision;
-            let receipt = PublicationCoordinator::receipt(
+            let (next, cleanup, receipt) = delete_roots(
+                transaction,
                 revision,
-                vec![
-                    "roots".into(),
-                    "sidebar".into(),
-                    "tags".into(),
-                    "folders".into(),
-                    "collections".into(),
-                    "search".into(),
-                ],
-                roots.iter().map(RootId),
-            );
+                &snapshot,
+                &roots,
+                deleted_at_ms,
+                &protected_cleanup_files,
+            )?;
             Ok((
                 (receipt.clone(), cleanup),
                 PublishedDelta {
@@ -686,6 +429,287 @@ impl Library {
                 Ok(removed)
             })
     }
+}
+
+/// Remove `roots` (and their media) from the library inside a publication:
+/// tombstones, projections, orders, smart folders and the cloud journal.
+/// Files no other media item uses are queued for cleanup; those an undo entry
+/// still needs (`protected`) are queued but not returned for immediate removal.
+pub(super) fn delete_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
+    deleted_at_ms: i64,
+    protected_cleanup_files: &std::collections::BTreeSet<crate::FileId>,
+) -> Result<(ProjectionSnapshot, Vec<crate::PendingBlobCleanup>, MutationReceipt)> {
+    let roots = roots.clone();
+    let mut media_ids = RoaringBitmap::new();
+    let mut collection_ids = Vec::new();
+    for root_id in &roots {
+        let root_id = RootId(root_id);
+        if let Some(members) = snapshot.collection_orders.get(&root_id) {
+            collection_ids.push(root_id);
+            media_ids.extend(members.iter().map(|media| media.0));
+        } else {
+            media_ids.insert(root_id.0);
+        }
+    }
+    let mut item_ids = roots.clone();
+    item_ids |= &media_ids;
+    stage_delete_ids(transaction, "delete_root", &roots)?;
+    stage_delete_ids(transaction, "delete_media", &media_ids)?;
+    stage_delete_ids(transaction, "delete_item", &item_ids)?;
+
+    // One set-based read of the deleted media's files. CROSS JOIN keeps
+    // SQLite walking the staged ids rather than every media item.
+    let mut files = std::collections::HashMap::new();
+    {
+        let mut statement = transaction.prepare_cached(
+            "SELECT file.file_id, file.content_hash, file.file_path,
+                    CASE WHEN cloud.remote_present = 1
+                         THEN cloud.remote_extension ELSE NULL END
+             FROM temp.delete_media selected
+             CROSS JOIN media_item media ON media.media_id = selected.local_id
+             JOIN media_file file ON file.file_id = media.file_id
+             LEFT JOIN cloud_blob_state cloud
+               ON cloud.file_hash = file.content_hash",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (file_id, content_hash, file_path, remote_extension) = row?;
+            files
+                .entry(file_id)
+                .or_insert((content_hash, file_path, remote_extension));
+        }
+    }
+    transaction.execute(
+        "INSERT INTO deletion_tombstone(stable_key, revision, deleted_at_ms)
+         SELECT item.stable_key, ?1, ?2
+         FROM temp.delete_item selected CROSS JOIN library_item item
+             ON item.local_id = selected.local_id
+         WHERE true
+         ON CONFLICT(stable_key) DO UPDATE SET
+             revision = excluded.revision,
+             deleted_at_ms = excluded.deleted_at_ms",
+        rusqlite::params![revision as i64, deleted_at_ms],
+    )?;
+    transaction.execute(
+        "DELETE FROM root_fts WHERE rowid IN
+             (SELECT local_id FROM temp.delete_root)",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM library_root WHERE root_id IN
+             (SELECT local_id FROM temp.delete_root)",
+        [],
+    )?;
+    for collection_id in &collection_ids {
+        ordering::delete(transaction, OrderOwnerKind::Collection, collection_id.0)?;
+    }
+    transaction.execute(
+        "DELETE FROM media_item WHERE media_id IN
+             (SELECT local_id FROM temp.delete_media)",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM library_item WHERE local_id IN
+             (SELECT local_id FROM temp.delete_item)",
+        [],
+    )?;
+
+    let mut cleanup = Vec::new();
+    let (device_id, retention_json) = transaction.query_row(
+        "SELECT device_id, retention_json FROM cloud_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    let retention_days = serde_json::from_str::<serde_json::Value>(&retention_json)
+        .ok()
+        .and_then(|value| value.get("deleted_blobs_days")?.as_i64())
+        .unwrap_or(7)
+        .clamp(0, 3_650);
+    let deleted_at =
+        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(deleted_at_ms)
+            .ok_or_else(|| {
+                LibraryError::InvalidInput("deletion timestamp is outside range".into())
+            })?;
+    let purge_after = deleted_at + chrono::Duration::days(retention_days);
+
+    // Files another media item still uses survive; one query finds them.
+    let still_referenced = {
+        let ids = serde_json::to_string(&files.keys().collect::<Vec<_>>())?;
+        let mut statement = transaction.prepare_cached(
+            "SELECT DISTINCT media.file_id FROM media_item media
+             WHERE media.file_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        let rows = statement.query_map([ids], |row| row.get::<_, u32>(0))?;
+        rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?
+    };
+    for (file_id, (content_hash, file_path, remote_extension)) in files {
+        if !still_referenced.contains(&file_id) {
+            if let Some(remote_extension) = remote_extension {
+                transaction.execute(
+                    "INSERT INTO cloud_tombstone
+                         (object_kind, object_key, mutation_id, hlc_physical_ms,
+                          hlc_logical, device_id, causal_frontier_json,
+                          deleted_at, purge_after)
+                     VALUES ('blob', ?1, ?2, ?3, 0, ?4, '{}', ?5, ?6)
+                     ON CONFLICT(object_kind, object_key) DO UPDATE SET
+                         mutation_id = excluded.mutation_id,
+                         hlc_physical_ms = excluded.hlc_physical_ms,
+                         hlc_logical = excluded.hlc_logical,
+                         device_id = excluded.device_id,
+                         causal_frontier_json = excluded.causal_frontier_json,
+                         deleted_at = excluded.deleted_at,
+                         purge_after = excluded.purge_after",
+                    rusqlite::params![
+                        format!("{content_hash}.{remote_extension}"),
+                        uuid::Uuid::new_v4().to_string(),
+                        deleted_at_ms,
+                        device_id,
+                        deleted_at.to_rfc3339(),
+                        purge_after.to_rfc3339(),
+                    ],
+                )?;
+            }
+            transaction.execute(
+                "INSERT INTO blob_cleanup_queue(file_id, file_path, enqueued_revision)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_id) DO NOTHING",
+                rusqlite::params![file_id, file_path, revision as i64],
+            )?;
+            let file_id = crate::FileId(file_id);
+            if !protected_cleanup_files.contains(&file_id) {
+                cleanup.push(crate::PendingBlobCleanup {
+                    file_id,
+                    content_hash,
+                    file_path,
+                });
+            }
+        }
+    }
+
+    let mut next = (*snapshot).clone();
+    for lifecycle in Lifecycle::ALL {
+        let values = Arc::make_mut(&mut next.lifecycle)
+            .entry(lifecycle)
+            .or_default();
+        if !values.is_disjoint(&roots) {
+            *values -= &roots;
+            bitmap::replace_changed(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Lifecycle,
+                    key_id: lifecycle.bitmap_key(),
+                },
+                values,
+                &roots,
+            )?;
+        }
+    }
+    for rating in Rating::ALL {
+        let values = Arc::make_mut(&mut next.ratings).entry(rating).or_default();
+        if !values.is_disjoint(&roots) {
+            *values -= &roots;
+            bitmap::replace_changed(
+                transaction,
+                revision,
+                BitmapKey {
+                    domain: BitmapDomain::Rating,
+                    key_id: rating.bitmap_key(),
+                },
+                values,
+                &roots,
+            )?;
+        }
+    }
+    let changed_tags = next
+        .tags
+        .iter()
+        .filter_map(|(tag_id, members)| {
+            (!members.is_disjoint(&roots)).then_some(*tag_id)
+        })
+        .collect::<Vec<_>>();
+    for tag_id in changed_tags {
+        let members = Arc::make_mut(&mut next.tags).get_mut(&tag_id).unwrap();
+        *members -= &roots;
+        bitmap::replace_changed(
+            transaction,
+            revision,
+            BitmapKey {
+                domain: BitmapDomain::Tag,
+                key_id: tag_id.0,
+            },
+            members,
+            &roots,
+        )?;
+    }
+    // Folder bitmaps say which orders hold a deleted root; scanning
+    // every order instead walked every membership in the library.
+    let changed_folders = next
+        .folders
+        .iter()
+        .filter_map(|(folder_id, members)| {
+            (!members.is_disjoint(&roots)).then_some(*folder_id)
+        })
+        .collect::<Vec<_>>();
+    for folder_id in changed_folders {
+        let mut order = next.folder_orders[&folder_id].as_ref().clone();
+        order.retain(|root| !roots.contains(root.0));
+        ordering::replace(
+            transaction,
+            revision,
+            OrderOwnerKind::Folder,
+            folder_id.0,
+            &order.iter().map(|root| root.0).collect::<Vec<_>>(),
+        )?;
+        Arc::make_mut(&mut next.folder_orders).insert(folder_id, Arc::new(order));
+        if let Some(members) = Arc::make_mut(&mut next.folders).get_mut(&folder_id) {
+            members.subtract(&roots);
+        }
+    }
+    for collection_id in &collection_ids {
+        Arc::make_mut(&mut next.collection_orders).remove(collection_id);
+    }
+    for media_id in &media_ids {
+        Arc::make_mut(&mut next.media_owner).remove(media_id);
+        Arc::make_mut(&mut next.image_media).remove(media_id);
+    }
+    crate::group::remove_root_projections(&mut next, &roots);
+    crate::smart::settle_affected(transaction, &mut next, &roots)?;
+    transaction.execute(
+        "INSERT INTO cloud_journal
+             (revision, operation_kind, target_bitmap, payload_json, created_at_ms)
+         VALUES (?1, 'root.permanent_delete', ?2, '{}', ?3)",
+        rusqlite::params![
+            revision as i64,
+            crate::bitmap::encode(&roots)?,
+            deleted_at_ms
+        ],
+    )?;
+    next.revision = revision;
+    let receipt = PublicationCoordinator::receipt(
+        revision,
+        vec![
+            "roots".into(),
+            "sidebar".into(),
+            "tags".into(),
+            "folders".into(),
+            "collections".into(),
+            "search".into(),
+        ],
+        roots.iter().map(RootId),
+    );
+    Ok((next, cleanup, receipt))
 }
 
 pub(super) fn restore_structure(

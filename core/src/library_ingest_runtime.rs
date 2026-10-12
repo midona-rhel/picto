@@ -91,6 +91,12 @@ fn settle_claimed(
         match prepare_job(application, &mut job) {
             Ok(cleanup) => match job.payload {
                 PreparedIngestPayload::Item(input) => {
+                    // One publication holds one task's items, so each
+                    // task's created roots are recorded with its own counts.
+                    if pending.task != job.task_id {
+                        pending.flush(application, &now, auto_tag, report)?;
+                        pending.task = job.task_id;
+                    }
                     pending.push(job.ingest_job_id, input, cleanup);
                     if pending.should_flush() {
                         pending.flush(application, &now, auto_tag, report)?;
@@ -100,12 +106,16 @@ fn settle_claimed(
                     settle_collection(
                         application,
                         job.ingest_job_id,
+                        job.task_id,
                         input,
                         cleanup,
                         &now,
                         auto_tag,
                         report,
                     )?;
+                }
+                PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => {
+                    unreachable!("prepare_job rejects unread task files")
                 }
             },
             Err(error) => {
@@ -127,6 +137,7 @@ const PENDING_FLUSH_AFTER: std::time::Duration = std::time::Duration::from_milli
 
 #[derive(Default)]
 struct PendingItems {
+    task: Option<picto_library::TaskId>,
     jobs: Vec<i64>,
     inputs: Vec<PreparedImport>,
     cleanup: Vec<Vec<PathBuf>>,
@@ -162,16 +173,12 @@ impl PendingItems {
         if jobs.is_empty() {
             return Ok(());
         }
-        let ingested = if auto_tag {
-            application.library().ingest_batch_with_auto_tags(&inputs)
-        } else {
-            application.library().ingest_batch(&inputs)
-        };
+        let ingested = ingest_items(application, &inputs, self.task, auto_tag);
         let Ok(outputs) = ingested else {
             // One bad item fails the whole group; settle each on its own so
             // the rest still import and the bad one gets its own error.
             for ((job_id, input), cleanup) in jobs.into_iter().zip(inputs).zip(cleanup) {
-                settle_item(application, job_id, input, cleanup, now, auto_tag, report)?;
+                settle_item(application, job_id, self.task, input, cleanup, now, auto_tag, report)?;
             }
             return Ok(());
         };
@@ -194,23 +201,32 @@ impl PendingItems {
     }
 }
 
+fn ingest_items(
+    application: &LibraryApplication,
+    inputs: &[PreparedImport],
+    task: Option<picto_library::TaskId>,
+    auto_tag: bool,
+) -> picto_library::Result<Vec<(RootId, picto_library::MutationReceipt)>> {
+    match (task, auto_tag) {
+        (Some(task), _) => application.library().ingest_batch_for_task(inputs, task, auto_tag),
+        (None, true) => application.library().ingest_batch_with_auto_tags(inputs),
+        (None, false) => application.library().ingest_batch(inputs),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn settle_item(
     application: &LibraryApplication,
     job_id: i64,
+    task: Option<picto_library::TaskId>,
     input: PreparedImport,
     cleanup: Vec<PathBuf>,
     now: &str,
     auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
-    let ingested = if auto_tag {
-        application
-            .library()
-            .ingest_batch_with_auto_tags(std::slice::from_ref(&input))
-            .map(|mut values| values.remove(0))
-    } else {
-        application.library().ingest(&input)
-    };
+    let ingested = ingest_items(application, std::slice::from_ref(&input), task, auto_tag)
+        .map(|mut values| values.remove(0));
     match ingested {
         Ok((root_id, _)) => {
             reconcile_ingested_sources(application, &[(std::slice::from_ref(&input), root_id)], now)?;
@@ -246,21 +262,25 @@ fn settle_item(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn settle_collection(
     application: &LibraryApplication,
     job_id: i64,
+    task: Option<picto_library::TaskId>,
     input: PreparedCollectionImport,
     cleanup: Vec<PathBuf>,
     now: &str,
     auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
-    let ingested = if auto_tag {
-        application
+    let ingested = match (task, auto_tag) {
+        (Some(task), _) => application
             .library()
-            .ingest_collection_with_auto_tags(&input)
-    } else {
-        application.library().ingest_collection(&input)
+            .ingest_collection_for_task(&input, task, auto_tag),
+        (None, true) => application
+            .library()
+            .ingest_collection_with_auto_tags(&input),
+        (None, false) => application.library().ingest_collection(&input),
     };
     match ingested {
         Ok((root_id, _)) => {
@@ -341,6 +361,7 @@ fn payload_inputs(payload: &PreparedIngestPayload) -> &[PreparedImport] {
     match payload {
         PreparedIngestPayload::Item(input) => std::slice::from_ref(input),
         PreparedIngestPayload::Collection(input) => &input.members,
+        PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => &[],
     }
 }
 
@@ -482,6 +503,9 @@ fn prepare_job(
                 "Collection cover index is outside the prepared members".to_string()
             })?;
             ensure_visible_thumbnail(application, cover)?;
+        }
+        PreparedIngestPayload::Pending(_) | PreparedIngestPayload::PendingCollection(_) => {
+            return Err("Import file was queued but never read".into());
         }
     }
     Ok(cleanup)

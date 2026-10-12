@@ -37,6 +37,7 @@ mod imports;
 mod duplicates;
 mod structure;
 mod undo;
+mod tasks;
 use tags::*;
 use folders::*;
 use smart_folders::*;

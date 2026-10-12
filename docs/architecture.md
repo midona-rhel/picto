@@ -185,6 +185,20 @@ publish prepared items in groups of up to 48, flushed at least every 250 ms so t
 progressively. Auto-tagging on import writes in batches outside the undo history; manual AI tagging
 stays undoable.
 
+Manual imports are foreground tasks (`task` table, `picto-library/src/mutation/tasks.rs`,
+`core/src/import_tasks.rs`). Starting one only records the task. The scan worker walks its paths
+and queues one `ingest_job` per file (`task_id`, `units`, `prepared = 0`) in batches, without
+reading any file, so a large folder is recorded at once and survives a quit; an interrupted scan
+runs again from the start and keeps the jobs it already queued (keys are per task and path). The
+ingest worker reads, hashes and probes a few files ahead of each ingest batch, then imports them as
+usual; claims skip unread files (`idx_ingest_job_claim`) and the jobs of a task that is not
+running. Pause holds a task's jobs in the queue across restarts; Stop drops the ones not yet
+imported. Stop-and-undo removes the roots the task created (`task_created_root`) and the tags it
+added to roots that already existed (`task_added_tag`); roots it reused stay. An import that moves
+its files into the library cannot be undone. `tasks.list` reports each task with a rate and an
+estimate measured over the last 20 s, and the renderer shows it in the foreground task dialog or,
+once sent to the background, the task bar.
+
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
 never committed.

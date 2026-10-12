@@ -74,7 +74,8 @@ fn main() {
         SubscriptionCoverSelection, SubscriptionDestinationPolicy, SubscriptionList,
         SubscriptionProgress, SubscriptionQueryView, SubscriptionView,
     };
-    use picto_core::tasks::{QueueCounts, TaskIssue, TaskSnapshot};
+    use picto_core::import_tasks::ImportStarted;
+    use picto_core::tasks::{ForegroundTask, TaskFailure};
 
     let output_base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     export!(&output_base;
@@ -114,9 +115,9 @@ fn main() {
         SetCredentialInput,
         SourceCatalogEntry,
         SettingsSnapshot,
-        QueueCounts,
-        TaskIssue,
-        TaskSnapshot,
+        ForegroundTask,
+        TaskFailure,
+        ImportStarted,
         ResolvedFilePath,
         ThumbnailQueueResult,
         ExportFormat,

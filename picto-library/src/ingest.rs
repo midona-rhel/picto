@@ -24,6 +24,8 @@ pub(crate) struct IngestResult {
     pub bitmap_keys: Vec<BitmapKey>,
     pub folder_ids: Vec<FolderId>,
     pub affected_roots: RoaringBitmap,
+    /// Tags this import added to roots that already existed (reuse only).
+    pub added_tags: Vec<(RootId, TagId)>,
 }
 
 pub(crate) fn insert_one(
@@ -44,6 +46,7 @@ pub(crate) fn insert_one(
                 RoaringBitmap::from_iter([existing.root_id.0])
             };
             let mut bitmap_keys = Vec::new();
+            let mut added_tags = Vec::new();
             for raw_name in &input.tags {
                 let name = canonical_tag_name(raw_name)?;
                 let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
@@ -60,6 +63,7 @@ pub(crate) fn insert_one(
                         .filter(|root_id| roots.insert(*root_id))
                         .collect::<RoaringBitmap>()
                 };
+                added_tags.extend(added_roots.iter().map(|root_id| (RootId(root_id), tag_id)));
                 if !added_roots.is_empty() {
                     bitmap_keys.push(BitmapKey {
                         domain: BitmapDomain::Tag,
@@ -100,6 +104,7 @@ pub(crate) fn insert_one(
                 bitmap_keys,
                 folder_ids: Vec::new(),
                 affected_roots,
+                added_tags,
             });
         }
     }
@@ -411,6 +416,7 @@ pub(crate) fn insert_one(
         bitmap_keys,
         folder_ids: input.folders.clone(),
         affected_roots,
+        added_tags: Vec::new(),
     })
 }
 

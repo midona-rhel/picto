@@ -20,7 +20,8 @@ import {
 } from '../platform/shellApi';
 import type { BaseScope, EntityTarget } from '../shared/types/canonical';
 import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
-import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { ImportStarted } from '../shared/types/generated/application/ImportStarted';
+import { showTask } from '../runtime/taskSettle';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import { getDefaultStore } from 'jotai';
 import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
@@ -45,10 +46,12 @@ export interface MediaImportParams {
 
 const store = getDefaultStore();
 
-async function addMedia(paths: string[], params: MediaImportParams): Promise<ImportEnqueueReport> {
-  const report = await enqueueImport(paths, params);
+/** Start an import; its task takes the foreground with progress and controls. */
+async function addMedia(paths: string[], params: MediaImportParams): Promise<ImportStarted> {
+  const started = await enqueueImport(paths, params);
+  showTask(started.task_id);
   if (params.parent_folder_id != null) recordRecentFolderUse([params.parent_folder_id]);
-  return report;
+  return started;
 }
 
 function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
@@ -211,7 +214,7 @@ export const filesController = {
   addMedia(
     paths: string[],
     params: MediaImportParams,
-  ): Promise<ImportEnqueueReport> {
+  ): Promise<ImportStarted> {
     return addMedia(paths, params);
   },
 

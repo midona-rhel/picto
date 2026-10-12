@@ -12,6 +12,7 @@ import { libraryInvalidation } from './libraryInvalidation';
 import { startDiagnosticsRuntime } from './diagnosticsRuntime';
 import { startCloudSettle } from './cloudSettle';
 import { startAssociatedFilesRuntime } from './associatedFilesRuntime';
+import { startTaskSettle } from './taskSettle';
 
 let cleanupFns: Array<() => void> = [];
 
@@ -30,6 +31,7 @@ export function startAppRuntime(): () => void {
     startHistoryRuntime(),
     startInspectorSettle(),
     startSubscriptionsSettle(),
+    startTaskSettle(),
   ];
   return () => {
     for (const cleanup of cleanupFns) cleanup();

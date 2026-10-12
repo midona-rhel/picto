@@ -35,6 +35,10 @@ pub fn start(
             ),
         ),
         (
+            "library-import-scan",
+            start_import_scan_worker(Arc::clone(&application), cancel.child_token(), wake.clone()),
+        ),
+        (
             "library-watched-folders",
             start_watched_folder_worker(Arc::clone(&application), cancel.child_token()),
         ),
@@ -89,6 +93,10 @@ pub fn start_tutorial(
         (
             "library-ingest",
             start_ingest_worker(Arc::clone(&application), cancel.child_token(), heavy_jobs, wake.clone()),
+        ),
+        (
+            "library-import-scan",
+            start_import_scan_worker(Arc::clone(&application), cancel.child_token(), wake.clone()),
         ),
         (
             "library-fts",
@@ -219,9 +227,27 @@ fn start_ingest_worker(
                 },
             };
             wake.mark_seen();
+            // Undo stopped imports before anything else of theirs runs, then
+            // read the next queued task files, then import what is ready.
+            let revert_application = Arc::clone(&application);
+            match tokio::task::spawn_blocking(move || {
+                crate::import_tasks::settle_reverts(&revert_application)
+            }).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "Import undo failed"),
+                Err(error) => tracing::warn!(%error, "Import undo worker stopped"),
+            }
+            if let Err(error) = crate::import_tasks::prepare_task_jobs(&application).await {
+                tracing::warn!(%error, "Reading queued import files failed");
+            }
             let batch_application = Arc::clone(&application);
             match tokio::task::spawn_blocking(move || {
-                crate::library_ingest_runtime::run_batch(&batch_application, 64)
+                let report = crate::library_ingest_runtime::run_batch(&batch_application, 64)?;
+                batch_application
+                    .library()
+                    .settle_finished_tasks(chrono::Utc::now().timestamp_millis())
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(report)
             }).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => tracing::warn!(%error, "Canonical ingest batch failed"),
@@ -229,6 +255,36 @@ fn start_ingest_worker(
             }
             drop(permit);
             if !wake.next(&cancel, Duration::from_millis(25), Duration::from_secs(2)).await {
+                return;
+            }
+        }
+    })
+}
+
+/// Walks the folders of imports whose scan has not finished: new imports as
+/// soon as they are started, interrupted ones after the library reopens.
+fn start_import_scan_worker(
+    application: Arc<LibraryApplication>,
+    cancel: CancellationToken,
+    mut wake: WorkWake,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            wake.mark_seen();
+            let scan_application = Arc::clone(&application);
+            let scan_cancel = cancel.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::import_tasks::scan_pending_tasks(&scan_application, &|| {
+                    scan_cancel.is_cancelled()
+                })
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "Import scan failed"),
+                Err(error) => tracing::warn!(%error, "Import scan worker stopped"),
+            }
+            if !wake.next(&cancel, Duration::from_millis(50), Duration::from_secs(5)).await {
                 return;
             }
         }

@@ -12,14 +12,25 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with_identity_reuse(inputs, true, false)
+        self.ingest_batch_with_identity_reuse(inputs, true, false, None)
+    }
+
+    /// Import items for a foreground task, which records the roots it
+    /// creates and the tags it adds to existing ones so it can be undone.
+    pub fn ingest_batch_for_task(
+        &self,
+        inputs: &[PreparedImport],
+        task: crate::TaskId,
+        auto_tag: bool,
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        self.ingest_batch_with_identity_reuse(inputs, true, auto_tag, Some(task))
     }
 
     pub fn ingest_batch_with_auto_tags(
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with_identity_reuse(inputs, true, true)
+        self.ingest_batch_with_identity_reuse(inputs, true, true, None)
     }
 
     /// Converter-only import path. It preserves every legacy root while still
@@ -28,7 +39,7 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with_identity_reuse(inputs, false, false)
+        self.ingest_batch_with_identity_reuse(inputs, false, false, None)
     }
 
     pub(super) fn ingest_batch_with_identity_reuse(
@@ -36,6 +47,7 @@ impl Library {
         inputs: &[PreparedImport],
         reuse_identity: bool,
         auto_tag: bool,
+        task: Option<crate::TaskId>,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
@@ -65,6 +77,16 @@ impl Library {
                 )?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
+                if let Some(task) = task {
+                    crate::mutation::tasks::record_task_ingest(
+                        transaction,
+                        task,
+                        output.created_root.then_some(output.root_id),
+                        &output.added_tags,
+                        1,
+                    )?;
+                    resources.insert("tasks".to_owned());
+                }
                 if output.created_root {
                     created_root_ids.push(output.root_id);
                     if let Some(attempt_id) = input
@@ -144,14 +166,24 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with_identity_reuse(input, true, false)
+        self.ingest_collection_with_identity_reuse(input, true, false, None)
+    }
+
+    /// Import a collection for a foreground task; see [`Self::ingest_batch_for_task`].
+    pub fn ingest_collection_for_task(
+        &self,
+        input: &PreparedCollectionImport,
+        task: crate::TaskId,
+        auto_tag: bool,
+    ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with_identity_reuse(input, true, auto_tag, Some(task))
     }
 
     pub fn ingest_collection_with_auto_tags(
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with_identity_reuse(input, true, true)
+        self.ingest_collection_with_identity_reuse(input, true, true, None)
     }
 
     pub(super) fn ingest_collection_with_identity_reuse(
@@ -159,6 +191,7 @@ impl Library {
         input: &PreparedCollectionImport,
         reuse_identity: bool,
         auto_tag: bool,
+        task: Option<crate::TaskId>,
     ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -211,6 +244,17 @@ impl Library {
                 }
                 if output.created_root {
                     created_root_ids.push(output.root_id);
+                }
+                if let Some(task) = task {
+                    // Members join the collection; undo removes the collection
+                    // only when this import created all of it (below).
+                    crate::mutation::tasks::record_task_ingest(
+                        transaction,
+                        task,
+                        None,
+                        &output.added_tags,
+                        0,
+                    )?;
                 }
                 resources.extend(output.resources);
                 bitmap_keys.extend(output.bitmap_keys);
@@ -316,6 +360,20 @@ impl Library {
                     )?;
                     resources.insert("subscriptions".to_owned());
                 }
+            }
+            if let Some(task) = task {
+                // A collection that absorbed items already in the library is
+                // not the import's to remove; only a wholly new one is.
+                let wholly_created = creates_collection
+                    && created_root_ids.len() == input.members.len();
+                crate::mutation::tasks::record_task_units(
+                    transaction,
+                    task,
+                    created_root_ids.len(),
+                    input.members.len() - created_root_ids.len(),
+                    wholly_created.then_some(published_root),
+                )?;
+                resources.insert("tasks".to_owned());
             }
             resources.extend(["tags".to_owned(), "folders".to_owned()]);
             let receipt = PublicationCoordinator::receipt(
