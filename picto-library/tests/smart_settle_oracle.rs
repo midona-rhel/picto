@@ -156,6 +156,8 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
         folders.push((id, effective));
     }
 
+    // Undo steps replay edits, not the setup above.
+    library.history().clear();
     let mut rng = Rng(0x5eed_1234_abcd_0001);
     let mut clock = edits_start as i64;
     for step in 0..STEPS {

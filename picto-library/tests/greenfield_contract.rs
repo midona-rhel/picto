@@ -3964,7 +3964,7 @@ fn repeated_collection_import_merges_new_members_without_replacing_its_name() {
 }
 
 #[test]
-fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
+fn exact_hash_collection_member_takes_in_the_loose_item_holding_its_file() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut original = imported("collection-existing", Lifecycle::Inbox, &["state:original"]);
@@ -3988,39 +3988,21 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
         })
         .unwrap();
 
+    // One file is one item: the loose copy becomes the post's member.
     assert_ne!(collection, existing_root);
     let inbox = library
         .query(&query(ItemScope::Inbox), &PageRequest::default())
         .unwrap();
-    assert_eq!(inbox.total, 2);
-    assert_eq!(inbox.media_count, 4);
-    let exact_matches = library
-        .query(
-            &query(ItemScope::MediaMatches {
-                item_id: collection.0,
-            }),
-            &PageRequest::default(),
-        )
-        .unwrap();
-    assert_eq!(exact_matches.total, 2);
-    assert_eq!(
-        exact_matches
-            .items
-            .iter()
-            .map(|item| item.root_id)
-            .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from([existing_root, collection])
-    );
-    assert_eq!(
-        library.projections().snapshot().collection_orders[&collection].len(),
-        3
-    );
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.media_count, 3);
     let snapshot = library.projections().snapshot();
+    let members = snapshot.collection_orders[&collection].clone();
+    assert_eq!(members.len(), 3);
+    assert_eq!(members[0], picto_library::MediaId(existing_root.0));
+    assert_eq!(snapshot.media_owner.get(existing_root.0), Some(&collection));
     let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
     let original_tag = snapshot.tag_ids_by_name["state:original"];
-    assert!(!snapshot.tags[&incoming_tag].contains(existing_root.0));
     assert!(snapshot.tags[&incoming_tag].contains(collection.0));
-    assert!(snapshot.tags[&original_tag].contains(existing_root.0));
     assert!(snapshot.tags[&original_tag].contains(collection.0));
     library
         .database()
@@ -4035,7 +4017,7 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
                 assert_eq!(
                     connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
                         .get::<_, i64>(0))?,
-                    4
+                    3
                 );
                 assert_eq!(
                     connection.query_row(
