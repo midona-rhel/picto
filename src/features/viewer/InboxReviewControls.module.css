@@ -24,8 +24,9 @@
   border-radius: inherit;
 }
 
-/* The pill stays put between items; the press light carries the change. */
 .leaving {
+  opacity: 0;
+  transform: translateX(-50%) translateY(7px) scale(0.96);
   pointer-events: none;
 }
 
@@ -149,133 +150,6 @@
   box-shadow: 1px 0 rgba(0, 0, 0, 0.18);
 }
 
-/*
- * Press light: a soft cloud of the chosen colour drifts behind the glass, up
- * and out past the pill's outer edge. Where it crosses, the rim catches it;
- * the opposite rim catches a fainter refraction moving the other way. All of
- * it is clipped to the pill. Positions are in the pill's 129 x 54 px box.
- */
-.burstClip {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  overflow: hidden;
-  border-radius: inherit;
-  pointer-events: none;
-}
-
-.burst {
-  --glow: 54, 220, 119;
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-}
-
-.burstReject {
-  --glow: 255, 75, 84;
-}
-
-.burstCloud,
-.burstRimNear,
-.burstRimFar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  border-radius: 50%;
-  opacity: 0;
-  will-change: transform, opacity;
-}
-
-.burstCloud {
-  width: 96px;
-  height: 64px;
-  margin: -32px 0 0 -48px;
-  background: radial-gradient(
-    ellipse closest-side,
-    rgba(var(--glow), 0.85) 0%,
-    rgba(var(--glow), 0.45) 45%,
-    rgba(var(--glow), 0.12) 75%,
-    transparent 100%
-  );
-  filter: blur(9px);
-  mix-blend-mode: screen;
-}
-
-/* Only the rim shows what is behind this layer. */
-.burstRim {
-  position: absolute;
-  inset: 0;
-  padding: 2px;
-  border-radius: inherit;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box exclude,
-    linear-gradient(#000 0 0);
-}
-
-.burstRimNear,
-.burstRimFar {
-  width: 64px;
-  height: 44px;
-  margin: -22px 0 0 -32px;
-  background: radial-gradient(
-    ellipse closest-side,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(var(--glow), 0.95) 35%,
-    transparent 100%
-  );
-  filter: blur(2px);
-}
-
-.burstAccept .burstCloud { animation: reviewCloudAccept 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-.burstAccept .burstRimNear { animation: reviewRimNearAccept 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-.burstAccept .burstRimFar { animation: reviewRimFarAccept 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-.burstReject .burstCloud { animation: reviewCloudReject 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-.burstReject .burstRimNear { animation: reviewRimNearReject 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-.burstReject .burstRimFar { animation: reviewRimFarReject 650ms cubic-bezier(0.35, 0, 0.4, 1) both; }
-
-@keyframes reviewCloudAccept {
-  0% { opacity: 1; transform: translate(34px, 30px) scale(1); }
-  40% { opacity: 0.9; transform: translate(18px, 18px) scale(0.95); }
-  100% { opacity: 0; transform: translate(-18px, 0) scale(0.8); }
-}
-
-@keyframes reviewRimNearAccept {
-  0% { opacity: 0; transform: translate(34px, 30px); }
-  35% { opacity: 0.7; transform: translate(20px, 20px); }
-  65% { opacity: 1; transform: translate(4px, 10px); }
-  100% { opacity: 0; transform: translate(-18px, 0); }
-}
-
-/* The refraction mirrors the light through the pill's centre. */
-@keyframes reviewRimFarAccept {
-  0% { opacity: 0; transform: translate(95px, 24px); }
-  45% { opacity: 0.75; transform: translate(109px, 34px); }
-  100% { opacity: 0; transform: translate(147px, 54px); }
-}
-
-@keyframes reviewCloudReject {
-  0% { opacity: 1; transform: translate(95px, 30px) scale(1); }
-  40% { opacity: 0.9; transform: translate(111px, 18px) scale(0.95); }
-  100% { opacity: 0; transform: translate(147px, 0) scale(0.8); }
-}
-
-@keyframes reviewRimNearReject {
-  0% { opacity: 0; transform: translate(95px, 30px); }
-  35% { opacity: 0.7; transform: translate(109px, 20px); }
-  65% { opacity: 1; transform: translate(125px, 10px); }
-  100% { opacity: 0; transform: translate(147px, 0); }
-}
-
-@keyframes reviewRimFarReject {
-  0% { opacity: 0; transform: translate(34px, 24px); }
-  45% { opacity: 0.75; transform: translate(20px, 34px); }
-  100% { opacity: 0; transform: translate(-18px, 54px); }
-}
-
 @keyframes reviewPillIn {
   from {
     opacity: 0;
@@ -302,10 +176,7 @@
     transition-duration: 1ms;
   }
 
-  .action.chosen .glow,
-  .burstCloud,
-  .burstRimNear,
-  .burstRimFar {
+  .action.chosen .glow {
     animation: none;
   }
 }
