@@ -34,6 +34,9 @@ const EXIT_DURATION_MS = 220;
 export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReviewControlsProps) {
   const [decision, setDecision] = useState<InboxReviewDecision | null>(null);
   const [leaving, setLeaving] = useState(false);
+  // The press light outlives the item: it keeps running on the pill while
+  // the next item comes in, so reviewing never waits for it.
+  const [burst, setBurst] = useState<{ decision: InboxReviewDecision; id: number } | null>(null);
   const acceptShortcut = getShortcut('inbox.accept')!;
   const rejectShortcut = getShortcut('inbox.reject')!;
 
@@ -45,6 +48,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
   const review = useCallback(async (nextDecision: InboxReviewDecision) => {
     if (decision) return;
     setDecision(nextDecision);
+    setBurst((current) => ({ decision: nextDecision, id: (current?.id ?? 0) + 1 }));
     try {
       await onCommit(itemId, nextDecision);
       setLeaving(true);
@@ -80,6 +84,24 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
       data-inbox-review-controls
       data-review-decision={decision ?? 'idle'}
     >
+      <span className={styles.burstClip} aria-hidden="true">
+        {burst ? (
+          <span
+            key={burst.id}
+            className={`${styles.burst} ${burst.decision === 'accept' ? styles.burstAccept : styles.burstReject}`}
+            data-review-burst={burst.decision}
+          >
+            <span
+              className={styles.burstCloud}
+              onAnimationEnd={() => setBurst((current) => (current?.id === burst.id ? null : current))}
+            />
+            <span className={styles.burstRim}>
+              <span className={styles.burstRimNear} />
+              <span className={styles.burstRimFar} />
+            </span>
+          </span>
+        ) : null}
+      </span>
       <KbdTooltip label={t("Accept")} shortcutId="inbox.accept" position="top">
         <button
           type="button"
