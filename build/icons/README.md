@@ -1,12 +1,8 @@
 # Picto application icon sources
 
-`picto-flat.svg` is the Windows and Linux master. The three numbered macOS SVGs are the accepted book geometry split into native material layers:
+`picto-flat.svg` is the Windows and Linux master. `picto-macos-book.svg` is the same book geometry as one macOS layer, so Icon Composer treats the strokes as one mark set into the face rather than separate floating pieces.
 
-1. `picto-macos-01-spine.svg`
-2. `picto-macos-02-under-pages.svg`
-3. `picto-macos-03-open-book.svg`
-
-All macOS layers use the same 1024×1024 canvas. They remain flat and opaque: no rounded-square mask, baked blur, highlight, refraction, or shadow belongs in the source artwork. `npm run generate:app-icons` renders those layers and writes `build/Picto.icon`, whose groups apply Liquid Glass, specular lighting, and neutral shadows. This follows Apple’s Icon Composer model while keeping the accepted geometry reproducible.
+The macOS layer uses the 1024×1024 canvas and stays flat and opaque: no rounded-square mask, baked blur, highlight, refraction, or shadow belongs in the source artwork. `npm run generate:app-icons` renders it and writes `build/Picto.icon`, whose single group applies Liquid Glass and specular lighting with combined lighting and no drop shadow. Icon Composer's tile fills the whole canvas while the flat master's tile is 896 px, so the layer is scaled by 1024/896 to keep the book the same size relative to its tile on every platform.
 
 The macOS package points directly at `build/Picto.icon`. Electron Builder compiles it with Xcode 26 or newer `actool`, embeds the resulting `Assets.car`, and also generates the legacy ICNS representation. Do not replace this with a manually composited PNG or ICNS fallback.
 

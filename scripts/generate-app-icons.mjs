@@ -40,11 +40,16 @@ function createIco(images) {
   return Buffer.concat([header, ...images.map(({ png }) => png)]);
 }
 
+// The whole book is one layer, so Icon Composer lights and shades it as one
+// mark set into the face instead of separate floating strokes.
 const composerLayers = [
-  ['01-spine', 'picto-macos-01-spine.svg'],
-  ['02-under-pages', 'picto-macos-02-under-pages.svg'],
-  ['03-open-book', 'picto-macos-03-open-book.svg'],
+  ['01-book', 'picto-macos-book.svg'],
 ];
+
+// Icon Composer's tile fills the 1024 canvas, while the flat master draws its
+// tile 64 px inside it (896 wide). Scaling the book by 1024/896 keeps it the
+// same size relative to the tile on every platform.
+const BOOK_SCALE = 1024 / 896;
 
 function composerGroup(name) {
   return {
@@ -55,12 +60,13 @@ function composerGroup(name) {
       'image-name': `${name}.png`,
       name,
       position: {
-        scale: 1,
+        scale: BOOK_SCALE,
         'translation-in-points': [0, 0],
       },
     }],
-    lighting: 'individual',
-    shadow: { kind: 'neutral', opacity: 0.28 },
+    lighting: 'combined',
+    // No drop shadow: the book reads as set into the face, not raised above it.
+    shadow: { kind: 'none', opacity: 0 },
     specular: true,
     translucency: { enabled: false, value: 0 },
   };

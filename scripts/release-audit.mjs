@@ -51,9 +51,7 @@ const approvedReleaseIcons = new Set([
   'build/picto-pack.png',
   'build/picto-pack.icns',
   'build/picto-pack.ico',
-  'build/Picto.icon/Assets/01-spine.png',
-  'build/Picto.icon/Assets/02-under-pages.png',
-  'build/Picto.icon/Assets/03-open-book.png',
+  'build/Picto.icon/Assets/01-book.png',
 ]);
 const macHomePrefix = `/${'Users'}/`;
 const windowsHomePattern = new RegExp(`[A-Z]:\\\\${'Users'}\\\\`, 'i');
@@ -108,8 +106,8 @@ assert(
 );
 
 const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
-const expectedMacIconLayers = ['01-spine.png', '02-under-pages.png', '03-open-book.png'];
-assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain exactly three material groups');
+const expectedMacIconLayers = ['01-book.png'];
+assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain the book as one material group');
 for (const [index, imageName] of expectedMacIconLayers.entries()) {
   const group = iconComposer.groups?.[index];
   assert(group?.layers?.length === 1 && group.layers[0]?.['image-name'] === imageName, `native macOS icon layer order is invalid: ${imageName}`);
@@ -171,9 +169,7 @@ assert(ffmpegDownload.includes('verify_sha256'), 'FFmpeg downloads must verify p
 if (checkArtifacts) {
   for (const file of [
     'build/Picto.icon/icon.json',
-    'build/Picto.icon/Assets/01-spine.png',
-    'build/Picto.icon/Assets/02-under-pages.png',
-    'build/Picto.icon/Assets/03-open-book.png',
+    'build/Picto.icon/Assets/01-book.png',
     'build/library-folder.png',
     'build/library.icns',
     'build/library.ico',
