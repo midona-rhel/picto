@@ -56,8 +56,8 @@
 
 /*
  * The light sits inside the glass and is clipped to this half of the pill:
- * a wash rising from the bottom edge, a lit rim along that edge, and on press
- * a pulse that spreads from the icon. Nothing draws outside the pill.
+ * a wash rising from the bottom edge and a lit rim along that edge; a press
+ * flashes it brighter. Nothing draws outside the pill.
  */
 .glow {
   --glow-x: 58%;
@@ -89,32 +89,12 @@
   --glow-fade: to left;
 }
 
-.glow::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 54px;
-  height: 54px;
-  margin: -27px 0 0 -27px;
-  box-sizing: border-box;
-  border: 2px solid rgba(var(--glow), 0.95);
-  border-radius: 50%;
-  box-shadow:
-    0 0 12px rgba(var(--glow), 0.85),
-    inset 0 0 10px rgba(var(--glow), 0.6);
-  opacity: 0;
-  transform: scale(0.3);
-}
-
 .action:disabled {
   cursor: default;
 }
 
 .action svg {
-  transition:
-    transform 120ms var(--ease-default),
-    filter 160ms ease;
+  transition: filter 160ms ease;
   filter:
     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58))
     drop-shadow(0 0 7px rgba(255, 255, 255, 0.08));
@@ -145,21 +125,9 @@
   color: rgba(255, 230, 231, 0.98);
 }
 
-.action:active:not(:disabled) svg {
-  transform: scale(0.88);
-}
-
 .action.chosen .glow {
   opacity: 1;
   animation: reviewFlash 360ms ease-out both;
-}
-
-.action.chosen .glow::after {
-  animation: reviewPulse 340ms var(--ease-default) both;
-}
-
-.action.chosen svg {
-  animation: reviewIconPop 260ms var(--ease-default) both;
 }
 
 .action:focus-visible {
@@ -193,26 +161,9 @@
   }
 }
 
-@keyframes reviewPulse {
-  0% {
-    opacity: 1;
-    transform: scale(0.3);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.7);
-  }
-}
-
 @keyframes reviewFlash {
   0% { filter: brightness(2); }
   100% { filter: none; }
-}
-
-@keyframes reviewIconPop {
-  0% { transform: scale(0.86); }
-  55% { transform: scale(1.14); }
-  100% { transform: scale(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -225,9 +176,7 @@
     transition-duration: 1ms;
   }
 
-  .action.chosen .glow,
-  .action.chosen .glow::after,
-  .action.chosen svg {
+  .action.chosen .glow {
     animation: none;
   }
 }
