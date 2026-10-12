@@ -28,7 +28,8 @@ interface InboxReviewControlsProps {
   onAdvance: () => void;
 }
 
-const EXIT_DURATION_MS = 120;
+// Long enough for the press pulse to read before the pill leaves.
+const EXIT_DURATION_MS = 220;
 
 export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReviewControlsProps) {
   const [decision, setDecision] = useState<InboxReviewDecision | null>(null);
@@ -87,6 +88,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
           disabled={decision != null}
           onClick={() => { void review('accept'); }}
         >
+          <span className={styles.glow} aria-hidden="true" />
           <IconCheck size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>
@@ -99,6 +101,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
           disabled={decision != null}
           onClick={() => { void review('reject'); }}
         >
+          <span className={styles.glow} aria-hidden="true" />
           <IconX size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>

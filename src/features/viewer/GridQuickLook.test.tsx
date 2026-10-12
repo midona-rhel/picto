@@ -12,8 +12,17 @@ vi.mock('../groups/GroupQuickLook', () => ({
 }));
 
 vi.mock('./QuickLook', () => ({
-  QuickLookContent: ({ currentIndex }: { currentIndex: number }) => (
-    <div data-testid="media-content" data-item-index={currentIndex} />
+  QuickLookContent: ({ items, currentIndex, thumbnailUrlOverride }: {
+    items: Array<{ root_id: number }>;
+    currentIndex: number;
+    thumbnailUrlOverride?: string;
+  }) => (
+    <div
+      data-testid="media-content"
+      data-item-index={currentIndex}
+      data-item-id={items[currentIndex]?.root_id}
+      data-thumbnail={thumbnailUrlOverride ?? ''}
+    />
   ),
 }));
 
@@ -81,5 +90,29 @@ describe('GridQuickLook', () => {
 
     await act(async () => { resolveDecode?.(); });
     await waitFor(() => expect(screen.getByTestId('media-content')).toHaveAttribute('data-item-index', '2'));
+  });
+
+  it('keeps drawing a reviewed item that left the list until the next one is decoded', async () => {
+    let resolveDecode: (() => void) | null = null;
+    class ControlledImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      decode = () => new Promise<void>((resolve) => { resolveDecode = resolve; });
+      set src(_value: string) { this.onload?.(); }
+    }
+    vi.stubGlobal('Image', ControlledImage);
+    const media = (items as unknown as Array<{ root_id: number }>).slice(1);
+    const props = { totalCount: 2, onNavigate: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<GridQuickLook {...props} items={media as never} currentIndex={0} />);
+    await act(async () => { resolveDecode?.(); });
+
+    // Item 8 was rejected: it leaves the inbox list and index 0 is now item 9.
+    rerender(<GridQuickLook {...props} items={media.slice(1) as never} currentIndex={0} />);
+    const content = screen.getByTestId('media-content');
+    expect(content).toHaveAttribute('data-item-id', '8');
+    expect(content.getAttribute('data-thumbnail')).not.toContain('media-next');
+
+    await act(async () => { resolveDecode?.(); });
+    await waitFor(() => expect(screen.getByTestId('media-content')).toHaveAttribute('data-item-id', '9'));
   });
 });
