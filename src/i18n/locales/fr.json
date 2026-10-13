@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "Dossier dupliqué",
   "Edited a folder": "Dossier modifié",
   "Changed a folder’s cover": "Couverture d’un dossier modifiée",
-  "Started watching a folder": "Surveillance d’un dossier activée",
   "Stopped watching a folder": "Surveillance d’un dossier désactivée",
   "Renamed a folder": "Dossier renommé",
   "Moved a folder": "Dossier déplacé",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "Un élément supprimé définitivement",
   "Deleted {value0} items permanently": "{value0} éléments supprimés définitivement",
   "Rejected an item": "Un élément refusé",
-  "Rejected {value0} items": "{value0} éléments refusés"
+  "Rejected {value0} items": "{value0} éléments refusés",
+  "Changed folder watching": "Surveillance du dossier modifiée",
+  "Rated an item 1 star": "Un élément noté 1 étoile",
+  "Rated {value0} items 1 star": "{value0} éléments notés 1 étoile"
 }

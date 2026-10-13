@@ -1313,6 +1313,12 @@ impl Library {
                 "metadata patch does not change a supported field".into(),
             ));
         }
+        let detail = match (rating, notes.is_some(), source_urls.is_some()) {
+            (Some(rating), false, false) => Some(format!("rating:{}", rating.bitmap_key())),
+            (None, true, false) => Some("notes".to_owned()),
+            (None, false, true) => Some("source_urls".to_owned()),
+            _ => None,
+        };
         let target = target.clone();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
@@ -1439,7 +1445,7 @@ impl Library {
                 "Change metadata",
                 SemanticChange::Compound(changes),
             )
-            .about(selection.len(), None);
+            .about(selection.len(), detail.as_deref());
             Ok((
                 receipt.clone(),
                 PublishedDelta {

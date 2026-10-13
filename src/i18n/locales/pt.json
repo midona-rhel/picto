@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "Pasta duplicada",
   "Edited a folder": "Pasta editada",
   "Changed a folder’s cover": "Capa de uma pasta alterada",
-  "Started watching a folder": "Monitoramento de uma pasta iniciado",
   "Stopped watching a folder": "Monitoramento de uma pasta parado",
   "Renamed a folder": "Pasta renomeada",
   "Moved a folder": "Pasta movida",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "Um item excluído permanentemente",
   "Deleted {value0} items permanently": "{value0} itens excluídos permanentemente",
   "Rejected an item": "Um item rejeitado",
-  "Rejected {value0} items": "{value0} itens rejeitados"
+  "Rejected {value0} items": "{value0} itens rejeitados",
+  "Changed folder watching": "Monitoramento da pasta alterado",
+  "Rated an item 1 star": "Um item avaliado com 1 estrela",
+  "Rated {value0} items 1 star": "{value0} itens avaliados com 1 estrela"
 }

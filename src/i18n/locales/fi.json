@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "Monistettiin kansio",
   "Edited a folder": "Muokattiin kansiota",
   "Changed a folder’s cover": "Vaihdettiin kansion kansikuva",
-  "Started watching a folder": "Aloitettiin kansion seuranta",
   "Stopped watching a folder": "Lopetettiin kansion seuranta",
   "Renamed a folder": "Nimettiin kansio uudelleen",
   "Moved a folder": "Siirrettiin kansio",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "Poistettiin kohde pysyvästi",
   "Deleted {value0} items permanently": "Poistettiin {value0} kohdetta pysyvästi",
   "Rejected an item": "Hylättiin kohde",
-  "Rejected {value0} items": "Hylättiin {value0} kohdetta"
+  "Rejected {value0} items": "Hylättiin {value0} kohdetta",
+  "Changed folder watching": "Muutettiin kansion seurantaa",
+  "Rated an item 1 star": "Arvioitiin kohde yhdellä tähdellä",
+  "Rated {value0} items 1 star": "Arvioitiin {value0} kohdetta yhdellä tähdellä"
 }
