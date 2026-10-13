@@ -5717,3 +5717,23 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
     assert_eq!(removed, vec![shared_hash]);
     assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
 }
+
+#[test]
+fn metadata_patch_history_describes_the_fields_the_renderer_changed() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library.ingest(&imported("patch-description", Lifecycle::Active, &[])).unwrap();
+    let target = SelectionTarget::Explicit { root_ids: vec![root] };
+    for (rating, notes, urls, expected) in [
+        (Some(Rating::Four), None, None, Some("rating:4")),
+        (Some(Rating::Unrated), None, None, Some("rating:0")),
+        (None, Some(Some("note".into())), None, Some("notes")),
+        (None, None, Some(vec!["https://example.test/new".into()]), Some("source_urls")),
+        (Some(Rating::Five), Some(None), None, None),
+    ] {
+        library.patch_metadata(&target, rating, notes, urls, 42).unwrap();
+        let entry = library.history().state().undo.unwrap();
+        assert_eq!(entry.command, "items.patch_metadata");
+        assert_eq!(entry.detail.as_deref(), expected);
+    }
+}

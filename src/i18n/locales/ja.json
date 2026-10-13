@@ -1518,7 +1518,7 @@
   "Duplicated a folder": "フォルダを複製しました",
   "Edited a folder": "フォルダを編集しました",
   "Changed a folder’s cover": "フォルダのカバーを変更しました",
-  "Started watching a folder": "フォルダの監視を開始しました",
+  "Changed folder watching": "フォルダの監視設定を変更しました",
   "Stopped watching a folder": "フォルダの監視を停止しました",
   "Renamed a folder": "フォルダの名前を変更しました",
   "Moved a folder": "フォルダを移動しました",

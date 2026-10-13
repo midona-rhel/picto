@@ -22,4 +22,13 @@ describe('describeHistoryEntry', () => {
   it('falls back to the backend label for a command it does not know', () => {
     expect(describeHistoryEntry(entry('settings.something'))).toBe('developer label');
   });
+
+  it('describes renderer metadata patches and watch edits accurately', () => {
+    expect(describeHistoryEntry(entry('items.patch_metadata', 2, 'rating:4'))).toBe('Rated 2 items 4 stars');
+    expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'rating:0'))).toBe('Cleared the rating of an item');
+    expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'notes'))).toBe('Changed notes');
+    expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'source_urls'))).toBe('Changed source links');
+    expect(describeHistoryEntry(entry('items.patch_metadata', 1))).toBe('Changed the details of an item');
+    expect(describeHistoryEntry(entry('folders.set_watch'))).toBe('Changed folder watching');
+  });
 });
