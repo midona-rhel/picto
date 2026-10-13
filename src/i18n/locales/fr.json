@@ -1562,5 +1562,6 @@
   "Rated an item 1 star": "Un élément noté 1 étoile",
   "Rated {value0} items 1 star": "{value0} éléments notés 1 étoile",
   "Delete undo is disabled. This cannot be undone.": "L’annulation des suppressions est désactivée. Cette action ne peut pas être annulée.",
-  "This delete can no longer be undone. Delete permanently anyway?": "Cette suppression ne peut plus être annulée. Supprimer définitivement quand même ?"
+  "This delete can no longer be undone. Delete permanently anyway?": "Cette suppression ne peut plus être annulée. Supprimer définitivement quand même ?",
+  "Matches": "Correspondances"
 }

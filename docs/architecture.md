@@ -274,6 +274,18 @@ Progress counters: posts traversed (metadata inspected), posts added (complete m
 the library), posts skipped (settled without a new visible item). A post is never reported as
 added before canonical ingest succeeds.
 
+Lifetime catalog counts belong to canonical run outcomes: distinct added source posts and
+retained source items per query (and distinct added posts across a subscription's queries).
+Deleting media or failing a later download does not erase earlier outcomes. Explicit history
+reset does. The library writer builds a disposable TEMP outcome index on open, maintains its
+distinct-member reference counts with transactional triggers, and publishes the small totals
+with the resident snapshot through `published_write`. Successful redownloads add references,
+not counts; workspace refreshes never aggregate historical attempts. Cascades remove the
+original indexed attribution even when the parent has already gone. Rollback/savepoints roll
+back the TEMP index too. The index is neither persisted nor checkpointed, and maintenance
+writes that would change it are rejected. No second canonical counter or schema migration is
+introduced; open pays the history scan once per session.
+
 When a source breaks, follow
 [`SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](./SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).
 

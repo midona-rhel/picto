@@ -2,10 +2,13 @@
 //!
 //! `cargo run --release -p picto_library --example library_ops_benchmark -- [roots] [runs] [smart_folders]`
 //! (defaults: 1,000,000 roots, 5 runs, 100 smart folders; up to 1,000 smart folders).
-//! Prints `ROW|operation|size|median ms|p90 ms|samples`. Local measurement only:
+//! Prints `ROW|operation|size|median ms|p95 ms|samples`. Local measurement only:
 //! never commit its output.
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
+//! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
+//! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
 //! Use `--delete-only` for bounded permanent-delete and undo rows.
+//! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -23,6 +26,9 @@ type R<T> = Result<T, Box<dyn std::error::Error>>;
 const VOCAB: usize = 20_000;
 const BASE_MS: u64 = 1_700_000_000_000;
 
+#[path = "library_ops_benchmark/subscriptions.rs"]
+mod subscriptions;
+
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
@@ -33,17 +39,29 @@ fn main() -> R<()> {
     let path = dir.path().join("audit.sqlite");
     let mut library = Library::create(&path)?;
     let fixture_started = Instant::now();
+    let subscriptions_only = std::env::args().any(|arg| arg == "--subscriptions-only");
 
     // --- fixture: ingest ---
     let t = Instant::now();
     let mut ids: Vec<RootId> = Vec::with_capacity(roots);
     for start in (0..roots).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
         let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(roots);
-        for (id, _) in library.ingest_batch(&(start..end).map(prepared).collect::<Vec<_>>())? {
+        let batch = (start..end).map(|index| {
+            let mut item = prepared(index);
+            if subscriptions_only && index >= roots / 5 {
+                item.tags.clear();
+            }
+            item
+        }).collect::<Vec<_>>();
+        for (id, _) in library.ingest_batch(&batch)? {
             ids.push(id);
         }
     }
     println!("FIXTURE ingest_{roots}_s={:.1}", t.elapsed().as_secs_f64());
+
+    if subscriptions_only {
+        return subscriptions::run(library, roots, runs);
+    }
 
     // --- fixture: settle FTS so name text filters see every root ---
     let t = Instant::now();
@@ -67,6 +85,13 @@ fn main() -> R<()> {
         }
         emit("permanently_delete 500 (undoable)", "500", &mut deletes);
         emit("undo permanently_delete 500", "500", &mut undos);
+        return Ok(());
+    }
+
+    if std::env::args().any(|arg| arg == "--tag-pages-only") {
+        library.ensure_tag_definitions(&(0..200_000).map(|index| format!("vocab:{index}")).collect::<Vec<_>>())?;
+        library.history().clear();
+        bench_tag_pages(&library, runs)?;
         return Ok(());
     }
 
@@ -358,7 +383,7 @@ fn main() -> R<()> {
     bench("counts", "-", runs * 4, || { library.counts()?; Ok(()) }, None::<fn() -> R<()>>)?;
     let tag_count = library.tags()?.len();
     bench("tags (full list)", &format!("{tag_count} tags"), runs * 4, || { library.tags()?; Ok(()) }, None::<fn() -> R<()>>)?;
-    bench("tag_page search (12)", "-", runs * 4, || { library.tag_page(None, Some("vocab:12"), 0, 12)?; Ok(()) }, None::<fn() -> R<()>>)?;
+    bench_tag_pages(&library, runs)?;
     let some_ids = library.tags()?.into_iter().take(5).map(|tag| tag.tag_id).collect::<Vec<_>>();
     bench("tags_by_id (5)", "-", runs * 4, || { library.tags_by_id(&some_ids)?; Ok(()) }, None::<fn() -> R<()>>)?;
     bench("unused_tag_count", "-", runs * 4, || { library.unused_tag_count()?; Ok(()) }, None::<fn() -> R<()>>)?;
@@ -553,6 +578,27 @@ fn main() -> R<()> {
     let first = library.query_window(&windows[0].1, &WindowRequest::at(0, 500))?;
     println!("ROW|first window after reopen (All)|{}|{:.1}|-|1 run, cold caches", first.page.total, ms(t));
     print_memory(&library, "after_reopen");
+    Ok(())
+}
+
+fn bench_tag_pages(library: &Library, runs: usize) -> R<()> {
+    let tag_count = library.projections().snapshot().tag_ids_by_name.len();
+    let size = format!("{tag_count} tags");
+    for (label, search, offset, limit) in [
+        ("tag_page unfiltered (500)", None, 0, 500),
+        ("tag_page unfiltered offset 500 (500)", None, 500, 500),
+        ("tag_page search (12)", Some("vocab:12"), 0, 12),
+        ("tag_page broad prefix (500)", Some("vocab:1"), 0, 500),
+        ("tag_page broad prefix offset 500 (500)", Some("vocab:1"), 500, 500),
+        ("tag_page sparse search (12)", Some("vocab:9999"), 0, 12),
+        ("tag_page no-match search (12)", Some("vocab:missing"), 0, 12),
+        ("tag_page substring offset 500 (500)", Some("vocab:99"), 500, 500),
+    ] {
+        bench(label, &size, runs * 4, || {
+            library.tag_page(None, search, offset, limit)?;
+            Ok(())
+        }, None::<fn() -> R<()>>)?;
+    }
     Ok(())
 }
 

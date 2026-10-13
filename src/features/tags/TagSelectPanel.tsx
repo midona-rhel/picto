@@ -48,6 +48,7 @@ import {
 } from './tagPreferences';
 import { t } from '../../i18n';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { rankMatches } from '../../shared/lib/searchRank';
 
 type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
 type TagLayout = 'grid' | 'list';
@@ -296,16 +297,16 @@ export function TagSelectPanel() {
     }
 
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
-    const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLocaleLowerCase();
+    const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLowerCase();
+    const matching = rankMatches(candidates, normalizedQuery, (tag) => (
+      normalizedQuery.includes(':') ? [formatTag(tag)] : [tag.subname || formatTag(tag)]
+    ));
     const seen = new Set<string>();
-    return candidates.filter((tag) => {
-      const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
+    return matching.filter((tag) => {
+      const visibleName = (tag.subname || formatTag(tag)).toLowerCase();
       if (seen.has(visibleName)) return false;
       seen.add(visibleName);
-      const searchableName = normalizedQuery.includes(':')
-        ? formatTag(tag).toLocaleLowerCase()
-        : visibleName;
-      return !normalizedQuery || searchableName.includes(normalizedQuery);
+      return true;
     });
   }, [activeNamespace, entityTagKeys, entityTagRecords, openingSelectedTagNames, query, selectedTagFilters, settledRemoteView.query, sidebarMode, tagPreferences.starredTags, tags]);
 
@@ -316,7 +317,7 @@ export function TagSelectPanel() {
     const name = settledRemoteView.namespace && !trimmed.includes(':')
       ? `${settledRemoteView.namespace}:${trimmed}`
       : trimmed;
-    const alreadyExists = tags.some((tag) => formatTag(tag).toLocaleLowerCase() === name.toLocaleLowerCase());
+    const alreadyExists = tags.some((tag) => formatTag(tag).toLowerCase() === name.toLowerCase());
     return alreadyExists ? null : tagRecord(name);
   }, [onApplyTagFilter, query, settledRemoteView, sidebarMode, tags]);
 

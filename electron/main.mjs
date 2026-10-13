@@ -23,7 +23,10 @@ import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
 import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
 import { createSiteIconService } from './services/siteIconService.mjs';
 import { createUpdateService } from './services/updateService.mjs';
-import { createSubscriptionNotificationService } from './services/subscriptionNotificationService.mjs';
+import {
+  createSubscriptionNotificationService,
+  installDockBadgeClearing,
+} from './services/subscriptionNotificationService.mjs';
 import { associatedFilesFromArguments } from './services/associatedFileService.mjs';
 
 installConsoleForwarding();
@@ -339,7 +342,9 @@ const subscriptionNotifications = createSubscriptionNotificationService({
   app,
   invokeSerialized,
   getCurrentLibraryRoot,
+  isAppFocused: () => BrowserWindow.getFocusedWindow() != null,
 });
+installDockBadgeClearing({ app });
 
 let buildAppMenu = () => {};
 
