@@ -1544,5 +1544,6 @@
   "Redone": "Rehecho",
   "Changed source links": "Se cambiaron los enlaces de origen",
   "Rated an item 1 star": "Se valoró un elemento con 1 estrella",
-  "Rated {value0} items 1 star": "Se valoraron {value0} elementos con 1 estrella"
+  "Rated {value0} items 1 star": "Se valoraron {value0} elementos con 1 estrella",
+  "Matches": "Coincidencias"
 }

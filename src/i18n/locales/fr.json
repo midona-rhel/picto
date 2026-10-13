@@ -1544,5 +1544,6 @@
   "Redone": "Rétabli",
   "Changed source links": "Liens sources modifiés",
   "Rated an item 1 star": "Un élément noté 1 étoile",
-  "Rated {value0} items 1 star": "{value0} éléments notés 1 étoile"
+  "Rated {value0} items 1 star": "{value0} éléments notés 1 étoile",
+  "Matches": "Correspondances"
 }

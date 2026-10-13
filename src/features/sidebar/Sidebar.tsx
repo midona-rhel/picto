@@ -684,7 +684,7 @@ export function Sidebar() {
     const folderId = parseFolderId(node.id);
     if (folderId == null) return;
     const isExpanded = !collapsed.has(node.id);
-    const hasChildren = folderList.some(({ node: n }) => n.parent_id === node.id);
+    const hasChildren = folderNodes.some((child) => child.parent_id === node.id);
     const allExpandableIds = expandableNodeIds(folderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const entries: MenuEntry[] = [
@@ -784,7 +784,7 @@ export function Sidebar() {
     const currentPayload = buildSmartFolderPayloadFromNode(node);
     const isGroup = isSmartFolderGroup(node);
     const isExpanded = !collapsed.has(node.id);
-    const hasChildren = smartList.some(({ node: child }) => child.parent_id === node.id);
+    const hasChildren = smartFolderNodes.some((child) => child.parent_id === node.id);
     const allExpandableIds = expandableNodeIds(smartFolderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const moveTargets = availableTreeMoveTargetIds(smartFolderNodes, [node.id]);

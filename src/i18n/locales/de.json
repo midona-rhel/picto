@@ -1544,5 +1544,6 @@
   "Redone": "Wiederhergestellt",
   "Changed source links": "Quelllinks geändert",
   "Rated an item 1 star": "Ein Element mit 1 Stern bewertet",
-  "Rated {value0} items 1 star": "{value0} Elemente mit 1 Stern bewertet"
+  "Rated {value0} items 1 star": "{value0} Elemente mit 1 Stern bewertet",
+  "Matches": "Treffer"
 }

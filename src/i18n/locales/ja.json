@@ -1544,5 +1544,6 @@
   "Redone": "やり直しました",
   "Changed source links": "ソースリンクを変更しました",
   "Rated an item 1 star": "項目を星 1 つに評価しました",
-  "Rated {value0} items 1 star": "{value0} 件を星 1 つに評価しました"
+  "Rated {value0} items 1 star": "{value0} 件を星 1 つに評価しました",
+  "Matches": "一致"
 }

@@ -1544,5 +1544,6 @@
   "Redone": "Tehty uudelleen",
   "Changed source links": "Muutettiin lähdelinkkejä",
   "Rated an item 1 star": "Arvioitiin kohde yhdellä tähdellä",
-  "Rated {value0} items 1 star": "Arvioitiin {value0} kohdetta yhdellä tähdellä"
+  "Rated {value0} items 1 star": "Arvioitiin {value0} kohdetta yhdellä tähdellä",
+  "Matches": "Osumat"
 }
