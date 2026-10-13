@@ -759,8 +759,9 @@ export function GridScreen({
       : currentItems[currentIndex + 1]?.root_id ?? currentItems[currentIndex - 1]?.root_id ?? null;
     inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
     const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
-    if (decision === 'accept') await entityMutations.setTargetLifecycle(target, 'active');
-    else await entityMutations.rejectTarget(target);
+    if (decision === 'reject') return entityMutations.rejectTarget(target);
+    await entityMutations.setTargetLifecycle(target, 'active');
+    return true;
   }, []);
 
   const resolveRootNeighbor = useCallback(async (session: NonNullable<typeof viewerSession>, delta: number) => {

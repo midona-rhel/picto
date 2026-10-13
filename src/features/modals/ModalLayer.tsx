@@ -85,7 +85,7 @@ export function ModalLayer() {
     <>
       <ConfirmModal
         open={confirm.open}
-        onClose={() => setConfirm({ ...confirm, open: false })}
+        onClose={() => { confirm.onCancel?.(); setConfirm({ ...confirm, open: false }); }}
         onConfirm={() => { confirm.onConfirm(); setConfirm({ ...confirm, open: false }); }}
         title={confirm.title}
         message={confirm.message}

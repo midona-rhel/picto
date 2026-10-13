@@ -366,12 +366,12 @@ pub fn dispatch_library(
             read(application.patch_metadata(&input.target, &input.patch)?)
         }
         "items.delete" => {
-            let input: TargetInput = parse(args_json)?;
-            read(application.delete_items(&input.target)?)
+            let input: DeleteItemsInput = parse(args_json)?;
+            read(application.delete_items(&input.target, input.require_undoable)?)
         }
         "items.reject_delete" => {
-            let input: TargetInput = parse(args_json)?;
-            read(application.reject_items(&input.target)?)
+            let input: DeleteItemsInput = parse(args_json)?;
+            read(application.reject_items(&input.target, input.require_undoable)?)
         }
         "items.organize_into_collection" => {
             let input: picto_library::OrganizeCollectionInput = parse(args_json)?;
@@ -917,6 +917,17 @@ struct RootInput {
 #[derive(Deserialize)]
 struct TargetInput {
     target: picto_library::selection::SelectionTarget,
+}
+
+#[derive(Deserialize)]
+struct DeleteItemsInput {
+    target: picto_library::selection::SelectionTarget,
+    #[serde(default = "require_delete_undo")]
+    require_undoable: bool,
+}
+
+fn require_delete_undo() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

@@ -86,35 +86,36 @@ export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecy
   settleSelectionAfterMutation();
 }
 
-export async function permanentlyDeleteTarget(target: EntityTarget): Promise<void> {
-  await deleteTarget(target, deleteItems, 'items.delete');
+export async function permanentlyDeleteTarget(target: EntityTarget, requireUndoable = true): Promise<void> {
+  await deleteTarget(target, deleteItems, 'items.delete', requireUndoable);
 }
 
 /**
  * Reject Inbox items: to Trash, or straight out of the library when the
  * "Rejected items" setting says so. Confirm deletes that cannot be undone.
  */
-export async function rejectTarget(target: EntityTarget): Promise<void> {
+export async function rejectTarget(target: EntityTarget): Promise<boolean> {
   const action = await getSettings().then((settings) => settings.rejectAction).catch(() => 'trash' as const);
   if (action === 'delete') {
-    await requestPermanentDelete(target, null, {
+    return requestPermanentDelete(target, null, {
       onlyNonUndoable: true,
-      remove: (selection) => deleteTarget(selection, rejectDeleteItems, 'items.reject'),
+      remove: (selection, requireUndoable) => deleteTarget(selection, rejectDeleteItems, 'items.reject', requireUndoable),
     });
-    return;
   }
   await setTargetLifecycle(target, 'trash');
+  return true;
 }
 
 async function deleteTarget(
   target: EntityTarget,
-  remove: (target: EntityTarget) => Promise<unknown>,
+  remove: (target: EntityTarget, requireUndoable: boolean) => Promise<unknown>,
   command: string,
+  requireUndoable: boolean,
 ): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
     const before = await getHistoryState().catch(() => undefined);
-    await remove(target);
+    await remove(target, requireUndoable);
     if (before) await announceUndoableMutation(command, before.undo?.entry_id ?? null);
 
     if (target.kind === 'explicit') {

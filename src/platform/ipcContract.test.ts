@@ -315,8 +315,12 @@ const CASES: Record<string, () => unknown> = {
   'entityApi.deleteItems': async () => {
     await entityApi.deleteItems(explicitTarget);
     await entityApi.deleteItems(queryTarget);
+    await entityApi.deleteItems(explicitTarget, false);
   },
-  'entityApi.rejectDeleteItems': () => entityApi.rejectDeleteItems(explicitTarget),
+  'entityApi.rejectDeleteItems': async () => {
+    await entityApi.rejectDeleteItems(explicitTarget);
+    await entityApi.rejectDeleteItems(explicitTarget, false);
+  },
   'entityApi.getSelectionSummary': async () => {
     for (const target of ALL_TARGETS) await entityApi.getSelectionSummary(target);
   },

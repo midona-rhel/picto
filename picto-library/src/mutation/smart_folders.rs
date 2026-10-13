@@ -237,11 +237,14 @@ impl Library {
                 PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: Some(HistoryEntry::for_command(
-                        "smart_folders.delete",
-                        "Delete smart folder",
-                        SemanticChange::Compound(changes),
-                    )),
+                    history: Some(
+                        HistoryEntry::for_command(
+                            "smart_folders.delete",
+                            "Delete smart folder",
+                            SemanticChange::Compound(changes),
+                        )
+                        .about(definitions.len() as u64, None),
+                    ),
                 },
             ))
         })?;

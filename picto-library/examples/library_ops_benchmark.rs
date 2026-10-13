@@ -58,7 +58,7 @@ fn main() -> R<()> {
         let mut undos = Vec::new();
         for _ in 0..runs {
             let started = Instant::now();
-            library.permanently_delete(&target, now(), 500)?;
+            library.permanently_delete(&target, now(), 500, false)?;
             deletes.push(ms(started));
             assert!(library.pending_blob_cleanup(500)?.is_empty());
             let started = Instant::now();
@@ -347,7 +347,7 @@ fn main() -> R<()> {
         let target = explicit(&ids[start..start + 1_000]);
         library.set_lifecycle(&target, Lifecycle::Trash)?;
         let t = Instant::now();
-        library.permanently_delete(&target, now(), 0)?;
+        library.permanently_delete(&target, now(), 0, false)?;
         del_ms.push(ms(t));
     }
     emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);
