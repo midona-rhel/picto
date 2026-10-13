@@ -25,6 +25,13 @@ describe('describeHistoryEntry', () => {
     expect(describeHistoryEntry(entry('settings.something'))).toBe('developer label');
   });
 
+  it.each([
+    [1, 'Deleted a smart folder'],
+    [3, 'Deleted 3 smart folders'],
+  ])('describes deletion of %i smart folders', (count, expected) => {
+    expect(describeHistoryEntry(entry('smart_folders.delete', count))).toBe(expected);
+  });
+
   it('describes renderer metadata patches and watch edits accurately', () => {
     expect(describeHistoryEntry(entry('items.patch_metadata', 2, 'rating:4'))).toBe('Rated 2 items 4 stars');
     expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'rating:1'))).toBe('Rated an item 1 star');

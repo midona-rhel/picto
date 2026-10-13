@@ -62,7 +62,7 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'folders.delete': (count) => (count === 1 ? t('Deleted a folder') : t('Deleted {value0} folders', { value0: count.toLocaleString() })),
   'smart_folders.create': () => t('Created a smart folder'),
   'smart_folders.update': () => t('Edited a smart folder'),
-  'smart_folders.delete': () => t('Deleted a smart folder'),
+  'smart_folders.delete': (count) => (count === 1 ? t('Deleted a smart folder') : t('Deleted {value0} smart folders', { value0: count.toLocaleString() })),
   'smart_folders.reorder': () => t('Reordered smart folders'),
   'tags.rename_or_merge': (_count, detail) => (detail === 'merge' ? t('Merged tags') : t('Renamed a tag')),
   'tags.delete': () => t('Deleted a tag'),

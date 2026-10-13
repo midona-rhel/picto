@@ -1531,6 +1531,7 @@
   "Created a smart folder": "Luotiin älykansio",
   "Edited a smart folder": "Muokattiin älykansiota",
   "Deleted a smart folder": "Poistettiin älykansio",
+  "Deleted {value0} smart folders": "Poistettiin {value0} älykansiota",
   "Reordered smart folders": "Järjestettiin älykansiot uudelleen",
   "Merged tags": "Yhdistettiin tunnisteet",
   "Renamed a tag": "Nimettiin tunniste uudelleen",

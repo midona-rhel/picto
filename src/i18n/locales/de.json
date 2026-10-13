@@ -1531,6 +1531,7 @@
   "Created a smart folder": "Einen intelligenten Ordner erstellt",
   "Edited a smart folder": "Einen intelligenten Ordner bearbeitet",
   "Deleted a smart folder": "Einen intelligenten Ordner gelöscht",
+  "Deleted {value0} smart folders": "{value0} intelligente Ordner gelöscht",
   "Reordered smart folders": "Intelligente Ordner neu angeordnet",
   "Merged tags": "Tags zusammengeführt",
   "Renamed a tag": "Einen Tag umbenannt",

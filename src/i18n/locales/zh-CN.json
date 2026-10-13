@@ -1531,6 +1531,7 @@
   "Created a smart folder": "已创建智能文件夹",
   "Edited a smart folder": "已编辑智能文件夹",
   "Deleted a smart folder": "已删除智能文件夹",
+  "Deleted {value0} smart folders": "已删除 {value0} 个智能文件夹",
   "Reordered smart folders": "已重新排序智能文件夹",
   "Merged tags": "已合并标签",
   "Renamed a tag": "已重命名标签",

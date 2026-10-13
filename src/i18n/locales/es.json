@@ -1531,6 +1531,7 @@
   "Created a smart folder": "Se creó una carpeta inteligente",
   "Edited a smart folder": "Se editó una carpeta inteligente",
   "Deleted a smart folder": "Se eliminó una carpeta inteligente",
+  "Deleted {value0} smart folders": "Se eliminaron {value0} carpetas inteligentes",
   "Reordered smart folders": "Se reordenaron las carpetas inteligentes",
   "Merged tags": "Se combinaron etiquetas",
   "Renamed a tag": "Se renombró una etiqueta",

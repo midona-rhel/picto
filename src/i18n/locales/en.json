@@ -1531,6 +1531,7 @@
   "Created a smart folder": "Created a smart folder",
   "Edited a smart folder": "Edited a smart folder",
   "Deleted a smart folder": "Deleted a smart folder",
+  "Deleted {value0} smart folders": "Deleted {value0} smart folders",
   "Reordered smart folders": "Reordered smart folders",
   "Merged tags": "Merged tags",
   "Renamed a tag": "Renamed a tag",

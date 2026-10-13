@@ -1531,6 +1531,7 @@
   "Created a smart folder": "スマートフォルダを作成しました",
   "Edited a smart folder": "スマートフォルダを編集しました",
   "Deleted a smart folder": "スマートフォルダを削除しました",
+  "Deleted {value0} smart folders": "スマートフォルダを {value0} 件削除しました",
   "Reordered smart folders": "スマートフォルダを並べ替えました",
   "Merged tags": "タグを統合しました",
   "Renamed a tag": "タグの名前を変更しました",
