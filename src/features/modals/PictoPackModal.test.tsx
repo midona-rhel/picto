@@ -1,7 +1,9 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/render';
 import { PictoPackModal } from './PictoPackModal';
+import * as taskGate from '../../runtime/taskGate';
+import { importPictoPack } from '../../platform/pictoPackApi';
 
 vi.mock('../../platform/pictoPackApi', async (original) => ({
   ...await original<typeof import('../../platform/pictoPackApi')>(),
@@ -34,6 +36,11 @@ test('previews an inspected pack before importing it', () => {
   expect(screen.getByText('Portfolio')).toBeVisible();
   expect(screen.getByText('Subscriptions, provider history, authentication, and folder watch paths are never included.')).toBeVisible();
   expect(screen.getByText('2.00 KB')).toBeVisible();
+  const gate = vi.spyOn(taskGate, 'allowTaskAction').mockReturnValue(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+  expect(gate).toHaveBeenCalledWith('import');
+  expect(importPictoPack).not.toHaveBeenCalled();
+  gate.mockRestore();
 });
 
 test('explains that a smart-folder export is an item snapshot without rules', () => {

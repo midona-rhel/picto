@@ -162,11 +162,13 @@ export function pictoPackPathFromDrop(paths: string[]): string | null {
 }
 
 export async function openPictoPackImport(path: string): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const summary = await inspectPictoPack(path);
   store.set(pictoPackModalAtom, { open: true, mode: 'import', path, summary });
 }
 
 export async function chooseAndImportPictoPack(): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openFile'],
     multiple: false,

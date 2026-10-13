@@ -36,6 +36,14 @@ function buildMenuTemplate(platform = 'linux', overrides = {}) {
   return template;
 }
 
+test.each(['darwin', 'win32', 'linux'])('all native import entries respect the running-task gate on %s', (platform) => {
+  const template = buildMenuTemplate(platform, { commandContext: { canImport: false } });
+  const file = template.find((item) => item.label === 'File').submenu;
+  for (const label of ['Import Files…', 'Import Folder…', 'Import Picto Pack…']) {
+    expect(file.find((item) => item.label === label).enabled).toBe(false);
+  }
+});
+
 test.each(['darwin', 'win32', 'linux'])('folder removal exclusively owns the delete accelerator on %s', (platform) => {
   const sendToFocusedWindow = vi.fn();
   const template = buildMenuTemplate(platform, {

@@ -219,6 +219,7 @@ export function createMenuManager({
           },
           {
             label: commandContext.importPictoPackLabel || 'Import Picto Pack…',
+            enabled: commandContext.canImport !== false,
             click: () => sendToMainWindow('menu:import-picto-pack'),
           },
           { type: 'separator' },
