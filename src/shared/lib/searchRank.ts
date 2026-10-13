@@ -25,13 +25,13 @@ export function matchRank(text: string, needle: string): number | null {
  * of the same rank keep their input order; a blank query returns the input.
  */
 export function rankMatches<T>(items: readonly T[], query: string, keys: (item: T) => readonly string[]): T[] {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = query.trim().toLowerCase();
   if (!needle) return [...items];
   const ranked: Array<{ item: T; rank: number; index: number }> = [];
   items.forEach((item, index) => {
     let best: number | null = null;
     for (const key of keys(item)) {
-      const rank = matchRank(key.toLocaleLowerCase(), needle);
+      const rank = matchRank(key.toLowerCase(), needle);
       if (rank != null && (best == null || rank < best)) best = rank;
     }
     if (best != null) ranked.push({ item, rank: best, index });

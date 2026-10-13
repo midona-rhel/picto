@@ -304,6 +304,33 @@ describe('TagSelectPanel assignment', () => {
     expect(onApplyTags).toHaveBeenLastCalledWith(['foo:cat', 'bar:cat']);
   });
 
+  it.each(['tr', 'az'])('finds qualified ASCII I searches in the %s runtime locale', async (locale) => {
+    const lower = String.prototype.toLocaleLowerCase;
+    const localized = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (this: string) {
+      return lower.call(this, locale);
+    });
+    try {
+      const store = createStore();
+      const onApplyTags = vi.fn();
+      store.set(tagSelectPortalAtom, { open: true, selectedTags: ['foo:Images'], onApplyTags });
+      mocks.getPaginated.mockResolvedValue({
+        tags: [{ tag_id: 3, namespace_id: 3, namespace: 'bar', subname: 'Images', active_count: 7, assignment_count: 7 }],
+        next_cursor: null,
+        revision: 1,
+      });
+      await act(async () => {
+        render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      });
+      fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'bar:IMAGES' } });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 170)); });
+      expect(document.querySelectorAll('[data-tag-index]')).toHaveLength(1);
+      fireEvent.click(screen.getByText('Images'));
+      expect(onApplyTags).toHaveBeenLastCalledWith(['foo:Images', 'bar:Images']);
+    } finally {
+      localized.mockRestore();
+    }
+  });
+
   it('keeps the settled tag view until the current backend search returns', async () => {
     const store = createStore();
     store.set(tagSelectPortalAtom, {

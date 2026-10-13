@@ -297,13 +297,13 @@ export function TagSelectPanel() {
     }
 
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
-    const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLocaleLowerCase();
+    const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLowerCase();
     const matching = rankMatches(candidates, normalizedQuery, (tag) => (
       normalizedQuery.includes(':') ? [formatTag(tag)] : [tag.subname || formatTag(tag)]
     ));
     const seen = new Set<string>();
     return matching.filter((tag) => {
-      const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
+      const visibleName = (tag.subname || formatTag(tag)).toLowerCase();
       if (seen.has(visibleName)) return false;
       seen.add(visibleName);
       return true;
@@ -317,7 +317,7 @@ export function TagSelectPanel() {
     const name = settledRemoteView.namespace && !trimmed.includes(':')
       ? `${settledRemoteView.namespace}:${trimmed}`
       : trimmed;
-    const alreadyExists = tags.some((tag) => formatTag(tag).toLocaleLowerCase() === name.toLocaleLowerCase());
+    const alreadyExists = tags.some((tag) => formatTag(tag).toLowerCase() === name.toLowerCase());
     return alreadyExists ? null : tagRecord(name);
   }, [onApplyTagFilter, query, settledRemoteView, sidebarMode, tags]);
 

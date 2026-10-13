@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { matchRank, rankMatches } from './searchRank';
 
 describe('matchRank', () => {
@@ -37,5 +37,20 @@ describe('rankMatches', () => {
 
   it('returns everything for a blank query', () => {
     expect(rankMatches(names, '  ', (name) => [name])).toEqual(names);
+  });
+
+  it.each(['tr', 'az'])('keeps ASCII I matching independent of the %s runtime locale', (locale) => {
+    const lower = String.prototype.toLocaleLowerCase;
+    const localized = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (this: string) {
+      return lower.call(this, locale);
+    });
+    try {
+      const items = ['AI tags', 'Images', 'icon', '\u0131rmak'];
+      for (const query of ['i', ' I ']) {
+        expect(rankMatches(items, query, (name) => [name])).toEqual(['Images', 'icon', 'AI tags']);
+      }
+    } finally {
+      localized.mockRestore();
+    }
   });
 });
