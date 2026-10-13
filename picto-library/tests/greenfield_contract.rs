@@ -3548,10 +3548,21 @@ fn smart_folder_definitions_are_typed_cycle_safe_and_session_undoable() {
     assert_eq!(deleted.deleted_smart_folder_ids.len(), 3);
     assert_eq!(deleted.fallback_smart_folder_id, None);
     assert!(library.smart_folders().unwrap().is_empty());
+    let entry = library.history().state().undo.unwrap();
+    assert_eq!(entry.command, "smart_folders.delete");
+    assert_eq!(entry.count, 3);
     library.undo().unwrap().unwrap();
     assert_eq!(library.smart_folders().unwrap().len(), 3);
+    assert_eq!(library.history().state().redo.unwrap(), entry);
     library.redo().unwrap().unwrap();
     assert!(library.smart_folders().unwrap().is_empty());
+    assert_eq!(library.history().state().undo.unwrap(), entry);
+
+    library.undo().unwrap().unwrap();
+    let deleted = library.delete_smart_folder(child).unwrap();
+    assert_eq!(deleted.deleted_smart_folder_ids, vec![child]);
+    assert_eq!(library.smart_folders().unwrap().len(), 2);
+    assert_eq!(library.history().state().undo.unwrap().count, 1);
 }
 
 #[test]

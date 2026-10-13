@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setLocale } from '../i18n';
 import { describeHistoryEntry } from './historyMessages';
 
 const entry = (command: string, count = 0, detail: string | null = null) => ({
@@ -6,6 +7,15 @@ const entry = (command: string, count = 0, detail: string | null = null) => ({
 });
 
 describe('describeHistoryEntry', () => {
+  afterEach(() => setLocale('en'));
+
+  it('formats numbers using the selected application language', () => {
+    setLocale('de');
+    expect(describeHistoryEntry(entry('items.set_lifecycle', 1000, 'trash'))).toContain('1.000');
+    setLocale('en');
+    expect(describeHistoryEntry(entry('items.set_lifecycle', 1000, 'trash'))).toContain('1,000');
+  });
+
   it('says what happened to the items in plain words', () => {
     expect(describeHistoryEntry(entry('items.set_lifecycle', 3, 'trash'))).toBe('Moved 3 items to Trash');
     expect(describeHistoryEntry(entry('items.set_lifecycle', 1, 'inbox'))).toBe('Moved an item to the Inbox');
@@ -23,6 +33,13 @@ describe('describeHistoryEntry', () => {
 
   it('falls back to the backend label for a command it does not know', () => {
     expect(describeHistoryEntry(entry('settings.something'))).toBe('developer label');
+  });
+
+  it.each([
+    [1, 'Deleted a smart folder'],
+    [3, 'Deleted 3 smart folders'],
+  ])('describes deletion of %i smart folders', (count, expected) => {
+    expect(describeHistoryEntry(entry('smart_folders.delete', count))).toBe(expected);
   });
 
   it('describes renderer metadata patches and watch edits accurately', () => {

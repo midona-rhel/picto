@@ -1530,6 +1530,7 @@
   "Created a smart folder": "Dossier intelligent créé",
   "Edited a smart folder": "Dossier intelligent modifié",
   "Deleted a smart folder": "Dossier intelligent supprimé",
+  "Deleted {value0} smart folders": "{value0} dossiers intelligents supprimés",
   "Reordered smart folders": "Dossiers intelligents réordonnés",
   "Merged tags": "Tags fusionnés",
   "Renamed a tag": "Tag renommé",

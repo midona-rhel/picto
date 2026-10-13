@@ -1530,6 +1530,7 @@
   "Created a smart folder": "Pasta inteligente criada",
   "Edited a smart folder": "Pasta inteligente editada",
   "Deleted a smart folder": "Pasta inteligente excluída",
+  "Deleted {value0} smart folders": "{value0} pastas inteligentes excluídas",
   "Reordered smart folders": "Pastas inteligentes reordenadas",
   "Merged tags": "Tags mescladas",
   "Renamed a tag": "Tag renomeada",
