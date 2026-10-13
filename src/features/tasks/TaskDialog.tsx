@@ -40,6 +40,7 @@ import btnStyles from '../../shared/styles/actionButton.module.css';
 import type { ForegroundTask } from '../../shared/types/generated/application/ForegroundTask';
 import type { TaskFailure } from '../../shared/types/generated/application/TaskFailure';
 import { t } from '../../i18n';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   formatCount,
   formatTimeLeft,
@@ -284,25 +285,27 @@ function TaskView({ task }: { task: ForegroundTask }) {
           </div>
           <div className={styles.windowButtons}>
             {ended ? null : (
+              <KbdTooltip label={t('Minimize')}>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label={t('Minimize')}
+                  onClick={() => minimizeTask(task.task_id)}
+                >
+                  <IconMinus size={15} stroke={1.75} />
+                </button>
+              </KbdTooltip>
+            )}
+            <KbdTooltip label={t('Close')}>
               <button
                 type="button"
                 className={styles.iconButton}
-                aria-label={t('Minimize')}
-                title={t('Minimize')}
-                onClick={() => minimizeTask(task.task_id)}
+                aria-label={t('Close')}
+                onClick={ended ? dismiss : askToStop}
               >
-                <IconMinus size={15} stroke={1.75} />
+                <IconX size={15} stroke={1.75} />
               </button>
-            )}
-            <button
-              type="button"
-              className={styles.iconButton}
-              aria-label={t('Close')}
-              title={t('Close')}
-              onClick={ended ? dismiss : askToStop}
-            >
-              <IconX size={15} stroke={1.75} />
-            </button>
+            </KbdTooltip>
           </div>
         </div>
         <Progress task={task} />
@@ -445,15 +448,16 @@ export function TaskBar() {
                 <IconPlayerPlay size={15} stroke={1.75} />
               </button>
             ) : null}
-            <button
-              type="button"
-              className={styles.iconButton}
-              aria-label={t('Show')}
-              title={t('Show')}
-              onClick={() => showTask(task.task_id)}
-            >
-              <IconChevronUp size={15} stroke={1.75} />
-            </button>
+            <KbdTooltip label={t('Show')}>
+              <button
+                type="button"
+                className={styles.iconButton}
+                aria-label={t('Show')}
+                onClick={() => showTask(task.task_id)}
+              >
+                <IconChevronUp size={15} stroke={1.75} />
+              </button>
+            </KbdTooltip>
           </div>
         );
       })}
