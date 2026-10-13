@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "フォルダを複製しました",
   "Edited a folder": "フォルダを編集しました",
   "Changed a folder’s cover": "フォルダのカバーを変更しました",
-  "Started watching a folder": "フォルダの監視を開始しました",
   "Stopped watching a folder": "フォルダの監視を停止しました",
   "Renamed a folder": "フォルダの名前を変更しました",
   "Moved a folder": "フォルダを移動しました",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "項目を完全に削除しました",
   "Deleted {value0} items permanently": "{value0} 件を完全に削除しました",
   "Rejected an item": "項目を却下しました",
-  "Rejected {value0} items": "{value0} 件を却下しました"
+  "Rejected {value0} items": "{value0} 件を却下しました",
+  "Changed folder watching": "フォルダの監視設定を変更しました",
+  "Rated an item 1 star": "項目を星 1 つに評価しました",
+  "Rated {value0} items 1 star": "{value0} 件を星 1 つに評価しました"
 }

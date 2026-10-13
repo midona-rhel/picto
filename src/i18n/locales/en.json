@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "Duplicated a folder",
   "Edited a folder": "Edited a folder",
   "Changed a folder’s cover": "Changed a folder’s cover",
-  "Started watching a folder": "Started watching a folder",
   "Stopped watching a folder": "Stopped watching a folder",
   "Renamed a folder": "Renamed a folder",
   "Moved a folder": "Moved a folder",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "Deleted an item permanently",
   "Deleted {value0} items permanently": "Deleted {value0} items permanently",
   "Rejected an item": "Rejected an item",
-  "Rejected {value0} items": "Rejected {value0} items"
+  "Rejected {value0} items": "Rejected {value0} items",
+  "Changed folder watching": "Changed folder watching",
+  "Rated an item 1 star": "Rated an item 1 star",
+  "Rated {value0} items 1 star": "Rated {value0} items 1 star"
 }

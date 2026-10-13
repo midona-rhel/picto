@@ -1518,7 +1518,6 @@
   "Duplicated a folder": "Einen Ordner dupliziert",
   "Edited a folder": "Einen Ordner bearbeitet",
   "Changed a folder’s cover": "Cover eines Ordners geändert",
-  "Started watching a folder": "Überwachung eines Ordners gestartet",
   "Stopped watching a folder": "Überwachung eines Ordners beendet",
   "Renamed a folder": "Einen Ordner umbenannt",
   "Moved a folder": "Einen Ordner verschoben",
@@ -1557,5 +1556,8 @@
   "Deleted an item permanently": "Ein Element endgültig gelöscht",
   "Deleted {value0} items permanently": "{value0} Elemente endgültig gelöscht",
   "Rejected an item": "Ein Element abgelehnt",
-  "Rejected {value0} items": "{value0} Elemente abgelehnt"
+  "Rejected {value0} items": "{value0} Elemente abgelehnt",
+  "Changed folder watching": "Ordnerüberwachung geändert",
+  "Rated an item 1 star": "Ein Element mit 1 Stern bewertet",
+  "Rated {value0} items 1 star": "{value0} Elemente mit 1 Stern bewertet"
 }

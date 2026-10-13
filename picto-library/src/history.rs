@@ -220,6 +220,9 @@ pub struct DeletedRootsState {
     pub source_items: Arc<Vec<(i64, u32)>>,
     /// Folders whose cover was a deleted root.
     pub folder_covers: Arc<Vec<(u32, u32)>>,
+    pub recent_views: Arc<Vec<(u32, i64)>>,
+    /// Cascaded queue rows, serialized for set-based restoration.
+    pub work_items_json: Arc<String>,
     pub files: Arc<Vec<FileId>>,
 }
 
@@ -250,6 +253,8 @@ impl DeletedRootsState {
             + provenance
             + self.structure.membership_bytes()
             + (self.source_posts.len() + self.source_items.len() + self.folder_covers.len()) * 16
+            + self.recent_views.len() * 16
+            + self.work_items_json.len()
             + self.files.len() * 4
             + self.roots.serialized_size()
             + self.image_media.serialized_size()

@@ -1316,6 +1316,12 @@ impl Library {
                 "metadata patch does not change a supported field".into(),
             ));
         }
+        let detail = match (rating, notes.is_some(), source_urls.is_some()) {
+            (Some(rating), false, false) => Some(format!("rating:{}", rating.bitmap_key())),
+            (None, true, false) => Some("notes".to_owned()),
+            (None, false, true) => Some("source_urls".to_owned()),
+            _ => None,
+        };
         let target = target.clone();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
@@ -1442,7 +1448,7 @@ impl Library {
                 "Change metadata",
                 SemanticChange::Compound(changes),
             )
-            .about(selection.len(), None);
+            .about(selection.len(), detail.as_deref());
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1852,13 +1858,15 @@ impl Library {
     ) -> Result<T> {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (output, _, history_entry) = self.database.published_write(
+        let (output, _, ()) = self.database.published_write(
             priority,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| operation(transaction, revision, snapshot),
-            move |_, delta| publish_delta(&projections, &publication, delta),
+            |_, delta| {
+                // Cleanup shares this writer: protect retained files before releasing it.
+                push_history(&self.history, publish_delta(&projections, &publication, delta));
+            },
         )?;
-        push_history(&self.history, history_entry);
         Ok(output)
     }
 

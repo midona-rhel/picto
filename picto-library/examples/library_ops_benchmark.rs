@@ -5,6 +5,7 @@
 //! Prints `ROW|operation|size|median ms|p90 ms|samples`. Local measurement only:
 //! never commit its output.
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
+//! Use `--delete-only` for bounded permanent-delete and undo rows.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -48,6 +49,26 @@ fn main() -> R<()> {
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
+
+    if std::env::args().any(|arg| arg == "--delete-only") {
+        let target = explicit(&ids[..500]);
+        library.set_lifecycle(&target, Lifecycle::Trash)?;
+        library.history().clear();
+        let mut deletes = Vec::new();
+        let mut undos = Vec::new();
+        for _ in 0..runs {
+            let started = Instant::now();
+            library.permanently_delete(&target, now(), 500)?;
+            deletes.push(ms(started));
+            assert!(library.pending_blob_cleanup(500)?.is_empty());
+            let started = Instant::now();
+            library.undo()?.expect("delete recorded history");
+            undos.push(ms(started));
+        }
+        emit("permanently_delete 500 (undoable)", "500", &mut deletes);
+        emit("undo permanently_delete 500", "500", &mut undos);
+        return Ok(());
+    }
 
     // Missing candidates must not force a walk through the complete query order.
     let last = *ids.last().expect("non-empty fixture");

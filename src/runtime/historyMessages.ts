@@ -16,6 +16,9 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'items.set_rating': (count, detail) => {
     const stars = Number(detail ?? 0);
     if (!stars) return (count === 1 ? t('Cleared the rating of an item') : t('Cleared the rating of {value0} items', { value0: count.toLocaleString() }));
+    if (stars === 1) return count === 1
+      ? t('Rated an item 1 star')
+      : t('Rated {value0} items 1 star', { value0: count.toLocaleString() });
     return count === 1
       ? t('Rated an item {value0} stars', { value0: stars })
       : t('Rated {value0} items {value1} stars', { value0: count.toLocaleString(), value1: stars });
@@ -29,7 +32,12 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'items.set_folder': (count, detail) => (detail === 'remove'
     ? (count === 1 ? t('Removed an item from a folder') : t('Removed {value0} items from a folder', { value0: count.toLocaleString() }))
     : (count === 1 ? t('Added an item to a folder') : t('Added {value0} items to a folder', { value0: count.toLocaleString() }))),
-  'items.patch_metadata': (count) => (count === 1 ? t('Changed the details of an item') : t('Changed the details of {value0} items', { value0: count.toLocaleString() })),
+  'items.patch_metadata': (count, detail) => {
+    if (detail?.startsWith('rating:')) return DESCRIPTIONS['items.set_rating'](count, detail.slice(7));
+    if (detail === 'notes') return t('Changed notes');
+    if (detail === 'source_urls') return t('Changed source links');
+    return count === 1 ? t('Changed the details of an item') : t('Changed the details of {value0} items', { value0: count.toLocaleString() });
+  },
   'items.set_notes': () => t('Changed notes'),
   'items.set_source_urls': () => t('Changed source links'),
   'items.rename': () => t('Renamed an item'),
@@ -45,7 +53,7 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'folders.duplicate': () => t('Duplicated a folder'),
   'folders.set_metadata': () => t('Edited a folder'),
   'folders.set_cover': () => t('Changed a folder’s cover'),
-  'folders.set_watch': () => t('Started watching a folder'),
+  'folders.set_watch': () => t('Changed folder watching'),
   'folders.clear_watch': () => t('Stopped watching a folder'),
   'folders.rename': () => t('Renamed a folder'),
   'folders.move': () => t('Moved a folder'),
