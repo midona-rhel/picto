@@ -59,6 +59,9 @@ impl Library {
             )));
         }
         let outputs = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(inputs.len());
             let mut created_root_ids = Vec::with_capacity(inputs.len());
@@ -204,6 +207,9 @@ impl Library {
             ));
         }
         let (collection_id, receipt) = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(input.members.len() + 1);
             let mut created_root_ids = Vec::with_capacity(input.members.len());
@@ -246,12 +252,12 @@ impl Library {
                     created_root_ids.push(output.root_id);
                 }
                 if let Some(task) = task {
-                    // Members join the collection; undo removes the collection
-                    // only when this import created all of it (below).
+                    // Partial collections are ungrouped during rollback, exposing
+                    // these created media roots for deletion.
                     crate::mutation::tasks::record_task_ingest(
                         transaction,
                         task,
-                        None,
+                        output.created_root.then_some(output.root_id),
                         &output.added_tags,
                         0,
                     )?;
@@ -289,8 +295,15 @@ impl Library {
             let creates_collection = (ordered_roots.len() >= 2
                 || preserve_singleton_collection)
                 && winning_collection_id.is_none();
+            let wholly_created = creates_collection && created_root_ids.len() == input.members.len();
             let (published_root, mut affected) =
                 if ordered_roots.len() >= 2 || preserve_singleton_collection {
+                    let before = task.filter(|_| !wholly_created).map(|_| {
+                        super::structure::capture_structure(
+                            transaction, &next,
+                            &ordered_roots.iter().map(|root| root.0).collect(), None,
+                        )
+                    }).transpose()?;
                     let output = crate::group::organize(
                         transaction,
                         revision,
@@ -314,6 +327,14 @@ impl Library {
                         None,
                     )?;
                     next = output.snapshot;
+                    if let (Some(task), Some(before)) = (task, before) {
+                        let after = super::structure::capture_structure(transaction, &next, &output.affected, None)?;
+                        super::tasks::record_task_undo(transaction, task, super::tasks::TaskUndo::Structure {
+                            affected: Arc::new(output.affected.clone()),
+                            before: Box::new(before),
+                            after: Box::new(after),
+                        })?;
+                    }
                     resources.insert("collections".to_owned());
                     (output.collection_id, output.affected)
                 } else {
@@ -362,10 +383,6 @@ impl Library {
                 }
             }
             if let Some(task) = task {
-                // A collection that absorbed items already in the library is
-                // not the import's to remove; only a wholly new one is.
-                let wholly_created = creates_collection
-                    && created_root_ids.len() == input.members.len();
                 crate::mutation::tasks::record_task_units(
                     transaction,
                     task,

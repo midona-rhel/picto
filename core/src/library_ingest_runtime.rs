@@ -88,6 +88,9 @@ fn settle_claimed(
     // that the first items should already be visible.
     let mut pending = PendingItems::default();
     for mut job in claimed {
+        if release_inactive_task(application, job.task_id, &[job.ingest_job_id], &now)? {
+            continue;
+        }
         match prepare_job(application, &mut job) {
             Ok(cleanup) => match job.payload {
                 PreparedIngestPayload::Item(input) => {
@@ -119,6 +122,9 @@ fn settle_claimed(
                 }
             },
             Err(error) => {
+                if release_inactive_task(application, job.task_id, &[job.ingest_job_id], &now)? {
+                    continue;
+                }
                 application
                     .library()
                     .fail_ingest_job(job.ingest_job_id, &error, &now)
@@ -131,6 +137,29 @@ fn settle_claimed(
     pending.flush(application, &now, auto_tag, report)?;
     crate::library_subscription_state::settle_ingest_runs(application, &now)?;
     Ok(())
+}
+
+fn release_inactive_task(
+    application: &LibraryApplication,
+    task: Option<picto_library::TaskId>,
+    jobs: &[i64],
+    now: &str,
+) -> Result<bool, String> {
+    if let Some(task) = task {
+        if application
+            .library()
+            .task_state(task)
+            .map_err(|error| error.to_string())?
+            != Some(picto_library::TaskState::Running)
+        {
+            application
+                .library()
+                .release_task_jobs(jobs, now)
+                .map_err(|error| error.to_string())?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 const PENDING_FLUSH_AFTER: std::time::Duration = std::time::Duration::from_millis(250);
@@ -171,6 +200,9 @@ impl PendingItems {
         let cleanup = std::mem::take(&mut self.cleanup);
         self.since = None;
         if jobs.is_empty() {
+            return Ok(());
+        }
+        if release_inactive_task(application, self.task, &jobs, now)? {
             return Ok(());
         }
         let ingested = ingest_items(application, &inputs, self.task, auto_tag);
@@ -225,6 +257,9 @@ fn settle_item(
     auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
+    if release_inactive_task(application, task, &[job_id], now)? {
+        return Ok(());
+    }
     let ingested = ingest_items(application, std::slice::from_ref(&input), task, auto_tag)
         .map(|mut values| values.remove(0));
     match ingested {
@@ -240,6 +275,10 @@ fn settle_item(
             Ok(())
         }
         Err(error) => {
+            if matches!(error, LibraryError::TaskNotRunning) {
+                application.library().release_task_jobs(&[job_id], now).map_err(|error| error.to_string())?;
+                return Ok(());
+            }
             if matches!(error, LibraryError::ImportDeleted) {
                 settle_deleted_import(application, job_id, std::slice::from_ref(&input), now)?;
                 report.skipped += 1;
@@ -273,6 +312,9 @@ fn settle_collection(
     auto_tag: bool,
     report: &mut CanonicalIngestRunReport,
 ) -> Result<(), String> {
+    if release_inactive_task(application, task, &[job_id], now)? {
+        return Ok(());
+    }
     let ingested = match (task, auto_tag) {
         (Some(task), _) => application
             .library()
@@ -294,6 +336,10 @@ fn settle_collection(
             report.cleanup_failures += cleanup_sources(cleanup);
         }
         Err(error) => {
+            if matches!(error, LibraryError::TaskNotRunning) {
+                application.library().release_task_jobs(&[job_id], now).map_err(|error| error.to_string())?;
+                return Ok(());
+            }
             if matches!(error, LibraryError::ImportDeleted) {
                 settle_deleted_import(application, job_id, &input.members, now)?;
                 report.skipped += 1;
@@ -636,6 +682,123 @@ mod tests {
             imported_at_ms: 1_700_000_000_000,
             captured_at_ms: None,
         }
+    }
+
+    #[test]
+    fn paused_or_stopped_claims_do_not_import_or_consume_attempts() {
+        for stop in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+            let library = application.library();
+            let task = library
+                .create_task("import", "test", "{}", true, false, 1)
+                .unwrap();
+            let mut jobs = Vec::new();
+            for index in 0..3 {
+                let path = directory.path().join(format!("{index}.png"));
+                let input =
+                    image_import(&path, &format!("claim-{index}"), [index * 50, 20, 30, 255]);
+                jobs.push(picto_library::TaskIngestJob {
+                    units: 1,
+                    job: PreparedIngestJob {
+                        job_key: format!("job-{index}"),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: true,
+                        payload: PreparedIngestPayload::Item(input),
+                    },
+                });
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            library.enqueue_task_jobs(task, &jobs, &now).unwrap();
+            library.complete_task_scan(task, 2).unwrap();
+            let claimed = library.claim_ingest_jobs(48, &now).unwrap();
+            assert_eq!(claimed.len(), 3);
+            if stop {
+                library.stop_task(task, false, 3).unwrap();
+            } else {
+                library.set_task_paused(task, true).unwrap();
+            }
+            let mut report = CanonicalIngestRunReport::default();
+            settle_claimed(&application, claimed, &now, &mut report).unwrap();
+            assert_eq!(report.ingested, 0);
+            assert_eq!(report.failed, 0);
+            assert!(directory.path().join("0.png").exists());
+            let record = library.task(task).unwrap().unwrap();
+            assert_eq!(record.added_units, 0);
+            assert_eq!(record.remaining_units, if stop { 0 } else { 3 });
+            if !stop {
+                library.set_task_paused(task, false).unwrap();
+                let claimed = library.claim_ingest_jobs(48, &now).unwrap();
+                assert!(claimed.iter().all(|job| job.attempt_count == 1));
+                settle_claimed(&application, claimed, &now, &mut report).unwrap();
+                library.settle_finished_tasks(4).unwrap();
+                assert_eq!(report.ingested, 3);
+                assert_eq!(
+                    library.task(task).unwrap().unwrap().state,
+                    picto_library::TaskState::Finished
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pause_after_buffering_prevents_publication_and_final_paused_job_can_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let library = application.library();
+        let task = library
+            .create_task("import", "buffered", "{}", true, false, 1)
+            .unwrap();
+        let path = directory.path().join("buffered.png");
+        let input = image_import(&path, "buffered", [10, 20, 30, 255]);
+        let now = chrono::Utc::now().to_rfc3339();
+        library
+            .enqueue_task_jobs(
+                task,
+                &[picto_library::TaskIngestJob {
+                    units: 1,
+                    job: PreparedIngestJob {
+                        job_key: "buffered".into(),
+                        source_kind: "manual".into(),
+                        source_path: path.to_string_lossy().into_owned(),
+                        source_item_id: None,
+                        delete_after_ingest: false,
+                        payload: PreparedIngestPayload::Item(input.clone()),
+                    },
+                }],
+                &now,
+            )
+            .unwrap();
+        library.complete_task_scan(task, 2).unwrap();
+        let claimed = library.claim_ingest_jobs(1, &now).unwrap();
+        let mut pending = PendingItems {
+            task: Some(task),
+            ..Default::default()
+        };
+        pending.push(claimed[0].ingest_job_id, input.clone(), vec![path.clone()]);
+        library.set_task_paused(task, true).unwrap();
+        let mut report = CanonicalIngestRunReport::default();
+        pending
+            .flush(&application, &now, false, &mut report)
+            .unwrap();
+        assert_eq!(report.ingested, 0);
+        assert!(path.exists());
+        // The serialized mutation itself also rejects a claim that lost a race.
+        assert!(matches!(
+            library.ingest_batch_for_task(&[input], task, false),
+            Err(LibraryError::TaskNotRunning)
+        ));
+        library.set_task_paused(task, false).unwrap();
+        let claimed = library.claim_ingest_jobs(1, &now).unwrap();
+        settle_claimed(&application, claimed.clone(), &now, &mut report).unwrap();
+        library.set_task_paused(task, true).unwrap();
+        library.settle_finished_tasks(4).unwrap();
+        assert_eq!(
+            library.task(task).unwrap().unwrap().state,
+            picto_library::TaskState::Finished
+        );
     }
 
     #[test]

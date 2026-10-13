@@ -9,7 +9,8 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-12-import-tasks";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback";
+const IMPORT_TASKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-import-tasks";
 const NO_CLOUD_CLOCKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
 const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
 const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
@@ -116,7 +117,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            NO_CLOUD_CLOCKS_PREDECESSOR
+            IMPORT_TASKS_PREDECESSOR
+                | NO_CLOUD_CLOCKS_PREDECESSOR
                 | CHUNKED_ORDERS_PREDECESSOR
                 | WATCH_LIFECYCLE_PREDECESSOR
                 | SOURCE_ROOTS_PREDECESSOR
@@ -192,6 +194,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
@@ -241,6 +244,7 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -274,6 +278,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
@@ -839,6 +844,56 @@ mod tests {
             count(&connection, "SELECT COUNT(*) FROM browsing_dirty_root"),
             1
         );
+    }
+
+    #[test]
+    fn import_task_rollback_migration_backs_up_and_reopens() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE task_undo;
+            INSERT INTO task(task_id, kind, title, state, input_json, created_at_ms)
+            VALUES (1, 'import', 'Paused', 'paused', '{}', 1);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1",
+                [super::IMPORT_TASKS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&database_path).unwrap());
+        let connection = Connection::open(&database_path).unwrap();
+        assert!(super::has_table(&connection, "task_undo").unwrap());
+        assert_eq!(
+            connection
+                .query_row("SELECT state FROM task WHERE task_id=1", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "paused"
+        );
+        let backups = std::fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".pre-migration-")
+                    .then_some(path)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert!(!super::has_table(&backup, "task_undo").unwrap());
+        drop(connection);
+        drop(LibraryDatabase::open(&database_path).unwrap());
     }
 
     #[test]

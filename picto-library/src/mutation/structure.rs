@@ -748,9 +748,15 @@ pub(super) fn restore_structure(
         ));
     }
 
+    // Keep surviving rows in place: deleting them would cascade recent views,
+    // queued work and stable aliases even though the collection still exists.
+    let retained = replacement.roots.iter().map(|root| root.root_id.0).collect::<RoaringBitmap>();
     for root_id in affected {
         if snapshot.collection_orders.contains_key(&RootId(root_id)) {
             ordering::delete(transaction, OrderOwnerKind::Collection, root_id)?;
+        }
+        if retained.contains(root_id) {
+            continue;
         }
         crate::fts::remove_root(transaction, root_id)?;
         transaction.execute("DELETE FROM library_root WHERE root_id = ?1", [root_id])?;
@@ -781,7 +787,7 @@ pub(super) fn restore_structure(
             RootKind::Collection => {
                 transaction.execute(
                     "INSERT INTO library_item(local_id, stable_key, item_kind)
-                     VALUES (?1, ?2, 2)",
+                     VALUES (?1, ?2, 2) ON CONFLICT(local_id) DO NOTHING",
                     rusqlite::params![root.root_id.0, root.stable_key],
                 )?;
             }
@@ -790,7 +796,16 @@ pub(super) fn restore_structure(
             "INSERT INTO library_root
                  (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
                   captured_at_ms, modified_at_ms, media_count, total_size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(root_id) DO UPDATE SET
+                 name = excluded.name, notes = excluded.notes,
+                 source_urls_json = excluded.source_urls_json,
+                 cover_media_id = excluded.cover_media_id,
+                 imported_at_ms = excluded.imported_at_ms,
+                 captured_at_ms = excluded.captured_at_ms,
+                 modified_at_ms = excluded.modified_at_ms,
+                 media_count = excluded.media_count,
+                 total_size_bytes = excluded.total_size_bytes",
             rusqlite::params![
                 root.root_id.0,
                 root.name,

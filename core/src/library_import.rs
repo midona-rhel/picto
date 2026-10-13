@@ -146,6 +146,7 @@ pub(crate) fn attach_source_folder_watch(
     application: &LibraryApplication,
     input: &ManualImportInput,
     folders: &mut BTreeMap<(Option<u32>, String), FolderId>,
+    task: Option<picto_library::TaskId>,
 ) -> Result<(), String> {
     let source = fs::canonicalize(&input.paths[0]).map_err(|error| {
         format!(
@@ -164,19 +165,33 @@ pub(crate) fn attach_source_folder_watch(
         .library()
         .folder_child_capacity(input.parent_folder_id)
         .map_err(|error| error.to_string())?;
-    let folder_id = ensure_relative_folder(
+    let folder_id = ensure_relative_folder_for_task(
         application,
         input.parent_folder_id,
         truncate_relative_folder(&root_name, capacity).as_deref(),
         folders,
+        task,
     )?
     .ok_or_else(|| "Could not create a destination for the watched folder".to_owned())?;
-    application.set_folder_watch(&picto_library::FolderWatchInput {
-        folder_id,
-        path: source.to_string_lossy().into_owned(),
-        include_subfolders: input.include_subfolders,
-        lifecycle: Lifecycle::Inbox,
-    })?;
+    if let Some(task) = task {
+        application
+            .library()
+            .set_folder_watch_for_task(
+                folder_id,
+                &source.to_string_lossy(),
+                input.include_subfolders,
+                Lifecycle::Inbox,
+                task,
+            )
+            .map_err(|error| error.to_string())?;
+    } else {
+        application.set_folder_watch(&picto_library::FolderWatchInput {
+            folder_id,
+            path: source.to_string_lossy().into_owned(),
+            include_subfolders: input.include_subfolders,
+            lifecycle: Lifecycle::Inbox,
+        })?;
+    }
     Ok(())
 }
 
@@ -481,6 +496,16 @@ pub(crate) fn ensure_relative_folder(
     relative: Option<&Path>,
     cache: &mut BTreeMap<(Option<u32>, String), FolderId>,
 ) -> Result<Option<FolderId>, String> {
+    ensure_relative_folder_for_task(application, parent, relative, cache, None)
+}
+
+pub(crate) fn ensure_relative_folder_for_task(
+    application: &LibraryApplication,
+    parent: Option<FolderId>,
+    relative: Option<&Path>,
+    cache: &mut BTreeMap<(Option<u32>, String), FolderId>,
+    task: Option<picto_library::TaskId>,
+) -> Result<Option<FolderId>, String> {
     let Some(relative) = relative else {
         return Ok(parent);
     };
@@ -501,6 +526,12 @@ pub(crate) fn ensure_relative_folder(
             .map(|folder| folder.folder_id)
         {
             folder_id
+        } else if let Some(task) = task {
+            application
+                .library()
+                .create_folder_for_task(&name, current, task)
+                .map_err(|error| error.to_string())?
+                .0
         } else {
             application
                 .create_folder(picto_library::CreateFolderInput {
@@ -515,14 +546,20 @@ pub(crate) fn ensure_relative_folder(
     Ok(current)
 }
 
-pub(crate) fn collect_manual_candidates(
+/// Visit files and directories without retaining the selection. The queue's
+/// stable job keys deduplicate overlapping paths and interrupted scans.
+pub(crate) fn walk_manual_candidates(
     library_root: &Path,
     input: &ManualImportInput,
-) -> Result<Vec<ImportCandidate>, String> {
+    checkpoint: &dyn Fn() -> Result<bool, String>,
+    mut visit: impl FnMut(ImportCandidate, bool) -> Result<bool, String>,
+) -> Result<bool, String> {
     let library = fs::canonicalize(library_root)
         .map_err(|error| format!("Failed to resolve library path: {error}"))?;
-    let mut candidates = Vec::new();
     for value in &input.paths {
+        if !checkpoint()? {
+            return Ok(false);
+        }
         let path = fs::canonicalize(value)
             .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
         if path.starts_with(&library) {
@@ -537,24 +574,82 @@ pub(crate) fn collect_manual_candidates(
             continue;
         }
         if metadata.is_file() {
-            if is_media_path(&path) && !should_ignore(&path) {
-                candidates.push(ImportCandidate {
-                    path,
-                    relative_parent: None,
-                });
+            if is_media_path(&path)
+                && !should_ignore(&path)
+                && !visit(
+                    ImportCandidate {
+                        path,
+                        relative_parent: None,
+                    },
+                    false,
+                )?
+            {
+                return Ok(false);
             }
         } else if metadata.is_dir() {
             let root_name = path.file_name().map(PathBuf::from);
-            candidates.extend(collect_directory(
-                &path,
-                input.include_subfolders,
-                input.preserve_structure.then_some(root_name).flatten(),
-            )?);
+            if !visit(
+                ImportCandidate {
+                    path: path.clone(),
+                    relative_parent: root_name.clone(),
+                },
+                true,
+            )? {
+                return Ok(false);
+            }
+            let read = |directory: &Path| {
+                fs::read_dir(directory)
+                    .map_err(|error| format!("Failed to read {}: {error}", directory.display()))
+            };
+            // Keep iterators, not directory listings: memory scales with depth.
+            let mut stack = vec![read(&path)?];
+            while !stack.is_empty() {
+                if !checkpoint()? {
+                    return Ok(false);
+                }
+                let Some(entry) = stack.last_mut().unwrap().next() else {
+                    stack.pop();
+                    continue;
+                };
+                let entry = entry.map_err(|error| error.to_string())?;
+                let child = entry.path();
+                if should_ignore(&child) || child.starts_with(&library) {
+                    continue;
+                }
+                let kind = entry.file_type().map_err(|error| error.to_string())?;
+                if kind.is_symlink() {
+                    continue;
+                }
+                let directory = kind.is_dir();
+                if (directory && input.include_subfolders)
+                    || (kind.is_file() && is_media_path(&child) && !is_zip(&child))
+                {
+                    let relative = child
+                        .strip_prefix(&path)
+                        .map_err(|error| error.to_string())?;
+                    let relative = if directory {
+                        relative
+                    } else {
+                        relative.parent().unwrap_or(Path::new(""))
+                    };
+                    let relative_parent = root_name.as_ref().map(|root| root.join(relative));
+                    if !visit(
+                        ImportCandidate {
+                            path: child.clone(),
+                            relative_parent,
+                        },
+                        directory,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                if directory && input.include_subfolders {
+                    stack.push(read(&child)?);
+                }
+            }
         }
     }
-    candidates.sort_by(|left, right| left.path.cmp(&right.path));
-    candidates.dedup_by(|left, right| left.path == right.path);
-    Ok(candidates)
+    Ok(true)
 }
 
 pub(crate) fn collect_structure_directories(root: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {

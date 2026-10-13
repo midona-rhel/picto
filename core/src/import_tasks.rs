@@ -126,19 +126,18 @@ pub fn scan_import_task(
     let input: ManualImportInput =
         serde_json::from_str(&task.input_json).map_err(|error| error.to_string())?;
     let fail = |error: &str| {
+        if library
+            .task_state(task_id)
+            .map_err(|error| error.to_string())?
+            != Some(TaskState::Running)
+        {
+            return Ok(());
+        }
         library
             .fail_task(task_id, error, now_ms())
             .map_err(|failure| failure.to_string())
     };
-    let candidates = match import::collect_manual_candidates(application.root(), &input) {
-        Ok(candidates) => candidates,
-        Err(error) => return fail(&error),
-    };
     let structure_only = input.preserve_structure && input.include_folders_without_media;
-    if candidates.is_empty() && !structure_only {
-        return fail("No supported media files were found in the selected import.");
-    }
-
     let mut folders = FolderCache::new();
     let capacity = if input.preserve_structure {
         library
@@ -147,71 +146,88 @@ pub fn scan_import_task(
     } else {
         0
     };
-    if structure_only {
-        for value in &input.paths {
-            let path = fs::canonicalize(value)
-                .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
-            if !path.is_dir() {
-                continue;
-            }
-            for relative in import::collect_structure_directories(&path, input.include_subfolders)? {
-                import::ensure_relative_folder(
-                    application,
-                    input.parent_folder_id,
-                    import::truncate_relative_folder(&relative, capacity).as_deref(),
-                    &mut folders,
-                )?;
-            }
-        }
-    }
-
     let mut chunk = Vec::with_capacity(SCAN_CHUNK);
     let mut members = Vec::new();
-    for candidate in candidates {
-        let path = candidate.path.to_string_lossy().into_owned();
-        let pending = PendingImport {
-            stable_key: format!("task:{}:{path}", task_id.0),
-            path: path.clone(),
-            lifecycle: input.lifecycle,
-            tags: input.tags.clone(),
-            folders: input.parent_folder_id.into_iter().collect(),
-            folder_path: input
-                .preserve_structure
-                .then(|| {
-                    candidate
-                        .relative_parent
-                        .as_deref()
-                        .and_then(|relative| import::truncate_relative_folder(relative, capacity))
-                })
-                .flatten()
-                .map(|relative| relative.to_string_lossy().into_owned()),
-            source_urls: input.source_urls.clone(),
-            imported_at_ms: task.created_at_ms,
-            archive: import::is_zip(&candidate.path),
-        };
-        if input.group_files {
-            members.push(pending);
-            continue;
-        }
-        chunk.push(TaskIngestJob {
-            job: PreparedIngestJob {
-                job_key: pending.stable_key.clone(),
-                source_kind: "manual".into(),
-                source_path: path,
-                source_item_id: None,
-                delete_after_ingest: input.delete_after_ingest,
-                payload: PreparedIngestPayload::Pending(pending),
-            },
-            units: 1,
-        });
-        if chunk.len() >= SCAN_CHUNK && !queue(application, task_id, &mut chunk, cancelled)? {
-            return Ok(());
-        }
+    let mut found = false;
+    let walked = import::walk_manual_candidates(
+        application.root(),
+        &input,
+        &|| scan_checkpoint(application, task_id, cancelled),
+        |candidate, directory| {
+            if directory {
+                if structure_only {
+                    import::ensure_relative_folder_for_task(
+                        application,
+                        input.parent_folder_id,
+                        candidate
+                            .relative_parent
+                            .as_deref()
+                            .and_then(|relative| {
+                                import::truncate_relative_folder(relative, capacity)
+                            })
+                            .as_deref(),
+                        &mut folders,
+                        Some(task_id),
+                    )?;
+                }
+                return Ok(true);
+            }
+            found = true;
+            let path = candidate.path.to_string_lossy().into_owned();
+            let pending = PendingImport {
+                stable_key: format!("task:{}:{path}", task_id.0),
+                path: path.clone(),
+                lifecycle: input.lifecycle,
+                tags: input.tags.clone(),
+                folders: input.parent_folder_id.into_iter().collect(),
+                folder_path: input
+                    .preserve_structure
+                    .then(|| {
+                        candidate.relative_parent.as_deref().and_then(|relative| {
+                            import::truncate_relative_folder(relative, capacity)
+                        })
+                    })
+                    .flatten()
+                    .map(|relative| relative.to_string_lossy().into_owned()),
+                source_urls: input.source_urls.clone(),
+                imported_at_ms: task.created_at_ms,
+                archive: import::is_zip(&candidate.path),
+            };
+            if input.group_files {
+                members.push(pending);
+                return Ok(true);
+            }
+            chunk.push(TaskIngestJob {
+                job: PreparedIngestJob {
+                    job_key: pending.stable_key.clone(),
+                    source_kind: "manual".into(),
+                    source_path: path,
+                    source_item_id: None,
+                    delete_after_ingest: input.delete_after_ingest,
+                    payload: PreparedIngestPayload::Pending(pending),
+                },
+                units: 1,
+            });
+            if chunk.len() >= SCAN_CHUNK && !queue(application, task_id, &mut chunk, cancelled)? {
+                return Ok(false);
+            }
+            Ok(true)
+        },
+    );
+    match walked {
+        Ok(true) => {}
+        Ok(false) => return Ok(()),
+        Err(error) => return fail(&error),
+    }
+    if !found && !structure_only {
+        return fail("No supported media files were found in the selected import.");
     }
     if !queue(application, task_id, &mut chunk, cancelled)? {
         return Ok(());
     }
     if !members.is_empty() {
+        members.sort_by(|left, right| left.path.cmp(&right.path));
+        members.dedup_by(|left, right| left.path == right.path);
         let units = members.len() as u64;
         let payload = if members.len() == 1 {
             PreparedIngestPayload::Pending(members.remove(0))
@@ -238,7 +254,7 @@ pub fn scan_import_task(
         }
     }
     if input.watch_source_folder {
-        import::attach_source_folder_watch(application, &input, &mut folders)?;
+        import::attach_source_folder_watch(application, &input, &mut folders, Some(task_id))?;
     }
     library
         .complete_task_scan(task_id, now_ms())
@@ -253,19 +269,8 @@ fn queue(
     chunk: &mut Vec<TaskIngestJob>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<bool, String> {
-    loop {
-        if cancelled() {
-            return Ok(false);
-        }
-        match application
-            .library()
-            .task_state(task)
-            .map_err(|error| error.to_string())?
-        {
-            Some(TaskState::Running) => break,
-            Some(TaskState::Paused) => std::thread::sleep(PAUSED_SCAN_POLL),
-            _ => return Ok(false),
-        }
+    if !scan_checkpoint(application, task, cancelled)? {
+        return Ok(false);
     }
     if !chunk.is_empty() {
         application
@@ -275,6 +280,27 @@ fn queue(
         chunk.clear();
     }
     Ok(true)
+}
+
+fn scan_checkpoint(
+    application: &LibraryApplication,
+    task: TaskId,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<bool, String> {
+    loop {
+        if cancelled() {
+            return Ok(false);
+        }
+        match application
+            .library()
+            .task_state(task)
+            .map_err(|error| error.to_string())?
+        {
+            Some(TaskState::Running) => return Ok(true),
+            Some(TaskState::Paused) => std::thread::sleep(PAUSED_SCAN_POLL),
+            _ => return Ok(false),
+        }
+    }
 }
 
 /// Read, hash and probe queued task files ahead of the ingest batches, a few
@@ -307,7 +333,7 @@ pub async fn prepare_task_jobs(application: &LibraryApplication) -> Result<usize
                 .map(|job| async {
                     (
                         job.ingest_job_id,
-                        prepare_pending(application, &job.payload, &folders).await,
+                        prepare_pending(application, &job.payload, &folders, job.task_id).await,
                     )
                 }),
         )
@@ -329,17 +355,18 @@ pub async fn prepare_pending(
     application: &LibraryApplication,
     payload: &PreparedIngestPayload,
     folders: &Mutex<FolderCache>,
+    task: Option<TaskId>,
 ) -> Result<PreparedIngestPayload, String> {
     match payload {
         PreparedIngestPayload::Pending(pending) => {
-            let members = prepare_member(application, pending, folders).await?;
+            let members = prepare_member(application, pending, folders, task).await?;
             let name = pending.archive.then(|| file_stem(&pending.path)).flatten();
             Ok(payload_for(members, name, pending.imported_at_ms))
         }
         PreparedIngestPayload::PendingCollection(collection) => {
             let mut members = Vec::with_capacity(collection.members.len());
             for member in &collection.members {
-                members.extend(prepare_member(application, member, folders).await?);
+                members.extend(prepare_member(application, member, folders, task).await?);
             }
             Ok(payload_for(
                 members,
@@ -355,6 +382,7 @@ async fn prepare_member(
     application: &LibraryApplication,
     pending: &PendingImport,
     folders: &Mutex<FolderCache>,
+    task: Option<TaskId>,
 ) -> Result<Vec<PreparedImport>, String> {
     let fields = ImportFields {
         lifecycle: pending.lifecycle,
@@ -381,7 +409,7 @@ async fn prepare_member(
     let folder = match &pending.folder_path {
         Some(relative) => {
             let mut cache = folders.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            import::ensure_relative_folder(application, parent, Some(Path::new(relative)), &mut cache)?
+            import::ensure_relative_folder_for_task(application, parent, Some(Path::new(relative)), &mut cache, task)?
         }
         None => parent,
     };
@@ -521,6 +549,298 @@ mod tests {
             .filter_map(|kind| snapshot.root_kinds.get(kind))
             .map(|roots| roots.len())
             .sum()
+    }
+
+    #[test]
+    fn task_folder_creation_reuses_the_writer_owned_folder_and_cannot_outlive_stop() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let library = application.library();
+        let parent = library.create_folder("Existing", None).unwrap().0;
+        let task = library.create_task("import", "folders", "{}", true, false, 1).unwrap();
+        let first = library.create_folder_for_task("New", Some(parent), task).unwrap().0;
+        let (second, receipt) = library.create_folder_for_task("New", Some(parent), task).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(library.projections().snapshot().revision, receipt.revision);
+        assert_eq!(application.navigation().unwrap().folders.len(), 2);
+        library.stop_task(task, true, 2).unwrap();
+        settle_reverts(&application).unwrap();
+        assert_eq!(application.navigation().unwrap().folders.len(), 1);
+        assert!(library.create_folder_for_task("Too late", Some(parent), task).is_err());
+        assert_eq!(application.navigation().unwrap().folders.len(), 1);
+    }
+
+    #[test]
+    fn scan_queues_progress_before_finishing_and_resumes_without_duplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        fs::create_dir(&source).unwrap();
+        for index in 0..600 {
+            fs::write(source.join(format!("{index}.png")), []).unwrap();
+        }
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let mut request = folder_input(&source);
+        request
+            .paths
+            .push(source.join("0.png").to_string_lossy().into_owned());
+        let started = start_manual_import(&application, &request).unwrap();
+        let record = task(&application, &started);
+        // Close as soon as the first chunk becomes visible. The tree is not exhausted.
+        scan_import_task(&application, &record, &|| {
+            task(&application, &started).total_units >= 256
+        })
+        .unwrap();
+        let interrupted = task(&application, &started);
+        assert_eq!(interrupted.total_units, 256);
+        assert!(!interrupted.scan_complete);
+        scan_import_task(&application, &record, &|| false).unwrap();
+        let finished = task(&application, &started);
+        assert_eq!(finished.total_units, 600);
+        assert!(finished.scan_complete);
+    }
+
+    #[test]
+    fn scan_observes_pause_stop_and_close_even_without_media() {
+        use std::cell::Cell;
+        for action in ["pause", "stop", "close"] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("source");
+            fs::create_dir(&source).unwrap();
+            for index in 0..100 {
+                fs::create_dir(source.join(index.to_string())).unwrap();
+            }
+            let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+            let mut request = folder_input(&source);
+            request.include_folders_without_media = true;
+            let started = start_manual_import(&application, &request).unwrap();
+            let id = TaskId(started.task_id);
+            let calls = Cell::new(0);
+            scan_import_task(&application, &task(&application, &started), &|| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 8 {
+                    match action {
+                        "pause" => {
+                            application.library().set_task_paused(id, true).unwrap();
+                        }
+                        "stop" => {
+                            application
+                                .library()
+                                .stop_task(id, false, now_ms())
+                                .unwrap();
+                        }
+                        _ => return true,
+                    }
+                }
+                // A paused scan must wait without traversing. Close on its next poll.
+                action == "pause" && calls.get() > 8
+            })
+            .unwrap();
+            let folders = application.navigation().unwrap().folders;
+            assert!(!folders.is_empty());
+            assert!(folders.len() < 101, "{action} traversed the whole tree");
+            assert!(calls.get() <= 9);
+            let record = task(&application, &started);
+            assert_eq!(
+                record.state,
+                if action == "pause" {
+                    TaskState::Paused
+                } else if action == "stop" {
+                    TaskState::Stopped
+                } else {
+                    TaskState::Running
+                }
+            );
+            assert!(record.error.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_remove_restores_partial_collection_members_order_and_cover_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("images.zip");
+        let write_zip = |count: u8| {
+            let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+            for index in 0..count {
+                let path = directory.path().join(format!("{index}.png"));
+                png(&path, [index * 50, 20, 30]);
+                zip.start_file(
+                    format!("{index}.png"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                std::io::copy(&mut fs::File::open(path).unwrap(), &mut zip).unwrap();
+            }
+            zip.finish().unwrap();
+        };
+        write_zip(2);
+        let root = directory.path().join("library");
+        let application = LibraryApplication::create(&root).unwrap();
+        let mut request = input(vec![archive.to_string_lossy().into_owned()], false);
+        request.lifecycle = Lifecycle::Active;
+        start_manual_import(&application, &request).unwrap();
+        let collection = drive(&application).await[0];
+        application
+            .library()
+            .record_recent_view(collection, 100)
+            .unwrap();
+        application.library().auxiliary_write(
+            picto_library::database::WorkPriority::ForegroundMutation,
+            ["tasks".to_owned()], [], |transaction, _| {
+                transaction.execute(
+                    "INSERT INTO work_item(root_id, work_type, status, available_at, created_at, updated_at)
+                     VALUES (?1, 'ai_tag', 'pending', 'now', 'now', 'now')", [collection.0],
+                )?;
+                Ok(())
+            },
+        ).unwrap();
+        let before = application.library().details(collection).unwrap();
+        let order = application
+            .library()
+            .projections()
+            .snapshot()
+            .collection_orders[&collection]
+            .clone();
+        write_zip(3);
+        let started = start_manual_import(&application, &request).unwrap();
+        drive(&application).await;
+        assert_eq!(
+            application
+                .library()
+                .details(collection)
+                .unwrap()
+                .media
+                .len(),
+            3
+        );
+        assert_eq!(task(&application, &started).added_units, 1);
+        drop(application);
+        let application = LibraryApplication::open(&root).unwrap();
+        application
+            .library()
+            .stop_task(TaskId(started.task_id), true, now_ms())
+            .unwrap();
+        settle_reverts(&application).unwrap();
+        let after = application.library().details(collection).unwrap();
+        assert_eq!(after.media.len(), 2);
+        assert_eq!(after.root.cover_media_id, before.root.cover_media_id);
+        assert_eq!(after.root.name, before.root.name);
+        assert_eq!(
+            application
+                .library()
+                .projections()
+                .snapshot()
+                .collection_orders[&collection],
+            order
+        );
+        assert_eq!(root_count(&application), 1);
+        assert_eq!(task(&application, &started).state, TaskState::Reverted);
+        drop(application);
+        let application = LibraryApplication::open(&root).unwrap();
+        assert_eq!(
+            application
+                .library()
+                .details(collection)
+                .unwrap()
+                .media
+                .len(),
+            2
+        );
+        let retained = application.library().auxiliary_read(
+            picto_library::database::WorkPriority::VisibleRead, |connection| {
+                Ok(connection.query_row(
+                    "SELECT (SELECT COUNT(*) FROM recent_view WHERE root_id = ?1),
+                            (SELECT COUNT(*) FROM work_item WHERE root_id = ?1 AND work_type = 'ai_tag')",
+                    [collection.0], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)),
+                )?)
+            },
+        ).unwrap();
+        assert_eq!(retained, (1, 1));
+    }
+
+    #[tokio::test]
+    async fn stop_remove_ungroups_a_new_collection_without_deleting_reused_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("existing.png");
+        let second = directory.path().join("new.png");
+        png(&first, [10, 20, 30]);
+        png(&second, [40, 50, 60]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        start_manual_import(
+            &application,
+            &input(vec![first.to_string_lossy().into_owned()], false),
+        )
+        .unwrap();
+        let existing = drive(&application).await[0];
+        let before = application.library().details(existing).unwrap();
+        let started = start_manual_import(
+            &application,
+            &input(
+                vec![
+                    first.to_string_lossy().into_owned(),
+                    second.to_string_lossy().into_owned(),
+                ],
+                true,
+            ),
+        )
+        .unwrap();
+        let grouped = drive(&application).await[0];
+        assert_eq!(
+            application.library().details(grouped).unwrap().media.len(),
+            2
+        );
+        application
+            .library()
+            .stop_task(TaskId(started.task_id), true, now_ms())
+            .unwrap();
+        settle_reverts(&application).unwrap();
+        assert_eq!(root_count(&application), 1);
+        let after = application.library().details(existing).unwrap();
+        assert_eq!(after.root, before.root);
+        assert_eq!(after.folder_ids, before.folder_ids);
+        assert_eq!(after.tag_ids, before.tag_ids);
+        assert!(application.library().details(grouped).is_err());
+    }
+
+    #[tokio::test]
+    async fn stop_remove_removes_created_folders_and_restores_existing_watch_after_reopen() {
+        for reuse in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("Photos");
+            fs::create_dir_all(source.join("nested/empty")).unwrap();
+            png(&source.join("nested/one.png"), [10, 20, 30]);
+            let root = directory.path().join("library");
+            let application = LibraryApplication::create(&root).unwrap();
+            if reuse {
+                let folder = application
+                    .library()
+                    .create_folder("Photos", None)
+                    .unwrap()
+                    .0;
+                application
+                    .library()
+                    .set_folder_watch(folder, "old-watch", false, Lifecycle::Active)
+                    .unwrap();
+            }
+            let before = application.navigation().unwrap().folders;
+            let mut request = folder_input(&source);
+            request.watch_source_folder = true;
+            request.include_folders_without_media = true;
+            let started = start_manual_import(&application, &request).unwrap();
+            drive(&application).await;
+            assert_eq!(application.navigation().unwrap().folders.len(), 3);
+            drop(application);
+            let application = LibraryApplication::open(&root).unwrap();
+            application
+                .library()
+                .stop_task(TaskId(started.task_id), true, now_ms())
+                .unwrap();
+            settle_reverts(&application).unwrap();
+            assert_eq!(application.navigation().unwrap().folders, before);
+            assert_eq!(root_count(&application), 0);
+            drop(application);
+            let application = LibraryApplication::open(&root).unwrap();
+            assert_eq!(application.navigation().unwrap().folders, before);
+        }
     }
 
     #[tokio::test]
@@ -813,7 +1133,7 @@ mod tests {
         // Import one file, then stop.
         let library = application.library();
         let first = library.unprepared_task_jobs(1).unwrap();
-        let payload = prepare_pending(&application, &first[0].payload, &Mutex::default()).await.unwrap();
+        let payload = prepare_pending(&application, &first[0].payload, &Mutex::default(), first[0].task_id).await.unwrap();
         library
             .settle_unprepared_task_jobs(&[(first[0].ingest_job_id, Ok(payload))], "2026-10-12T00:00:00Z")
             .unwrap();

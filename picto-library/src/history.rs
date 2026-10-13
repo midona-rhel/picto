@@ -43,7 +43,7 @@ pub struct RootTextState {
     pub modified_at_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDefinitionState {
     pub folder_id: FolderId,
     pub stable_key: String,
@@ -90,13 +90,13 @@ pub struct StructuralRootState {
     pub total_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructuralMediaNoteState {
     pub media_id: MediaId,
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuralState {
     pub roots: Arc<Vec<StructuralRootState>>,
     pub media_notes: Arc<Vec<StructuralMediaNoteState>>,
@@ -107,7 +107,7 @@ pub struct StructuralState {
 
 /// Only affected members are retained, anchored to their original neighbours.
 /// Later imports into the same folder are not replaced when structure is undone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuralFolderPosition {
     pub root_id: RootId,
     pub previous: Option<RootId>,

@@ -38,3 +38,12 @@ CREATE TABLE IF NOT EXISTS task_added_tag (
     tag_id INTEGER NOT NULL,
     PRIMARY KEY(task_id, root_id, tag_id)
 ) WITHOUT ROWID, STRICT;
+
+-- Task-owned changes replay through the same structural/folder undo owners.
+CREATE TABLE IF NOT EXISTS task_undo (
+    undo_id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES task(task_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('structure', 'folder')),
+    payload BLOB NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_task_undo_task ON task_undo(task_id, kind, undo_id);

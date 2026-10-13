@@ -6,6 +6,7 @@
 //! removes the roots the task created (`task_created_root`) and the tags it
 //! added to roots that already existed (`task_added_tag`). Everything here is
 //! durable, so a paused task stays paused and an interrupted one resumes.
+//! Collection and folder changes use the same replay owners as session undo.
 
 use super::*;
 use crate::model::{
@@ -59,6 +60,104 @@ fn task_state(transaction: &rusqlite::Transaction<'_>, task: TaskId) -> Result<T
     let state = state.ok_or_else(|| LibraryError::NotFound(format!("task {}", task.0)))?;
     TaskState::parse(&state)
         .ok_or_else(|| LibraryError::InvalidState(format!("unknown task state {state}")))
+}
+
+pub(super) fn require_running_task(
+    transaction: &rusqlite::Transaction<'_>,
+    task: TaskId,
+) -> Result<()> {
+    if task_state(transaction, task)? != TaskState::Running {
+        return Err(LibraryError::TaskNotRunning);
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) enum TaskUndo {
+    Structure {
+        affected: Arc<RoaringBitmap>,
+        before: Box<StructuralState>,
+        after: Box<StructuralState>,
+    },
+    Folder {
+        folder_id: FolderId,
+        before: Option<Box<FolderDefinitionState>>,
+        after: Option<Box<FolderDefinitionState>>,
+    },
+}
+
+impl TaskUndo {
+    fn into_change(self) -> SemanticChange {
+        match self {
+            Self::Structure {
+                affected,
+                before,
+                after,
+            } => SemanticChange::Structure {
+                affected,
+                before: *before,
+                after: *after,
+            },
+            Self::Folder {
+                folder_id,
+                before,
+                after,
+            } => SemanticChange::FolderDefinition {
+                folder_id,
+                before,
+                after,
+            },
+        }
+    }
+}
+
+pub(super) fn record_task_undo(
+    transaction: &rusqlite::Transaction<'_>,
+    task: TaskId,
+    change: TaskUndo,
+) -> Result<()> {
+    let kind = match &change {
+        TaskUndo::Structure { .. } => "structure",
+        TaskUndo::Folder { .. } => "folder",
+    };
+    let payload = bincode::serialize(&change)
+        .map_err(|error| LibraryError::InvalidState(error.to_string()))?;
+    transaction.execute(
+        "INSERT INTO task_undo(task_id, kind, payload) VALUES (?1, ?2, ?3)",
+        params![task.0, kind, payload],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_task_undo(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    task: TaskId,
+    kind: &str,
+    snapshot: &mut ProjectionSnapshot,
+    affected: &mut RoaringBitmap,
+    resources: &mut BTreeSet<String>,
+) -> Result<()> {
+    let mut statement = transaction.prepare_cached(
+        "SELECT payload FROM task_undo WHERE task_id = ?1 AND kind = ?2 ORDER BY undo_id DESC",
+    )?;
+    let mut rows = statement.query(params![task.0, kind])?;
+    while let Some(row) = rows.next()? {
+        let bytes: Vec<u8> = row.get(0)?;
+        let change: TaskUndo = bincode::deserialize(&bytes)
+            .map_err(|error| LibraryError::InvalidState(error.to_string()))?;
+        super::undo::apply_semantic_change(
+            transaction,
+            revision,
+            snapshot,
+            &change.into_change(),
+            false,
+            affected,
+            resources,
+        )?;
+    }
+    Ok(())
 }
 
 impl Library {
@@ -331,7 +430,7 @@ impl Library {
         Ok(())
     }
 
-    /// Mark running tasks whose scan is complete and whose jobs are all
+    /// Mark open tasks whose scan is complete and whose jobs are all
     /// settled as finished.
     pub fn settle_finished_tasks(&self, now_ms: i64) -> Result<()> {
         self.auxiliary_write_if_changed(
@@ -360,22 +459,21 @@ impl Library {
         if ingest_job_ids.is_empty() {
             return Ok(());
         }
+        let ids = serde_json::to_string(ingest_job_ids)?;
         self.auxiliary_write(WorkPriority::CanonicalIngest, task_resources(), [], |transaction, _| {
-            let mut statement = transaction.prepare_cached(
+            transaction.execute(
                 "UPDATE ingest_job
                  SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0), updated_at = ?1
-                 WHERE ingest_job_id = ?2 AND status = 'running'",
+                 WHERE ingest_job_id IN (SELECT value FROM json_each(?2)) AND status = 'running'",
+                params![now, ids],
             )?;
-            for ingest_job_id in ingest_job_ids {
-                statement.execute(params![now, ingest_job_id])?;
-            }
-            // A stopped task drops what it handed back.
             transaction.execute(
                 "DELETE FROM ingest_job
-                 WHERE status = 'pending' AND task_id IN (
+                 WHERE ingest_job_id IN (SELECT value FROM json_each(?1))
+                   AND status = 'pending' AND task_id IN (
                      SELECT task_id FROM task WHERE state NOT IN ('running', 'paused')
                  )",
-                [],
+                [ids],
             )?;
             Ok(())
         })?;
@@ -461,13 +559,15 @@ impl Library {
                 match result {
                     Ok(payload) => transaction.execute(
                         "UPDATE ingest_job SET payload_json = ?1, prepared = 1, updated_at = ?2
-                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0",
+                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0
+                           AND EXISTS (SELECT 1 FROM task WHERE task.task_id = ingest_job.task_id AND state IN ('running', 'paused'))",
                         params![payload, now, job_id],
                     )?,
                     Err(error) => transaction.execute(
                         "UPDATE ingest_job SET status = 'failed', last_error = ?1,
                              payload_json = '{}', updated_at = ?2
-                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0",
+                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0
+                           AND EXISTS (SELECT 1 FROM task WHERE task.task_id = ingest_job.task_id AND state = 'running')",
                         params![error, now, job_id],
                     )?,
                 };
@@ -489,9 +589,14 @@ impl Library {
                 "DELETE FROM ingest_job WHERE task_id = ?1 AND status IN ('pending', 'running')",
                 [task.0],
             )?;
+            let mut next = (*snapshot).clone();
+            let mut resources = BTreeSet::from(["tasks".to_owned(), "ingest".to_owned()]);
+            let mut affected = RoaringBitmap::new();
+            replay_task_undo(transaction, revision, task, "structure", &mut next, &mut affected, &mut resources)?;
             let mut existing = RoaringBitmap::new();
+
             for kind in [RootKind::Media, RootKind::Collection] {
-                if let Some(roots) = snapshot.root_kinds.get(&kind) {
+                if let Some(roots) = next.root_kinds.get(&kind) {
                     existing |= roots;
                 }
             }
@@ -513,21 +618,16 @@ impl Library {
                 rows
             };
 
-            let mut resources = vec!["tasks".to_owned(), "ingest".to_owned()];
-            let mut affected = created.clone();
-            let (mut next, cleanup) = if created.is_empty() {
-                ((*snapshot).clone(), Vec::new())
+            affected |= &created;
+            let cleanup = if created.is_empty() {
+                Vec::new()
             } else {
-                let (next, cleanup, receipt) = super::structure::delete_roots(
-                    transaction,
-                    revision,
-                    &snapshot,
-                    &created,
-                    now_ms,
-                    &protected_cleanup_files,
+                let (deleted, cleanup, receipt) = super::structure::delete_roots(
+                    transaction, revision, &next, &created, now_ms, &protected_cleanup_files,
                 )?;
                 resources.extend(receipt.resources);
-                (next, cleanup)
+                next = deleted;
+                cleanup
             };
 
             let mut by_tag = std::collections::BTreeMap::<TagId, RoaringBitmap>::new();
@@ -570,6 +670,8 @@ impl Library {
                 resources.extend(["roots".to_owned(), "tags".to_owned()]);
                 affected |= &untagged;
             }
+            replay_task_undo(transaction, revision, task, "folder", &mut next, &mut affected, &mut resources)?;
+            transaction.execute("DELETE FROM task_undo WHERE task_id = ?1", [task.0])?;
             transaction.execute(
                 "UPDATE task SET state = 'reverted', scan_complete = 1,
                      finished_at_ms = COALESCE(finished_at_ms, ?1)
@@ -643,7 +745,7 @@ pub(crate) fn record_task_units(
 fn settle_finished(transaction: &rusqlite::Transaction<'_>, now_ms: i64) -> Result<usize> {
     Ok(transaction.execute(
         "UPDATE task SET state = 'finished', finished_at_ms = ?1
-         WHERE state = 'running' AND scan_complete = 1
+         WHERE state IN ('running', 'paused') AND scan_complete = 1
            AND NOT EXISTS (
                SELECT 1 FROM ingest_job j
                WHERE j.task_id = task.task_id AND j.status IN ('pending', 'running')
