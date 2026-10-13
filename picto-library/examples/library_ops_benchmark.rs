@@ -553,6 +553,8 @@ fn bench_tag_pages(library: &Library, runs: usize) -> R<()> {
         ("tag_page broad prefix (500)", Some("vocab:1"), 0, 500),
         ("tag_page broad prefix offset 500 (500)", Some("vocab:1"), 500, 500),
         ("tag_page sparse search (12)", Some("vocab:9999"), 0, 12),
+        ("tag_page no-match search (12)", Some("vocab:missing"), 0, 12),
+        ("tag_page substring offset 500 (500)", Some("vocab:99"), 500, 500),
     ] {
         bench(label, &size, runs * 4, || {
             library.tag_page(None, search, offset, limit)?;

@@ -15,7 +15,10 @@ export function matchRank(text: string, needle: string): number | null {
   let found = false;
   for (let index = text.indexOf(needle); index >= 0; index = text.indexOf(needle, index + 1)) {
     found = true;
-    if (index > 0 && !WORD_CHARACTER.test(text[index - 1])) return 2;
+    // A non-BMP predecessor occupies two UTF-16 code units.
+    const paired = (text.codePointAt(index - 2) ?? 0) > 0xffff;
+    const before = text.slice(index - (paired ? 2 : 1), index);
+    if (index > 0 && !WORD_CHARACTER.test(before)) return 2;
   }
   return found ? 3 : null;
 }

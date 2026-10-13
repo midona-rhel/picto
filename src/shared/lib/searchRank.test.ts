@@ -14,6 +14,17 @@ describe('matchRank', () => {
     expect(matchRank('catcat cat', 'cat')).toBe(1);
     expect(matchRank('bobcat cat', 'cat')).toBe(2);
   });
+
+  it('classifies the full preceding Unicode code point', () => {
+    expect(matchRank('\u{10400}cat', 'cat')).toBe(3);
+    expect(matchRank('\u{1D7CE}cat', 'cat')).toBe(3);
+    expect(matchRank('\u{1F408}cat', 'cat')).toBe(2);
+    expect(matchRank('\u{10400}cat cat', 'cat')).toBe(2);
+    const names = ['\u{10400}cat', '\u{1F408}cat', 'cat', 'catfish'];
+    expect(rankMatches(names, 'cat', (name) => [name])).toEqual([
+      'cat', 'catfish', '\u{1F408}cat', '\u{10400}cat',
+    ]);
+  });
 });
 
 describe('rankMatches', () => {
