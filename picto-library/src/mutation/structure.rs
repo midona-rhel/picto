@@ -350,23 +350,25 @@ impl Library {
         Ok(receipt)
     }
 
-    /// Delete Trash roots for good. A delete of at most `undo_limit` roots is
+    /// Delete Trash roots for good. A delete of at most `undo_limit` media items is
     /// undoable: its rows are kept in history and its files stay on disk
     /// until the entry leaves history (when the app closes, or it falls off
     /// the stack). A larger one cannot be undone and frees its files at once.
+    /// With `require_undoable`, refuse instead of silently dropping undo.
     pub fn permanently_delete(
         &self,
         target: &SelectionTarget,
         deleted_at_ms: i64,
         undo_limit: usize,
+        require_undoable: bool,
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         self.delete_permanently_from(
             target,
             deleted_at_ms,
             undo_limit,
+            require_undoable,
             Lifecycle::Trash,
-            "items.delete",
-            "Delete permanently",
+            ("items.delete", "Delete permanently"),
         )
     }
 
@@ -377,14 +379,15 @@ impl Library {
         target: &SelectionTarget,
         deleted_at_ms: i64,
         undo_limit: usize,
+        require_undoable: bool,
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         self.delete_permanently_from(
             target,
             deleted_at_ms,
             undo_limit,
+            require_undoable,
             Lifecycle::Inbox,
-            "items.reject",
-            "Reject",
+            ("items.reject", "Reject"),
         )
     }
 
@@ -393,9 +396,9 @@ impl Library {
         target: &SelectionTarget,
         deleted_at_ms: i64,
         undo_limit: usize,
+        require_undoable: bool,
         lifecycle: Lifecycle,
-        command: &'static str,
-        label: &'static str,
+        (command, label): (&'static str, &'static str),
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         let target = target.clone();
         let (receipt, cleanup) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
@@ -412,6 +415,9 @@ impl Library {
                 }));
             }
             let undoable = undo_limit > 0 && snapshot.media_count.sum(&roots) <= undo_limit as u128;
+            if require_undoable && !undoable {
+                return Err(LibraryError::UndoLimitExceeded);
+            }
             let state = undoable
                 .then(|| capture_deleted_roots(transaction, &snapshot, &roots))
                 .transpose()?;
@@ -436,6 +442,12 @@ impl Library {
                 )
                 .about(roots.len(), None)
             });
+            if require_undoable && history.as_ref().is_none_or(|entry| {
+                entry.estimated_bytes > crate::history::HISTORY_BYTE_LIMIT
+            }) {
+                // Returning an error rolls back the delete before publication.
+                return Err(LibraryError::UndoLimitExceeded);
+            }
             Ok((
                 (receipt.clone(), cleanup),
                 PublishedDelta {

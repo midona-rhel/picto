@@ -1046,15 +1046,15 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 />
               </Row>
               <p className={styles.settingHint}>
-                {t("Deleting skips Trash. Like any delete, it can be undone until Picto closes.")}</p>
+                {t("Deleting skips Trash. Only deletes within the undo limit below can be undone.")}</p>
             </div>
           </div>
           <div className={styles.settingsBlock}>
             <div className={styles.blockContent}>
               <div className={styles.blockTitle}>{t("Undoing deletes")}</div>
-              <Row label={t("Undo deletes of up to")}>
+              <Row label={t("Undo limit (media items)")}>
                 <CompactNumberInput
-                  label={t("Undo deletes of up to")}
+                  label={t("Undo limit (media items)")}
                   min={0}
                   max={100_000}
                   value={appSettings?.undoDeleteLimit ?? 500}
@@ -1063,7 +1063,7 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
                 />
               </Row>
               <p className={styles.settingHint}>
-                {t("A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.")}</p>
+                {t("Counts media items, including collection members. Set to 0 to disable delete undo. Deletes within the limit can be undone until Picto closes. Larger deletes ask for confirmation and cannot be undone.")}</p>
             </div>
           </div>
         </>
@@ -1189,7 +1189,7 @@ const ALL_SETTINGS: SettingRow[] = [
   },
   {
     id: 'deleting.undo',
-    label: t("Undo deletes of up to"),
+    label: t("Undo limit (media items)"),
     keywords: 'undo delete permanently restore trash empty limit',
     panel: 'deleting',
   },

@@ -961,6 +961,7 @@ impl LibraryApplication {
     pub fn delete_items(
         &self,
         target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
     ) -> Result<picto_library::MutationReceipt, String> {
         let (receipt, _) = self
             .library
@@ -968,6 +969,7 @@ impl LibraryApplication {
                 target,
                 chrono::Utc::now().timestamp_millis(),
                 self.undo_delete_limit()?,
+                require_undoable,
             )
             .map_err(|error| error.to_string())?;
         Ok(receipt)
@@ -977,6 +979,7 @@ impl LibraryApplication {
     pub fn reject_items(
         &self,
         target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
     ) -> Result<picto_library::MutationReceipt, String> {
         let (receipt, _) = self
             .library
@@ -984,6 +987,7 @@ impl LibraryApplication {
                 target,
                 chrono::Utc::now().timestamp_millis(),
                 self.undo_delete_limit()?,
+                require_undoable,
             )
             .map_err(|error| error.to_string())?;
         Ok(receipt)

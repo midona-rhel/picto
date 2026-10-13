@@ -91,13 +91,13 @@ export function setItemLifecycle(target: EntityTarget, lifecycle: Lifecycle): Pr
   return invoke<MutationReceipt>('items.set_lifecycle', { target, lifecycle });
 }
 
-export function deleteItems(target: EntityTarget): Promise<unknown> {
-  return invoke('items.delete', { target });
+export function deleteItems(target: EntityTarget, requireUndoable = true): Promise<unknown> {
+  return invoke('items.delete', { target, require_undoable: requireUndoable });
 }
 
-/** Reject Inbox items straight out of the library (undoable like a delete). */
-export function rejectDeleteItems(target: EntityTarget): Promise<unknown> {
-  return invoke('items.reject_delete', { target });
+/** Reject Inbox items; dropping the undo requirement needs explicit confirmation. */
+export function rejectDeleteItems(target: EntityTarget, requireUndoable = true): Promise<unknown> {
+  return invoke('items.reject_delete', { target, require_undoable: requireUndoable });
 }
 
 /** Current positions of roots in a view's order; null for a root the view no longer holds. */
