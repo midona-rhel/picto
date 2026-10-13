@@ -136,6 +136,72 @@ impl StructuralState {
     }
 }
 
+/// A `media_item` row: id, name, notes, file.
+pub type DeletedMediaRow = (u32, String, Option<String>, u32);
+/// A `source_provenance` row: source key, source item key, media, text.
+pub type DeletedProvenanceRow = (String, String, u32, Option<String>);
+
+/// Everything a permanent delete removed, so undo can put it back exactly:
+/// the roots' structure (rows, memberships, folder positions, collection
+/// orders) and the rows that pointed at them. The files stay on disk while
+/// the entry is in history (`protected_cleanup_files`).
+#[derive(Debug, Clone)]
+pub struct DeletedRootsState {
+    pub roots: Arc<RoaringBitmap>,
+    pub structure: StructuralState,
+    /// `library_item` rows of the roots and their media: id, stable key, kind.
+    pub items: Arc<Vec<(u32, String, u8)>>,
+    /// `media_item` rows: id, name, notes, file.
+    pub media: Arc<Vec<DeletedMediaRow>>,
+    /// The media that are images.
+    pub image_media: Arc<RoaringBitmap>,
+    /// `source_provenance` rows: source key, source item key, media, text.
+    pub provenance: Arc<Vec<DeletedProvenanceRow>>,
+    /// Source posts that pointed at a deleted root, with that root.
+    pub source_posts: Arc<Vec<(i64, u32)>>,
+    /// Source items that pointed at a deleted media item, with that media.
+    pub source_items: Arc<Vec<(i64, u32)>>,
+    /// Folders whose cover was a deleted root.
+    pub folder_covers: Arc<Vec<(u32, u32)>>,
+    pub recent_views: Arc<Vec<(u32, i64)>>,
+    /// Cascaded queue rows, serialized for set-based restoration.
+    pub work_items_json: Arc<String>,
+    pub files: Arc<Vec<FileId>>,
+}
+
+impl DeletedRootsState {
+    fn estimated_bytes(&self) -> usize {
+        let roots = self
+            .structure
+            .roots
+            .iter()
+            .map(|root| root.stable_key.len() + root.name.len() + root.source_urls_json.len() + 96)
+            .sum::<usize>();
+        let items = self.items.iter().map(|(_, key, _)| key.len() + 16).sum::<usize>();
+        let media = self
+            .media
+            .iter()
+            .map(|(_, name, notes, _)| name.len() + notes.as_deref().map_or(0, str::len) + 24)
+            .sum::<usize>();
+        let provenance = self
+            .provenance
+            .iter()
+            .map(|(key, item, _, text)| key.len() + item.len() + text.as_deref().map_or(0, str::len) + 24)
+            .sum::<usize>();
+        roots
+            + items
+            + media
+            + provenance
+            + self.structure.membership_bytes()
+            + (self.source_posts.len() + self.source_items.len() + self.folder_covers.len()) * 16
+            + self.recent_views.len() * 16
+            + self.work_items_json.len()
+            + self.files.len() * 4
+            + self.roots.serialized_size()
+            + self.image_media.serialized_size()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticChange {
     AuxiliaryJson {
@@ -218,6 +284,8 @@ pub enum SemanticChange {
         after: StructuralState,
     },
     DuplicateResolution(crate::duplicate::DuplicateHistoryState),
+    /// Undo restores the deleted roots; redo deletes them again.
+    PermanentDelete(Arc<DeletedRootsState>),
     Compound(Vec<SemanticChange>),
 }
 
@@ -367,6 +435,7 @@ impl SemanticChange {
                     + after.membership_bytes()
             }
             Self::DuplicateResolution(state) => state.estimated_bytes(),
+            Self::PermanentDelete(state) => state.estimated_bytes(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }
@@ -378,6 +447,7 @@ impl SemanticChange {
                     protected.insert(file_id);
                 }
             }
+            Self::PermanentDelete(state) => protected.extend(state.files.iter().copied()),
             Self::Compound(changes) => {
                 for change in changes {
                     change.protected_cleanup_files(protected);

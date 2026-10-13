@@ -24,6 +24,8 @@ const ANNOUNCED_MUTATIONS = new Set([
   'collections.ungroup',
   'folders.delete',
   'items.apply_ai_tags',
+  'items.delete',
+  'items.reject',
   'items.rename_many',
   'smart_folders.delete',
   'tags.delete',
@@ -66,11 +68,12 @@ function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationR
   });
 }
 
-export async function announceUndoableMutation(command: string): Promise<void> {
+export async function announceUndoableMutation(command: string, previousEntryId?: number | null): Promise<void> {
   if (!ANNOUNCED_MUTATIONS.has(command)) return;
   try {
     const state = await getHistoryState();
     if (state.undo?.command !== command) return;
+    if (state.undo.entry_id === previousEntryId) return;
     showSuccessNotification({
       title: describeHistoryEntry(state.undo),
       message: '',

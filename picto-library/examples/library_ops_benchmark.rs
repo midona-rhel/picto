@@ -7,6 +7,7 @@
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
 //! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
 //! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
+//! Use `--delete-only` for bounded permanent-delete and undo rows.
 //! Add `--tag-pages-only` to measure paging/search with 200k tag definitions after ingest.
 use std::time::Instant;
 
@@ -66,6 +67,26 @@ fn main() -> R<()> {
     let t = Instant::now();
     while library.settle_fts(20_000)?.is_some() {}
     println!("FIXTURE settle_fts_s={:.1}", t.elapsed().as_secs_f64());
+
+    if std::env::args().any(|arg| arg == "--delete-only") {
+        let target = explicit(&ids[..500]);
+        library.set_lifecycle(&target, Lifecycle::Trash)?;
+        library.history().clear();
+        let mut deletes = Vec::new();
+        let mut undos = Vec::new();
+        for _ in 0..runs {
+            let started = Instant::now();
+            library.permanently_delete(&target, now(), 500, false)?;
+            deletes.push(ms(started));
+            assert!(library.pending_blob_cleanup(500)?.is_empty());
+            let started = Instant::now();
+            library.undo()?.expect("delete recorded history");
+            undos.push(ms(started));
+        }
+        emit("permanently_delete 500 (undoable)", "500", &mut deletes);
+        emit("undo permanently_delete 500", "500", &mut undos);
+        return Ok(());
+    }
 
     if std::env::args().any(|arg| arg == "--tag-pages-only") {
         library.ensure_tag_definitions(&(0..200_000).map(|index| format!("vocab:{index}")).collect::<Vec<_>>())?;
@@ -351,7 +372,7 @@ fn main() -> R<()> {
         let target = explicit(&ids[start..start + 1_000]);
         library.set_lifecycle(&target, Lifecycle::Trash)?;
         let t = Instant::now();
-        library.permanently_delete(&target, now())?;
+        library.permanently_delete(&target, now(), 0, false)?;
         del_ms.push(ms(t));
     }
     emit("permanently_delete 1k (from Trash)", "1000", &mut del_ms);

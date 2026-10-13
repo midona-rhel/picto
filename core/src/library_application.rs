@@ -44,6 +44,9 @@ impl Default for AiWorkerStatus {
     }
 }
 
+/// Items a permanent delete may hold and still be undoable, by default.
+pub const DEFAULT_UNDO_DELETE_LIMIT: usize = 500;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LibraryHistoryEntrySummary {
     pub entry_id: u64,
@@ -944,12 +947,47 @@ impl LibraryApplication {
     pub fn delete_items(
         &self,
         target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
     ) -> Result<picto_library::MutationReceipt, String> {
         let (receipt, _) = self
             .library
-            .permanently_delete(target, chrono::Utc::now().timestamp_millis())
+            .permanently_delete(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+                require_undoable,
+            )
             .map_err(|error| error.to_string())?;
         Ok(receipt)
+    }
+
+    /// Reject Inbox items out of the library without passing through Trash.
+    pub fn reject_items(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let (receipt, _) = self
+            .library
+            .delete_rejected(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+                require_undoable,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(receipt)
+    }
+
+    /// How many items a permanent delete may hold and still be undoable
+    /// (the `undoDeleteLimit` setting).
+    fn undo_delete_limit(&self) -> Result<usize, String> {
+        Ok(self
+            .application_settings()?
+            .value
+            .get("undoDeleteLimit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(DEFAULT_UNDO_DELETE_LIMIT, |limit| limit.min(100_000) as usize))
     }
 
     pub fn duplicate_candidates(

@@ -43,7 +43,7 @@ describe('InboxReviewControls', () => {
 
   it('accepts with Z and advances only after persistence and the exit animation', async () => {
     let resolveCommit: (() => void) | null = null;
-    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { resolveCommit = () => resolve(true); }));
     const onAdvance = vi.fn();
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
 
@@ -65,7 +65,7 @@ describe('InboxReviewControls', () => {
   });
 
   it.each(['Accept', 'Reject'])('shows the full %s pulse before fading and advancing', async (action) => {
-    const onCommit = vi.fn().mockResolvedValue(undefined);
+    const onCommit = vi.fn().mockResolvedValue(true);
     const onAdvance = vi.fn();
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
     const controls = document.querySelector('[data-inbox-review-controls]');
@@ -91,7 +91,7 @@ describe('InboxReviewControls', () => {
 
   it('waits for a slow commit without delaying again for a pulse that already finished', async () => {
     let resolveCommit!: () => void;
-    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { resolveCommit = () => resolve(true); }));
     const onAdvance = vi.fn();
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
     const controls = document.querySelector('[data-inbox-review-controls]');
@@ -115,7 +115,7 @@ describe('InboxReviewControls', () => {
       ...matchMedia(query), matches: query === '(prefers-reduced-motion: reduce)',
     }));
     let resolveCommit!: () => void;
-    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { resolveCommit = () => resolve(true); }));
     const onAdvance = vi.fn();
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
 
@@ -152,7 +152,7 @@ describe('InboxReviewControls', () => {
   });
 
   it('retargets the persistent controls without replaying their mount transition', () => {
-    const onCommit = vi.fn(() => new Promise<void>(() => {}));
+    const onCommit = vi.fn(() => new Promise<boolean>(() => {}));
     const onAdvance = vi.fn();
     const { rerender } = render(
       <InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />,
@@ -174,6 +174,7 @@ describe('InboxReviewControls', () => {
       return <InboxReviewControls itemId={items[0]} onAdvance={onAdvance} onCommit={async (id, decision) => {
         commits(id, decision);
         setItems((current) => current.filter((item) => item !== id));
+        return true;
       }} />;
     }
     render(<ReconciledInbox />);
@@ -199,12 +200,30 @@ describe('InboxReviewControls', () => {
   });
 
   it('locks synchronously against multiple shortcuts in the same render', () => {
-    const onCommit = vi.fn(() => new Promise<void>(() => {}));
+    const onCommit = vi.fn(() => new Promise<boolean>(() => {}));
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={vi.fn()} />);
     act(() => {
       fireEvent.keyDown(window, { key: 'z' });
       fireEvent.keyDown(window, { key: 'x' });
     });
     expect(onCommit).toHaveBeenCalledOnce();
+  });
+  it('keeps the current item and resets the controls when confirmation is cancelled', async () => {
+    let cancel!: () => void;
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { cancel = () => resolve(false); }));
+    const onAdvance = vi.fn();
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reject item' }));
+    await act(async () => { vi.runAllTimers(); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { cancel(); });
+    await act(async () => { vi.runAllTimers(); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    expect(showErrorNotification).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-inbox-review-controls]')).toHaveAttribute('data-review-decision', 'idle');
+    expect(screen.getByRole('button', { name: 'Reject item' })).toBeEnabled();
+    fireEvent.keyDown(window, { key: 'z' });
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith(42, 'accept');
   });
 });

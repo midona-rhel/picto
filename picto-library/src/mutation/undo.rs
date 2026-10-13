@@ -899,6 +899,39 @@ pub(super) fn apply_semantic_change(
                 resources.insert("search".into());
             }
         }
+        SemanticChange::PermanentDelete(state) => {
+            if use_after {
+                let roots = state.roots.as_ref();
+                let mut existing = RoaringBitmap::new();
+                for kind in [RootKind::Media, RootKind::Collection] {
+                    if let Some(members) = snapshot.root_kinds.get(&kind) {
+                        existing |= members;
+                    }
+                }
+                if !roots.is_subset(&existing) {
+                    return Err(LibraryError::InvalidState(
+                        "cannot redo the delete because its items changed".into(),
+                    ));
+                }
+                let (next, _, receipt) = super::structure::delete_roots(
+                    transaction,
+                    revision,
+                    snapshot,
+                    roots,
+                    now_ms(),
+                    &std::collections::BTreeSet::new(),
+                )?;
+                *snapshot = next;
+                resources.extend(receipt.resources);
+            } else {
+                super::structure::restore_deleted_roots(transaction, revision, snapshot, state)?;
+                resources.extend(
+                    ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "recently_viewed", "tasks"]
+                        .map(str::to_owned),
+                );
+            }
+            *affected |= state.roots.as_ref();
+        }
         SemanticChange::Compound(changes) => {
             if use_after {
                 for change in changes {

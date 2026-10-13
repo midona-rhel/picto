@@ -78,6 +78,7 @@ import { contentSortSubmenu } from '../folders/folderContextMenu';
 import { useScrollToTop } from '../../shared/hooks/useScrollToTop';
 import { ScrollToTopButton } from '../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 import { t, translateMessage } from '../../i18n';
+import { requestPermanentDelete } from '../../controllers/permanentDeleteRequest';
 
 const IC = 19;
 const SIDEBAR_RETURN_TO_TOP_THRESHOLD = 360;
@@ -1014,14 +1015,7 @@ export function Sidebar() {
         danger: true,
         keywords: 'delete remove trash permanently',
         action: () => {
-          store.set(confirmModalAtom, {
-            open: true,
-            title: t("Empty Trash"),
-            message: 'Permanently delete every item in Trash? This cannot be undone.',
-            confirmLabel: t("Delete All"),
-            danger: true,
-            onConfirm: () => entityMutations.permanentlyDeleteTarget(target),
-          });
+          void requestPermanentDelete(target, node.count ?? null, { emptyTrash: true });
         },
       },
       {

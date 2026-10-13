@@ -24,7 +24,7 @@ export function resolveInboxReviewItemId(
 
 interface InboxReviewControlsProps {
   itemId: number;
-  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<void>;
+  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<boolean>;
   onAdvance: () => void;
 }
 
@@ -54,10 +54,15 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setDecision(nextDecision);
     try {
-      await Promise.all([
+      const [committed] = await Promise.all([
         onCommit(itemId, nextDecision),
         reducedMotion ? Promise.resolve() : new Promise<void>((resolve) => setTimeout(resolve, PULSE_DURATION_MS)),
       ]);
+      if (!committed) {
+        setDecision(null);
+        setLeaving(false);
+        return;
+      }
       setLeaving(true);
       if (!reducedMotion) {
         await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));

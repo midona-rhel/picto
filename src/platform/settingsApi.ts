@@ -69,6 +69,10 @@ export interface AppSettings {
   notificationPopupTones: NotificationTone[];
   autoImportEnabled: boolean;
   multiFileImportBehavior: 'ask' | 'group' | 'separate';
+  /** What rejecting an Inbox item does: move it to Trash, or delete it. */
+  rejectAction: 'trash' | 'delete';
+  /** Deletes of up to this many items can be undone until Picto closes. */
+  undoDeleteLimit: number;
   subscriptionDefaultSchedule: 'manual' | 'daily' | 'weekly' | 'monthly';
   subscriptionDefaultPostsPerRun: number;
   subscriptionDefaultGroupPosts: boolean;
@@ -125,6 +129,8 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   notificationPopupTones: ['error', 'warning', 'info', 'success'],
   autoImportEnabled: true,
   multiFileImportBehavior: 'ask',
+  rejectAction: 'trash',
+  undoDeleteLimit: 500,
   subscriptionDefaultSchedule: 'daily',
   subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
@@ -279,6 +285,8 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     notificationPopupTones: notificationTonesValue(storedOrDefault(source, 'notificationPopupTones', APP_SETTINGS_DEFAULTS.notificationPopupTones), 'notificationPopupTones'),
     autoImportEnabled: booleanValue(storedOrDefault(source, 'autoImportEnabled', APP_SETTINGS_DEFAULTS.autoImportEnabled), 'autoImportEnabled'),
     multiFileImportBehavior: enumValue(storedOrDefault(source, 'multiFileImportBehavior', APP_SETTINGS_DEFAULTS.multiFileImportBehavior), 'multiFileImportBehavior', ['ask', 'group', 'separate'] as const),
+    rejectAction: enumValue(storedOrDefault(source, 'rejectAction', APP_SETTINGS_DEFAULTS.rejectAction), 'rejectAction', ['trash', 'delete'] as const),
+    undoDeleteLimit: integerRangeValue(storedOrDefault(source, 'undoDeleteLimit', APP_SETTINGS_DEFAULTS.undoDeleteLimit), 'undoDeleteLimit', 0, 100_000),
     subscriptionDefaultSchedule: enumValue(storedOrDefault(source, 'subscriptionDefaultSchedule', APP_SETTINGS_DEFAULTS.subscriptionDefaultSchedule), 'subscriptionDefaultSchedule', ['manual', 'daily', 'weekly', 'monthly'] as const),
     subscriptionDefaultPostsPerRun: integerRangeValue(storedOrDefault(source, 'subscriptionDefaultPostsPerRun', APP_SETTINGS_DEFAULTS.subscriptionDefaultPostsPerRun), 'subscriptionDefaultPostsPerRun', 1, 10_000),
     subscriptionDefaultGroupPosts: booleanValue(storedOrDefault(source, 'subscriptionDefaultGroupPosts', APP_SETTINGS_DEFAULTS.subscriptionDefaultGroupPosts), 'subscriptionDefaultGroupPosts'),

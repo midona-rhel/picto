@@ -115,6 +115,7 @@ import type { GridScrollPosition } from '../../shared/types/gridScroll';
 import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 import { t } from '../../i18n';
+import { requestPermanentDelete } from '../../controllers/permanentDeleteRequest';
 
 const store = getDefaultStore();
 interface GridScreenProps {
@@ -399,16 +400,7 @@ export function GridScreen({
 
   const permanentlyDeleteSelection = useCallback((target = selectionTarget, count = selectionCount) => {
     if (!target) return;
-    store.set(confirmModalAtom, {
-      open: true,
-      title: t("Delete Permanently"),
-      message: `This will permanently delete ${count} item${count !== 1 ? 's' : ''}. This cannot be undone.`,
-      confirmLabel: t("Delete"),
-      danger: true,
-      onConfirm: () => {
-        void entityMutations.permanentlyDeleteTarget(target);
-      },
-    });
+    void requestPermanentDelete(target, count);
   }, [selectionTarget, selectionCount, clearSelection]);
 
   // ── Detail window communication ──
@@ -653,7 +645,8 @@ export function GridScreen({
       }
       if (scope.kind === 'inbox' && count > 0 && matchesShortcutDef(e, defs.reject)) {
         e.preventDefault();
-        void setSelectionLifecycle('trash');
+        const target = store.get(selectionTargetAtom);
+        if (target) void entityMutations.rejectTarget(target);
         return;
       }
 
@@ -762,10 +755,10 @@ export function GridScreen({
       ? null
       : currentItems[currentIndex + 1]?.root_id ?? currentItems[currentIndex - 1]?.root_id ?? null;
     inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
-    await entityMutations.setTargetLifecycle(
-      { kind: 'explicit', root_ids: [itemId] },
-      decision === 'accept' ? 'active' : 'trash',
-    );
+    const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
+    if (decision === 'reject') return entityMutations.rejectTarget(target);
+    await entityMutations.setTargetLifecycle(target, 'active');
+    return true;
   }, []);
 
   const resolveRootNeighbor = useCallback(async (session: NonNullable<typeof viewerSession>, delta: number) => {
@@ -1589,7 +1582,7 @@ export function GridScreen({
             onRestore: () => { void setSelectionLifecycle('active', effectiveTarget); },
             onPermanentDelete: () => { permanentlyDeleteSelection(effectiveTarget, selCount); },
             onAccept: () => { void setSelectionLifecycle('active', effectiveTarget); },
-            onReject: () => { void setSelectionLifecycle('trash', effectiveTarget); },
+            onReject: () => { if (effectiveTarget) void entityMutations.rejectTarget(effectiveTarget); },
           });
           const menuId = contextMenu.openAt(pos, entries);
           if (openWithPending && singleItem?.content_hash) {

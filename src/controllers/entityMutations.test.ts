@@ -3,6 +3,12 @@ import { getDefaultStore } from 'jotai';
 import { gridSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
+import { confirmModalAtom } from '../state/modals';
+import { clearNotifications, getCurrentNotification } from '../shared/lib/notifications';
+import { getHistoryState } from '../platform/historyApi';
+import { getSelectionSummary, deleteItems, rejectDeleteItems } from '../platform/entityApi';
+import { getSettings } from '../platform/settingsApi';
+import type { EntityTarget, EntityViewQuery, SelectionSummary } from '../shared/types/canonical';
 
 const { loadInspectorDataMock, setItemLifecycleMock } = vi.hoisted(() => ({
   loadInspectorDataMock: vi.fn(),
@@ -12,6 +18,7 @@ const { loadInspectorDataMock, setItemLifecycleMock } = vi.hoisted(() => ({
 vi.mock('../platform/entityApi', () => ({
   applyEntityTags: vi.fn(),
   deleteItems: vi.fn(),
+  rejectDeleteItems: vi.fn(),
   getSelectionSummary: vi.fn(),
   patchMediaEntities: vi.fn(),
   renameItem: vi.fn(),
@@ -22,19 +29,34 @@ vi.mock('../platform/folderApi', () => ({
   updateFolderMembership: vi.fn(),
 }));
 vi.mock('./inspectorController', () => ({ loadInspectorData: loadInspectorDataMock }));
+vi.mock('../platform/settingsApi', () => ({ getSettings: vi.fn() }));
+vi.mock('../platform/historyApi', () => ({ getHistoryState: vi.fn() }));
 vi.mock('../shared/hooks/useRecentItems', () => ({ recordRecentItems: vi.fn() }));
 
 import {
   permanentlyDeleteTarget,
+  rejectTarget,
   setItemRating,
   setTargetLifecycle,
   settleSelectionAfterMutation,
 } from './entityMutations';
 
+const inboxQuery: EntityViewQuery = {
+  scope: { kind: 'inbox' },
+  view: { filter: { kind: 'all', value: [] }, sort: { field: 'name', direction: 'ascending', random_seed: null } },
+};
+
 describe('setTargetLifecycle', () => {
   const store = getDefaultStore();
 
   beforeEach(() => {
+    vi.mocked(getHistoryState).mockReset().mockResolvedValue({ undo: null, redo: null });
+    vi.mocked(getSelectionSummary).mockReset().mockResolvedValue({ selected_count: 2, media_count: 2 } as SelectionSummary);
+    vi.mocked(getSettings).mockReset().mockResolvedValue({ rejectAction: 'delete', undoDeleteLimit: 500 } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(deleteItems).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(rejectDeleteItems).mockReset().mockResolvedValue(undefined as never);
+    clearNotifications();
+    store.set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
     setItemLifecycleMock.mockReset();
     setItemLifecycleMock.mockResolvedValue(undefined);
     loadInspectorDataMock.mockReset();
@@ -59,6 +81,25 @@ describe('setTargetLifecycle', () => {
     );
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
     expect(store.get(gridSelectionAtom).anchor).toBeNull();
+  });
+
+  it.each(['trash', 'delete'] as const)('rejects using the saved %s preference', async (rejectAction) => {
+    const { getSettings } = await import('../platform/settingsApi');
+    const { rejectDeleteItems } = await import('../platform/entityApi');
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction, undoDeleteLimit: 500 } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(rejectDeleteItems).mockReset();
+    const target = { kind: 'explicit', root_ids: [4, 7] } as const;
+
+    await rejectTarget({ ...target, root_ids: [...target.root_ids] });
+
+    if (rejectAction === 'delete') {
+      expect(rejectDeleteItems).toHaveBeenCalledWith(target, true);
+      expect(setItemLifecycleMock).not.toHaveBeenCalled();
+    } else {
+      expect(setItemLifecycleMock).toHaveBeenCalledWith(target, 'trash');
+      expect(rejectDeleteItems).not.toHaveBeenCalled();
+    }
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
   it('clears selection after restoring selected items from Trash', async () => {
@@ -98,6 +139,7 @@ describe('setTargetLifecycle', () => {
     expect(store.get(permanentDeletesInFlightAtom)).toBe(1);
     expect(store.get(viewerSessionAtom)?.currentItemId).toBe(4);
 
+    await vi.waitFor(() => expect(finishDelete).toBeDefined());
     finishDelete();
     await deletion;
 
@@ -115,6 +157,82 @@ describe('setTargetLifecycle', () => {
     )).rejects.toThrow('delete failed');
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
     expect(store.get(permanentDeletesInFlightAtom)).toBe(0);
+  });
+
+  it.each([
+    { limit: 0, roots: 1, media: 1, target: { kind: 'explicit', root_ids: [4] } },
+    { limit: 2, roots: 1, media: 3, target: { kind: 'explicit', root_ids: [4] } },
+    { limit: 2, roots: 300, media: 300, target: { kind: 'query', query: inboxQuery, excluded_root_ids: [7] } },
+    { limit: 2, roots: 3, media: 3, target: { kind: 'range', query: inboxQuery, spans: [{ anchor_root_id: 4, focus_root_id: 7 }] } },
+  ])('confirms nonundoable rejects using backend counts: $limit/$media', async ({ limit, roots, media, target }) => {
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction: 'delete', undoDeleteLimit: limit } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(getSelectionSummary).mockResolvedValue({ selected_count: roots, media_count: media } as SelectionSummary);
+
+    const result = rejectTarget(target as EntityTarget);
+    await vi.waitFor(() => expect(store.get(confirmModalAtom).open).toBe(true));
+
+    expect(getSelectionSummary).toHaveBeenCalledWith(target);
+    expect(rejectDeleteItems).not.toHaveBeenCalled();
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
+    expect(store.get(confirmModalAtom).message).toContain('cannot be undone');
+    store.get(confirmModalAtom).onConfirm();
+    await expect(result).resolves.toBe(true);
+    expect(rejectDeleteItems).toHaveBeenCalledWith(target, false);
+    await vi.waitFor(() => expect(store.get(gridSelectionAtom).itemIds.size).toBe(0));
+  });
+
+  it('does not reject when the backend selection cannot be resolved', async () => {
+    vi.mocked(getSelectionSummary).mockRejectedValue(new Error('selection expired'));
+    await expect(rejectTarget({ kind: 'explicit', root_ids: [4] })).resolves.toBe(false);
+    expect(rejectDeleteItems).not.toHaveBeenCalled();
+    expect(store.get(confirmModalAtom).open).toBe(false);
+  });
+
+  it('requires confirmation if the undo limit cannot be read', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce({ rejectAction: 'delete' } as Awaited<ReturnType<typeof getSettings>>)
+      .mockRejectedValueOnce(new Error('settings unavailable'));
+    const result = rejectTarget({ kind: 'explicit', root_ids: [4] });
+    await vi.waitFor(() => expect(store.get(confirmModalAtom).open).toBe(true));
+    expect(rejectDeleteItems).not.toHaveBeenCalled();
+    expect(store.get(confirmModalAtom).open).toBe(true);
+    store.get(confirmModalAtom).onCancel?.();
+    await expect(result).resolves.toBe(false);
+  });
+
+  it.each(['items.delete', 'items.reject'])('does not offer an older %s entry as Undo for a new delete', async (command) => {
+    const entry = { entry_id: 10, command, label: 'Delete', count: 1, detail: null };
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction: 'delete', undoDeleteLimit: 0 } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(getHistoryState).mockResolvedValue({ undo: entry, redo: null });
+    const remove = command === 'items.delete' ? permanentlyDeleteTarget : rejectTarget;
+    const result = remove({ kind: 'explicit', root_ids: [4] });
+    if (command === 'items.reject') {
+      await vi.waitFor(() => expect(store.get(confirmModalAtom).open).toBe(true));
+      store.get(confirmModalAtom).onConfirm();
+      await vi.waitFor(() => expect(getHistoryState).toHaveBeenCalledTimes(2));
+    }
+    await result;
+    expect(getCurrentNotification()).toBeNull();
+
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction: 'delete', undoDeleteLimit: 500 } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(getHistoryState).mockResolvedValueOnce({ undo: entry, redo: null })
+      .mockResolvedValueOnce({ undo: { ...entry, entry_id: 11 }, redo: null });
+    await remove({ kind: 'explicit', root_ids: [7] });
+    expect(getCurrentNotification()?.action?.label).toBe('Undo');
+  });
+
+  it.each([0, 2])('cancels a collection reject at undo limit %s without changing selection or viewer', async (undoDeleteLimit) => {
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction: 'delete', undoDeleteLimit } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(getSelectionSummary).mockResolvedValue({ selected_count: 1, media_count: 3 } as SelectionSummary);
+    store.set(quickLookSessionAtom, { currentIndex: 0, currentItemId: 4 });
+    let settled = false;
+    const result = rejectTarget({ kind: 'explicit', root_ids: [4] }).then((value) => { settled = true; return value; });
+    await vi.waitFor(() => expect(store.get(confirmModalAtom).open).toBe(true));
+    expect(settled).toBe(false);
+    store.get(confirmModalAtom).onCancel?.();
+    await expect(result).resolves.toBe(false);
+    expect(rejectDeleteItems).not.toHaveBeenCalled();
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
+    expect(store.get(quickLookSessionAtom)?.currentItemId).toBe(4);
   });
 
   it('exposes one settlement owner for successful relocation mutations', () => {

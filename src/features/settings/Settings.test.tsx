@@ -191,6 +191,14 @@ beforeEach(() => {
 });
 
 describe('Settings', () => {
+  it('explains the media-based delete undo limit and its disabled state', async () => {
+    const user = setupUser();
+    await renderSettings();
+    await user.click(screen.getByRole('button', { name: 'Inbox & Deleting' }));
+    expect(screen.getByText('Deleting skips Trash. Only deletes within the undo limit below can be undone.')).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Undo limit (media items)' })).toBeInTheDocument();
+    expect(screen.getByText(/Counts media items, including collection members\. Set to 0 to disable delete undo\./)).toBeInTheDocument();
+  });
   it('shows the Picto package version in About instead of the Electron runtime version', async () => {
     const user = setupUser();
     await renderSettings();
