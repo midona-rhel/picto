@@ -79,6 +79,31 @@ function expectImage(hash: string, width: number, height: number, scale: number)
 }
 
 describe('GridQuickLook', () => {
+  it.each([
+    { index: 1, windowStart: 0, totalCount: undefined, previous: true, next: false },
+    { index: 0, windowStart: 0, totalCount: undefined, previous: false, next: true },
+    { index: 1, windowStart: 20, totalCount: 30, previous: true, next: true },
+    { index: 1, windowStart: 20, totalCount: 22, previous: true, next: false },
+  ])('preserves keyboard bounds while a removed image is retained at $windowStart + $index', async ({
+    index, windowStart, totalCount, previous, next,
+  }) => {
+    const before = media(10, 'before', 1600, 800);
+    const items = index === 0 ? [portrait, before, landscape] : [before, portrait, landscape];
+    const onNavigate = vi.fn();
+    const props = { ...callbacks, onNavigate, windowStart, totalCount, currentIndex: index };
+    const { rerender } = render(<GridQuickLook {...props} items={items} />);
+    await decodeThumbnail('portrait');
+    rerender(<GridQuickLook {...props} items={items.filter((item) => item !== portrait)} />);
+    expectImage('portrait', 800, 1600, 0.375);
+
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(onNavigate.mock.calls).toEqual(previous ? [[-1]] : []);
+    onNavigate.mockClear();
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(onNavigate.mock.calls).toEqual(next ? [[1]] : []);
+    expectImage('portrait', 800, 1600, 0.375);
+  });
+
   it('keeps the decoded group visible until the adjacent media thumbnail is decoded', async () => {
     const items = [group, portrait];
     const { rerender } = render(<GridQuickLook {...callbacks} items={items} currentIndex={0} />);

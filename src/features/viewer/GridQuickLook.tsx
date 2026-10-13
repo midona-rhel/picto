@@ -106,6 +106,8 @@ export function GridQuickLook(props: GridQuickLookProps) {
           {...props}
           items={contentItems}
           currentIndex={contentIndex}
+          windowStart={(props.windowStart ?? 0) + displayedIndex - contentIndex}
+          totalCount={totalCount}
           thumbnailReady={decodedThumbnailItemId === currentItem.root_id}
           thumbnailUrlOverride={decodedThumbnailItemId === currentItem.root_id
             ? decodedThumbnailUrl ?? undefined

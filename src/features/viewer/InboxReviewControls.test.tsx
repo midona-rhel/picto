@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetShortcutRuntimeForTests } from '../../runtime/shortcutRuntime';
 import { InboxReviewControls, resolveInboxReviewItemId } from './InboxReviewControls';
@@ -145,6 +145,10 @@ describe('InboxReviewControls', () => {
     expect(screen.getByRole('button', { name: 'Reject item' })).toBeEnabled();
     await act(async () => { await vi.runAllTimersAsync(); });
     expect(onAdvance).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'z' });
+    await act(async () => {});
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith(9, 'accept');
   });
 
   it('retargets the persistent controls without replaying their mount transition', () => {
@@ -160,5 +164,47 @@ describe('InboxReviewControls', () => {
     expect(document.querySelector('[data-inbox-review-controls]')).toBe(controls);
     fireEvent.click(screen.getByRole('button', { name: 'Accept item' }));
     expect(onCommit).toHaveBeenCalledWith(43, 'accept');
+  });
+
+  it.each(['z', 'x'])('keeps reconciliation from retargeting a %s review during its pulse and exit', async (key) => {
+    const commits = vi.fn();
+    const onAdvance = vi.fn();
+    function ReconciledInbox() {
+      const [items, setItems] = useState([42, 43, 44]);
+      return <InboxReviewControls itemId={items[0]} onAdvance={onAdvance} onCommit={async (id, decision) => {
+        commits(id, decision);
+        setItems((current) => current.filter((item) => item !== id));
+      }} />;
+    }
+    render(<ReconciledInbox />);
+    fireEvent.keyDown(window, { key });
+    await act(async () => {});
+
+    // The lifecycle delta already removed 42, but its review is still playing.
+    fireEvent.keyDown(window, { key: 'z' });
+    fireEvent.keyDown(window, { key: 'x' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject item' }));
+    expect(commits.mock.calls).toEqual([[42, key === 'z' ? 'accept' : 'reject']]);
+    expect(screen.getByRole('button', { name: 'Accept item' })).toBeDisabled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(360); });
+    fireEvent.keyDown(window, { key: 'x' });
+    expect(commits).toHaveBeenCalledTimes(1);
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(onAdvance).toHaveBeenCalledOnce();
+
+    // Only after advance is the new inbox item reviewable.
+    fireEvent.keyDown(window, { key: 'x' });
+    expect(commits.mock.calls[1]).toEqual([43, 'reject']);
+  });
+
+  it('locks synchronously against multiple shortcuts in the same render', () => {
+    const onCommit = vi.fn(() => new Promise<void>(() => {}));
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={vi.fn()} />);
+    act(() => {
+      fireEvent.keyDown(window, { key: 'z' });
+      fireEvent.keyDown(window, { key: 'x' });
+    });
+    expect(onCommit).toHaveBeenCalledOnce();
   });
 });
