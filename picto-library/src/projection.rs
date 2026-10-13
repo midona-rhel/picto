@@ -694,6 +694,7 @@ impl Deref for RecentViews {
 #[derive(Debug, Clone)]
 pub struct ProjectionSnapshot {
     pub revision: u64,
+    pub subscription_counts: Arc<crate::subscription_counts::SubscriptionCounts>,
     pub text_index: Arc<crate::text_index::TextIndex>,
     pub name_index: Arc<crate::name_index::NameIndex>,
     /// Drawing facts of every root, hydrated for grid summaries without SQLite.
@@ -977,7 +978,7 @@ impl ProjectionStore {
     ) -> Result<Self> {
         let started = std::time::Instant::now();
         let mut statistics = ProjectionLoadStatistics::default();
-        let (snapshot, recovered_partitions) = database.read(
+        let (mut snapshot, recovered_partitions) = database.read(
             crate::database::WorkPriority::CorrectnessRecovery,
             |connection| {
                 let stage = std::time::Instant::now();
@@ -1030,6 +1031,7 @@ impl ProjectionStore {
             persist_recovered_partitions(database, &snapshot)?;
             statistics.recovery_persistence_us = stage.elapsed().as_micros() as u64;
         }
+        snapshot.subscription_counts = Arc::new(database.subscription_counts()?);
         statistics.total_us = started.elapsed().as_micros() as u64;
         Ok(Self {
             snapshot: ArcSwap::from_pointee(snapshot),
@@ -1340,6 +1342,7 @@ fn load(
 
     let mut snapshot = ProjectionSnapshot {
         revision,
+        subscription_counts: Arc::default(),
         text_index: resident.text_index,
         name_index: resident.name_index,
         drawing: resident.drawing,

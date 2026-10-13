@@ -6,7 +6,7 @@
 //! never commit its output.
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
 //! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
-//! history, fixed retained outcomes, and tags on 20% of the library's roots.
+//! growing retained outcomes (unique and successful redownloads), and tags on 20% of roots.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -58,7 +58,7 @@ fn main() -> R<()> {
     println!("FIXTURE ingest_{roots}_s={:.1}", t.elapsed().as_secs_f64());
 
     if subscriptions_only {
-        return subscriptions::run(&library, roots, runs);
+        return subscriptions::run(library, roots, runs);
     }
 
     // --- fixture: settle FTS so name text filters see every root ---

@@ -464,7 +464,9 @@ mod tests {
         connection
             .execute_batch(
                 "DROP INDEX idx_source_post_attempt_added;
-             DROP INDEX idx_source_file_attempt_retained;",
+             DROP INDEX idx_source_file_attempt_retained;
+             DROP INDEX idx_subscription_run_latest;
+             DROP INDEX idx_subscription_run_active;",
             )
             .unwrap();
         drop(connection);
@@ -475,9 +477,10 @@ mod tests {
                 count(
                     &connection,
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN
-                 ('idx_source_post_attempt_added', 'idx_source_file_attempt_retained')"
+                 ('idx_source_post_attempt_added', 'idx_source_file_attempt_retained',
+                  'idx_subscription_run_latest', 'idx_subscription_run_active')"
                 ),
-                2
+                4
             );
             assert_eq!(super::validate(&connection).unwrap(), 1);
         }

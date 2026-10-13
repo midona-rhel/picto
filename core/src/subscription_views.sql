@@ -4,27 +4,16 @@ WITH active_runs AS (
     WHERE status IN ('pending', 'running')
 ),
 latest_run_ids AS (
-    SELECT subscription_id, MAX(run_id) AS run_id
-    FROM subscription_run
-    GROUP BY subscription_id
+    SELECT s.subscription_id,
+           (SELECT MAX(r.run_id) FROM subscription_run r
+            WHERE r.subscription_id = s.subscription_id) AS run_id
+    FROM subscription s
 ),
 visible_runs AS (
     SELECT s.subscription_id, COALESCE(active.run_id, latest.run_id) AS run_id
     FROM subscription s
     LEFT JOIN active_runs active USING(subscription_id)
     LEFT JOIN latest_run_ids latest USING(subscription_id)
-),
--- Posts the subscription's runs imported. Run records, not the
--- library: trashing or deleting an item does not lower it.
-root_totals AS (
-    SELECT query.subscription_id,
-           COUNT(DISTINCT attempt.source_post_id) AS root_count
-    FROM subscription_query query
-    JOIN subscription_run_query run_query ON run_query.query_id = query.query_id
-    JOIN source_post_attempt attempt
-      ON attempt.run_query_id = run_query.run_query_id
-     AND attempt.state = 'added'
-    GROUP BY query.subscription_id
 ),
 issue_totals AS (
     SELECT subscription_id, COUNT(*) AS issue_count
@@ -71,7 +60,7 @@ SELECT s.subscription_id, s.name, s.schedule, s.paused,
            THEN active.failure_kind
            ELSE COALESCE(active.status, latest.status)
        END,
-       COALESCE(root_totals.root_count, 0),
+       0, -- Lifetime totals come from this revision's resident outcome index.
        COALESCE(issue_totals.issue_count, 0),
        COALESCE(traversed_posts.posts_traversed, 0),
        COALESCE(item_progress.posts_added, 0),
@@ -99,7 +88,6 @@ LEFT JOIN active_runs active
 LEFT JOIN latest_run_ids latest_id
   ON latest_id.subscription_id = s.subscription_id
 LEFT JOIN subscription_run latest ON latest.run_id = latest_id.run_id
-LEFT JOIN root_totals USING (subscription_id)
 LEFT JOIN issue_totals USING (subscription_id)
 LEFT JOIN traversed_posts
   ON traversed_posts.run_id = COALESCE(active.run_id, latest.run_id)

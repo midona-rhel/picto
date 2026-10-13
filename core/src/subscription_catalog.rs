@@ -214,8 +214,10 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
         .auxiliary_read_consistent(
             picto_library::database::WorkPriority::VisibleRead,
             |connection, projection| {
-                let mut subscriptions = query_subscription_views(connection)?;
-                let mut queries = query_views_by_subscription(connection)?;
+                let mut subscriptions =
+                    query_subscription_views(connection, &projection.subscription_counts)?;
+                let mut queries =
+                    query_views_by_subscription(connection, &projection.subscription_counts)?;
                 let (mut destinations, mut covers) = subscription_settings_by_id_library(
                     connection,
                     application.blobs(),
@@ -249,6 +251,7 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
 
 fn query_subscription_views(
     connection: &rusqlite::Connection,
+    counts: &picto_library::subscription_counts::SubscriptionCounts,
 ) -> rusqlite::Result<Vec<SubscriptionView>> {
     connection
         .prepare(include_str!("subscription_views.sql"))?
@@ -263,7 +266,7 @@ fn query_subscription_views(
                 next_run_at: row.get(6)?,
                 active_run_id: row.get(7)?,
                 status: row.get(8)?,
-                root_count: row.get(9)?,
+                root_count: counts.posts(row.get(0)?),
                 open_issue_count: row.get(10)?,
                 cover_file_hash: None,
                 cover_focus_x: 500,
@@ -1606,9 +1609,11 @@ fn normalize_destination_policy(
 
 fn query_views_by_subscription(
     connection: &rusqlite::Connection,
+    counts: &picto_library::subscription_counts::SubscriptionCounts,
 ) -> rusqlite::Result<HashMap<i64, Vec<SubscriptionQueryView>>> {
     let mut statement = connection.prepare(include_str!("subscription_query_views.sql"))?;
     let rows = statement.query_map([], |row| {
+        let totals = counts.query(row.get(1)?);
         Ok((
             row.get::<_, i64>(0)?,
             SubscriptionQueryView {
@@ -1626,9 +1631,9 @@ fn query_views_by_subscription(
                 last_failure_at: row.get(12)?,
                 last_failure_kind: row.get(13)?,
                 last_failure_message: row.get(14)?,
-                post_count: row.get(15)?,
-                media_count: row.get(16)?,
-                successful_run_count: row.get(17)?,
+                post_count: totals.posts,
+                media_count: totals.media,
+                successful_run_count: totals.successful_runs,
             },
         ))
     })?;
@@ -1927,7 +1932,9 @@ mod tests {
 
     #[test]
     fn historical_counts_deduplicate_and_attribute_retained_files_to_their_query() {
-        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("counts.db");
+        let mut connection = rusqlite::Connection::open(&path).unwrap();
         picto_library::schema::create(&mut connection).unwrap();
         connection.execute_batch(
             "INSERT INTO subscription(subscription_id, subscription_key, name, schedule, created_at)
@@ -1956,7 +1963,10 @@ mod tests {
                     (3, 1, 'retained'), (3, 2, 'failed'),
                     (4, 1, 'duplicate'), (4, 2, 'duplicate');",
         ).unwrap();
-        let queries = super::query_views_by_subscription(&connection).unwrap();
+        let library = picto_library::Library::open(&path).unwrap();
+        let counts = library.projections().snapshot().subscription_counts.clone();
+        drop(library);
+        let queries = super::query_views_by_subscription(&connection, &counts).unwrap();
         assert_eq!(
             (queries[&1][0].post_count, queries[&1][0].media_count),
             (1, 1)
@@ -1969,14 +1979,14 @@ mod tests {
             (queries[&2][0].post_count, queries[&2][0].media_count),
             (0, 0)
         );
-        let subscriptions = super::query_subscription_views(&connection).unwrap();
+        let subscriptions = super::query_subscription_views(&connection, &counts).unwrap();
         assert_eq!(subscriptions[0].root_count, 1);
         assert_eq!(subscriptions[1].root_count, 0);
         // Only the latest run contributes progress; lifetime counts stay distinct.
         assert_eq!(subscriptions[0].progress.posts_added, 1);
         assert_eq!(subscriptions[0].progress.ingested, 1);
 
-        // Refresh work must not grow with unrelated failed historical attempts.
+        // Refresh work must not grow with successful retained history either.
         let steps = || {
             [
                 include_str!("subscription_views.sql"),
@@ -1999,9 +2009,9 @@ mod tests {
              INSERT INTO source_item(source_post_id, item_key, position, state, created_at, updated_at)
              SELECT source_post_id, 'failed', 0, 'failed', 'now', 'now' FROM source_post WHERE source_post_id > 1;
              INSERT INTO source_post_attempt(run_query_id, source_post_id, state, started_at)
-             SELECT 1, source_post_id, 'failed', 'now' FROM source_post WHERE source_post_id > 1;
+             SELECT 1, source_post_id, 'added', 'now' FROM source_post WHERE source_post_id > 1;
              INSERT INTO source_file_attempt(attempt_id, source_item_id, state)
-             SELECT a.attempt_id, i.source_item_id, 'failed'
+             SELECT a.attempt_id, i.source_item_id, 'retained'
              FROM source_post_attempt a JOIN source_item i USING(source_post_id)
              WHERE a.source_post_id > 1;",
         ).unwrap();
