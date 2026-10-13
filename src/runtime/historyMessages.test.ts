@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setLocale } from '../i18n';
 import { describeHistoryEntry } from './historyMessages';
 
 const entry = (command: string, count = 0, detail: string | null = null) => ({
@@ -6,6 +7,15 @@ const entry = (command: string, count = 0, detail: string | null = null) => ({
 });
 
 describe('describeHistoryEntry', () => {
+  afterEach(() => setLocale('en'));
+
+  it('formats numbers using the selected application language', () => {
+    setLocale('de');
+    expect(describeHistoryEntry(entry('items.set_lifecycle', 1000, 'trash'))).toContain('1.000');
+    setLocale('en');
+    expect(describeHistoryEntry(entry('items.set_lifecycle', 1000, 'trash'))).toContain('1,000');
+  });
+
   it('says what happened to the items in plain words', () => {
     expect(describeHistoryEntry(entry('items.set_lifecycle', 3, 'trash'))).toBe('Moved 3 items to Trash');
     expect(describeHistoryEntry(entry('items.set_lifecycle', 1, 'inbox'))).toBe('Moved an item to the Inbox');
