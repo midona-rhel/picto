@@ -1480,5 +1480,6 @@
   "A selected range lost its first or last item, so that range is no longer selected.": "Une plage sélectionnée a perdu son premier ou son dernier élément ; elle n'est donc plus sélectionnée.",
   "Could not preview smart folder rules": "Impossible de prévisualiser les règles du dossier intelligent",
   "Could not restore smart folder rules": "Impossible de restaurer les règles du dossier intelligent",
-  "Could not save smart folder": "Impossible d'enregistrer le dossier intelligent"
+  "Could not save smart folder": "Impossible d'enregistrer le dossier intelligent",
+  "Matches": "Correspondances"
 }

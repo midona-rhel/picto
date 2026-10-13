@@ -260,6 +260,13 @@ function StandardRow({
       {hasChildren && (
         <div
           className={styles.expandArrow}
+          data-sidebar-disclosure
+          // The row captures the pointer on press (for dragging), which sends
+          // the click to the row instead of here; and a quick second click
+          // would reach the row's double-click toggle and undo this one. The
+          // arrow keeps its own presses.
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
         >
           <span className={`${styles.triangle} ${expanded ? styles.expanded : styles.collapsed}`} />

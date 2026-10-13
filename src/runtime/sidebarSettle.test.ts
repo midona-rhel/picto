@@ -28,7 +28,7 @@ describe('sidebar runtime settling', () => {
   it('subscribes to every resource that changes sidebar counts', () => {
     const stop = startSidebarSettle();
 
-    expect([...callbacks.keys()]).toEqual(['sidebar', 'folders', 'smart_folders', 'tags']);
+    expect([...callbacks.keys()]).toEqual(['sidebar', 'folders', 'smart_folders', 'tags', 'duplicates']);
     expect(start).not.toHaveBeenCalled();
 
     stop();
@@ -42,9 +42,10 @@ describe('sidebar runtime settling', () => {
     callbacks.get('folders')?.();
     callbacks.get('smart_folders')?.();
     callbacks.get('tags')?.();
+    callbacks.get('duplicates')?.();
     await Promise.resolve();
 
-    expect(fetchTree).toHaveBeenCalledTimes(4);
+    expect(fetchTree).toHaveBeenCalledTimes(5);
     stop();
   });
 });

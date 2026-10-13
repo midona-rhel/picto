@@ -1209,6 +1209,50 @@ mod tests {
     }
 
     #[test]
+    fn tag_search_ranks_exact_then_prefix_then_word_start_then_substring() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path()).unwrap();
+        let mut tagged = input();
+        tagged.tags = vec![
+            "amelia_(twokinds)".into(),
+            "brutus_(twokinds)".into(),
+            "notwokinds".into(),
+            "twokinds_comic".into(),
+            "series:twokinds".into(),
+        ];
+        application.library().ingest(&tagged).unwrap();
+
+        let names = |search: &str| {
+            application
+                .list_tags(None, Some(search), None, 10)
+                .unwrap()
+                .tags
+                .iter()
+                .map(|tag| format!("{}:{}", tag.namespace, tag.subname))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names("TwoKinds"),
+            [
+                "series:twokinds",
+                ":twokinds_comic",
+                ":amelia_(twokinds)",
+                ":brutus_(twokinds)",
+                ":notwokinds",
+            ]
+        );
+        assert_eq!(names("series:twok"), ["series:twokinds"]);
+
+        let first = application.list_tags(None, Some("twokinds"), None, 2).unwrap();
+        let second = application
+            .list_tags(None, Some("twokinds"), first.next_cursor.as_deref(), 10)
+            .unwrap();
+        assert_eq!(first.tags.len() + second.tags.len(), 5);
+        assert_eq!(second.tags[0].subname, "amelia_(twokinds)");
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
     fn shell_coalesces_multiple_publications_into_one_renderer_event() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path()).unwrap();

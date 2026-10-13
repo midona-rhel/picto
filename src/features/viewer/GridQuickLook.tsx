@@ -23,6 +23,12 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const [decodedThumbnailItemId, setDecodedThumbnailItemId] = useState<number | null>(null);
   const [decodedThumbnailUrl, setDecodedThumbnailUrl] = useState<string | null>(null);
   const currentItem = retainedIndex >= 0 ? props.items[retainedIndex] : displayedItem;
+  // An item that left the list (accepted or rejected from the inbox) stays on
+  // screen until the next thumbnail is decoded. The content must keep drawing
+  // that item, with its own size: given the list, the index would already name
+  // the next item, and the old image would be fitted to the next one's size.
+  const contentItems = retainedIndex >= 0 || !currentItem ? props.items : [currentItem];
+  const contentIndex = retainedIndex >= 0 || !currentItem ? displayedIndex : 0;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
 
@@ -98,7 +104,10 @@ export function GridQuickLook(props: GridQuickLookProps) {
       ) : (
         <QuickLookContent
           {...props}
-          currentIndex={displayedIndex}
+          items={contentItems}
+          currentIndex={contentIndex}
+          windowStart={(props.windowStart ?? 0) + displayedIndex - contentIndex}
+          totalCount={totalCount}
           thumbnailReady={decodedThumbnailItemId === currentItem.root_id}
           thumbnailUrlOverride={decodedThumbnailItemId === currentItem.root_id
             ? decodedThumbnailUrl ?? undefined

@@ -1480,5 +1480,6 @@
   "A selected range lost its first or last item, so that range is no longer selected.": "所选范围失去了第一项或最后一项，因此该范围不再被选中。",
   "Could not preview smart folder rules": "无法预览智能文件夹规则",
   "Could not restore smart folder rules": "无法恢复智能文件夹规则",
-  "Could not save smart folder": "无法保存智能文件夹"
+  "Could not save smart folder": "无法保存智能文件夹",
+  "Matches": "匹配项"
 }
