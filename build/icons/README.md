@@ -12,8 +12,8 @@ The macOS package points directly at `build/Picto.icon`. Electron Builder compil
 
 Verification:
 
-1. Run `npm run generate:app-icons` and confirm the three generated assets are 1024×1024 RGBA PNGs.
-2. Open `build/Picto.icon` in Icon Composer when visually tuning material properties. Do not edit the generated geometry there; update the numbered SVG master instead.
+1. Run `npm run generate:app-icons` and confirm `build/Picto.icon/Assets/01-book.png` is a 1024×1024 RGBA PNG.
+2. Open `build/Picto.icon` in Icon Composer when visually tuning material properties. Do not edit the generated geometry there; update `build/icons/picto-macos-book.svg` instead.
 3. Preview Default, Dark, and Mono appearances on macOS in Icon Composer.
 4. Run the macOS `release/**` CI package job. It uses the Apple Silicon `macos-26` runner so Xcode can compile the native icon asset.
 5. Inspect the packaged app for `Contents/Resources/Assets.car` and `Contents/Resources/icon.icns`.
