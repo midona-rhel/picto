@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use picto_library::{
-    FolderId, PendingCollectionImport, PendingImport, PreparedCollectionImport, PreparedImport,
+    FolderId, PendingImport, PreparedCollectionImport, PreparedImport,
     PreparedIngestJob, PreparedIngestPayload, TaskId, TaskIngestJob, TaskRecord, TaskState,
 };
 use serde::{Deserialize, Serialize};
@@ -78,11 +78,14 @@ pub fn start_manual_import(
         }
         resolved.push(path);
     }
+    let _start = crate::tasks::lock_import_start(application)?;
     // Seeding (a background import) is not the user's; it never waits.
     if !input.background {
         crate::tasks::ensure_can_start(application, crate::tasks::IMPORT_ACTION)?;
     }
-    let input_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
+    let mut options = serde_json::to_value(input).map_err(|error| error.to_string())?;
+    options["collection_name"] = serde_json::json!(import::collection_name(&input.paths));
+    let input_json = options.to_string();
     let task = application
         .library()
         .create_task(
@@ -147,7 +150,6 @@ pub fn scan_import_task(
         0
     };
     let mut chunk = Vec::with_capacity(SCAN_CHUNK);
-    let mut members = Vec::new();
     let mut found = false;
     let walked = import::walk_manual_candidates(
         application.root(),
@@ -193,10 +195,6 @@ pub fn scan_import_task(
                 imported_at_ms: task.created_at_ms,
                 archive: import::is_zip(&candidate.path),
             };
-            if input.group_files {
-                members.push(pending);
-                return Ok(true);
-            }
             chunk.push(TaskIngestJob {
                 job: PreparedIngestJob {
                     job_key: pending.stable_key.clone(),
@@ -224,34 +222,6 @@ pub fn scan_import_task(
     }
     if !queue(application, task_id, &mut chunk, cancelled)? {
         return Ok(());
-    }
-    if !members.is_empty() {
-        members.sort_by(|left, right| left.path.cmp(&right.path));
-        members.dedup_by(|left, right| left.path == right.path);
-        let units = members.len() as u64;
-        let payload = if members.len() == 1 {
-            PreparedIngestPayload::Pending(members.remove(0))
-        } else {
-            PreparedIngestPayload::PendingCollection(PendingCollectionImport {
-                members,
-                name: import::collection_name(&input.paths),
-                modified_at_ms: task.created_at_ms,
-            })
-        };
-        chunk.push(TaskIngestJob {
-            job: PreparedIngestJob {
-                job_key: format!("task:{}:collection", task_id.0),
-                source_kind: "manual".into(),
-                source_path: input.paths.join("\n"),
-                source_item_id: None,
-                delete_after_ingest: input.delete_after_ingest,
-                payload,
-            },
-            units,
-        });
-        if !queue(application, task_id, &mut chunk, cancelled)? {
-            return Ok(());
-        }
     }
     if input.watch_source_folder {
         import::attach_source_folder_watch(application, &input, &mut folders, Some(task_id))?;
@@ -342,11 +312,39 @@ pub async fn prepare_task_jobs(application: &LibraryApplication) -> Result<usize
             break;
         }
         prepared += results.len();
-        library
-            .settle_unprepared_task_jobs(&results, &chrono::Utc::now().to_rfc3339())
-            .map_err(|error| error.to_string())?;
+        store_prepared(application, &results)?;
     }
     Ok(prepared)
+}
+
+fn store_prepared(
+    application: &LibraryApplication,
+    results: &[(i64, Result<PreparedIngestPayload, String>)],
+) -> Result<(), String> {
+    let stored = application.library().settle_unprepared_task_jobs(results, &chrono::Utc::now().to_rfc3339());
+    for (id, result) in results {
+        if !stored.as_ref().is_ok_and(|ids| ids.contains(id)) {
+            if let Ok(payload) = result {
+                match payload {
+                    PreparedIngestPayload::Item(item) => cleanup_staging(application, std::slice::from_ref(item)),
+                    PreparedIngestPayload::Collection(collection) => cleanup_staging(application, &collection.members),
+                    _ => {}
+                }
+            }
+        }
+    }
+    stored.map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn cleanup_staging(application: &LibraryApplication, members: &[PreparedImport]) {
+    let staging = application.root().join("temp/archive-import");
+    for member in members {
+        let path = Path::new(&member.file_path);
+        if path.starts_with(&staging) {
+            let _ = fs::remove_file(path);
+            if let Some(parent) = path.parent() { let _ = fs::remove_dir(parent); }
+        }
+    }
 }
 
 /// The importable form of a pending payload; other payloads are returned as
@@ -366,7 +364,13 @@ pub async fn prepare_pending(
         PreparedIngestPayload::PendingCollection(collection) => {
             let mut members = Vec::with_capacity(collection.members.len());
             for member in &collection.members {
-                members.extend(prepare_member(application, member, folders, task).await?);
+                match prepare_member(application, member, folders, task).await {
+                    Ok(prepared) => members.extend(prepared),
+                    Err(error) => {
+                        cleanup_staging(application, &members);
+                        return Err(error);
+                    }
+                }
             }
             Ok(payload_for(
                 members,
@@ -409,7 +413,13 @@ async fn prepare_member(
     let folder = match &pending.folder_path {
         Some(relative) => {
             let mut cache = folders.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            import::ensure_relative_folder_for_task(application, parent, Some(Path::new(relative)), &mut cache, task)?
+            match import::ensure_relative_folder_for_task(application, parent, Some(Path::new(relative)), &mut cache, task) {
+                Ok(folder) => folder,
+                Err(error) => {
+                    cleanup_staging(application, &members);
+                    return Err(error);
+                }
+            }
         }
         None => parent,
     };
@@ -572,6 +582,7 @@ mod tests {
 
     #[test]
     fn scan_queues_progress_before_finishing_and_resumes_without_duplicates() {
+        for group_files in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source");
         fs::create_dir(&source).unwrap();
@@ -580,6 +591,7 @@ mod tests {
         }
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let mut request = folder_input(&source);
+        request.group_files = group_files;
         request
             .paths
             .push(source.join("0.png").to_string_lossy().into_owned());
@@ -597,6 +609,7 @@ mod tests {
         let finished = task(&application, &started);
         assert_eq!(finished.total_units, 600);
         assert!(finished.scan_complete);
+        }
     }
 
     #[test]
@@ -906,13 +919,15 @@ mod tests {
         zip.finish().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
 
-        start_manual_import(&application, &input(vec![archive.to_string_lossy().into_owned()], false))
+        let started = start_manual_import(&application, &input(vec![archive.to_string_lossy().into_owned()], false))
             .unwrap();
         let roots = drive(&application).await;
         assert_eq!(roots.len(), 1);
         let details = application.library().details(roots[0]).unwrap();
         assert_eq!(details.root.kind, picto_library::RootKind::Collection);
         assert_eq!(details.media.len(), 2);
+        let finished = task(&application, &started);
+        assert_eq!((finished.total_units, finished.done_units()), (2, 2));
         assert!(archive.exists());
         let staging = application.root().join("temp/archive-import");
         assert!(fs::read_dir(staging).unwrap().next().is_none());
@@ -1244,4 +1259,86 @@ mod tests {
         assert!(crate::tasks::foreground_tasks(&application).unwrap()[0].blocks.is_empty());
         start_manual_import(&application, &second).unwrap();
     }
+    #[tokio::test]
+    async fn discarded_archive_preparation_cleans_staging_and_paused_totals_are_idempotent() {
+        for stop in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("one.png");
+            png(&source, [1, 2, 3]);
+            let archive = directory.path().join("files.zip");
+            let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+            for name in ["a.png", "b.png"] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                std::io::copy(&mut fs::File::open(&source).unwrap(), &mut zip).unwrap();
+            }
+            zip.finish().unwrap();
+            let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+            let started = start_manual_import(&application, &input(vec![archive.to_string_lossy().into_owned()], false)).unwrap();
+            scan_pending_tasks(&application, &|| false).unwrap();
+            let jobs = application.library().unprepared_task_jobs(1).unwrap();
+            let job = &jobs[0];
+            let prepared = prepare_pending(&application, &job.payload, &Mutex::default(), job.task_id).await.unwrap();
+            let staging = application.root().join("temp/archive-import");
+            assert!(fs::read_dir(&staging).unwrap().next().is_some());
+            if stop { application.library().stop_task(TaskId(started.task_id), false, now_ms()).unwrap(); }
+            else { application.library().set_task_paused(TaskId(started.task_id), true).unwrap(); }
+            let results = [(job.ingest_job_id, Ok(prepared))];
+            store_prepared(&application, &results).unwrap();
+            if stop {
+                assert!(fs::read_dir(&staging).unwrap().next().is_none());
+                assert_eq!(root_count(&application), 0);
+            } else {
+                assert!(fs::read_dir(&staging).unwrap().next().is_some());
+                assert_eq!(task(&application, &started).total_units, 2);
+                // A repeated settlement cannot add the ZIP's expansion twice.
+                store_prepared(&application, &results).unwrap();
+                assert_eq!(task(&application, &started).total_units, 2);
+                application.library().set_task_paused(TaskId(started.task_id), false).unwrap();
+                drive(&application).await;
+                let finished = task(&application, &started);
+                assert_eq!((finished.total_units, finished.done_units()), (2, 2));
+                assert!(fs::read_dir(&staging).unwrap().next().is_none());
+            }
+            assert!(archive.exists());
+        }
+    }
+
+    #[test]
+    fn backend_pack_and_manual_import_exclude_each_other() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.png");
+        png(&source, [1, 2, 3]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let request = input(vec![source.to_string_lossy().into_owned()], false);
+        let pack = crate::picto_pack::PictoPackImportRequest { path: directory.path().join("missing.pictopack") };
+        let started = start_manual_import(&application, &request).unwrap();
+        assert!(crate::picto_pack::import(&application, &pack).unwrap_err().contains("still running"));
+        application.library().stop_task(TaskId(started.task_id), false, now_ms()).unwrap();
+        let pack_guard = crate::tasks::lock_import_start(&application).unwrap();
+        assert!(start_manual_import(&application, &request).unwrap_err().contains("Picto Pack"));
+        assert!(crate::picto_pack::import(&application, &pack).unwrap_err().contains("Picto Pack"));
+        drop(pack_guard);
+        assert!(crate::picto_pack::import(&application, &pack).is_err());
+        // Failure releases the gate, too.
+        start_manual_import(&application, &request).unwrap();
+    }
+
+    #[tokio::test]
+    async fn grouped_import_spans_bounded_batches() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("group");
+        fs::create_dir(&source).unwrap();
+        for index in 0..55 { png(&source.join(format!("{index}.png")), [index, 2, 3]); }
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let started = start_manual_import(&application, &input(vec![source.to_string_lossy().into_owned()], true)).unwrap();
+        drive(&application).await;
+        assert_eq!(root_count(&application), 1);
+        let finished = task(&application, &started);
+        assert_eq!((finished.total_units, finished.added_units), (55, 55));
+        assert_eq!(finished.state, TaskState::Finished);
+        application.library().stop_task(TaskId(started.task_id), true, now_ms()).unwrap();
+        settle_reverts(&application).unwrap();
+        assert_eq!(root_count(&application), 0);
+    }
+
 }

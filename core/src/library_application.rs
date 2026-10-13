@@ -27,6 +27,7 @@ pub struct LibraryApplication {
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
     ai_worker_status: std::sync::Mutex<AiWorkerStatus>,
+    pub(crate) import_start: std::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +151,7 @@ impl LibraryApplication {
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
             ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
+            import_start: std::sync::Mutex::new(()),
         })
     }
 

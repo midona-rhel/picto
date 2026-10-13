@@ -716,3 +716,69 @@ fn task_rollback_splits_overlapping_collections_and_reverses_their_aliases() {
     assert!(!snapshot.smart_results[&smart.0].contains(first.0));
     assert_eq!(shared_files(&library), 0);
 }
+
+#[test]
+fn task_rollback_restores_reused_names_notes_and_smart_results_after_reopen() {
+    for grouped in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("library.sqlite");
+        let library = Library::create(&path).unwrap();
+        let original = imported("12345", "same-file");
+        let root = if grouped {
+            library.ingest_collection(&collection(vec![original, imported("other", "other-file")])).unwrap().0
+        } else { library.ingest(&original).unwrap().0 };
+        let before = library.details(root).unwrap();
+        let smart = library.create_smart_folder(SmartFolderInput {
+            name: "Meaningful".into(), parent_id: None, icon: None, color: None, notes: None,
+            view: ViewQuerySpec { filter: FilterExpr::Clause(FilterClause::Text { field: picto_library::predicate::TextField::Name, query: "Meaningful".into() }), sort: ItemSort::default() },
+        }).unwrap().0;
+        let options = serde_json::json!({"group_files": grouped, "collection_name": "New"});
+        let task = library.create_task("import", "Rename", &options.to_string(), true, false, 1).unwrap();
+        let mut incoming = imported("Meaningful landscape", "same-file");
+        incoming.notes = Some("Imported note".into());
+        library.ingest_batch_for_task(&[incoming], task, false).unwrap();
+        assert_eq!(library.details(root).unwrap().media[0].media_name, "Meaningful landscape.png");
+        library.settle_fts(100).unwrap();
+        if !grouped { assert!(library.projections().snapshot().smart_results[&smart.0].contains(root.0)); }
+        drop(library);
+        let library = Library::open(&path).unwrap();
+        if grouped {
+            // Another bounded batch must append to the same pre-existing collection.
+            library.ingest_batch_for_task(&[imported("third", "third-file")], task, false).unwrap();
+            assert_eq!(library.details(root).unwrap().media.len(), 3);
+        }
+        library.stop_task(task, true, 2).unwrap();
+        library.revert_task(task, 3).unwrap();
+        library.settle_fts(100).unwrap();
+        let after = library.details(root).unwrap();
+        assert_eq!(after.root, before.root);
+        assert_eq!(after.media.len(), before.media.len());
+        for (after, before) in after.media.iter().zip(&before.media) {
+            assert_eq!(after.media_id, before.media_id);
+            assert_eq!(after.media_name, before.media_name);
+            assert_eq!(after.media_notes, before.media_notes);
+        }
+        assert!(!library.projections().snapshot().smart_results[&smart.0].contains(root.0));
+        assert_eq!(shared_files(&library), 0);
+    }
+}
+
+#[test]
+fn grouped_task_rollback_preserves_a_loose_existing_item_from_an_earlier_batch() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let existing = imported("original", "existing-file");
+    let root = library.ingest(&existing).unwrap().0;
+    let before = library.details(root).unwrap();
+    let task = library.create_task("import", "Group", r#"{"group_files":true}"#, true, false, 1).unwrap();
+    library.ingest_batch_for_task(&[existing], task, false).unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    library.ingest_batch_for_task(&[imported("new", "new-file")], task, false).unwrap();
+    library.stop_task(task, true, 2).unwrap();
+    library.revert_task(task, 3).unwrap();
+    assert_eq!(library.details(root).unwrap().root, before.root);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 1);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias"), 0);
+}

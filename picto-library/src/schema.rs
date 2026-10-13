@@ -10,6 +10,7 @@ use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
 pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
+const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
 const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
 const MEDIA_ALIASES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-media-aliases";
 const IMPORT_TASKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-import-tasks";
@@ -126,7 +127,8 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            TASK_ROLLBACK_PREDECESSOR
+            COMBINED_IMPORT_PREDECESSOR
+                | TASK_ROLLBACK_PREDECESSOR
                 | MEDIA_ALIASES_PREDECESSOR
                 | IMPORT_TASKS_PREDECESSOR
                 | NO_CLOUD_CLOCKS_PREDECESSOR
@@ -205,6 +207,7 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
@@ -257,6 +260,7 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
@@ -293,6 +297,7 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                COMBINED_IMPORT_PREDECESSOR,
                 TASK_ROLLBACK_PREDECESSOR,
                 MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
@@ -868,8 +873,9 @@ mod tests {
     }
 
     #[test]
-    fn combined_schema_migrates_both_feature_predecessors_with_backup_and_reopen() {
+    fn combined_schema_migrates_feature_and_acceptance_predecessors_with_backup_and_reopen() {
         for predecessor in [
+            super::COMBINED_IMPORT_PREDECESSOR,
             super::TASK_ROLLBACK_PREDECESSOR,
             super::MEDIA_ALIASES_PREDECESSOR,
         ] {
@@ -895,6 +901,8 @@ mod tests {
                      ALTER TABLE ingest_job DROP COLUMN prepared;
                      DROP TABLE task;",
                 ).unwrap();
+            } else if predecessor == super::COMBINED_IMPORT_PREDECESSOR {
+                connection.execute_batch("DROP TABLE task_undo;").unwrap();
             } else {
                 connection
                     .execute_batch(
@@ -912,6 +920,10 @@ mod tests {
 
             let library = crate::Library::open(&path).unwrap();
             library.merge_shared_files().unwrap();
+            if predecessor == super::COMBINED_IMPORT_PREDECESSOR {
+                assert_eq!(library.task(task).unwrap().unwrap().state, crate::TaskState::Paused);
+                assert!(library.folders().unwrap().iter().any(|row| row.folder_id == folder));
+            }
             if predecessor == super::TASK_ROLLBACK_PREDECESSOR {
                 assert_eq!(
                     library.task(task).unwrap().unwrap().state,
@@ -961,7 +973,7 @@ mod tests {
             );
             assert_eq!(
                 super::has_table(&backup, "library_item_alias").unwrap(),
-                predecessor == super::MEDIA_ALIASES_PREDECESSOR
+                predecessor != super::TASK_ROLLBACK_PREDECESSOR
             );
             drop(crate::Library::open(&path).unwrap());
         }

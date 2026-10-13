@@ -72,6 +72,14 @@ fn holds_blocks(state: picto_library::TaskState) -> bool {
     matches!(state, Running | Paused | Reverting)
 }
 
+/// Serialize the foreground start check with task registration. A synchronous
+/// Picto Pack keeps this guard until its structural writes have finished.
+pub(crate) fn lock_import_start(
+    application: &crate::library_application::LibraryApplication,
+) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    application.import_start.try_lock().map_err(|_| "Another import is starting or a Picto Pack is still running.".to_owned())
+}
+
 /// Refuse to start `action` while an open task blocks it.
 pub fn ensure_can_start(
     application: &crate::library_application::LibraryApplication,

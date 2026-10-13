@@ -1,6 +1,7 @@
 //! Importing prepared media and collections.
 
 use super::*;
+use rusqlite::{params, OptionalExtension};
 
 impl Library {
     pub fn ingest(&self, input: &PreparedImport) -> Result<(RootId, MutationReceipt)> {
@@ -23,6 +24,20 @@ impl Library {
         task: crate::TaskId,
         auto_tag: bool,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        let grouped = self.task(task)?.is_some_and(|record| {
+            serde_json::from_str::<serde_json::Value>(&record.input_json)
+                .ok().and_then(|value| value["group_files"].as_bool()).unwrap_or(false)
+        });
+        if grouped && !inputs.is_empty() {
+            if inputs.len() > ingest::MAX_INGEST_BATCH {
+                return Err(LibraryError::InvalidInput("task ingest batch is too large".into()));
+            }
+            let output = self.ingest_collection_with(&PreparedCollectionImport {
+                members: inputs.to_vec(), cover_index: 0, existing_root_id: None,
+                name: None, modified_at_ms: inputs[0].imported_at_ms,
+            }, auto_tag, Some(task))?;
+            return Ok(vec![output; inputs.len()]);
+        }
         self.ingest_batch_with(inputs, auto_tag, Some(task))
     }
 
@@ -60,7 +75,7 @@ impl Library {
             let mut folder_ids = HashSet::new();
             let mut affected = RoaringBitmap::new();
             for input in inputs {
-                let output = ingest::insert_one(transaction, revision, next, input)?;
+                let output = ingest::insert_one(transaction, revision, next, input, task)?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
                 if let Some(task) = task {
@@ -196,6 +211,21 @@ impl Library {
             if let Some(task) = task {
                 super::tasks::require_running_task(transaction, task)?;
             }
+            // Each grouped task streams ordinary jobs. Its durable alias resolves
+            // the accumulated collection across batches, pauses and reopen.
+            let mut grouped = input.clone();
+            let group_key = if let Some(task) = task {
+                let options: String = transaction.query_row("SELECT input_json FROM task WHERE task_id = ?1", [task.0], |row| row.get(0))?;
+                let options: serde_json::Value = serde_json::from_str(&options)?;
+                if options["group_files"].as_bool() == Some(true) {
+                    grouped.name = options["collection_name"].as_str().map(str::to_owned);
+                    let key = format!("task:{}:collection", task.0);
+                    let item: Option<u32> = transaction.query_row("SELECT local_id FROM library_item_alias WHERE stable_key = ?1", [&key], |row| row.get(0)).optional()?;
+                    grouped.existing_root_id = item.map(|id| snapshot.media_owner.get(id).copied().unwrap_or(RootId(id)));
+                    Some(key)
+                } else { None }
+            } else { None };
+            let input = &grouped;
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(input.members.len() + 1);
             let mut created_root_ids = Vec::with_capacity(input.members.len());
@@ -222,7 +252,7 @@ impl Library {
             let mut ingest_affected = RoaringBitmap::new();
             let mut outputs = Vec::with_capacity(input.members.len());
             for member in &input.members {
-                let output = ingest::insert_one(transaction, revision, next, member)?;
+                let output = ingest::insert_one(transaction, revision, next, member, task)?;
                 next = output.snapshot;
                 if output.created_root {
                     created_root_ids.push(output.root_id);
@@ -270,7 +300,9 @@ impl Library {
                 .collect::<Vec<_>>();
             let winning_collection_id = existing_collections.first().copied();
             let creates_collection = ordered_roots.len() >= 2 && winning_collection_id.is_none();
-            let wholly_created = creates_collection && created_root_ids.len() == input.members.len();
+            let wholly_created = creates_collection
+                && input.existing_root_id.is_none()
+                && created_root_ids.len() == input.members.len();
             let before = task.filter(|_| !wholly_created && ordered_roots.len() >= 2).map(|_| {
                 super::structure::capture_structure(
                     transaction, &next,
@@ -335,6 +367,9 @@ impl Library {
                     affected: Arc::new(affected.clone()),
                     before: Box::new(before), after: Box::new(after),
                 })?;
+            }
+            if let Some(key) = group_key {
+                transaction.execute("INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2) ON CONFLICT(stable_key) DO UPDATE SET local_id = excluded.local_id", params![key, published_root.0])?;
             }
             affected |= &ingest_affected;
             ingest::persist_touched(

@@ -285,6 +285,11 @@ pub enum SemanticChange {
         before: Arc<Vec<RootTextState>>,
         after: Arc<Vec<RootTextState>>,
     },
+    MediaText {
+        media_id: MediaId,
+        before: (String, Option<String>),
+        after: (String, Option<String>),
+    },
     CollectionCover {
         root_id: RootId,
         before: MediaId,
@@ -394,6 +399,7 @@ impl SemanticChange {
                         + 40
                 })
                 .sum(),
+            Self::MediaText { before, after, .. } => before.0.len() + after.0.len() + before.1.as_deref().map_or(0, str::len) + after.1.as_deref().map_or(0, str::len) + 64,
             Self::CollectionCover {
                 before_notes,
                 after_notes,

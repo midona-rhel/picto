@@ -218,6 +218,8 @@ pub fn import(
     application: &LibraryApplication,
     request: &PictoPackImportRequest,
 ) -> Result<PictoPackImportResult, String> {
+    let _import = crate::tasks::lock_import_start(application)?;
+    crate::tasks::ensure_can_start(application, crate::tasks::IMPORT_ACTION)?;
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("picto-pack-import".into())

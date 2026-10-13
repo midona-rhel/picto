@@ -73,7 +73,7 @@ pub(super) fn require_running_task(
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub(super) enum TaskUndo {
+pub(crate) enum TaskUndo {
     Structure {
         affected: Arc<RoaringBitmap>,
         before: Box<StructuralState>,
@@ -85,11 +85,15 @@ pub(super) enum TaskUndo {
         after: Option<Box<FolderDefinitionState>>,
     },
     Relink(Arc<crate::history::RelinkState>),
+    RootText { before: Arc<Vec<crate::history::RootTextState>>, after: Arc<Vec<crate::history::RootTextState>> },
+    MediaText { media_id: MediaId, before: (String, Option<String>), after: (String, Option<String>) },
 }
 
 impl TaskUndo {
     fn into_change(self) -> SemanticChange {
         match self {
+            Self::RootText { before, after } => SemanticChange::RootText { before, after },
+            Self::MediaText { media_id, before, after } => SemanticChange::MediaText { media_id, before, after },
             Self::Relink(state) => SemanticChange::Relink(state),
             Self::Structure {
                 affected,
@@ -113,13 +117,13 @@ impl TaskUndo {
     }
 }
 
-pub(super) fn record_task_undo(
+pub(crate) fn record_task_undo(
     transaction: &rusqlite::Transaction<'_>,
     task: TaskId,
     change: TaskUndo,
 ) -> Result<()> {
     let kind = match &change {
-        TaskUndo::Structure { .. } | TaskUndo::Relink(_) => "structure",
+        TaskUndo::Structure { .. } | TaskUndo::Relink(_) | TaskUndo::RootText { .. } | TaskUndo::MediaText { .. } => "structure",
         TaskUndo::Folder { .. } => "folder",
     };
     let payload = bincode::serialize(&change)
@@ -540,44 +544,49 @@ impl Library {
         &self,
         results: &[(i64, std::result::Result<PreparedIngestPayload, String>)],
         now: &str,
-    ) -> Result<()> {
-        if results.is_empty() {
-            return Ok(());
-        }
-        let encoded = results
-            .iter()
-            .map(|(job_id, result)| {
-                Ok((
-                    *job_id,
-                    match result {
-                        Ok(payload) => Ok(serde_json::to_string(payload)?),
-                        Err(error) => Err(error.clone()),
-                    },
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.auxiliary_write(WorkPriority::CanonicalIngest, task_resources(), [], |transaction, _| {
-            for (job_id, result) in &encoded {
+    ) -> Result<Vec<i64>> {
+        let (stored, _) = self.auxiliary_write(WorkPriority::CanonicalIngest, task_resources(), [], |transaction, _| {
+            let mut stored = Vec::new();
+            for (job_id, result) in results {
                 match result {
-                    Ok(payload) => transaction.execute(
-                        "UPDATE ingest_job SET payload_json = ?1, prepared = 1, updated_at = ?2
-                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0
-                           AND EXISTS (SELECT 1 FROM task WHERE task.task_id = ingest_job.task_id AND state IN ('running', 'paused'))",
-                        params![payload, now, job_id],
-                    )?,
-                    Err(error) => transaction.execute(
-                        "UPDATE ingest_job SET status = 'failed', last_error = ?1,
-                             payload_json = '{}', updated_at = ?2
-                         WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0
-                           AND EXISTS (SELECT 1 FROM task WHERE task.task_id = ingest_job.task_id AND state = 'running')",
-                        params![error, now, job_id],
-                    )?,
-                };
+                    Ok(payload) => {
+                        let units = match payload {
+                            PreparedIngestPayload::Item(_) => 1,
+                            PreparedIngestPayload::Collection(collection) => collection.members.len(),
+                            _ => return Err(LibraryError::InvalidInput("task preparation returned unread files".into())),
+                        } as i64;
+                        let previous: Option<(i64, i64)> = transaction.query_row(
+                            "SELECT j.task_id, j.units FROM ingest_job j JOIN task t ON t.task_id = j.task_id
+                             WHERE j.ingest_job_id = ?1 AND j.status = 'pending' AND j.prepared = 0 AND t.state IN ('running', 'paused')",
+                            [job_id], |row| Ok((row.get(0)?, row.get(1)?)),
+                        ).optional()?;
+                        if let Some((task_id, old_units)) = previous {
+                            transaction.execute("UPDATE ingest_job SET payload_json = ?1, units = ?2, prepared = 1, updated_at = ?3 WHERE ingest_job_id = ?4",
+                                params![serde_json::to_string(payload)?, units, now, job_id])?;
+                            transaction.execute("UPDATE task SET total_units = total_units + ?1 WHERE task_id = ?2", params![units - old_units, task_id])?;
+                            stored.push(*job_id);
+                        } else if transaction.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM ingest_job WHERE ingest_job_id = ?1 AND prepared = 1 AND payload_json = ?2)",
+                            params![job_id, serde_json::to_string(payload)?], |row| row.get::<_, bool>(0),
+                        )? {
+                            stored.push(*job_id);
+                        }
+                    }
+                    Err(error) => {
+                        transaction.execute(
+                            "UPDATE ingest_job SET status = 'failed', last_error = ?1,
+                                 payload_json = '{}', updated_at = ?2
+                             WHERE ingest_job_id = ?3 AND status = 'pending' AND prepared = 0
+                               AND EXISTS (SELECT 1 FROM task WHERE task.task_id = ingest_job.task_id AND state = 'running')",
+                            params![error, now, job_id],
+                        )?;
+                    }
+                }
             }
             settle_finished(transaction, chrono::Utc::now().timestamp_millis())?;
-            Ok(())
+            Ok(stored)
         })?;
-        Ok(())
+        Ok(stored)
     }
 
     /// Undo a task: remove the roots it created that still exist and the tags
@@ -676,6 +685,7 @@ impl Library {
             if !Arc::ptr_eq(&snapshot.smart_results, &next.smart_results) {
                 resources.insert("smart_folders".into());
             }
+            transaction.execute("DELETE FROM library_item_alias WHERE stable_key = ?1", [format!("task:{}:collection", task.0)])?;
             transaction.execute("DELETE FROM task_undo WHERE task_id = ?1", [task.0])?;
             transaction.execute(
                 "UPDATE task SET state = 'reverted', scan_complete = 1,

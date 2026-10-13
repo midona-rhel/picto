@@ -66,6 +66,8 @@ pub fn run_batch(
             tracing::warn!(%release, "Could not release ingest claims; they recover on next open");
         }
     }
+    report.root_ids.sort_unstable();
+    report.root_ids.dedup();
     settled.map(|()| report)
 }
 
