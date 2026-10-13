@@ -337,6 +337,8 @@ fn main() -> R<()> {
     bench("counts", "-", runs * 4, || { library.counts()?; Ok(()) }, None::<fn() -> R<()>>)?;
     let tag_count = library.tags()?.len();
     bench("tags (full list)", &format!("{tag_count} tags"), runs * 4, || { library.tags()?; Ok(()) }, None::<fn() -> R<()>>)?;
+    bench("tag_page unfiltered (500)", &format!("{tag_count} tags"), runs * 4, || { library.tag_page(None, None, 0, 500)?; Ok(()) }, None::<fn() -> R<()>>)?;
+    bench("tag_page unfiltered offset 500 (500)", &format!("{tag_count} tags"), runs * 4, || { library.tag_page(None, None, 500, 500)?; Ok(()) }, None::<fn() -> R<()>>)?;
     bench("tag_page search (12)", "-", runs * 4, || { library.tag_page(None, Some("vocab:12"), 0, 12)?; Ok(()) }, None::<fn() -> R<()>>)?;
     let some_ids = library.tags()?.into_iter().take(5).map(|tag| tag.tag_id).collect::<Vec<_>>();
     bench("tags_by_id (5)", "-", runs * 4, || { library.tags_by_id(&some_ids)?; Ok(()) }, None::<fn() -> R<()>>)?;

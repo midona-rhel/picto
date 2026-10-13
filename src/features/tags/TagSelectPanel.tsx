@@ -298,16 +298,16 @@ export function TagSelectPanel() {
 
     const localView = sidebarMode === 'selected' || sidebarMode === 'starred';
     const normalizedQuery = (localView ? query : settledRemoteView.query).trim().toLocaleLowerCase();
+    const matching = rankMatches(candidates, normalizedQuery, (tag) => (
+      normalizedQuery.includes(':') ? [formatTag(tag)] : [tag.subname || formatTag(tag)]
+    ));
     const seen = new Set<string>();
-    const unique = candidates.filter((tag) => {
+    return matching.filter((tag) => {
       const visibleName = (tag.subname || formatTag(tag)).toLocaleLowerCase();
       if (seen.has(visibleName)) return false;
       seen.add(visibleName);
       return true;
     });
-    return rankMatches(unique, normalizedQuery, (tag) => (
-      normalizedQuery.includes(':') ? [formatTag(tag)] : [tag.subname || formatTag(tag)]
-    ));
   }, [activeNamespace, entityTagKeys, entityTagRecords, openingSelectedTagNames, query, selectedTagFilters, settledRemoteView.query, sidebarMode, tagPreferences.starredTags, tags]);
 
   const createTag = useMemo(() => {

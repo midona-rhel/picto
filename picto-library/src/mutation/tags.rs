@@ -89,27 +89,16 @@ impl Library {
                 let in_namespace = |entry: &&SortedTag| {
                     namespace.is_none_or(|namespace| entry.row.namespace == namespace)
                 };
-                let matching: Vec<&SortedTag> = match search.as_deref() {
-                    None => sorted.iter().filter(in_namespace).collect(),
-                    Some(search) => {
-                        let mut ranked = sorted
-                            .iter()
-                            .filter(in_namespace)
-                            .filter_map(|entry| entry.search_rank(search).map(|rank| (rank, entry)))
-                            .collect::<Vec<_>>();
-                        // Stable: tags of one rank keep the alphabetical order.
-                        ranked.sort_by_key(|(rank, _)| *rank);
-                        ranked.into_iter().map(|(_, entry)| entry).collect()
-                    }
-                };
-                let page = matching
-                    .iter()
-                    .skip(offset)
-                    .take(limit)
+                let (page, next) = tag_page_entries(
+                    sorted.iter().filter(in_namespace),
+                    search.as_deref(),
+                    offset,
+                    limit,
+                );
+                let page = page
+                    .into_iter()
                     .map(|entry| entry.row.clone().with_counts(&snapshot))
                     .collect::<Vec<_>>();
-                let next = offset.saturating_add(limit);
-                let next = (matching.len() > next).then_some(next);
                 Ok((page, next, snapshot.revision))
             },
         )
@@ -1464,6 +1453,30 @@ pub(super) struct SortedTag {
     row: TagDefinitionRow,
 }
 
+fn tag_page_entries<'a>(
+    entries: impl Iterator<Item = &'a SortedTag> + 'a,
+    search: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> (Vec<&'a SortedTag>, Option<usize>) {
+    let matching: Box<dyn Iterator<Item = &'a SortedTag> + 'a> = match search {
+        None => Box::new(entries),
+        Some(search) => {
+            let mut ranked = entries
+                .filter_map(|entry| entry.search_rank(search).map(|rank| (rank, entry)))
+                .collect::<Vec<_>>();
+            // Stable: tags of one rank keep the alphabetical order.
+            ranked.sort_by_key(|(rank, _)| *rank);
+            Box::new(ranked.into_iter().map(|(_, entry)| entry))
+        }
+    };
+    // Unranked pages stop after one lookahead, without collecting the cache.
+    let mut matching = matching.skip(offset);
+    let page = matching.by_ref().take(limit).collect();
+    let next = matching.next().map(|_| offset.saturating_add(limit));
+    (page, next)
+}
+
 impl SortedTag {
     /// How well `search` (lowercased) matches this tag, best first. Text with
     /// a colon also matches `namespace:subname`, so `character:twok` finds
@@ -1592,4 +1605,100 @@ pub(super) fn tag_definition_rows(
         }
     };
     rows.map_err(LibraryError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(subname: &str) -> SortedTag {
+        SortedTag {
+            subname_key: subname.to_owned(),
+            namespace_key: "general".into(),
+            row: TagDefinitionRow {
+                tag_id: crate::TagId(1),
+                namespace_id: TagNamespaceId(1),
+                namespace: "general".into(),
+                subname: subname.to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn unfiltered_tag_page_only_visits_offset_limit_and_one_lookahead() {
+        let entry = tag("cat");
+        for offset in [0, 500, 10_000] {
+            let mut visited = 0;
+            let entries = std::iter::repeat_n(&entry, 200_000).inspect(|_| visited += 1);
+            let (page, next) = tag_page_entries(entries, None, offset, 500);
+            assert_eq!(page.len(), 500);
+            assert_eq!(next, Some(offset + 500));
+            assert_eq!(visited, offset + 500 + 1);
+        }
+    }
+
+    #[test]
+    fn tag_page_boundaries_preserve_order_and_cursor() {
+        let tags = [tag("bobcat"), tag("cat"), tag("catfish"), tag("wild_cat")];
+        for (search, expected) in [
+            (None, ["bobcat", "cat", "catfish", "wild_cat"]),
+            (Some("cat"), ["cat", "catfish", "wild_cat", "bobcat"]),
+        ] {
+            for (offset, limit, end, next) in [
+                (0, 2, 2, Some(2)),
+                (2, 2, 4, None),
+                (3, 2, 4, None),
+                (4, 2, 4, None),
+                (5, 2, 4, None),
+                (0, 0, 0, Some(0)),
+                (0, 10, 4, None),
+            ] {
+                let (page, cursor) = tag_page_entries(tags.iter(), search, offset, limit);
+                let names = page
+                    .iter()
+                    .map(|entry| entry.row.subname.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(names, expected[offset.min(4)..end]);
+                assert_eq!(cursor, next);
+            }
+        }
+        for (page, next) in [
+            tag_page_entries(tags.iter(), Some("missing"), 0, 2),
+            tag_page_entries([].iter(), None, 0, 2),
+        ] {
+            assert!(page.is_empty());
+            assert_eq!(next, None);
+        }
+    }
+
+    #[test]
+    fn tag_page_preserves_namespace_filtering_and_blank_search_pagination() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        library
+            .ensure_tag_definitions(&[
+                "foo:ant".into(),
+                "bar:cat".into(),
+                "foo:cat".into(),
+                "foo:dog".into(),
+            ])
+            .unwrap();
+
+        for search in [None, Some("  ")] {
+            let (first, next, revision) = library.tag_page(Some("foo"), search, 0, 2).unwrap();
+            assert_eq!(
+                first.iter().map(|tag| tag.subname.as_str()).collect::<Vec<_>>(),
+                ["ant", "cat"]
+            );
+            assert!(first.iter().all(|tag| tag.namespace == "foo"));
+            assert_eq!(next, Some(2));
+            let (last, next, last_revision) = library
+                .tag_page(Some("foo"), search, next.unwrap(), 2)
+                .unwrap();
+            assert_eq!(last.len(), 1);
+            assert_eq!(last[0].subname, "dog");
+            assert_eq!(next, None);
+            assert_eq!(last_revision, revision);
+        }
+    }
 }
