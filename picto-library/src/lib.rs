@@ -29,6 +29,7 @@ pub mod query_request;
 pub mod schema;
 pub mod selection;
 pub mod smart;
+pub mod subscription_counts;
 pub mod text_index;
 pub mod work_queue;
 
