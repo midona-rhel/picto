@@ -38,6 +38,8 @@ pub struct ForegroundTask {
     #[ts(type = "number | null")]
     pub finished_at_ms: Option<i64>,
     pub error: Option<String>,
+    /// Actions that cannot start while this task is open (`blocked_actions`).
+    pub blocks: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -45,6 +47,50 @@ pub struct ForegroundTask {
 pub struct TaskFailure {
     pub path: String,
     pub error: String,
+}
+
+/// Starting an import.
+pub const IMPORT_ACTION: &str = "import";
+
+/// What an open (running, paused or undoing) task of `kind` keeps from
+/// starting. This is the one table of which work excludes which: the backend
+/// refuses a blocked start (`ensure_can_start`) and the renderer disables what
+/// a task's `blocks` names. A new kind of heavy task (an export, a Picto Pack,
+/// a duplicate scan) adds its row here, and its start calls
+/// `ensure_can_start` with its own action.
+pub fn blocked_actions(kind: &str) -> &'static [&'static str] {
+    match kind {
+        crate::import_tasks::IMPORT_TASK_KIND => &[IMPORT_ACTION],
+        _ => &[],
+    }
+}
+
+/// Running, paused, or undoing what it imported: the task still holds what it
+/// blocks.
+fn holds_blocks(state: picto_library::TaskState) -> bool {
+    use picto_library::TaskState::{Paused, Reverting, Running};
+    matches!(state, Running | Paused | Reverting)
+}
+
+/// Refuse to start `action` while an open task blocks it.
+pub fn ensure_can_start(
+    application: &crate::library_application::LibraryApplication,
+    action: &str,
+) -> Result<(), String> {
+    let tasks = application
+        .library()
+        .tasks(false)
+        .map_err(|error| error.to_string())?;
+    match tasks
+        .iter()
+        .find(|task| holds_blocks(task.state) && blocked_actions(&task.kind).contains(&action))
+    {
+        Some(task) => Err(format!(
+            "“{}” is still running. Let it finish or stop it before starting another.",
+            task.title
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Recent progress samples per task, for the rate and estimate. Kept in
@@ -101,6 +147,11 @@ pub fn foreground_tasks(
             let eta_seconds = rate
                 .filter(|_| task.scan_complete && rate.is_some_and(|rate| rate > 0.0))
                 .map(|rate| (task.total_units.saturating_sub(done) as f64 / rate).ceil() as u64);
+            let blocks = if holds_blocks(task.state) {
+                blocked_actions(&task.kind).iter().map(|action| (*action).to_owned()).collect()
+            } else {
+                Vec::new()
+            };
             ForegroundTask {
                 task_id: task.task_id.0,
                 kind: task.kind,
@@ -117,6 +168,7 @@ pub fn foreground_tasks(
                 eta_seconds,
                 created_at_ms: task.created_at_ms,
                 finished_at_ms: task.finished_at_ms,
+                blocks,
                 error: task.error,
             }
         })

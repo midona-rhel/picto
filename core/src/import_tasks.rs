@@ -78,6 +78,10 @@ pub fn start_manual_import(
         }
         resolved.push(path);
     }
+    // Seeding (a background import) is not the user's; it never waits.
+    if !input.background {
+        crate::tasks::ensure_can_start(application, crate::tasks::IMPORT_ACTION)?;
+    }
     let input_json = serde_json::to_string(input).map_err(|error| error.to_string())?;
     let task = application
         .library()
@@ -883,5 +887,41 @@ mod tests {
         start_manual_import(&application, &seeded).unwrap();
         assert_eq!(drive(&application).await.len(), 1);
         assert!(application.library().tasks(false).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_second_import_waits_until_the_first_one_ends() {
+        let directory = tempfile::tempdir().unwrap();
+        let first_source = directory.path().join("one.png");
+        let second_source = directory.path().join("two.png");
+        png(&first_source, [10, 20, 30]);
+        png(&second_source, [40, 50, 60]);
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let first = input(vec![first_source.to_string_lossy().into_owned()], false);
+        let second = input(vec![second_source.to_string_lossy().into_owned()], false);
+
+        let started = start_manual_import(&application, &first).unwrap();
+        assert_eq!(
+            crate::tasks::foreground_tasks(&application).unwrap()[0].blocks,
+            vec![crate::tasks::IMPORT_ACTION.to_owned()]
+        );
+        assert!(start_manual_import(&application, &second).is_err());
+        // A paused import still holds its place.
+        application
+            .library()
+            .set_task_paused(TaskId(started.task_id), true)
+            .unwrap();
+        assert!(start_manual_import(&application, &second).is_err());
+        // Seeding never waits.
+        let mut seeded = second.clone();
+        seeded.background = true;
+        start_manual_import(&application, &seeded).unwrap();
+
+        application
+            .library()
+            .stop_task(TaskId(started.task_id), false, now_ms())
+            .unwrap();
+        assert!(crate::tasks::foreground_tasks(&application).unwrap()[0].blocks.is_empty());
+        start_manual_import(&application, &second).unwrap();
     }
 }

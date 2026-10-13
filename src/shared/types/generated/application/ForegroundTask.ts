@@ -24,4 +24,8 @@ revertible: boolean,
 /**
  * Files per second over the last stretch of work, once known.
  */
-rate_per_second: number | null, eta_seconds: number | null, created_at_ms: number, finished_at_ms: number | null, error: string | null, };
+rate_per_second: number | null, eta_seconds: number | null, created_at_ms: number, finished_at_ms: number | null, error: string | null,
+/**
+ * Actions that cannot start while this task is open (`blocked_actions`).
+ */
+blocks: Array<string>, };

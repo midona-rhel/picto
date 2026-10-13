@@ -1503,7 +1503,6 @@
   "Could not stop the import": "无法停止导入",
   "Hide failed": "隐藏失败项",
   "Show {value0} failed": "显示 {value0} 个失败项",
-  "Run in background": "在后台运行",
   "Could not close the task": "无法关闭任务",
   "Could not pause the import": "无法暂停导入",
   "Stop…": "停止…",
@@ -1529,5 +1528,8 @@
   "Finished in {value0}": "用时 {value0} 完成",
   "Finished": "已完成",
   "Stopped before every file was imported": "在所有文件导入前已停止",
-  "Removed the {value0} items it added": "已移除添加的 {value0} 个项目"
+  "Removed the {value0} items it added": "已移除添加的 {value0} 个项目",
+  "Available when “{value0}” finishes": "“{value0}”完成后可用",
+  "An import is already running": "已有导入正在进行",
+  "Let “{value0}” finish or stop it before starting another.": "请等待“{value0}”完成或将其停止，然后再开始新的导入。"
 }

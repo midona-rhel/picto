@@ -27,6 +27,7 @@ function task(id: number, state: string): ForegroundTask {
     task_id: id, kind: 'import', title: `Import ${id}`, state, scan_complete: true, total: 10, done: 1,
     added: 1, existing: 0, failed: 0, revertible: true, rate_per_second: null, eta_seconds: null,
     created_at_ms: 0, finished_at_ms: null, error: null,
+    blocks: state === 'running' || state === 'paused' ? ['import'] : [],
   };
 }
 

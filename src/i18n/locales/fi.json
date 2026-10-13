@@ -1503,7 +1503,6 @@
   "Could not stop the import": "Tuontia ei voitu lopettaa",
   "Hide failed": "Piilota epäonnistuneet",
   "Show {value0} failed": "Näytä {value0} epäonnistunutta",
-  "Run in background": "Suorita taustalla",
   "Could not close the task": "Tehtävää ei voitu sulkea",
   "Could not pause the import": "Tuontia ei voitu keskeyttää",
   "Stop…": "Lopeta…",
@@ -1529,5 +1528,8 @@
   "Finished in {value0}": "Valmis ajassa {value0}",
   "Finished": "Valmis",
   "Stopped before every file was imported": "Lopetettu ennen kuin kaikki tiedostot tuotiin",
-  "Removed the {value0} items it added": "Lisätyt {value0} kohdetta poistettiin"
+  "Removed the {value0} items it added": "Lisätyt {value0} kohdetta poistettiin",
+  "Available when “{value0}” finishes": "Käytettävissä, kun ”{value0}” on valmis",
+  "An import is already running": "Tuonti on jo käynnissä",
+  "Let “{value0}” finish or stop it before starting another.": "Anna tuonnin ”{value0}” valmistua tai pysäytä se ennen uuden aloittamista."
 }

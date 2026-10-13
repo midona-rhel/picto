@@ -1503,7 +1503,6 @@
   "Could not stop the import": "Could not stop the import",
   "Hide failed": "Hide failed",
   "Show {value0} failed": "Show {value0} failed",
-  "Run in background": "Run in background",
   "Could not close the task": "Could not close the task",
   "Could not pause the import": "Could not pause the import",
   "Stop…": "Stop…",
@@ -1529,5 +1528,8 @@
   "Finished in {value0}": "Finished in {value0}",
   "Finished": "Finished",
   "Stopped before every file was imported": "Stopped before every file was imported",
-  "Removed the {value0} items it added": "Removed the {value0} items it added"
+  "Removed the {value0} items it added": "Removed the {value0} items it added",
+  "Available when “{value0}” finishes": "Available when “{value0}” finishes",
+  "An import is already running": "An import is already running",
+  "Let “{value0}” finish or stop it before starting another.": "Let “{value0}” finish or stop it before starting another."
 }

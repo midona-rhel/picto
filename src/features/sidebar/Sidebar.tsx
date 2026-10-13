@@ -69,6 +69,7 @@ import {
 } from './quickAccessPreferences';
 import styles from './Sidebar.module.css';
 import { chooseAndImportFolder, filesController } from '../../controllers/filesController';
+import { taskGate } from '../../runtime/taskGate';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
 import { refreshSubscriptionsWorkspace } from '../../runtime/subscriptionsSettle';
@@ -715,7 +716,7 @@ export function Sidebar() {
         void openFolderAutoTagsEditor([folderId]);
       } },
       { separator: true },
-      { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: () => {
+      { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, disabled: taskGate('import').blocked, action: () => {
         void chooseAndImportFolder({ kind: 'folder', folder_id: folderId });
       } },
       { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: () => {
@@ -1334,6 +1335,7 @@ export function Sidebar() {
               },
               {
                 label: t("Import Folder..."), icon: <IconFolderPlus size={14} />,
+                disabled: taskGate('import').blocked,
                 action: () => { void chooseAndImportFolder({ kind: 'all' }); },
               },
             ]);

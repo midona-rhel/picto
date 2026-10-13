@@ -1503,7 +1503,6 @@
   "Could not stop the import": "読み込みを中止できませんでした",
   "Hide failed": "失敗を隠す",
   "Show {value0} failed": "失敗した {value0} 件を表示",
-  "Run in background": "バックグラウンドで実行",
   "Could not close the task": "タスクを閉じられませんでした",
   "Could not pause the import": "読み込みを一時停止できませんでした",
   "Stop…": "中止…",
@@ -1529,5 +1528,8 @@
   "Finished in {value0}": "{value0} で完了",
   "Finished": "完了",
   "Stopped before every file was imported": "すべてのファイルを読み込む前に中止しました",
-  "Removed the {value0} items it added": "追加された {value0} 件を削除しました"
+  "Removed the {value0} items it added": "追加された {value0} 件を削除しました",
+  "Available when “{value0}” finishes": "「{value0}」の完了後に利用できます",
+  "An import is already running": "すでにインポートが実行中です",
+  "Let “{value0}” finish or stop it before starting another.": "別のインポートを始める前に、「{value0}」の完了を待つか停止してください。"
 }

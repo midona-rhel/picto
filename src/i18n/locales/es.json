@@ -1503,7 +1503,6 @@
   "Could not stop the import": "No se pudo detener la importación",
   "Hide failed": "Ocultar fallidos",
   "Show {value0} failed": "Mostrar {value0} fallidos",
-  "Run in background": "Ejecutar en segundo plano",
   "Could not close the task": "No se pudo cerrar la tarea",
   "Could not pause the import": "No se pudo pausar la importación",
   "Stop…": "Detener…",
@@ -1529,5 +1528,8 @@
   "Finished in {value0}": "Terminado en {value0}",
   "Finished": "Terminado",
   "Stopped before every file was imported": "Detenido antes de importar todos los archivos",
-  "Removed the {value0} items it added": "Se quitaron los {value0} elementos añadidos"
+  "Removed the {value0} items it added": "Se quitaron los {value0} elementos añadidos",
+  "Available when “{value0}” finishes": "Disponible cuando termine «{value0}»",
+  "An import is already running": "Ya hay una importación en curso",
+  "Let “{value0}” finish or stop it before starting another.": "Deja que «{value0}» termine o detenlo antes de empezar otra."
 }

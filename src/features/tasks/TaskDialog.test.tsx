@@ -26,6 +26,7 @@ function task(overrides: Partial<ForegroundTask> = {}): ForegroundTask {
     created_at_ms: 1_000,
     finished_at_ms: null,
     error: null,
+    blocks: ['import'],
     ...overrides,
   };
 }
@@ -95,6 +96,28 @@ describe('TaskDialog', () => {
     expect(invoke).toHaveBeenCalledWith('tasks.stop', { task_id: 7, undo: true });
   });
 
+  it('asks what happens to the files when a running import is closed', async () => {
+    renderWithProviders(<TaskDialog />);
+    show(task());
+    invoke.mockResolvedValue([task({ state: 'paused' })]);
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    expect(invoke).toHaveBeenCalledWith('tasks.pause', { task_id: 7 });
+    expect(screen.getByText('Stop importing “Commissions 2024”?')).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith('tasks.dismiss', expect.anything());
+  });
+
+  it('closes a finished import without asking', async () => {
+    renderWithProviders(<TaskDialog />);
+    act(() => {
+      store.set(taskPresentationAtom, { focusedTaskId: 7, minimized: new Set<number>() });
+      applyTasks([task({ state: 'finished', done: 12408, finished_at_ms: 291_000, blocks: [] })]);
+    });
+    expect(screen.queryByRole('button', { name: 'Minimize' })).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    expect(invoke).toHaveBeenCalledWith('tasks.dismiss', { task_id: 7 });
+  });
+
   it('resumes when the user decides to keep importing', async () => {
     renderWithProviders(<TaskDialog />);
     show(task());
@@ -120,7 +143,7 @@ describe('TaskDialog', () => {
     renderWithProviders(<TaskDialog />);
     act(() => {
       store.set(taskPresentationAtom, { focusedTaskId: 7, minimized: new Set<number>() });
-      applyTasks([task({ state: 'finished', done: 12408, added: 12095, failed: 2, finished_at_ms: 291_000 })]);
+      applyTasks([task({ state: 'finished', done: 12408, added: 12095, failed: 2, finished_at_ms: 291_000, blocks: [] })]);
     });
 
     expect(screen.getByText('Imported “Commissions 2024”')).toBeInTheDocument();
@@ -137,7 +160,7 @@ describe('TaskDialog', () => {
     renderWithProviders(<><TaskDialog /><TaskBar /></>);
     show(task());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     const row = screen.getByRole('status');
     expect(within(row).getByText(`${(4962).toLocaleString()} / ${(12408).toLocaleString()} · 3 min`)).toBeInTheDocument();

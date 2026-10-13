@@ -22,6 +22,7 @@ import type { BaseScope, EntityTarget } from '../shared/types/canonical';
 import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
 import type { ImportStarted } from '../shared/types/generated/application/ImportStarted';
 import { showTask } from '../runtime/taskSettle';
+import { allowTaskAction } from '../runtime/taskGate';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import { getDefaultStore } from 'jotai';
 import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
@@ -65,6 +66,7 @@ function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
 
 /** Resolve one multi-file batch through the user's single persisted import policy. */
 export async function requestMediaImport(paths: string[], params: MediaImportParams): Promise<void> {
+  if (!allowTaskAction('import')) return;
   if (paths.length <= 1 || params.group_files != null) {
     enqueueMediaImport(paths, params);
     return;
@@ -108,6 +110,7 @@ const MEDIA_IMPORT_FILTERS = [{
 
 /** Use the canonical desktop picker and import destination for a grid scope. */
 export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openFile'],
     multiple: true,
@@ -124,6 +127,7 @@ export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
 
 /** Use the canonical desktop picker and structure-preserving folder import. */
 export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openDirectory'],
     multiple: false,
@@ -176,6 +180,7 @@ export async function chooseAndImportPictoPack(): Promise<void> {
 
 /** Import copied files or a copied bitmap through the durable ingest queue. */
 export async function pasteImport(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const payload = await readClipboardImport();
   if (payload.paths.length === 0) {
     throw new Error('The clipboard does not contain importable files or an image.');

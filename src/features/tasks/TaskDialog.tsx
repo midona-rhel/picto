@@ -1,21 +1,23 @@
 /**
  * The foreground task view: a heavy job (an import) takes the front of the
- * app with its progress, an estimate, Pause and Stop. It can be sent to the
- * background, where it continues in the task bar until reopened.
+ * app with its progress, an estimate, Pause and Stop. Minimize (top right)
+ * sends it to the task bar, where it continues until reopened; Close asks
+ * what happens to the files already imported, as Stop does.
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAtomValue } from 'jotai';
 import {
   IconAlertTriangle,
-  IconArrowsDiagonal,
-  IconArrowsDiagonalMinimize2,
   IconCheck,
+  IconChevronUp,
   IconFolderSearch,
+  IconMinus,
   IconPhotoDown,
   IconPlayerPause,
   IconPlayerPlay,
   IconPlayerStop,
+  IconX,
 } from '@tabler/icons-react';
 import {
   dismissTask,
@@ -186,7 +188,6 @@ function StopView({
     <>
       <div className={styles.body}>
         <div className={styles.head}>
-          <span className={styles.kind} data-tone="paused" aria-hidden="true"><IconPlayerStop size={17} stroke={1.75} /></span>
           <div className={styles.titles}>
             <div className={styles.title}>{t('Stop importing “{value0}”?', { value0: task.title })}</div>
             <div className={styles.subtitle}>
@@ -264,14 +265,44 @@ function TaskView({ task }: { task: ForegroundTask }) {
   }
 
   const ended = !open;
+  const dismiss = () => { void control(() => dismissTask(task.task_id), t('Could not close the task')); };
+  // Closing a running import asks what happens to its files; nothing more is
+  // imported while the user decides.
+  const askToStop = () => {
+    if (phase === 'removing') return;
+    const resume = task.state === 'running';
+    setStopping({ resume });
+    if (resume) void control(() => pauseTask(task.task_id), t('Could not pause the import'));
+  };
   return (
     <>
       <div className={styles.body} aria-live="polite">
         <div className={styles.head}>
-          <TaskIcon task={task} />
           <div className={styles.titles}>
             <div className={styles.title}>{taskTitle(task)}</div>
             <div className={styles.subtitle} data-warning={Boolean(task.error) || undefined}>{taskSubtitle(task)}</div>
+          </div>
+          <div className={styles.windowButtons}>
+            {ended ? null : (
+              <button
+                type="button"
+                className={styles.iconButton}
+                aria-label={t('Minimize')}
+                title={t('Minimize')}
+                onClick={() => minimizeTask(task.task_id)}
+              >
+                <IconMinus size={15} stroke={1.75} />
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.iconButton}
+              aria-label={t('Close')}
+              title={t('Close')}
+              onClick={ended ? dismiss : askToStop}
+            >
+              <IconX size={15} stroke={1.75} />
+            </button>
           </div>
         </div>
         <Progress task={task} />
@@ -286,19 +317,14 @@ function TaskView({ task }: { task: ForegroundTask }) {
               {showFailures ? t('Hide failed') : t('Show {value0} failed', { value0: formatCount(task.failed) })}
             </button>
           ) : null
-        ) : (
-          <button type="button" className={`${btnStyles.btn} ${styles.ghost}`} onClick={() => minimizeTask(task.task_id)}>
-            <IconArrowsDiagonalMinimize2 size={14} stroke={1.75} />
-            {t('Run in background')}
-          </button>
-        )}
+        ) : null}
         <span className={styles.spacer} />
         {ended ? (
           <button
             type="button"
             className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
             data-modal-primary="true"
-            onClick={() => { void control(() => dismissTask(task.task_id), t('Could not close the task')); }}
+            onClick={dismiss}
           >
             {t('Done')}
           </button>
@@ -326,12 +352,7 @@ function TaskView({ task }: { task: ForegroundTask }) {
             <button
               type="button"
               className={btnStyles.btn}
-              onClick={() => {
-                // Nothing more is imported while the user decides.
-                const resume = task.state === 'running';
-                setStopping({ resume });
-                if (resume) void control(() => pauseTask(task.task_id), t('Could not pause the import'));
-              }}
+              onClick={askToStop}
             >
               <IconPlayerStop size={14} stroke={1.75} />
               {t('Stop…')}
@@ -428,9 +449,10 @@ export function TaskBar() {
               type="button"
               className={styles.iconButton}
               aria-label={t('Show')}
+              title={t('Show')}
               onClick={() => showTask(task.task_id)}
             >
-              <IconArrowsDiagonal size={15} stroke={1.75} />
+              <IconChevronUp size={15} stroke={1.75} />
             </button>
           </div>
         );

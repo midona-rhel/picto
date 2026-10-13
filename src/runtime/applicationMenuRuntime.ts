@@ -5,6 +5,8 @@ import { chooseAndImportFiles, chooseAndImportFolder, chooseAndImportPictoPack, 
 import { foldersController } from '../controllers/foldersController';
 import { windowController } from '../controllers/windowController';
 import { listen } from '../platform/ipc';
+import { taskGate } from './taskGate';
+import { tasksAtom } from './taskSettle';
 import { gridActiveAtom, gridItemsAtom, gridScopeAtom } from '../state/grid';
 import {
   batchRenameModalAtom,
@@ -98,6 +100,7 @@ function menuContext(): Record<string, unknown> {
       && selected.length === count
       && selected.length > 0
       && selected.every((item) => item.kind === 'media' && Boolean(item.content_hash)),
+    canImport: !taskGate('import').blocked,
     importPictoPackLabel: t("Import Picto Pack..."),
     exportPictoPackLabel: t("Export as Picto Pack..."),
   };
@@ -335,6 +338,7 @@ export function startApplicationMenuRuntime(): () => void {
   });
 
   disposers.push(store.sub(gridSelectionAtom, syncContext));
+  disposers.push(store.sub(tasksAtom, syncContext));
   disposers.push(store.sub(gridItemsAtom, syncContext));
   disposers.push(store.sub(gridScopeAtom, syncContext));
   disposers.push(store.sub(gridActiveAtom, syncContext));

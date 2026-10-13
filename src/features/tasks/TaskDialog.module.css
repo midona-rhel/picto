@@ -38,9 +38,21 @@
 
 .head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-width: 0;
+}
+
+.head .titles {
+  flex: 1;
+}
+
+/* Minimize and close, top right, like a window's own controls. */
+.windowButtons {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: -6px -10px 0 0;
 }
 
 .kind {
@@ -277,10 +289,10 @@
 .choiceMark {
   display: grid;
   flex: none;
+  align-self: center;
   place-items: center;
   width: 16px;
   height: 16px;
-  margin-top: 1px;
   color: var(--color-primary);
 }
 
