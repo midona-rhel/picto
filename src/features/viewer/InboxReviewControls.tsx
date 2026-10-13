@@ -28,8 +28,9 @@ interface InboxReviewControlsProps {
   onAdvance: () => void;
 }
 
-// Long enough for the press pulse to read before the pill leaves.
-const EXIT_DURATION_MS = 220;
+// Match reviewFlash and the pill's exit transition in the stylesheet.
+const PULSE_DURATION_MS = 360;
+const EXIT_DURATION_MS = 120;
 
 export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReviewControlsProps) {
   const [decision, setDecision] = useState<InboxReviewDecision | null>(null);
@@ -44,11 +45,17 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
 
   const review = useCallback(async (nextDecision: InboxReviewDecision) => {
     if (decision) return;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setDecision(nextDecision);
     try {
-      await onCommit(itemId, nextDecision);
+      await Promise.all([
+        onCommit(itemId, nextDecision),
+        reducedMotion ? Promise.resolve() : new Promise<void>((resolve) => setTimeout(resolve, PULSE_DURATION_MS)),
+      ]);
       setLeaving(true);
-      await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
+      if (!reducedMotion) {
+        await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
+      }
       onAdvance();
     } catch (reason) {
       setDecision(null);

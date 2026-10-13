@@ -14,7 +14,7 @@
   color: var(--color-text-primary);
   transform: translateX(-50%);
   opacity: 1;
-  animation: reviewPillIn 130ms var(--ease-default) both;
+  animation: reviewPillIn 130ms var(--ease-default) backwards;
   transition:
     opacity 120ms var(--ease-default),
     transform 120ms var(--ease-default);

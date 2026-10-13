@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetShortcutRuntimeForTests } from '../../runtime/shortcutRuntime';
 import { InboxReviewControls, resolveInboxReviewItemId } from './InboxReviewControls';
+import styles from './InboxReviewControls.module.css';
 
 const { showErrorNotification } = vi.hoisted(() => ({ showErrorNotification: vi.fn() }));
 vi.mock('../../shared/lib/notifications', () => ({ showErrorNotification }));
@@ -22,6 +23,7 @@ describe('InboxReviewControls', () => {
   afterEach(() => {
     resetShortcutRuntimeForTests();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('shows review controls for the viewed inbox entity, including groups', () => {
@@ -58,7 +60,70 @@ describe('InboxReviewControls', () => {
 
     await act(async () => { resolveCommit?.(); });
     expect(onAdvance).not.toHaveBeenCalled();
-    await act(async () => { vi.runAllTimers(); });
+    await act(async () => { await vi.runAllTimersAsync(); });
+    expect(onAdvance).toHaveBeenCalledOnce();
+  });
+
+  it.each(['Accept', 'Reject'])('shows the full %s pulse before fading and advancing', async (action) => {
+    const onCommit = vi.fn().mockResolvedValue(undefined);
+    const onAdvance = vi.fn();
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
+    const controls = document.querySelector('[data-inbox-review-controls]');
+
+    fireEvent.click(screen.getByRole('button', { name: `${action} item` }));
+    await act(async () => {});
+    expect(onCommit).toHaveBeenCalledWith(42, action.toLowerCase());
+    expect(controls).not.toHaveClass(styles.leaving);
+    expect(onAdvance).not.toHaveBeenCalled();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(359); });
+    expect(controls).not.toHaveClass(styles.leaving);
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(controls).toHaveClass(styles.leaving);
+    expect(onAdvance).not.toHaveBeenCalled();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(119); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(onAdvance).toHaveBeenCalledOnce();
+  });
+
+  it('waits for a slow commit without delaying again for a pulse that already finished', async () => {
+    let resolveCommit!: () => void;
+    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onAdvance = vi.fn();
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
+    const controls = document.querySelector('[data-inbox-review-controls]');
+
+    fireEvent.keyDown(window, { key: 'z' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(controls).not.toHaveClass(styles.leaving);
+    expect(onAdvance).not.toHaveBeenCalled();
+
+    await act(async () => { resolveCommit(); });
+    expect(controls).toHaveClass(styles.leaving);
+    await act(async () => { await vi.advanceTimersByTimeAsync(119); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(onAdvance).toHaveBeenCalledOnce();
+  });
+
+  it('skips animation waits for reduced motion but still waits for persistence', async () => {
+    const matchMedia = window.matchMedia.bind(window);
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query), matches: query === '(prefers-reduced-motion: reduce)',
+    }));
+    let resolveCommit!: () => void;
+    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onAdvance = vi.fn();
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
+
+    fireEvent.keyDown(window, { key: 'z' });
+    await act(async () => {});
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { resolveCommit(); });
+    // No timer advancement: with no animation, persistence is the only gate.
     expect(onAdvance).toHaveBeenCalledOnce();
   });
 
@@ -77,6 +142,9 @@ describe('InboxReviewControls', () => {
     });
     expect(onAdvance).not.toHaveBeenCalled();
     expect(document.querySelector('[data-inbox-review-controls]')).toHaveAttribute('data-review-decision', 'idle');
+    expect(screen.getByRole('button', { name: 'Reject item' })).toBeEnabled();
+    await act(async () => { await vi.runAllTimersAsync(); });
+    expect(onAdvance).not.toHaveBeenCalled();
   });
 
   it('retargets the persistent controls without replaying their mount transition', () => {
