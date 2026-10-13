@@ -47,6 +47,7 @@ import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { labToHex } from '../../shared/lib/labColor';
 import { getSettings, patchSettings } from '../../platform/settingsApi';
 import { t } from '../../i18n';
+import { rankMatches } from '../../shared/lib/searchRank';
 
 type ViewMode = 'suggested' | 'below';
 
@@ -453,8 +454,7 @@ export function AiTaggerPanel() {
 
   const visibleTags = useMemo(() => {
     const source = viewMode === 'suggested' ? suggested : below;
-    const search = query.trim().toLowerCase();
-    return search ? source.filter((tag) => tag.key.toLowerCase().includes(search)) : source;
+    return query.trim() ? rankMatches(source, query, (tag) => [tag.key]) : source;
   }, [below, query, suggested, viewMode]);
 
   const modelLabel = useCallback((slug: string) => models.find((model) => model.slug === slug)?.label ?? slug, [models]);
