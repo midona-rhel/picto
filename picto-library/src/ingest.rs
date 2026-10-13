@@ -26,82 +26,78 @@ pub(crate) struct IngestResult {
     pub affected_roots: RoaringBitmap,
 }
 
+/// Import one file. One file is one media item: an import whose source item,
+/// stable key or file the library already holds resolves to that item (adding
+/// its tags and provenance) instead of creating another. Collection
+/// imports combine overlapping collections, including their tags.
 pub(crate) fn insert_one(
     transaction: &Transaction<'_>,
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
-    reuse_exact_root: bool,
-    reuse_identity: bool,
 ) -> Result<IngestResult> {
-    if reuse_identity {
-        if let Some(existing) = existing_import(transaction, &snapshot, input, reuse_exact_root)? {
-            let mut affected_roots =
-                refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
-            let tag_roots = if existing.exact_hash_match {
-                exact_hash_owners(transaction, &snapshot, &input.facts.content_hash)?
+    if let Some(existing) = existing_import(transaction, &snapshot, input)? {
+        let mut affected_roots =
+            refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
+        let tag_roots = RoaringBitmap::from_iter([existing.root_id.0]);
+        let mut bitmap_keys = Vec::new();
+        for raw_name in &input.tags {
+            let name = canonical_tag_name(raw_name)?;
+            let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
+                tag_id
             } else {
-                RoaringBitmap::from_iter([existing.root_id.0])
+                let tag_id = ensure_tag(transaction, &name)?;
+                Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name, tag_id);
+                tag_id
             };
-            let mut bitmap_keys = Vec::new();
-            for raw_name in &input.tags {
-                let name = canonical_tag_name(raw_name)?;
-                let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
-                    tag_id
-                } else {
-                    let tag_id = ensure_tag(transaction, &name)?;
-                    Arc::make_mut(&mut snapshot.tag_ids_by_name).insert(name, tag_id);
-                    tag_id
-                };
-                let added_roots = {
-                    let roots = Arc::make_mut(&mut snapshot.tags).entry(tag_id).or_default();
-                    tag_roots
-                        .iter()
-                        .filter(|root_id| roots.insert(*root_id))
-                        .collect::<RoaringBitmap>()
-                };
-                if !added_roots.is_empty() {
-                    bitmap_keys.push(BitmapKey {
-                        domain: BitmapDomain::Tag,
-                        key_id: tag_id.0,
-                    });
-                    let counts = Arc::make_mut(&mut snapshot.tag_count);
-                    for root_id in added_roots {
-                        counts.insert(
-                            root_id,
-                            counts.value(root_id).unwrap_or(0).saturating_add(1),
-                        );
-                        affected_roots.insert(root_id);
-                    }
+            let added_roots = {
+                let roots = Arc::make_mut(&mut snapshot.tags).entry(tag_id).or_default();
+                tag_roots
+                    .iter()
+                    .filter(|root_id| roots.insert(*root_id))
+                    .collect::<RoaringBitmap>()
+            };
+            if !added_roots.is_empty() {
+                bitmap_keys.push(BitmapKey {
+                    domain: BitmapDomain::Tag,
+                    key_id: tag_id.0,
+                });
+                let counts = Arc::make_mut(&mut snapshot.tag_count);
+                for root_id in added_roots {
+                    counts.insert(
+                        root_id,
+                        counts.value(root_id).unwrap_or(0).saturating_add(1),
+                    );
+                    affected_roots.insert(root_id);
                 }
             }
-            if let Some(source) = &input.source_identity {
-                transaction
-                    .prepare_cached(
-                        "INSERT INTO source_provenance
-                     (source_key, source_item_key, media_id, source_text)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(source_key, source_item_key, media_id) DO UPDATE SET
-                     source_text = excluded.source_text",
-                    )?
-                    .execute(params![
-                        source.source_key,
-                        source.source_item_key,
-                        existing.media_id.0,
-                        source.source_text
-                    ])?;
-            }
-            snapshot.revision = revision;
-            return Ok(IngestResult {
-                root_id: existing.root_id,
-                created_root: false,
-                snapshot,
-                resources: vec!["roots".into(), "tags".into()],
-                bitmap_keys,
-                folder_ids: Vec::new(),
-                affected_roots,
-            });
         }
+        if let Some(source) = &input.source_identity {
+            transaction
+                .prepare_cached(
+                    "INSERT INTO source_provenance
+                 (source_key, source_item_key, media_id, source_text)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(source_key, source_item_key, media_id) DO UPDATE SET
+                 source_text = excluded.source_text",
+                )?
+                .execute(params![
+                    source.source_key,
+                    source.source_item_key,
+                    existing.media_id.0,
+                    source.source_text
+                ])?;
+        }
+        snapshot.revision = revision;
+        return Ok(IngestResult {
+            root_id: existing.root_id,
+            created_root: false,
+            snapshot,
+            resources: vec!["roots".into(), "tags".into()],
+            bitmap_keys,
+            folder_ids: Vec::new(),
+            affected_roots,
+        });
     }
     if let Some(deleted_at_ms) = transaction
         .prepare_cached("SELECT deleted_at_ms FROM deletion_tombstone WHERE stable_key = ?1")?
@@ -383,15 +379,6 @@ pub(crate) fn insert_one(
     {
         Arc::make_mut(&mut snapshot.notes_present).insert(root_id.0);
     }
-    if !reuse_exact_root && reuse_identity {
-        bitmap_keys.extend(inherit_standalone_tags(
-            transaction,
-            &mut snapshot,
-            root_id,
-            &input.facts.content_hash,
-        )?);
-    }
-
     let affected_roots = RoaringBitmap::from_iter([root_id.0]);
 
     Arc::make_mut(&mut snapshot.name_index).insert(root_id.0, &input.media_name);
@@ -623,18 +610,24 @@ fn refresh_existing_file(
 struct ExistingImport {
     media_id: MediaId,
     root_id: RootId,
-    exact_hash_match: bool,
 }
 
+/// The media item an import resolves to, if the library already has it: by
+/// stable key (or the alias a merged-away item left), by source item, or by
+/// file. Each file has at most one media item, so the file lookup is exact.
 fn existing_import(
     transaction: &Transaction<'_>,
     snapshot: &ProjectionSnapshot,
     input: &PreparedImport,
-    reuse_exact_root: bool,
 ) -> Result<Option<ExistingImport>> {
     let stable_media = transaction
         .prepare_cached(
-            "SELECT local_id FROM library_item WHERE stable_key = ?1 AND item_kind = 1",
+            "SELECT local_id FROM library_item WHERE stable_key = ?1 AND item_kind = 1
+             UNION ALL
+             SELECT alias.local_id FROM library_item_alias alias
+             JOIN library_item item ON item.local_id = alias.local_id AND item.item_kind = 1
+             WHERE alias.stable_key = ?1
+             LIMIT 1",
         )?
         .query_row([&input.stable_key], |row| row.get::<_, u32>(0))
         .optional()?;
@@ -660,112 +653,32 @@ fn existing_import(
             "stable and source identities resolve to different media".into(),
         ));
     }
-    let exact_media = if reuse_exact_root {
-        transaction
-            .prepare_cached(
-                "SELECT media.media_id
-                 FROM media_item media
-                 JOIN media_file file ON file.file_id = media.file_id
-                 LEFT JOIN library_root root ON root.root_id = media.media_id
-                 WHERE file.content_hash = ?1
-                 ORDER BY root.root_id IS NULL, media.media_id
-                 LIMIT 1",
-            )?
-            .query_row([&input.facts.content_hash], |row| row.get::<_, u32>(0))
-            .optional()?
+    let media_id = if let Some(media_id) = stable_media.or(source_media) {
+        media_id
+    } else if let Some(media_id) = transaction
+        .prepare_cached(
+            "SELECT media.media_id
+             FROM media_file file
+             JOIN media_item media ON media.file_id = file.file_id
+             WHERE file.content_hash = ?1
+             ORDER BY media.media_id
+             LIMIT 1",
+        )?
+        .query_row([&input.facts.content_hash], |row| row.get::<_, u32>(0))
+        .optional()?
+    {
+        media_id
     } else {
-        None
+        return Ok(None);
     };
-    let exact_hash_match = exact_media.is_some();
-    let media_id = stable_media.or(source_media).or(exact_media);
-    Ok(media_id.map(|media_id| ExistingImport {
+    Ok(Some(ExistingImport {
         media_id: MediaId(media_id),
         root_id: snapshot
             .media_owner
             .get(media_id)
             .copied()
             .unwrap_or(RootId(media_id)),
-        exact_hash_match,
     }))
-}
-
-fn exact_hash_owners(
-    transaction: &Transaction<'_>,
-    snapshot: &ProjectionSnapshot,
-    content_hash: &str,
-) -> Result<RoaringBitmap> {
-    let mut statement = transaction.prepare_cached(
-        "SELECT media.media_id
-         FROM media_item media
-         JOIN media_file file ON file.file_id = media.file_id
-         WHERE file.content_hash = ?1",
-    )?;
-    let media_ids = statement
-        .query_map([content_hash], |row| row.get::<_, u32>(0))?
-        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
-    media_ids
-        .into_iter()
-        .map(|media_id| {
-            snapshot
-                .media_owner
-                .get(media_id)
-                .map(|owner| owner.0)
-                .ok_or_else(|| {
-                    LibraryError::InvalidState(format!("media {media_id} has no owning root"))
-                })
-        })
-        .collect()
-}
-
-fn inherit_standalone_tags(
-    transaction: &Transaction<'_>,
-    snapshot: &mut ProjectionSnapshot,
-    target: RootId,
-    content_hash: &str,
-) -> Result<Vec<BitmapKey>> {
-    let mut statement = transaction.prepare_cached(
-        "SELECT DISTINCT media.media_id
-         FROM media_item media
-         JOIN media_file file ON file.file_id = media.file_id
-         JOIN library_item item ON item.local_id = media.media_id AND item.item_kind = 1
-         JOIN library_root root ON root.root_id = media.media_id
-         WHERE file.content_hash = ?1 AND media.media_id != ?2",
-    )?;
-    let donors = statement
-        .query_map(params![content_hash, target.0], |row| row.get::<_, u32>(0))?
-        .collect::<std::result::Result<RoaringBitmap, rusqlite::Error>>()?;
-    if donors.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let inherited = snapshot
-        .tags
-        .iter()
-        .filter_map(|(tag_id, roots)| (!roots.is_disjoint(&donors)).then_some(*tag_id))
-        .collect::<Vec<_>>();
-    let mut changed = Vec::new();
-    let mut added = 0u64;
-    for tag_id in inherited {
-        if Arc::make_mut(&mut snapshot.tags)
-            .entry(tag_id)
-            .or_default()
-            .insert(target.0)
-        {
-            added += 1;
-            changed.push(BitmapKey {
-                domain: BitmapDomain::Tag,
-                key_id: tag_id.0,
-            });
-        }
-    }
-    if added != 0 {
-        let counts = Arc::make_mut(&mut snapshot.tag_count);
-        counts.insert(
-            target.0,
-            counts.value(target.0).unwrap_or(0).saturating_add(added),
-        );
-    }
-    Ok(changed)
 }
 
 pub(crate) fn persist_touched(

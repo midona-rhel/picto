@@ -145,12 +145,69 @@ pub type DeletedProvenanceRow = (String, String, u32, Option<String>);
 /// the roots' structure (rows, memberships, folder positions, collection
 /// orders) and the rows that pointed at them. The files stay on disk while
 /// the entry is in history (`protected_cleanup_files`).
+/// Rows a merge pointed from the merged-away item (or a collection it
+/// emptied) at the item that stays, so undo can point them back. Each move
+/// names the row, where it pointed before and where it points after.
+#[derive(Debug, Clone, Default)]
+pub struct RelinkState {
+    /// Source posts: post, root before, root after.
+    pub source_posts: Vec<(i64, u32, u32)>,
+    /// Source items: item, media before, media after.
+    pub source_items: Vec<(i64, u32, u32)>,
+    /// Provenance rows moved to another media item.
+    pub provenance: Vec<RelinkedProvenance>,
+    /// Folder covers: folder, root before, root after.
+    pub folder_covers: Vec<(u32, u32, u32)>,
+    /// Stable-key aliases: key, the item it named before (none for a new
+    /// alias), the item it names after.
+    pub aliases: Vec<(String, Option<u32>, u32)>,
+}
+
+/// A `source_provenance` row moved from one media item to another. When the
+/// target already had the same source, the moved row is dropped instead.
+#[derive(Debug, Clone)]
+pub struct RelinkedProvenance {
+    pub source_key: String,
+    pub source_item_key: String,
+    pub source_text: Option<String>,
+    pub from: u32,
+    pub to: u32,
+    pub target_had: bool,
+}
+
+impl RelinkState {
+    pub fn is_empty(&self) -> bool {
+        self.source_posts.is_empty()
+            && self.source_items.is_empty()
+            && self.provenance.is_empty()
+            && self.folder_covers.is_empty()
+            && self.aliases.is_empty()
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        (self.source_posts.len() + self.source_items.len() + self.folder_covers.len()) * 16
+            + self
+                .provenance
+                .iter()
+                .map(|row| {
+                    row.source_key.len()
+                        + row.source_item_key.len()
+                        + row.source_text.as_deref().map_or(0, str::len)
+                        + 24
+                })
+                .sum::<usize>()
+            + self.aliases.iter().map(|(key, _, _)| key.len() + 16).sum::<usize>()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DeletedRootsState {
     pub roots: Arc<RoaringBitmap>,
     pub structure: StructuralState,
     /// `library_item` rows of the roots and their media: id, stable key, kind.
     pub items: Arc<Vec<(u32, String, u8)>>,
+    /// Stable identities retained from earlier item or collection merges.
+    pub aliases: Arc<Vec<(String, u32)>>,
     /// `media_item` rows: id, name, notes, file.
     pub media: Arc<Vec<DeletedMediaRow>>,
     /// The media that are images.
@@ -178,6 +235,7 @@ impl DeletedRootsState {
             .map(|root| root.stable_key.len() + root.name.len() + root.source_urls_json.len() + 96)
             .sum::<usize>();
         let items = self.items.iter().map(|(_, key, _)| key.len() + 16).sum::<usize>();
+        let aliases = self.aliases.iter().map(|(key, _)| key.len() + 8).sum::<usize>();
         let media = self
             .media
             .iter()
@@ -190,6 +248,7 @@ impl DeletedRootsState {
             .sum::<usize>();
         roots
             + items
+            + aliases
             + media
             + provenance
             + self.structure.membership_bytes()
@@ -286,6 +345,8 @@ pub enum SemanticChange {
     DuplicateResolution(crate::duplicate::DuplicateHistoryState),
     /// Undo restores the deleted roots; redo deletes them again.
     PermanentDelete(Arc<DeletedRootsState>),
+    /// Rows a merge moved onto the item that stays.
+    Relink(Arc<RelinkState>),
     Compound(Vec<SemanticChange>),
 }
 
@@ -436,6 +497,7 @@ impl SemanticChange {
             }
             Self::DuplicateResolution(state) => state.estimated_bytes(),
             Self::PermanentDelete(state) => state.estimated_bytes(),
+            Self::Relink(state) => state.estimated_bytes(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }

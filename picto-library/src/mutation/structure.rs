@@ -823,6 +823,13 @@ pub(super) fn capture_deleted_roots(
         )?
         .query_map([&media_json], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
         .collect::<rusqlite::Result<Vec<crate::history::DeletedMediaRow>>>()?;
+    let aliases = transaction
+        .prepare(
+            "SELECT stable_key, local_id FROM library_item_alias
+             WHERE local_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&items_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let provenance = transaction
         .prepare(
             "SELECT source_key, source_item_key, media_id, source_text FROM source_provenance
@@ -879,6 +886,7 @@ pub(super) fn capture_deleted_roots(
         roots: Arc::new(roots.clone()),
         structure: capture_structure(transaction, snapshot, roots, None)?,
         items: Arc::new(items),
+        aliases: Arc::new(aliases),
         media: Arc::new(media_rows),
         image_media: Arc::new(snapshot.image_media.as_ref() & &media),
         provenance: Arc::new(provenance),
@@ -912,6 +920,26 @@ pub(super) fn restore_deleted_roots(
             "cannot undo the delete because its items exist again".into(),
         ));
     }
+    // Aliases and primary keys live in separate tables, so their UNIQUE
+    // constraints alone cannot detect an identity reused since deletion.
+    if !state.aliases.is_empty() {
+        let keys = serde_json::to_string(
+            &state.aliases.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+        )?;
+        let reused: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM json_each(?1) saved
+                 CROSS JOIN library_item item ON item.stable_key = saved.value
+             )",
+            [keys],
+            |row| row.get(0),
+        )?;
+        if reused {
+            return Err(LibraryError::InvalidState(
+                "cannot undo the delete because a saved alias is now a live item's primary key".into(),
+            ));
+        }
+    }
     let files_json = ids_json(state.files.iter().map(|file| file.0))?;
     let files: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM media_file WHERE file_id IN (SELECT value FROM json_each(?1))",
@@ -923,6 +951,18 @@ pub(super) fn restore_deleted_roots(
             "cannot undo the delete because its files were already removed".into(),
         ));
     }
+    // One file is one item: a file imported again since cannot come back
+    // as a second one.
+    let reimported: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM media_item WHERE file_id IN (SELECT value FROM json_each(?1))",
+        [&files_json],
+        |row| row.get(0),
+    )?;
+    if reimported != 0 {
+        return Err(LibraryError::InvalidState(
+            "cannot undo the delete because its files are in the library again".into(),
+        ));
+    }
 
     let mut insert_item = transaction
         .prepare_cached("INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, ?3)")?;
@@ -930,6 +970,13 @@ pub(super) fn restore_deleted_roots(
         insert_item.execute(rusqlite::params![id, key, kind])?;
     }
     drop(insert_item);
+    let mut insert_alias = transaction.prepare_cached(
+        "INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2)",
+    )?;
+    for (key, id) in state.aliases.iter() {
+        insert_alias.execute(rusqlite::params![key, id])?;
+    }
+    drop(insert_alias);
     let mut insert_media = transaction.prepare_cached(
         "INSERT INTO media_item(media_id, media_name, media_notes, file_id) VALUES (?1, ?2, ?3, ?4)",
     )?;

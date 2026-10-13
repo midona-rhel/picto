@@ -932,6 +932,10 @@ pub(super) fn apply_semantic_change(
             }
             *affected |= state.roots.as_ref();
         }
+        SemanticChange::Relink(state) => {
+            super::merge::apply_relink(transaction, state, use_after)?;
+            resources.insert("subscriptions".into());
+        }
         SemanticChange::Compound(changes) => {
             if use_after {
                 for change in changes {
