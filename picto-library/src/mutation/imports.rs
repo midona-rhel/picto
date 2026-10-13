@@ -1,6 +1,7 @@
 //! Importing prepared media and collections.
 
 use super::*;
+use rusqlite::{params, OptionalExtension};
 
 impl Library {
     pub fn ingest(&self, input: &PreparedImport) -> Result<(RootId, MutationReceipt)> {
@@ -12,20 +13,46 @@ impl Library {
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, false)
+        self.ingest_batch_with(inputs, false, None)
+    }
+
+    /// Import items for a foreground task, which records the roots it
+    /// creates and the tags it adds to existing ones so it can be undone.
+    pub fn ingest_batch_for_task(
+        &self,
+        inputs: &[PreparedImport],
+        task: crate::TaskId,
+        auto_tag: bool,
+    ) -> Result<Vec<(RootId, MutationReceipt)>> {
+        let grouped = self.task(task)?.is_some_and(|record| {
+            serde_json::from_str::<serde_json::Value>(&record.input_json)
+                .ok().and_then(|value| value["group_files"].as_bool()).unwrap_or(false)
+        });
+        if grouped && !inputs.is_empty() {
+            if inputs.len() > ingest::MAX_INGEST_BATCH {
+                return Err(LibraryError::InvalidInput("task ingest batch is too large".into()));
+            }
+            let output = self.ingest_collection_with(&PreparedCollectionImport {
+                members: inputs.to_vec(), cover_index: 0, existing_root_id: None,
+                name: None, modified_at_ms: inputs[0].imported_at_ms,
+            }, auto_tag, Some(task))?;
+            return Ok(vec![output; inputs.len()]);
+        }
+        self.ingest_batch_with(inputs, auto_tag, Some(task))
     }
 
     pub fn ingest_batch_with_auto_tags(
         &self,
         inputs: &[PreparedImport],
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
-        self.ingest_batch_with(inputs, true)
+        self.ingest_batch_with(inputs, true, None)
     }
 
     fn ingest_batch_with(
         &self,
         inputs: &[PreparedImport],
         auto_tag: bool,
+        task: Option<crate::TaskId>,
     ) -> Result<Vec<(RootId, MutationReceipt)>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
@@ -37,6 +64,9 @@ impl Library {
             )));
         }
         let outputs = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(inputs.len());
             let mut created_root_ids = Vec::with_capacity(inputs.len());
@@ -45,9 +75,19 @@ impl Library {
             let mut folder_ids = HashSet::new();
             let mut affected = RoaringBitmap::new();
             for input in inputs {
-                let output = ingest::insert_one(transaction, revision, next, input)?;
+                let output = ingest::insert_one(transaction, revision, next, input, task)?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
+                if let Some(task) = task {
+                    crate::mutation::tasks::record_task_ingest(
+                        transaction,
+                        task,
+                        output.created_root.then_some(output.root_id),
+                        &output.added_tags,
+                        1,
+                    )?;
+                    resources.insert("tasks".to_owned());
+                }
                 if output.created_root {
                     created_root_ids.push(output.root_id);
                     if let Some(attempt_id) = input
@@ -127,14 +167,24 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, false)
+        self.ingest_collection_with(input, false, None)
+    }
+
+    /// Import a collection for a foreground task; see [`Self::ingest_batch_for_task`].
+    pub fn ingest_collection_for_task(
+        &self,
+        input: &PreparedCollectionImport,
+        task: crate::TaskId,
+        auto_tag: bool,
+    ) -> Result<(RootId, MutationReceipt)> {
+        self.ingest_collection_with(input, auto_tag, Some(task))
     }
 
     pub fn ingest_collection_with_auto_tags(
         &self,
         input: &PreparedCollectionImport,
     ) -> Result<(RootId, MutationReceipt)> {
-        self.ingest_collection_with(input, true)
+        self.ingest_collection_with(input, true, None)
     }
 
     /// Import a post's files as one collection. A file the library already
@@ -145,6 +195,7 @@ impl Library {
         &self,
         input: &PreparedCollectionImport,
         auto_tag: bool,
+        task: Option<crate::TaskId>,
     ) -> Result<(RootId, MutationReceipt)> {
         if input.members.is_empty() {
             return Err(LibraryError::InvalidInput(
@@ -157,6 +208,24 @@ impl Library {
             ));
         }
         let (collection_id, receipt) = self.publish(WorkPriority::CanonicalIngest, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
+            // Each grouped task streams ordinary jobs. Its durable alias resolves
+            // the accumulated collection across batches, pauses and reopen.
+            let mut grouped = input.clone();
+            let group_key = if let Some(task) = task {
+                let options: String = transaction.query_row("SELECT input_json FROM task WHERE task_id = ?1", [task.0], |row| row.get(0))?;
+                let options: serde_json::Value = serde_json::from_str(&options)?;
+                if options["group_files"].as_bool() == Some(true) {
+                    grouped.name = options["collection_name"].as_str().map(str::to_owned);
+                    let key = format!("task:{}:collection", task.0);
+                    let item: Option<u32> = transaction.query_row("SELECT local_id FROM library_item_alias WHERE stable_key = ?1", [&key], |row| row.get(0)).optional()?;
+                    grouped.existing_root_id = item.map(|id| snapshot.media_owner.get(id).copied().unwrap_or(RootId(id)));
+                    Some(key)
+                } else { None }
+            } else { None };
+            let input = &grouped;
             let mut next = (*snapshot).clone();
             let mut root_ids = Vec::with_capacity(input.members.len() + 1);
             let mut created_root_ids = Vec::with_capacity(input.members.len());
@@ -183,10 +252,21 @@ impl Library {
             let mut ingest_affected = RoaringBitmap::new();
             let mut outputs = Vec::with_capacity(input.members.len());
             for member in &input.members {
-                let output = ingest::insert_one(transaction, revision, next, member)?;
+                let output = ingest::insert_one(transaction, revision, next, member, task)?;
                 next = output.snapshot;
                 if output.created_root {
                     created_root_ids.push(output.root_id);
+                }
+                if let Some(task) = task {
+                    // Partial collections are ungrouped during rollback, exposing
+                    // these created media roots for deletion.
+                    crate::mutation::tasks::record_task_ingest(
+                        transaction,
+                        task,
+                        output.created_root.then_some(output.root_id),
+                        &output.added_tags,
+                        0,
+                    )?;
                 }
                 resources.extend(output.resources);
                 bitmap_keys.extend(output.bitmap_keys);
@@ -220,16 +300,31 @@ impl Library {
                 .collect::<Vec<_>>();
             let winning_collection_id = existing_collections.first().copied();
             let creates_collection = ordered_roots.len() >= 2 && winning_collection_id.is_none();
+            let wholly_created = creates_collection
+                && input.existing_root_id.is_none()
+                && created_root_ids.len() == input.members.len();
+            let before = task.filter(|_| !wholly_created && ordered_roots.len() >= 2).map(|_| {
+                super::structure::capture_structure(
+                    transaction, &next,
+                    &ordered_roots.iter().map(|root| root.0).collect(), None,
+                )
+            }).transpose()?;
             let requested_cover = requested_cover.filter(|root| ordered_roots.contains(root));
             let (published_root, mut affected) = if let Some(winner) = winning_collection_id.filter(|_| ordered_roots.len() >= 2) {
-                    let mut merge = Merge::default();
+                    let mut merge = Merge { record: task.is_some(), ..Default::default() };
                     combine_overlapping_roots(transaction, revision, &mut next,
                         &ordered_roots, winner, input.modified_at_ms, &mut merge)?;
+                    if let Some(task) = task {
+                        for change in merge.changes {
+                            if let SemanticChange::Relink(state) = change {
+                                super::tasks::record_task_undo(transaction, task, super::tasks::TaskUndo::Relink(state))?;
+                            }
+                        }
+                    }
                     resources.extend(merge.resources);
                     (winner, merge.affected)
                 } else if ordered_roots.len() >= 2 {
-                    // A loose item that joins the post may sit in another
-                    // lifecycle; the set takes the one that keeps it most.
+                    // Capture before lifecycle promotion so rollback restores each input's state.
                     settle_lifecycles(&mut next, &ordered_roots, &mut bitmap_keys);
                     let output = crate::group::organize(
                         transaction,
@@ -266,6 +361,16 @@ impl Library {
                             .collect::<RoaringBitmap>(),
                     )
                 };
+            if let (Some(task), Some(before)) = (task, before) {
+                let after = super::structure::capture_structure(transaction, &next, &affected, None)?;
+                super::tasks::record_task_undo(transaction, task, super::tasks::TaskUndo::Structure {
+                    affected: Arc::new(affected.clone()),
+                    before: Box::new(before), after: Box::new(after),
+                })?;
+            }
+            if let Some(key) = group_key {
+                transaction.execute("INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2) ON CONFLICT(stable_key) DO UPDATE SET local_id = excluded.local_id", params![key, published_root.0])?;
+            }
             affected |= &ingest_affected;
             ingest::persist_touched(
                 transaction,
@@ -300,6 +405,16 @@ impl Library {
                     )?;
                     resources.insert("subscriptions".to_owned());
                 }
+            }
+            if let Some(task) = task {
+                crate::mutation::tasks::record_task_units(
+                    transaction,
+                    task,
+                    created_root_ids.len(),
+                    input.members.len() - created_root_ids.len(),
+                    wholly_created.then_some(published_root),
+                )?;
+                resources.insert("tasks".to_owned());
             }
             resources.extend(["tags".to_owned(), "folders".to_owned()]);
             let receipt = PublicationCoordinator::receipt(

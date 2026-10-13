@@ -33,7 +33,7 @@ impl TryFrom<u8> for BitmapDomain {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BitmapKey {
     pub domain: BitmapDomain,
     pub key_id: u32,

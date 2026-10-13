@@ -43,7 +43,7 @@ pub struct RootTextState {
     pub modified_at_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderDefinitionState {
     pub folder_id: FolderId,
     pub stable_key: String,
@@ -90,13 +90,13 @@ pub struct StructuralRootState {
     pub total_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructuralMediaNoteState {
     pub media_id: MediaId,
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuralState {
     pub roots: Arc<Vec<StructuralRootState>>,
     pub media_notes: Arc<Vec<StructuralMediaNoteState>>,
@@ -107,7 +107,7 @@ pub struct StructuralState {
 
 /// Only affected members are retained, anchored to their original neighbours.
 /// Later imports into the same folder are not replaced when structure is undone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuralFolderPosition {
     pub root_id: RootId,
     pub previous: Option<RootId>,
@@ -148,7 +148,7 @@ pub type DeletedProvenanceRow = (String, String, u32, Option<String>);
 /// Rows a merge pointed from the merged-away item (or a collection it
 /// emptied) at the item that stays, so undo can point them back. Each move
 /// names the row, where it pointed before and where it points after.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RelinkState {
     /// Source posts: post, root before, root after.
     pub source_posts: Vec<(i64, u32, u32)>,
@@ -165,7 +165,7 @@ pub struct RelinkState {
 
 /// A `source_provenance` row moved from one media item to another. When the
 /// target already had the same source, the moved row is dropped instead.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelinkedProvenance {
     pub source_key: String,
     pub source_item_key: String,
@@ -285,6 +285,11 @@ pub enum SemanticChange {
         before: Arc<Vec<RootTextState>>,
         after: Arc<Vec<RootTextState>>,
     },
+    MediaText {
+        media_id: MediaId,
+        before: (String, Option<String>),
+        after: (String, Option<String>),
+    },
     CollectionCover {
         root_id: RootId,
         before: MediaId,
@@ -394,6 +399,7 @@ impl SemanticChange {
                         + 40
                 })
                 .sum(),
+            Self::MediaText { before, after, .. } => before.0.len() + after.0.len() + before.1.as_deref().map_or(0, str::len) + after.1.as_deref().map_or(0, str::len) + 64,
             Self::CollectionCover {
                 before_notes,
                 after_notes,

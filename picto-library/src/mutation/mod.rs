@@ -38,6 +38,7 @@ mod duplicates;
 mod structure;
 mod merge;
 mod undo;
+pub(crate) mod tasks;
 use tags::*;
 use folders::*;
 use smart_folders::*;
@@ -1996,7 +1997,7 @@ fn required_name(kind: &str, name: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-fn load_root_text(
+pub(crate) fn load_root_text(
     transaction: &rusqlite::Transaction<'_>,
     roots: &RoaringBitmap,
 ) -> Result<Vec<crate::history::RootTextState>> {

@@ -24,6 +24,8 @@ const ALLOWED_UNCHANGED_MESSAGES = new Set([
   'EU (QWERTZ / AZERTY / Nordic)', 'ExHentai', 'GitHub', 'Google Drive', 'namespace:tag',
   'Picto', 'Picto {value0}', 'SauceNAO', 'Sogou', 'TinEye', 'Twitter', 'URL: {value0}',
   'US (QWERTY)', 'X-BC', 'YouTube',
+  // Unit symbols for durations read the same in most languages.
+  '{value0} s', '{value0} min', '{value0} min {value1} s', '{value0} h {value1} min',
 ]);
 const ALLOWED_UNCHANGED_BY_LOCALE = {
   pt: new Set(['{value0} sites']),

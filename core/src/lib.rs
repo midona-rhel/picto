@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod dto;
 pub mod duplicates;
 pub mod events;
+pub mod import_tasks;
 pub mod ipc;
 pub mod library_application;
 pub mod library_import;

@@ -27,6 +27,7 @@ import * as shellApi from './shellApi';
 import * as smartFolderApi from './smartFolderApi';
 import * as subscriptionApi from './subscriptionApi';
 import * as tagApi from './tagApi';
+import * as taskApi from './taskApi';
 import * as updateApi from './updateApi';
 import { setTargetNotes, setTargetSourceUrls } from '../controllers/entityMutations';
 import { compileGridQuery, createEmptyItemFilters } from '../shared/lib/itemFilters';
@@ -51,6 +52,7 @@ const MODULES = {
   smartFolderApi,
   subscriptionApi,
   tagApi,
+  taskApi,
   updateApi,
 } as const;
 
@@ -583,6 +585,15 @@ const CASES: Record<string, () => unknown> = {
   'tagApi.createTagGroup': () => tagApi.createTagGroup('species'),
   'tagApi.renameTagGroup': () => tagApi.renameTagGroup(2, 'creature'),
   'tagApi.deleteTagGroup': () => tagApi.deleteTagGroup(2),
+  'taskApi.listTasks': () => taskApi.listTasks(),
+  'taskApi.pauseTask': () => taskApi.pauseTask(1),
+  'taskApi.resumeTask': () => taskApi.resumeTask(1),
+  'taskApi.stopTask': async () => {
+    await taskApi.stopTask(1, false);
+    await taskApi.stopTask(1, true);
+  },
+  'taskApi.dismissTask': () => taskApi.dismissTask(1),
+  'taskApi.taskFailures': () => taskApi.taskFailures(1),
 };
 
 /** Mirror the transport: Electron sends `JSON.stringify(args ?? {})` to Rust. */

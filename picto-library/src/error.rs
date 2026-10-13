@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum LibraryError {
+    #[error("import task is no longer running")]
+    TaskNotRunning,
     #[error("query superseded")]
     QuerySuperseded,
     #[error("The library view took too long to load. Please retry.")]

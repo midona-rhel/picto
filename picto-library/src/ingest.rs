@@ -24,6 +24,8 @@ pub(crate) struct IngestResult {
     pub bitmap_keys: Vec<BitmapKey>,
     pub folder_ids: Vec<FolderId>,
     pub affected_roots: RoaringBitmap,
+    /// Tags this import added to roots that already existed (reuse only).
+    pub added_tags: Vec<(RootId, TagId)>,
 }
 
 /// Import one file. One file is one media item: an import whose source item,
@@ -35,12 +37,25 @@ pub(crate) fn insert_one(
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
+    task: Option<crate::TaskId>,
 ) -> Result<IngestResult> {
     if let Some(existing) = existing_import(transaction, &snapshot, input)? {
+        let before = task.map(|_| reused_text(transaction, existing)).transpose()?;
         let mut affected_roots =
             refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
+        if let (Some(task), Some((root_before, media_before))) = (task, before) {
+            let (root_after, media_after) = reused_text(transaction, existing)?;
+            use crate::mutation::tasks::{record_task_undo, TaskUndo};
+            if root_before != root_after {
+                record_task_undo(transaction, task, TaskUndo::RootText { before: Arc::new(root_before), after: Arc::new(root_after) })?;
+            }
+            if media_before != media_after {
+                record_task_undo(transaction, task, TaskUndo::MediaText { media_id: existing.media_id, before: media_before, after: media_after })?;
+            }
+        }
         let tag_roots = RoaringBitmap::from_iter([existing.root_id.0]);
         let mut bitmap_keys = Vec::new();
+        let mut added_tags = Vec::new();
         for raw_name in &input.tags {
             let name = canonical_tag_name(raw_name)?;
             let tag_id = if let Some(tag_id) = snapshot.tag_ids_by_name.get(&name).copied() {
@@ -57,6 +72,7 @@ pub(crate) fn insert_one(
                     .filter(|root_id| roots.insert(*root_id))
                     .collect::<RoaringBitmap>()
             };
+            added_tags.extend(added_roots.iter().map(|root| (RootId(root), tag_id)));
             if !added_roots.is_empty() {
                 bitmap_keys.push(BitmapKey {
                     domain: BitmapDomain::Tag,
@@ -97,6 +113,7 @@ pub(crate) fn insert_one(
             bitmap_keys,
             folder_ids: Vec::new(),
             affected_roots,
+            added_tags,
         });
     }
     if let Some(deleted_at_ms) = transaction
@@ -398,6 +415,7 @@ pub(crate) fn insert_one(
         bitmap_keys,
         folder_ids: input.folders.clone(),
         affected_roots,
+        added_tags: Vec::new(),
     })
 }
 
@@ -473,6 +491,15 @@ pub(crate) fn enqueue_ai_tag_roots(
         ])?;
     }
     Ok(())
+}
+
+type ReusedText = (Vec<crate::history::RootTextState>, (String, Option<String>));
+
+fn reused_text(transaction: &Transaction<'_>, existing: ExistingImport) -> Result<ReusedText> {
+    let roots = crate::mutation::load_root_text(transaction, &RoaringBitmap::from_iter([existing.root_id.0]))?;
+    let media = transaction.query_row("SELECT media_name, media_notes FROM media_item WHERE media_id = ?1", [existing.media_id.0], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok((roots, media))
+
 }
 
 fn refresh_existing_file(

@@ -29,3 +29,6 @@ CREATE INDEX IF NOT EXISTS idx_cloud_blob_state_state ON cloud_blob_state(state,
 CREATE INDEX IF NOT EXISTS idx_cloud_blob_state_error ON cloud_blob_state(file_hash) WHERE last_error IS NOT NULL;
 -- Watched-folder scans look up their own finished jobs among every import.
 CREATE INDEX IF NOT EXISTS idx_ingest_job_source_kind ON ingest_job(source_kind, status, job_key);
+CREATE INDEX IF NOT EXISTS idx_ingest_job_task ON ingest_job(task_id, status) WHERE task_id IS NOT NULL;
+-- Claims skip files a task has queued but not yet read, however many wait.
+CREATE INDEX IF NOT EXISTS idx_ingest_job_claim ON ingest_job(status, prepared, available_at, ingest_job_id);

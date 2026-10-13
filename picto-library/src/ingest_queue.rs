@@ -99,10 +99,16 @@ impl Library {
             [],
             |transaction, _| {
                 let mut statement = transaction.prepare(
+                    // A paused or stopped task's jobs wait; jobs without a task
+                    // (subscriptions, watched folders) are never held.
                     "SELECT ingest_job_id, source_path, delete_after_ingest,
-                            attempt_count, payload_json
+                            attempt_count, payload_json, task_id
                      FROM ingest_job
-                     WHERE status = 'pending' AND available_at <= ?1
+                     WHERE status = 'pending' AND prepared = 1 AND available_at <= ?1
+                       AND (task_id IS NULL OR EXISTS (
+                           SELECT 1 FROM task
+                           WHERE task.task_id = ingest_job.task_id AND task.state = 'running'
+                       ))
                      ORDER BY available_at, ingest_job_id
                      LIMIT ?2",
                 )?;
@@ -114,6 +120,7 @@ impl Library {
                             row.get::<_, bool>(2)?,
                             row.get::<_, u32>(3)?,
                             row.get::<_, String>(4)?,
+                            row.get::<_, Option<i64>>(5)?,
                         ))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -122,7 +129,7 @@ impl Library {
                     return Ok(None);
                 }
                 let mut jobs = Vec::with_capacity(rows.len());
-                for (ingest_job_id, source_path, delete_after_ingest, attempt_count, payload) in
+                for (ingest_job_id, source_path, delete_after_ingest, attempt_count, payload, task_id) in
                     rows
                 {
                     transaction.execute(
@@ -138,6 +145,7 @@ impl Library {
                         delete_after_ingest,
                         attempt_count: attempt_count + 1,
                         payload: serde_json::from_str(&payload)?,
+                        task_id: task_id.map(crate::TaskId),
                     });
                 }
                 Ok(Some(jobs))
@@ -239,7 +247,7 @@ impl Library {
     }
 }
 
-fn validate_job(job: &PreparedIngestJob) -> Result<()> {
+pub(crate) fn validate_job(job: &PreparedIngestJob) -> Result<()> {
     if job.job_key.trim().is_empty() {
         return Err(LibraryError::InvalidInput("ingest job key is empty".into()));
     }
@@ -259,6 +267,12 @@ fn validate_job(job: &PreparedIngestJob) -> Result<()> {
                 "collection ingest needs at least two members".into(),
             ))
         }
+        PreparedIngestPayload::Pending(input) if input.stable_key.trim().is_empty() => Err(
+            LibraryError::InvalidInput("ingest stable key is empty".into()),
+        ),
+        PreparedIngestPayload::PendingCollection(input) if input.members.len() < 2 => Err(
+            LibraryError::InvalidInput("collection ingest needs at least two members".into()),
+        ),
         _ => Ok(()),
     }
 }

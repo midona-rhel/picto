@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
-import { chooseAndExportOriginals, chooseAndImportFolder, filesController, manualImportParamsForScope, openPictoPackImport, pictoPackPathFromDrop, requestMediaImport } from './filesController';
+import { chooseAndExportOriginals, chooseAndImportFolder, chooseAndImportPictoPack, filesController, manualImportParamsForScope, openPictoPackImport, pictoPackPathFromDrop, requestMediaImport } from './filesController';
+import * as taskGate from '../runtime/taskGate';
 import * as folderApi from '../platform/folderApi';
 import * as settingsApi from '../platform/settingsApi';
 import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
@@ -27,6 +28,16 @@ afterEach(() => {
 });
 
 describe('Picto Pack drop import', () => {
+  it('blocks choosing or opening a pack while another import owns the task', async () => {
+    vi.spyOn(taskGate, 'allowTaskAction').mockReturnValue(false);
+    (window as any).picto = { dialog: { open: vi.fn() }, api: { invoke: vi.fn() } };
+    await chooseAndImportPictoPack();
+    await openPictoPackImport('/tmp/portfolio.picto-pack');
+    expect((window as any).picto.dialog.open).not.toHaveBeenCalled();
+    expect((window as any).picto.api.invoke).not.toHaveBeenCalled();
+    expect(getDefaultStore().get(pictoPackModalAtom)).toEqual({ open: false });
+  });
+
   it('recognizes one dropped pack regardless of extension casing', () => {
     expect(pictoPackPathFromDrop(['/tmp/Portfolio.PICTO-PACK'])).toBe('/tmp/Portfolio.PICTO-PACK');
     expect(pictoPackPathFromDrop(['/tmp/photo.png'])).toBeNull();
@@ -133,12 +144,7 @@ describe('multi-file import choice', () => {
     vi.spyOn(settingsApi, 'getSettings').mockResolvedValue({
       multiFileImportBehavior: behavior,
     } as settingsApi.AppSettings);
-    const addMedia = vi.spyOn(folderApi, 'addMedia').mockResolvedValue({
-      discovered: 2,
-      queued: 2,
-      already_queued: 0,
-      skipped: 0,
-    });
+    const addMedia = vi.spyOn(folderApi, 'addMedia').mockResolvedValue({ task_id: 1 });
 
     await requestMediaImport(['/tmp/one.png', '/tmp/two.png'], { lifecycle: 'active' });
 

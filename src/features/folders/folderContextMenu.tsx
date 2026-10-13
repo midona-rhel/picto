@@ -54,6 +54,8 @@ interface FolderContextMenuOptions {
   onDuplicate: () => void;
   onSetAutoTags: () => void;
   onImport: () => void;
+  /** Another import is running; importing here waits for it. */
+  importDisabled?: boolean;
   onAttachWatch: () => void;
   onRemoveWatch?: () => void;
   onSortTree: (descending: boolean, recursive: boolean) => void;
@@ -92,7 +94,7 @@ export function buildFolderContextMenu(options: FolderContextMenuOptions): MenuE
     { label: t("Duplicate"), icon: <IconCopy size={14} />, action: options.onDuplicate },
     { label: t("Set Auto Tags..."), icon: <IconAutoTags size={14} />, action: options.onSetAutoTags },
     { separator: true },
-    { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: options.onImport },
+    { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: options.onImport, disabled: options.importDisabled },
     { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: options.onAttachWatch },
     ...(options.watchEnabled && options.onRemoveWatch ? [{
       label: t("Remove Watched Folder"),

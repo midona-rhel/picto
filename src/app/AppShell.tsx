@@ -13,6 +13,7 @@ import { ToolbarHistoryIcon, ToolbarPanelIcon } from '../shared/ui/icons/toolbar
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { WorkspaceSurface } from '../features/workspace/WorkspaceSurface';
 import { CloudSyncBar } from '../features/tasks/CloudSyncBar';
+import { TaskBar, TaskDialog } from '../features/tasks/TaskDialog';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
@@ -716,6 +717,8 @@ export function AppShell() {
         </div>
       )}
       <CloudSyncBar />
+      <TaskBar />
+      <TaskDialog />
       <ModalLayer />
       <TagSelectPanel />
       <FolderPickerPanel />

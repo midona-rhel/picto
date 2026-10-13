@@ -5,6 +5,7 @@ import { analyzeFolderTree } from '../../platform/folderApi';
 import type { FolderTreeAnalysis } from '../../shared/types/generated/application/FolderTreeAnalysis';
 import { folderConsolidationMessage } from '../folders/folderDepthAnalysis';
 import { t } from '../../i18n';
+import { useTaskGate } from '../../runtime/taskGate';
 
 export interface FolderImportOptions {
   preserveStructure: boolean;
@@ -26,6 +27,7 @@ export function FolderImportModal({
   onImport: (options: FolderImportOptions) => void;
   targetFolderId: number | null;
 }) {
+  const importGate = useTaskGate('import');
   const [options, setOptions] = useState<FolderImportOptions>({
     preserveStructure: true,
     includeSubfolders: true,
@@ -97,7 +99,8 @@ export function FolderImportModal({
           <button
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onImport(options)}
-            disabled={analyzing || analysisError != null}
+            disabled={analyzing || analysisError != null || importGate.blocked}
+            title={importGate.reason ?? undefined}
             type="button"
             data-modal-primary="true"
           >

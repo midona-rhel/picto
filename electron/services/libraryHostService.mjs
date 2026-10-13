@@ -558,6 +558,7 @@ export function createLibraryHostService({
       preserve_structure: false,
       delete_after_ingest: false,
       group_files: false,
+      background: true,
     });
     await command('imports.enqueue', {
       paths: [
@@ -571,6 +572,7 @@ export function createLibraryHostService({
       preserve_structure: false,
       delete_after_ingest: false,
       group_files: true,
+      background: true,
     });
     await command('imports.enqueue', {
       paths: [
@@ -584,6 +586,7 @@ export function createLibraryHostService({
       preserve_structure: false,
       delete_after_ingest: false,
       group_files: false,
+      background: true,
     });
     const smartGroup = await command('smart_folders.create', {
       name: 'Renaissance searches',

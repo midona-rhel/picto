@@ -305,6 +305,18 @@ pub(super) fn apply_semantic_change(
                 }
             }
         }
+        SemanticChange::MediaText { media_id, before, after } => {
+            let (expected, replacement) = if use_after { (before, after) } else { (after, before) };
+            let current = transaction.query_row("SELECT media_name, media_notes FROM media_item WHERE media_id = ?1", [media_id.0], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))?;
+            if current != *expected {
+                return Err(LibraryError::InvalidState("cannot replay history because media text changed".into()));
+            }
+            transaction.execute("UPDATE media_item SET media_name = ?2, media_notes = ?3 WHERE media_id = ?1", rusqlite::params![media_id.0, replacement.0, replacement.1])?;
+            let owner = snapshot.media_owner.get(media_id.0).copied().unwrap_or(RootId(media_id.0));
+            affected.insert(owner.0);
+            crate::fts::mark_one(transaction, owner, revision as i64)?;
+            resources.extend(["roots".into(), "search".into()]);
+        }
         SemanticChange::RootText { before, after } => {
             let (expected, replacement) = if use_after {
                 (before.as_ref(), after.as_ref())

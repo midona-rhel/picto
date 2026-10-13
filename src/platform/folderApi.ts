@@ -4,7 +4,7 @@ import type { CreatedFolder } from '../shared/types/generated/application/Create
 import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
 import type { ExportResult } from '../shared/types/generated/application/ExportResult';
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
-import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { ImportStarted } from '../shared/types/generated/application/ImportStarted';
 import type { FolderTreeAnalysis } from '../shared/types/generated/application/FolderTreeAnalysis';
 import type { EntityTarget, Lifecycle } from '../shared/types/canonical';
 import { compileGridQuery, createEmptyItemFilters } from '../shared/lib/itemFilters';
@@ -145,8 +145,8 @@ export function addMedia(paths: string[], params: {
   watch_source_folder?: boolean;
   delete_after_ingest?: boolean;
   group_files?: boolean;
-}): Promise<ImportEnqueueReport> {
-  return invoke<ImportEnqueueReport>('imports.enqueue', {
+}): Promise<ImportStarted> {
+  return invoke<ImportStarted>('imports.enqueue', {
     paths,
     tags: params.tags ?? [],
     source_urls: params.source_urls ?? [],

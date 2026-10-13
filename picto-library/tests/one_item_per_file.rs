@@ -552,3 +552,233 @@ fn migration_combines_chained_overlaps_without_splitting_any_original_set() {
     assert_eq!(library.merge_shared_files().unwrap(), SharedFileMerge::default());
     assert_eq!(members(&library, a).len(), 4);
 }
+
+#[test]
+fn task_rollback_restores_a_partially_reused_collection_without_copying_shared_files() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let first = imported("original-a", "hash-a");
+    let second = imported("original-b", "hash-b");
+    let root = library
+        .ingest_collection(&collection(vec![first, second]))
+        .unwrap()
+        .0;
+    let before = library.details(root).unwrap();
+    let before_members = members(&library, root);
+    library.auxiliary_write(
+        picto_library::database::WorkPriority::ForegroundMutation,
+        ["roots".to_owned()], [], |transaction, _| {
+            transaction.execute(
+                "INSERT INTO library_item_alias(stable_key, local_id) VALUES ('older-collection', ?1)",
+                [root.0],
+            )?;
+            Ok(())
+        },
+    ).unwrap();
+    let task = library
+        .create_task("import", "Overlapping import", "{}", true, false, 1)
+        .unwrap();
+    let mut shared = imported("different-source-a", "hash-a");
+    shared.tags = vec!["task:added".into()];
+    let added = imported("new-c", "hash-c");
+    assert_eq!(
+        library
+            .ingest_collection_for_task(&collection(vec![shared, added]), task, false)
+            .unwrap()
+            .0,
+        root
+    );
+    assert_eq!(shared_files(&library), 0);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 3);
+    assert_eq!(members(&library, root).len(), 3);
+    let progress = library.task(task).unwrap().unwrap();
+    assert_eq!((progress.added_units, progress.existing_units), (1, 1));
+    drop(library);
+
+    let library = Library::open(&path).unwrap();
+    library.stop_task(task, true, 2).unwrap();
+    library.revert_task(task, 3).unwrap();
+    let after = library.details(root).unwrap();
+    assert_eq!(after.root, before.root);
+    assert_eq!(after.tag_ids, before.tag_ids);
+    assert_eq!(members(&library, root), before_members);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 2);
+    assert_eq!(shared_files(&library), 0);
+    assert_eq!(
+        scalar(
+            &library,
+            "SELECT local_id FROM library_item_alias WHERE stable_key='older-collection'"
+        ),
+        root.0 as i64
+    );
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(members(&library, root), before_members);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 2);
+    assert_eq!(
+        library
+            .ingest(&imported("third-source-a", "hash-a"))
+            .unwrap()
+            .0,
+        root
+    );
+    assert_eq!(shared_files(&library), 0);
+}
+
+#[test]
+fn task_rollback_splits_overlapping_collections_and_reverses_their_aliases() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let first = library
+        .ingest_collection(&collection(vec![imported("a", "a"), imported("b", "b")]))
+        .unwrap()
+        .0;
+    let mut c = imported("c", "c");
+    c.tags = vec!["keep:second".into()];
+    let second = library
+        .ingest_collection(&collection(vec![c, imported("d", "d")]))
+        .unwrap()
+        .0;
+    let tag = library.projections().snapshot().tag_ids_by_name["keep:second"];
+    let smart = library
+        .create_smart_folder(smart_tag("Second collection", tag))
+        .unwrap()
+        .0;
+    assert!(library.projections().snapshot().smart_results[&smart.0].contains(second.0));
+
+    let originals =
+        [first, second].map(|root| (library.details(root).unwrap(), members(&library, root)));
+    let folder = library.create_folder("Cover", None).unwrap().0;
+    library
+        .add_to_folder(
+            &SelectionTarget::Explicit {
+                root_ids: vec![second],
+            },
+            folder,
+        )
+        .unwrap();
+    library.set_folder_cover(folder, second).unwrap();
+    let task = library
+        .create_task("import", "Combine collections", "{}", true, false, 1)
+        .unwrap();
+    let joined = library
+        .ingest_collection_for_task(
+            &collection(vec![
+                imported("new-source-a", "a"),
+                imported("new-source-c", "c"),
+                imported("new-e", "e"),
+            ]),
+            task,
+            false,
+        )
+        .unwrap()
+        .0;
+    assert_eq!(members(&library, joined).len(), 5);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_root"), 1);
+    assert_eq!(
+        scalar(&library, "SELECT COUNT(*) FROM library_item_alias"),
+        1
+    );
+    assert_eq!(shared_files(&library), 0);
+    assert!(library.projections().snapshot().smart_results[&smart.0].contains(joined.0));
+    drop(library);
+
+    let library = Library::open(&path).unwrap();
+    library.stop_task(task, true, 2).unwrap();
+    library.revert_task(task, 3).unwrap();
+    for (before, order) in originals {
+        let after = library.details(before.root.root_id).unwrap();
+        assert_eq!(after.root, before.root);
+        assert_eq!(after.lifecycle, before.lifecycle);
+        assert_eq!(after.tag_ids, before.tag_ids);
+        assert_eq!(members(&library, before.root.root_id), order);
+    }
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_root"), 2);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 4);
+    assert_eq!(
+        scalar(&library, "SELECT COUNT(*) FROM library_item_alias"),
+        0
+    );
+    assert_eq!(
+        library
+            .folders()
+            .unwrap()
+            .iter()
+            .find(|row| row.folder_id == folder)
+            .unwrap()
+            .cover_root_id,
+        Some(second)
+    );
+    let snapshot = library.projections().snapshot();
+    assert!(snapshot.smart_results[&smart.0].contains(second.0));
+    assert!(!snapshot.smart_results[&smart.0].contains(first.0));
+    assert_eq!(shared_files(&library), 0);
+}
+
+#[test]
+fn task_rollback_restores_reused_names_notes_and_smart_results_after_reopen() {
+    for grouped in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("library.sqlite");
+        let library = Library::create(&path).unwrap();
+        let original = imported("12345", "same-file");
+        let root = if grouped {
+            library.ingest_collection(&collection(vec![original, imported("other", "other-file")])).unwrap().0
+        } else { library.ingest(&original).unwrap().0 };
+        let before = library.details(root).unwrap();
+        let smart = library.create_smart_folder(SmartFolderInput {
+            name: "Meaningful".into(), parent_id: None, icon: None, color: None, notes: None,
+            view: ViewQuerySpec { filter: FilterExpr::Clause(FilterClause::Text { field: picto_library::predicate::TextField::Name, query: "Meaningful".into() }), sort: ItemSort::default() },
+        }).unwrap().0;
+        let options = serde_json::json!({"group_files": grouped, "collection_name": "New"});
+        let task = library.create_task("import", "Rename", &options.to_string(), true, false, 1).unwrap();
+        let mut incoming = imported("Meaningful landscape", "same-file");
+        incoming.notes = Some("Imported note".into());
+        library.ingest_batch_for_task(&[incoming], task, false).unwrap();
+        assert_eq!(library.details(root).unwrap().media[0].media_name, "Meaningful landscape.png");
+        library.settle_fts(100).unwrap();
+        if !grouped { assert!(library.projections().snapshot().smart_results[&smart.0].contains(root.0)); }
+        drop(library);
+        let library = Library::open(&path).unwrap();
+        if grouped {
+            // Another bounded batch must append to the same pre-existing collection.
+            library.ingest_batch_for_task(&[imported("third", "third-file")], task, false).unwrap();
+            assert_eq!(library.details(root).unwrap().media.len(), 3);
+        }
+        library.stop_task(task, true, 2).unwrap();
+        library.revert_task(task, 3).unwrap();
+        library.settle_fts(100).unwrap();
+        let after = library.details(root).unwrap();
+        assert_eq!(after.root, before.root);
+        assert_eq!(after.media.len(), before.media.len());
+        for (after, before) in after.media.iter().zip(&before.media) {
+            assert_eq!(after.media_id, before.media_id);
+            assert_eq!(after.media_name, before.media_name);
+            assert_eq!(after.media_notes, before.media_notes);
+        }
+        assert!(!library.projections().snapshot().smart_results[&smart.0].contains(root.0));
+        assert_eq!(shared_files(&library), 0);
+    }
+}
+
+#[test]
+fn grouped_task_rollback_preserves_a_loose_existing_item_from_an_earlier_batch() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let existing = imported("original", "existing-file");
+    let root = library.ingest(&existing).unwrap().0;
+    let before = library.details(root).unwrap();
+    let task = library.create_task("import", "Group", r#"{"group_files":true}"#, true, false, 1).unwrap();
+    library.ingest_batch_for_task(&[existing], task, false).unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    library.ingest_batch_for_task(&[imported("new", "new-file")], task, false).unwrap();
+    library.stop_task(task, true, 2).unwrap();
+    library.revert_task(task, 3).unwrap();
+    assert_eq!(library.details(root).unwrap().root, before.root);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM media_item"), 1);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias"), 0);
+}
