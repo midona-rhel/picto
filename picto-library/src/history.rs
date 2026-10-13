@@ -206,6 +206,8 @@ pub struct DeletedRootsState {
     pub structure: StructuralState,
     /// `library_item` rows of the roots and their media: id, stable key, kind.
     pub items: Arc<Vec<(u32, String, u8)>>,
+    /// Stable identities retained from earlier item or collection merges.
+    pub aliases: Arc<Vec<(String, u32)>>,
     /// `media_item` rows: id, name, notes, file.
     pub media: Arc<Vec<DeletedMediaRow>>,
     /// The media that are images.
@@ -230,6 +232,7 @@ impl DeletedRootsState {
             .map(|root| root.stable_key.len() + root.name.len() + root.source_urls_json.len() + 96)
             .sum::<usize>();
         let items = self.items.iter().map(|(_, key, _)| key.len() + 16).sum::<usize>();
+        let aliases = self.aliases.iter().map(|(key, _)| key.len() + 8).sum::<usize>();
         let media = self
             .media
             .iter()
@@ -242,6 +245,7 @@ impl DeletedRootsState {
             .sum::<usize>();
         roots
             + items
+            + aliases
             + media
             + provenance
             + self.structure.membership_bytes()

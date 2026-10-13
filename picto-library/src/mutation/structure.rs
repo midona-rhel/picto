@@ -810,6 +810,13 @@ pub(super) fn capture_deleted_roots(
         )?
         .query_map([&media_json], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
         .collect::<rusqlite::Result<Vec<crate::history::DeletedMediaRow>>>()?;
+    let aliases = transaction
+        .prepare(
+            "SELECT stable_key, local_id FROM library_item_alias
+             WHERE local_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&items_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let provenance = transaction
         .prepare(
             "SELECT source_key, source_item_key, media_id, source_text FROM source_provenance
@@ -848,6 +855,7 @@ pub(super) fn capture_deleted_roots(
         roots: Arc::new(roots.clone()),
         structure: capture_structure(transaction, snapshot, roots, None)?,
         items: Arc::new(items),
+        aliases: Arc::new(aliases),
         media: Arc::new(media_rows),
         image_media: Arc::new(snapshot.image_media.as_ref() & &media),
         provenance: Arc::new(provenance),
@@ -909,6 +917,13 @@ pub(super) fn restore_deleted_roots(
         insert_item.execute(rusqlite::params![id, key, kind])?;
     }
     drop(insert_item);
+    let mut insert_alias = transaction.prepare_cached(
+        "INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2)",
+    )?;
+    for (key, id) in state.aliases.iter() {
+        insert_alias.execute(rusqlite::params![key, id])?;
+    }
+    drop(insert_alias);
     let mut insert_media = transaction.prepare_cached(
         "INSERT INTO media_item(media_id, media_name, media_notes, file_id) VALUES (?1, ?2, ?3, ?4)",
     )?;

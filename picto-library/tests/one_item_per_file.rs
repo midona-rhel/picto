@@ -456,6 +456,19 @@ fn a_post_bridging_two_collections_preserves_their_metadata_and_reopens() {
     let alias = library.database().read(picto_library::database::WorkPriority::VisibleRead,
         |db| Ok(db.query_row("SELECT local_id FROM library_item_alias WHERE stable_key = ?1", [&second_key], |row| row.get::<_, u32>(0))?)).unwrap();
     assert_eq!(alias, first.0);
+
+    let target = SelectionTarget::Explicit { root_ids: vec![combined] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.history().clear();
+    for _ in 0..2 {
+        library.permanently_delete(&target, 2000, 500).unwrap();
+        assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias"), 0);
+        library.undo().unwrap().unwrap();
+        let restored = library.database().read(picto_library::database::WorkPriority::VisibleRead,
+            |db| Ok(db.query_row("SELECT local_id FROM library_item_alias WHERE stable_key = ?1", [&second_key], |row| row.get::<_, u32>(0))?)).unwrap();
+        assert_eq!(restored, first.0);
+        assert_eq!(members(&library, combined).len(), 4);
+    }
 }
 
 #[test]
