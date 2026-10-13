@@ -4,6 +4,7 @@ dist/
 coverage/
 .vite/
 *.tsbuildinfo
+/build/Picto.icon/Assets/
 
 # Rust and native-addon build output
 **/target/

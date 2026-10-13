@@ -9,6 +9,7 @@ import { CURATED_ICONS } from './iconRegistry';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './IconPicker.module.css';
 import { t } from '../../../i18n';
+import { rankMatches } from '../../lib/searchRank';
 
 const ICON_SIZE = 19;
 
@@ -32,7 +33,7 @@ export function IconPicker({
   const query = search.toLowerCase().trim();
   const filtered = useMemo(
     () => query
-      ? CURATED_ICONS.filter((i) => i.label.toLowerCase().includes(query) || i.name.toLowerCase().includes(query))
+      ? rankMatches(CURATED_ICONS, query, (icon) => [icon.label, icon.name])
       : CURATED_ICONS,
     [query],
   );
