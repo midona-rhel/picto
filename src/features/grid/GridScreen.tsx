@@ -645,7 +645,8 @@ export function GridScreen({
       }
       if (scope.kind === 'inbox' && count > 0 && matchesShortcutDef(e, defs.reject)) {
         e.preventDefault();
-        void setSelectionLifecycle('trash');
+        const target = store.get(selectionTargetAtom);
+        if (target) void entityMutations.rejectTarget(target);
         return;
       }
 

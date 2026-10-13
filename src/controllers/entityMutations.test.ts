@@ -12,6 +12,7 @@ const { loadInspectorDataMock, setItemLifecycleMock } = vi.hoisted(() => ({
 vi.mock('../platform/entityApi', () => ({
   applyEntityTags: vi.fn(),
   deleteItems: vi.fn(),
+  rejectDeleteItems: vi.fn(),
   getSelectionSummary: vi.fn(),
   patchMediaEntities: vi.fn(),
   renameItem: vi.fn(),
@@ -22,10 +23,12 @@ vi.mock('../platform/folderApi', () => ({
   updateFolderMembership: vi.fn(),
 }));
 vi.mock('./inspectorController', () => ({ loadInspectorData: loadInspectorDataMock }));
+vi.mock('../platform/settingsApi', () => ({ getSettings: vi.fn() }));
 vi.mock('../shared/hooks/useRecentItems', () => ({ recordRecentItems: vi.fn() }));
 
 import {
   permanentlyDeleteTarget,
+  rejectTarget,
   setItemRating,
   setTargetLifecycle,
   settleSelectionAfterMutation,
@@ -59,6 +62,25 @@ describe('setTargetLifecycle', () => {
     );
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
     expect(store.get(gridSelectionAtom).anchor).toBeNull();
+  });
+
+  it.each(['trash', 'delete'] as const)('rejects using the saved %s preference', async (rejectAction) => {
+    const { getSettings } = await import('../platform/settingsApi');
+    const { rejectDeleteItems } = await import('../platform/entityApi');
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(rejectDeleteItems).mockReset();
+    const target = { kind: 'explicit', root_ids: [4, 7] } as const;
+
+    await rejectTarget({ ...target, root_ids: [...target.root_ids] });
+
+    if (rejectAction === 'delete') {
+      expect(rejectDeleteItems).toHaveBeenCalledWith(target);
+      expect(setItemLifecycleMock).not.toHaveBeenCalled();
+    } else {
+      expect(setItemLifecycleMock).toHaveBeenCalledWith(target, 'trash');
+      expect(rejectDeleteItems).not.toHaveBeenCalled();
+    }
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
   it('clears selection after restoring selected items from Trash', async () => {
