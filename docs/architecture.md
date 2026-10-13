@@ -17,6 +17,17 @@ media occurrences, and visible roots have separate identities. Attached collecti
 their root's lifecycle and folder placement. `All` contains active roots only; Inbox and Trash are
 separate lifecycle scopes.
 
+One file is exactly one media item, enforced by a unique index on `media_item(file_id)`. Every
+import resolves a file it already holds to that item: a standalone import adds its tags and
+provenance to it, a loose item joins a new collection that contains it, and an item already in
+another collection causes the overlapping sets to combine. Chained overlaps also combine,
+retaining every unique media item and merging tags, folders, notes, source links and the highest rating. Resolving a duplicate by
+keeping one file merges the other item into the kept one (tags, folder places, the higher rating,
+the lifecycle that keeps it most, notes and source links), undoably. A merged-away item's stable
+key stays in `library_item_alias`, so re-imports, Picto Packs and cloud copies resolve to the item
+that stays. Libraries from before the rule merge their shared files once at open
+(`Library::merge_shared_files`), after the schema migration's backup.
+
 Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. See
 [Subscriptions](#subscriptions) for how source posts become standalone items or collections.
 
@@ -172,6 +183,22 @@ entry for a bitmap keeps only the members it changed, and replay checks and rest
 members: later edits to other roots never block an undo, while a later edit to the same roots
 does. Replay re-checks only the smart folders the replayed change can affect.
 
+A permanent delete (emptying Trash, or rejecting with the "Rejected items: Delete permanently"
+setting) is undoable when it holds at most `undoDeleteLimit` media items (default 500), counting
+collection members; zero disables delete undo. Its history entry
+keeps the deleted roots' structure and every row that pointed at them, and its files stay on disk
+while the entry is in history: `protected_cleanup_files` keeps them out of the blob cleanup, which
+removes them once the entry leaves history, at the latest when the app closes. A larger delete
+records no entry and frees its files at once; the renderer confirms nonundoable rejects using
+the backend-resolved selection, not the loaded grid window. History protection is registered
+before releasing the writer, and cleanup reads it after acquiring the same writer. Undo restores
+recent views and cascaded queue jobs, assigning new queue IDs and requeuing interrupted running jobs.
+When the renderer promises undo, it sends `require_undoable`; the serialized writer checks the
+resolved selection against the limit and refuses the delete if it no longer fits. Only a fresh
+nonundoable confirmation permits a retry without that constraint. Delete requests await both
+confirmation and persistence, returning success only after the mutation commits; cancellation
+or failure never advances Inbox review.
+
 Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
 subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
 when a folder's result or rule actually changed. Derivative facts publish narrowly: a perceptual
@@ -184,6 +211,20 @@ publishes a change, with a fallback probe every 2-30 s for work that becomes rea
 publish prepared items in groups of up to 48, flushed at least every 250 ms so the grid fills
 progressively. Auto-tagging on import writes in batches outside the undo history; manual AI tagging
 stays undoable.
+
+Manual imports are foreground tasks (`task` table, `picto-library/src/mutation/tasks.rs`,
+`core/src/import_tasks.rs`). Starting one only records the task. The scan worker walks its paths
+and queues one `ingest_job` per file (`task_id`, `units`, `prepared = 0`) in batches, without
+reading any file, so a large folder is recorded at once and survives a quit; an interrupted scan
+runs again from the start and keeps the jobs it already queued (keys are per task and path). The
+ingest worker reads, hashes and probes a few files ahead of each ingest batch, then imports them as
+usual; claims skip unread files (`idx_ingest_job_claim`) and the jobs of a task that is not
+running. Pause holds a task's jobs in the queue across restarts; Stop drops the ones not yet
+imported. Stop-and-undo removes the roots the task created (`task_created_root`) and the tags it
+added to roots that already existed (`task_added_tag`); roots it reused stay. An import that moves
+its files into the library cannot be undone. `tasks.list` reports each task with a rate and an
+estimate measured over the last 20 s, and the renderer shows it in the foreground task dialog or,
+once sent to the background, the task bar.
 
 `picto-library/examples/library_ops_benchmark.rs` measures these operations on a synthetic library
 (`-- [roots] [runs] [smart_folders]`, default 1M roots and 100 smart folders). Its output is local and
@@ -246,6 +287,18 @@ expose another post until the current one settles.
 Progress counters: posts traversed (metadata inspected), posts added (complete media set reached
 the library), posts skipped (settled without a new visible item). A post is never reported as
 added before canonical ingest succeeds.
+
+Lifetime catalog counts belong to canonical run outcomes: distinct added source posts and
+retained source items per query (and distinct added posts across a subscription's queries).
+Deleting media or failing a later download does not erase earlier outcomes. Explicit history
+reset does. The library writer builds a disposable TEMP outcome index on open, maintains its
+distinct-member reference counts with transactional triggers, and publishes the small totals
+with the resident snapshot through `published_write`. Successful redownloads add references,
+not counts; workspace refreshes never aggregate historical attempts. Cascades remove the
+original indexed attribution even when the parent has already gone. Rollback/savepoints roll
+back the TEMP index too. The index is neither persisted nor checkpointed, and maintenance
+writes that would change it are rejected. No second canonical counter or schema migration is
+introduced; open pays the history scan once per session.
 
 When a source breaks, follow
 [`SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md`](./SOURCE_INTEGRATION_BREAKAGE_PLAYBOOK.md).

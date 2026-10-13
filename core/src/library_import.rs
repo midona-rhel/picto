@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use picto_library::{
-    FolderId, ImmutableMediaFacts, Lifecycle, PreparedCollectionImport, PreparedImport,
+    FolderId, ImmutableMediaFacts, Lifecycle, PreparedImport,
     PreparedIngestJob, PreparedIngestPayload, Rating,
 };
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,26 @@ pub struct ManualImportInput {
     pub delete_after_ingest: bool,
     #[serde(default)]
     pub group_files: bool,
+    /// Import without showing a task (tutorial seeding).
+    #[serde(default)]
+    pub background: bool,
+}
+
+/// What a prepared import gets from the request, besides its file.
+pub(crate) struct ImportFields<'a> {
+    pub lifecycle: Lifecycle,
+    pub tags: &'a [String],
+    pub source_urls: &'a [String],
+}
+
+impl<'a> From<&'a ManualImportInput> for ImportFields<'a> {
+    fn from(input: &'a ManualImportInput) -> Self {
+        Self {
+            lifecycle: input.lifecycle,
+            tags: &input.tags,
+            source_urls: &input.source_urls,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,9 +85,9 @@ pub struct FolderTreeAnalysis {
 }
 
 #[derive(Debug, Clone)]
-struct ImportCandidate {
-    path: PathBuf,
-    relative_parent: Option<PathBuf>,
+pub(crate) struct ImportCandidate {
+    pub path: PathBuf,
+    pub relative_parent: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -122,183 +142,11 @@ pub fn analyze_folder_tree(
     })
 }
 
-pub async fn enqueue_manual_import(
-    application: &LibraryApplication,
-    input: &ManualImportInput,
-) -> Result<ImportEnqueueReport, String> {
-    if input.paths.is_empty() {
-        return Err("At least one import path is required".into());
-    }
-    if input.watch_source_folder {
-        if !input.preserve_structure {
-            return Err(
-                "Watching an imported folder requires preserving its folder structure".into(),
-            );
-        }
-        if input.paths.len() != 1 {
-            return Err("Watching an imported folder requires exactly one source folder".into());
-        }
-    }
-    let candidates = collect_manual_candidates(application.root(), input)?;
-    let structure_directories = if input.preserve_structure && input.include_folders_without_media {
-        let mut directories = Vec::new();
-        for value in &input.paths {
-            let path = fs::canonicalize(value)
-                .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
-            if path.is_dir() {
-                directories.extend(collect_structure_directories(
-                    &path,
-                    input.include_subfolders,
-                )?);
-            }
-        }
-        directories
-    } else {
-        Vec::new()
-    };
-    let folder_capacity = input
-        .preserve_structure
-        .then(|| {
-            application
-                .library()
-                .folder_child_capacity(input.parent_folder_id)
-        })
-        .transpose()
-        .map_err(|error| error.to_string())?
-        .unwrap_or(0);
-    let invocation = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
-    let mut folders = BTreeMap::new();
-    let mut report = ImportEnqueueReport {
-        discovered: candidates.len(),
-        ..Default::default()
-    };
-
-    if input.preserve_structure && input.include_folders_without_media {
-        for relative in &structure_directories {
-            ensure_relative_folder(
-                application,
-                input.parent_folder_id,
-                truncate_relative_folder(relative, folder_capacity).as_deref(),
-                &mut folders,
-            )?;
-        }
-    }
-
-    let mut collection_members = Vec::new();
-    let mut preparation_errors = Vec::new();
-    let mut prepared_count = 0usize;
-    let mut job_index = 0usize;
-    for (index, candidate) in candidates.into_iter().enumerate() {
-        let candidate_result = if is_zip(&candidate.path) {
-            prepare_archive(
-                application,
-                &candidate.path,
-                input,
-                None,
-                now.timestamp_millis(),
-            )
-            .await
-        } else {
-            prepare_import(
-                &candidate.path,
-                input,
-                None,
-                format!("manual:{invocation}:{index}"),
-                now.timestamp_millis(),
-            )
-            .await
-            .map(|value| vec![value])
-        };
-        match candidate_result {
-            Ok(mut values) => {
-                let folder_id = if input.preserve_structure {
-                    ensure_relative_folder(
-                        application,
-                        input.parent_folder_id,
-                        candidate
-                            .relative_parent
-                            .as_deref()
-                            .and_then(|relative| {
-                                truncate_relative_folder(relative, folder_capacity)
-                            })
-                            .as_deref(),
-                        &mut folders,
-                    )?
-                } else {
-                    input.parent_folder_id
-                };
-                for value in &mut values {
-                    value.folders = folder_id.into_iter().collect();
-                }
-                prepared_count += values.len();
-                let collect_as_collection =
-                    input.group_files || report.discovered == 1 && values.len() > 1;
-                if collect_as_collection {
-                    collection_members.append(&mut values);
-                } else {
-                    for value in values {
-                        let job = PreparedIngestJob {
-                            job_key: format!("manual:{invocation}:{job_index}"),
-                            source_kind: "manual".into(),
-                            source_path: value.file_path.clone(),
-                            source_item_id: None,
-                            delete_after_ingest: input.delete_after_ingest,
-                            payload: PreparedIngestPayload::Item(value),
-                        };
-                        enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
-                        job_index += 1;
-                    }
-                }
-            }
-            Err(error) => {
-                report.skipped += 1;
-                preparation_errors.push(error);
-            }
-        }
-    }
-
-    if prepared_count == 0 {
-        if input.preserve_structure && input.include_folders_without_media {
-            return Ok(report);
-        }
-        let detail = preparation_errors
-            .first()
-            .map(|error| format!(" First error: {error}"))
-            .unwrap_or_default();
-        return Err(format!(
-            "No supported media files were found in the selected import.{}",
-            detail
-        ));
-    }
-    if !collection_members.is_empty() {
-        let name = collection_name(&input.paths);
-        let job = PreparedIngestJob {
-            job_key: format!("manual:{invocation}:collection"),
-            source_kind: "manual".into(),
-            source_path: input.paths.join("\n"),
-            source_item_id: None,
-            delete_after_ingest: input.delete_after_ingest || report.discovered == 1,
-            payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
-                members: collection_members,
-                cover_index: 0,
-                existing_root_id: None,
-                name,
-                modified_at_ms: now.timestamp_millis(),
-            }),
-        };
-        enqueue(application, &job, &now.to_rfc3339(), &mut report)?;
-    }
-    if input.watch_source_folder {
-        attach_source_folder_watch(application, input, &mut folders)?;
-    }
-    Ok(report)
-}
-
-fn attach_source_folder_watch(
+pub(crate) fn attach_source_folder_watch(
     application: &LibraryApplication,
     input: &ManualImportInput,
     folders: &mut BTreeMap<(Option<u32>, String), FolderId>,
+    task: Option<picto_library::TaskId>,
 ) -> Result<(), String> {
     let source = fs::canonicalize(&input.paths[0]).map_err(|error| {
         format!(
@@ -317,19 +165,33 @@ fn attach_source_folder_watch(
         .library()
         .folder_child_capacity(input.parent_folder_id)
         .map_err(|error| error.to_string())?;
-    let folder_id = ensure_relative_folder(
+    let folder_id = ensure_relative_folder_for_task(
         application,
         input.parent_folder_id,
         truncate_relative_folder(&root_name, capacity).as_deref(),
         folders,
+        task,
     )?
     .ok_or_else(|| "Could not create a destination for the watched folder".to_owned())?;
-    application.set_folder_watch(&picto_library::FolderWatchInput {
-        folder_id,
-        path: source.to_string_lossy().into_owned(),
-        include_subfolders: input.include_subfolders,
-        lifecycle: Lifecycle::Inbox,
-    })?;
+    if let Some(task) = task {
+        application
+            .library()
+            .set_folder_watch_for_task(
+                folder_id,
+                &source.to_string_lossy(),
+                input.include_subfolders,
+                Lifecycle::Inbox,
+                task,
+            )
+            .map_err(|error| error.to_string())?;
+    } else {
+        application.set_folder_watch(&picto_library::FolderWatchInput {
+            folder_id,
+            path: source.to_string_lossy().into_owned(),
+            include_subfolders: input.include_subfolders,
+            lifecycle: Lifecycle::Inbox,
+        })?;
+    }
     Ok(())
 }
 
@@ -417,6 +279,7 @@ pub async fn scan_watched_folders(
         watch_source_folder: false,
         delete_after_ingest: false,
         group_files: false,
+        background: false,
     };
     let mut folders = BTreeMap::new();
     for candidate in pending {
@@ -426,7 +289,7 @@ pub async fn scan_watched_folders(
         }
         match prepare_import(
             &candidate.path,
-            &input,
+            &ImportFields::from(&input),
             None,
             candidate.job_key.clone(),
             now.timestamp_millis(),
@@ -523,10 +386,10 @@ fn enqueue(
     Ok(())
 }
 
-async fn prepare_archive(
+pub(crate) async fn prepare_archive(
     application: &LibraryApplication,
     archive_path: &Path,
-    input: &ManualImportInput,
+    input: &ImportFields<'_>,
     folder_id: Option<FolderId>,
     imported_at_ms: i64,
 ) -> Result<Vec<PreparedImport>, String> {
@@ -570,9 +433,9 @@ async fn prepare_archive(
     Ok(members)
 }
 
-async fn prepare_import(
+pub(crate) async fn prepare_import(
     path: &Path,
-    input: &ManualImportInput,
+    input: &ImportFields<'_>,
     folder_id: Option<FolderId>,
     stable_key: String,
     imported_at_ms: i64,
@@ -618,20 +481,30 @@ async fn prepare_import(
         lifecycle: input.lifecycle,
         rating: Rating::Unrated,
         notes: None,
-        tags: input.tags.clone(),
+        tags: input.tags.to_vec(),
         folders: folder_id.into_iter().collect(),
-        source_urls: input.source_urls.clone(),
+        source_urls: input.source_urls.to_vec(),
         source_identity: None,
         imported_at_ms,
         captured_at_ms,
     })
 }
 
-fn ensure_relative_folder(
+pub(crate) fn ensure_relative_folder(
     application: &LibraryApplication,
     parent: Option<FolderId>,
     relative: Option<&Path>,
     cache: &mut BTreeMap<(Option<u32>, String), FolderId>,
+) -> Result<Option<FolderId>, String> {
+    ensure_relative_folder_for_task(application, parent, relative, cache, None)
+}
+
+pub(crate) fn ensure_relative_folder_for_task(
+    application: &LibraryApplication,
+    parent: Option<FolderId>,
+    relative: Option<&Path>,
+    cache: &mut BTreeMap<(Option<u32>, String), FolderId>,
+    task: Option<picto_library::TaskId>,
 ) -> Result<Option<FolderId>, String> {
     let Some(relative) = relative else {
         return Ok(parent);
@@ -653,6 +526,12 @@ fn ensure_relative_folder(
             .map(|folder| folder.folder_id)
         {
             folder_id
+        } else if let Some(task) = task {
+            application
+                .library()
+                .create_folder_for_task(&name, current, task)
+                .map_err(|error| error.to_string())?
+                .0
         } else {
             application
                 .create_folder(picto_library::CreateFolderInput {
@@ -667,14 +546,20 @@ fn ensure_relative_folder(
     Ok(current)
 }
 
-fn collect_manual_candidates(
+/// Visit files and directories without retaining the selection. The queue's
+/// stable job keys deduplicate overlapping paths and interrupted scans.
+pub(crate) fn walk_manual_candidates(
     library_root: &Path,
     input: &ManualImportInput,
-) -> Result<Vec<ImportCandidate>, String> {
+    checkpoint: &dyn Fn() -> Result<bool, String>,
+    mut visit: impl FnMut(ImportCandidate, bool) -> Result<bool, String>,
+) -> Result<bool, String> {
     let library = fs::canonicalize(library_root)
         .map_err(|error| format!("Failed to resolve library path: {error}"))?;
-    let mut candidates = Vec::new();
     for value in &input.paths {
+        if !checkpoint()? {
+            return Ok(false);
+        }
         let path = fs::canonicalize(value)
             .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
         if path.starts_with(&library) {
@@ -689,27 +574,85 @@ fn collect_manual_candidates(
             continue;
         }
         if metadata.is_file() {
-            if is_media_path(&path) && !should_ignore(&path) {
-                candidates.push(ImportCandidate {
-                    path,
-                    relative_parent: None,
-                });
+            if is_media_path(&path)
+                && !should_ignore(&path)
+                && !visit(
+                    ImportCandidate {
+                        path,
+                        relative_parent: None,
+                    },
+                    false,
+                )?
+            {
+                return Ok(false);
             }
         } else if metadata.is_dir() {
             let root_name = path.file_name().map(PathBuf::from);
-            candidates.extend(collect_directory(
-                &path,
-                input.include_subfolders,
-                input.preserve_structure.then_some(root_name).flatten(),
-            )?);
+            if !visit(
+                ImportCandidate {
+                    path: path.clone(),
+                    relative_parent: root_name.clone(),
+                },
+                true,
+            )? {
+                return Ok(false);
+            }
+            let read = |directory: &Path| {
+                fs::read_dir(directory)
+                    .map_err(|error| format!("Failed to read {}: {error}", directory.display()))
+            };
+            // Keep iterators, not directory listings: memory scales with depth.
+            let mut stack = vec![read(&path)?];
+            while !stack.is_empty() {
+                if !checkpoint()? {
+                    return Ok(false);
+                }
+                let Some(entry) = stack.last_mut().unwrap().next() else {
+                    stack.pop();
+                    continue;
+                };
+                let entry = entry.map_err(|error| error.to_string())?;
+                let child = entry.path();
+                if should_ignore(&child) || child.starts_with(&library) {
+                    continue;
+                }
+                let kind = entry.file_type().map_err(|error| error.to_string())?;
+                if kind.is_symlink() {
+                    continue;
+                }
+                let directory = kind.is_dir();
+                if (directory && input.include_subfolders)
+                    || (kind.is_file() && is_media_path(&child) && !is_zip(&child))
+                {
+                    let relative = child
+                        .strip_prefix(&path)
+                        .map_err(|error| error.to_string())?;
+                    let relative = if directory {
+                        relative
+                    } else {
+                        relative.parent().unwrap_or(Path::new(""))
+                    };
+                    let relative_parent = root_name.as_ref().map(|root| root.join(relative));
+                    if !visit(
+                        ImportCandidate {
+                            path: child.clone(),
+                            relative_parent,
+                        },
+                        directory,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                if directory && input.include_subfolders {
+                    stack.push(read(&child)?);
+                }
+            }
         }
     }
-    candidates.sort_by(|left, right| left.path.cmp(&right.path));
-    candidates.dedup_by(|left, right| left.path == right.path);
-    Ok(candidates)
+    Ok(true)
 }
 
-fn collect_structure_directories(root: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn collect_structure_directories(root: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {
     let root_name = root.file_name().map(PathBuf::from).unwrap_or_default();
     let mut directories = vec![root_name.clone()];
     if !recursive {
@@ -744,7 +687,7 @@ fn relative_folder_depth(path: &Path) -> usize {
         .count()
 }
 
-fn truncate_relative_folder(path: &Path, maximum_depth: usize) -> Option<PathBuf> {
+pub(crate) fn truncate_relative_folder(path: &Path, maximum_depth: usize) -> Option<PathBuf> {
     let mut truncated = PathBuf::new();
     for component in path
         .components()
@@ -805,7 +748,7 @@ fn collect_directory(
     Ok(files)
 }
 
-fn collection_name(paths: &[String]) -> Option<String> {
+pub(crate) fn collection_name(paths: &[String]) -> Option<String> {
     let first = paths.first().map(Path::new)?;
     if paths.len() == 1 {
         return first
@@ -837,7 +780,7 @@ fn is_media_path(path: &Path) -> bool {
     crate::media_processing::has_supported_extension(path)
 }
 
-fn is_zip(path: &Path) -> bool {
+pub(crate) fn is_zip(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
@@ -875,278 +818,12 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use image::{Rgb, RgbImage};
 
     use super::*;
 
     fn png(path: &Path, color: [u8; 3]) {
         RgbImage::from_pixel(4, 4, Rgb(color)).save(path).unwrap();
-    }
-
-    fn input(paths: Vec<String>, group_files: bool) -> ManualImportInput {
-        ManualImportInput {
-            paths,
-            tags: vec!["source:manual".into()],
-            source_urls: vec!["https://example.test/manual".into()],
-            lifecycle: Lifecycle::Inbox,
-            parent_folder_id: None,
-            preserve_structure: false,
-            include_subfolders: true,
-            include_folders_without_media: false,
-            watch_source_folder: false,
-            delete_after_ingest: false,
-            group_files,
-        }
-    }
-
-    #[tokio::test]
-    async fn manual_import_queues_the_canonical_payload() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("source.png");
-        png(&source, [10, 20, 30]);
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-
-        let report = enqueue_manual_import(
-            &application,
-            &input(vec![source.to_string_lossy().into_owned()], false),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.discovered, 1);
-        assert_eq!(report.queued, 1);
-
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        assert_eq!(settled.ingested, 1);
-        let details = application.library().details(settled.root_ids[0]).unwrap();
-        assert_eq!(details.lifecycle, Lifecycle::Inbox);
-        assert_eq!(
-            details.root.source_urls,
-            vec!["https://example.test/manual"]
-        );
-        assert_eq!(details.tag_ids.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn manual_import_expands_zip_to_collection_and_cleans_staging() {
-        let directory = tempfile::tempdir().unwrap();
-        let first = directory.path().join("first.png");
-        let second = directory.path().join("second.png");
-        png(&first, [10, 20, 30]);
-        png(&second, [30, 20, 10]);
-        let archive = directory.path().join("images.zip");
-        let file = fs::File::create(&archive).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("nested/first.png", options).unwrap();
-        std::io::copy(&mut fs::File::open(&first).unwrap(), &mut zip).unwrap();
-        zip.start_file("second.png", options).unwrap();
-        std::io::copy(&mut fs::File::open(&second).unwrap(), &mut zip).unwrap();
-        zip.finish().unwrap();
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-
-        let report = enqueue_manual_import(
-            &application,
-            &input(vec![archive.to_string_lossy().into_owned()], false),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.queued, 1);
-
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        assert_eq!(settled.ingested, 1);
-        let details = application.library().details(settled.root_ids[0]).unwrap();
-        assert_eq!(details.root.kind, picto_library::RootKind::Collection);
-        assert_eq!(details.media.len(), 2);
-        assert!(archive.exists());
-        let staging = application.root().join("temp/archive-import");
-        assert!(fs::read_dir(staging).unwrap().next().is_none());
-    }
-
-    #[tokio::test]
-    async fn folder_import_does_not_expand_zip_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("Downloads");
-        fs::create_dir(&source).unwrap();
-        let archive = source.join("images.zip");
-        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
-        zip.start_file("image.png", zip::write::SimpleFileOptions::default())
-            .unwrap();
-        zip.write_all(b"not needed because the archive must not be opened")
-            .unwrap();
-        zip.finish().unwrap();
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-
-        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
-        folder_input.preserve_structure = true;
-        let error = enqueue_manual_import(&application, &folder_input)
-            .await
-            .unwrap_err();
-
-        assert!(error.contains("No supported media files"));
-        assert!(!application.root().join("temp/archive-import").exists());
-    }
-
-    #[tokio::test]
-    async fn grouped_manual_import_is_one_atomic_collection_job() {
-        let directory = tempfile::tempdir().unwrap();
-        let first = directory.path().join("first.png");
-        let second = directory.path().join("second.png");
-        png(&first, [10, 20, 30]);
-        png(&second, [30, 20, 10]);
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-
-        let report = enqueue_manual_import(
-            &application,
-            &input(
-                vec![
-                    first.to_string_lossy().into_owned(),
-                    second.to_string_lossy().into_owned(),
-                ],
-                true,
-            ),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.discovered, 2);
-        assert_eq!(report.queued, 1);
-
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        assert_eq!(settled.ingested, 1);
-        let details = application.library().details(settled.root_ids[0]).unwrap();
-        assert_eq!(details.root.kind, picto_library::RootKind::Collection);
-        assert_eq!(details.media.len(), 2);
-        assert_eq!(details.tag_ids.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn folder_import_queues_valid_media_and_skips_a_later_invalid_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("Downloads");
-        fs::create_dir(&source).unwrap();
-        png(&source.join("a-good.png"), [10, 20, 30]);
-        fs::write(source.join("z-empty.png"), []).unwrap();
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
-        folder_input.preserve_structure = true;
-
-        let report = enqueue_manual_import(&application, &folder_input)
-            .await
-            .unwrap();
-        assert_eq!(report.discovered, 2);
-        assert_eq!(report.queued, 1);
-        assert_eq!(report.skipped, 1);
-
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        assert_eq!(settled.ingested, 1);
-        let imported = application.library().details(settled.root_ids[0]).unwrap();
-        let folder = application
-            .navigation()
-            .unwrap()
-            .folders
-            .into_iter()
-            .find(|folder| folder.name == "Downloads")
-            .expect("the successful file should create its preserved folder");
-        assert_eq!(imported.folder_ids, vec![folder.folder_id]);
-    }
-
-    #[tokio::test]
-    async fn folder_import_can_watch_its_preserved_root_for_future_media() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("Photos");
-        fs::create_dir(&source).unwrap();
-        png(&source.join("first.png"), [10, 20, 30]);
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
-        folder_input.preserve_structure = true;
-        folder_input.watch_source_folder = true;
-        folder_input.include_subfolders = false;
-
-        enqueue_manual_import(&application, &folder_input)
-            .await
-            .unwrap();
-
-        let folder = application
-            .navigation()
-            .unwrap()
-            .folders
-            .into_iter()
-            .find(|folder| folder.name == "Photos")
-            .expect("the imported root folder should exist");
-        assert!(folder.watch_enabled);
-        assert_eq!(
-            folder.watch_path.as_deref(),
-            Some(
-                fs::canonicalize(&source)
-                    .unwrap()
-                    .to_string_lossy()
-                    .as_ref()
-            )
-        );
-        assert!(!folder.watch_subfolders);
-    }
-
-    #[tokio::test]
-    async fn invalid_folder_import_reports_an_error_without_creating_structure() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("Downloads");
-        fs::create_dir(&source).unwrap();
-        fs::write(source.join("empty.png"), []).unwrap();
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
-        folder_input.preserve_structure = true;
-
-        let error = enqueue_manual_import(&application, &folder_input)
-            .await
-            .unwrap_err();
-        assert!(error.contains("No supported media files"));
-        assert!(application.navigation().unwrap().folders.is_empty());
-    }
-
-    #[tokio::test]
-    async fn folder_import_consolidates_a_tree_deeper_than_eight_without_skipping_media() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("Downloads");
-        let mut deepest = source.clone();
-        for depth in 2..=9 {
-            deepest = deepest.join(format!("level-{depth}"));
-        }
-        fs::create_dir_all(&deepest).unwrap();
-        png(&deepest.join("source.png"), [10, 20, 30]);
-        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
-        let mut folder_input = input(vec![source.to_string_lossy().into_owned()], false);
-        folder_input.preserve_structure = true;
-
-        let analysis = analyze_folder_tree(
-            &application,
-            &FolderTreeAnalysisInput {
-                path: source.to_string_lossy().into_owned(),
-                destination_folder_id: None,
-                include_subfolders: true,
-                include_source_root: true,
-            },
-        )
-        .unwrap();
-        assert_eq!(analysis.source_depth, 9);
-        assert_eq!(analysis.retained_depth, 8);
-        assert_eq!(analysis.consolidated_levels, 1);
-
-        let report = enqueue_manual_import(&application, &folder_input)
-            .await
-            .unwrap();
-        assert_eq!(report.queued, 1);
-        let folders = application.navigation().unwrap().folders;
-        assert_eq!(folders.len(), 8);
-        assert!(!folders.iter().any(|folder| folder.name == "level-9"));
-        let retained = folders
-            .iter()
-            .find(|folder| folder.name == "level-8")
-            .unwrap()
-            .folder_id;
-        let settled = crate::library_ingest_runtime::run_batch(&application, 64).unwrap();
-        let details = application.library().details(settled.root_ids[0]).unwrap();
-        assert_eq!(details.folder_ids, vec![retained]);
     }
 
     #[tokio::test]

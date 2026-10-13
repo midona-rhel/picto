@@ -711,7 +711,21 @@
           1,
           2
         ]
-      }
+      },
+      "require_undoable": false
+    }
+  ],
+  [
+    "items.delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "require_undoable": true
     }
   ],
   [
@@ -890,7 +904,8 @@
         "excluded_root_ids": [
           2
         ]
-      }
+      },
+      "require_undoable": true
     }
   ],
   [
@@ -2560,6 +2575,32 @@
     }
   ],
   [
+    "items.reject_delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "require_undoable": false
+    }
+  ],
+  [
+    "items.reject_delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "require_undoable": true
+    }
+  ],
+  [
     "items.rename",
     {
       "root_id": 1,
@@ -3958,6 +3999,8 @@
         ],
         "autoImportEnabled": true,
         "multiFileImportBehavior": "ask",
+        "rejectAction": "trash",
+        "undoDeleteLimit": 500,
         "subscriptionDefaultSchedule": "daily",
         "subscriptionDefaultPostsPerRun": 100,
         "subscriptionDefaultGroupPosts": true,
@@ -4703,5 +4746,47 @@
   [
     "tags.unused_count",
     {}
+  ],
+  [
+    "tasks.dismiss",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.failures",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.list",
+    {}
+  ],
+  [
+    "tasks.pause",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.resume",
+    {
+      "task_id": 1
+    }
+  ],
+  [
+    "tasks.stop",
+    {
+      "task_id": 1,
+      "undo": false
+    }
+  ],
+  [
+    "tasks.stop",
+    {
+      "task_id": 1,
+      "undo": true
+    }
   ]
 ]

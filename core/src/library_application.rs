@@ -27,6 +27,7 @@ pub struct LibraryApplication {
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
     ai_worker_status: std::sync::Mutex<AiWorkerStatus>,
+    pub(crate) import_start: std::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,11 +45,16 @@ impl Default for AiWorkerStatus {
     }
 }
 
+/// Items a permanent delete may hold and still be undoable, by default.
+pub const DEFAULT_UNDO_DELETE_LIMIT: usize = 500;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LibraryHistoryEntrySummary {
     pub entry_id: u64,
     pub command: String,
     pub label: String,
+    pub count: u64,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +117,20 @@ impl LibraryApplication {
     }
 
     fn from_library(root: PathBuf, library: Library) -> Result<Self, String> {
+        // One file is one item. Libraries from before the rule merge the
+        // items that share a file, once; the schema migration took a backup.
+        // A failed merge commits nothing and is retried at the next open; the
+        // library stays usable meanwhile.
+        match library.merge_shared_files() {
+            Ok(merged) if merged.files != 0 => tracing::info!(
+                files = merged.files,
+                merged_items = merged.merged_items,
+                removed_collections = merged.removed_collections,
+                "Merged items that shared a file into one item each"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Could not merge items that share a file"),
+        }
         if let Some(receipt) = library
             .canonicalize_general_tag_namespace()
             .map_err(|error| format!("Failed to canonicalize General tags: {error}"))?
@@ -131,6 +151,7 @@ impl LibraryApplication {
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
             ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
+            import_start: std::sync::Mutex::new(()),
         })
     }
 
@@ -942,12 +963,47 @@ impl LibraryApplication {
     pub fn delete_items(
         &self,
         target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
     ) -> Result<picto_library::MutationReceipt, String> {
         let (receipt, _) = self
             .library
-            .permanently_delete(target, chrono::Utc::now().timestamp_millis())
+            .permanently_delete(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+                require_undoable,
+            )
             .map_err(|error| error.to_string())?;
         Ok(receipt)
+    }
+
+    /// Reject Inbox items out of the library without passing through Trash.
+    pub fn reject_items(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+        require_undoable: bool,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let (receipt, _) = self
+            .library
+            .delete_rejected(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+                require_undoable,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(receipt)
+    }
+
+    /// How many items a permanent delete may hold and still be undoable
+    /// (the `undoDeleteLimit` setting).
+    fn undo_delete_limit(&self) -> Result<usize, String> {
+        Ok(self
+            .application_settings()?
+            .value
+            .get("undoDeleteLimit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(DEFAULT_UNDO_DELETE_LIMIT, |limit| limit.min(100_000) as usize))
     }
 
     pub fn duplicate_candidates(
@@ -1115,6 +1171,8 @@ fn map_history_entry(
         entry_id: value.entry_id,
         command: value.command,
         label: value.label,
+        count: value.count,
+        detail: value.detail,
     }
 }
 
@@ -1205,6 +1263,50 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["zebra-cat"]
         );
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn tag_search_ranks_exact_then_prefix_then_word_start_then_substring() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path()).unwrap();
+        let mut tagged = input();
+        tagged.tags = vec![
+            "amelia_(twokinds)".into(),
+            "brutus_(twokinds)".into(),
+            "notwokinds".into(),
+            "twokinds_comic".into(),
+            "series:twokinds".into(),
+        ];
+        application.library().ingest(&tagged).unwrap();
+
+        let names = |search: &str| {
+            application
+                .list_tags(None, Some(search), None, 10)
+                .unwrap()
+                .tags
+                .iter()
+                .map(|tag| format!("{}:{}", tag.namespace, tag.subname))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names("TwoKinds"),
+            [
+                "series:twokinds",
+                ":twokinds_comic",
+                ":amelia_(twokinds)",
+                ":brutus_(twokinds)",
+                ":notwokinds",
+            ]
+        );
+        assert_eq!(names("series:twok"), ["series:twokinds"]);
+
+        let first = application.list_tags(None, Some("twokinds"), None, 2).unwrap();
+        let second = application
+            .list_tags(None, Some("twokinds"), first.next_cursor.as_deref(), 10)
+            .unwrap();
+        assert_eq!(first.tags.len() + second.tags.len(), 5);
+        assert_eq!(second.tags[0].subname, "amelia_(twokinds)");
         assert!(second.next_cursor.is_none());
     }
 

@@ -64,8 +64,11 @@ impl Library {
         )
     }
 
-    /// One page of tags, filtered by namespace and subname substring and sorted
-    /// by subname, then namespace, then id (case-insensitive). Counts are
+    /// One page of tags, filtered by namespace and search text. Without a
+    /// search, tags are sorted by subname, then namespace, then id
+    /// (case-insensitive). With one, matches are ranked by [`match_rank`]
+    /// (exact, prefix, word start, substring), keeping that order within a
+    /// rank; `namespace:subname` text also matches the namespace. Counts are
     /// computed only for the returned page, not for every tag in the library.
     pub fn tag_page(
         &self,
@@ -83,20 +86,17 @@ impl Library {
             |revision| self.capture_revision(revision),
             |connection, snapshot| {
                 let sorted = self.tag_list.sorted(connection, snapshot.revision)?;
-                let mut matching = sorted.iter().filter(|entry| {
-                    namespace.is_none_or(|namespace| entry.row.namespace == namespace)
-                        && search
-                            .as_ref()
-                            .is_none_or(|search| entry.subname_key.contains(search.as_str()))
-                });
-                let page = matching
-                    .by_ref()
-                    .skip(offset)
-                    .take(limit)
+                let (page, next) = matching_tag_page(
+                    &sorted,
+                    namespace,
+                    search.as_deref(),
+                    offset,
+                    limit,
+                );
+                let page = page
+                    .into_iter()
                     .map(|entry| entry.row.clone().with_counts(&snapshot))
                     .collect::<Vec<_>>();
-                let next = offset.saturating_add(limit);
-                let next = matching.next().is_some().then_some(next);
                 Ok((page, next, snapshot.revision))
             },
         )
@@ -739,7 +739,8 @@ impl Library {
                         "tags.group.rename",
                         "Merge tag namespaces",
                         SemanticChange::Compound(changes),
-                    )),
+                    )
+                    .about(0, Some("merge"))),
                 },
             ))
         })?;
@@ -956,7 +957,8 @@ impl Library {
                         },
                         label,
                         SemanticChange::Compound(history_changes),
-                    )),
+                    )
+                    .about(0, destination.is_some().then_some("merge"))),
                 },
             ))
         })?;
@@ -1087,7 +1089,8 @@ impl Library {
                 "items.apply_tags",
                 if add { "Add tags" } else { "Remove tags" },
                 SemanticChange::Compound(changes),
-            );
+            )
+            .about(affected.len(), Some(if add { "add" } else { "remove" }));
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1447,7 +1450,155 @@ pub(crate) struct TagListCache(parking_lot::Mutex<Option<(u64, Arc<Vec<SortedTag
 
 pub(super) struct SortedTag {
     subname_key: String,
+    namespace_key: String,
     row: TagDefinitionRow,
+}
+
+fn tag_page_entries<'a>(
+    entries: impl Iterator<Item = &'a SortedTag>,
+    offset: usize,
+    limit: usize,
+) -> (Vec<&'a SortedTag>, Option<usize>) {
+    // Collect only the requested page and inspect one lookahead.
+    let mut matching = entries.skip(offset);
+    let page = matching.by_ref().take(limit).collect();
+    let next = matching.next().map(|_| offset.saturating_add(limit));
+    (page, next)
+}
+
+fn matching_tag_page<'a>(
+    sorted: &'a [SortedTag],
+    namespace: Option<&str>,
+    search: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> (Vec<&'a SortedTag>, Option<usize>) {
+    let in_namespace = move |entry: &&SortedTag| {
+        namespace.is_none_or(|namespace| entry.row.namespace == namespace)
+    };
+    let Some(search) = search else {
+        return tag_page_entries(sorted.iter().filter(in_namespace), offset, limit);
+    };
+    let mut skip = offset;
+    let mut page = Vec::new();
+    for entry in (0..2).flat_map(|rank| {
+        tag_rank_ranges(sorted, search, rank)
+            .into_iter()
+            .flat_map(move |range| sorted[range].iter())
+            .filter(in_namespace)
+            .filter(move |entry| entry.search_rank(search) == Some(rank))
+    }) {
+        if skip > 0 {
+            skip -= 1;
+        } else if page.len() == limit {
+            return (page, Some(offset.saturating_add(limit)));
+        } else {
+            page.push(entry);
+        }
+    }
+
+    // One lower-rank pass. Word starts can displace earlier substrings, so keep
+    // only the substring prefix that could still enter this window + lookahead.
+    // The page uses O(limit) references; this buffer uses at most O(offset + limit).
+    let mut substrings = Vec::new();
+    for entry in sorted.iter().filter(in_namespace) {
+        match entry.search_rank(search) {
+            Some(2) => {
+                if skip > 0 {
+                    skip -= 1;
+                } else if page.len() == limit {
+                    return (page, Some(offset.saturating_add(limit)));
+                } else {
+                    page.push(entry);
+                }
+                substrings.truncate(skip.saturating_add(limit - page.len()).saturating_add(1));
+            }
+            Some(3) if substrings.len() < skip.saturating_add(limit - page.len()).saturating_add(1) => {
+                substrings.push(entry);
+            }
+            _ => {}
+        }
+    }
+    let (tail, next) = tag_page_entries(substrings.into_iter(), skip, limit - page.len());
+    page.extend(tail);
+    (page, next.map(|_| offset.saturating_add(limit)))
+}
+
+fn tag_rank_ranges(
+    sorted: &[SortedTag],
+    search: &str,
+    rank: u8,
+) -> [std::ops::Range<usize>; 2] {
+    // Exact/prefix matches form contiguous ranges in the alphabetical cache.
+    // Lower ranks are scanned only when these cannot fill the page.
+    let range = |needle: &str| {
+        let start = sorted.partition_point(|entry| entry.subname_key.as_str() < needle);
+        let end = start + sorted[start..].partition_point(|entry| {
+            if rank == 0 {
+                entry.subname_key == needle
+            } else {
+                entry.subname_key.starts_with(needle)
+            }
+        });
+        start..end
+    };
+    let mut ranges = [
+        range(search),
+        search.split_once(':').map_or(0..0, |(_, subname)| range(subname)),
+    ];
+    if ranges[0].start > ranges[1].start {
+        ranges.swap(0, 1);
+    }
+    // Qualified text can also be a literal subname. Merge overlapping ranges
+    // so the same tag never appears twice and alphabetical ties stay stable.
+    if ranges[0].end >= ranges[1].start {
+        ranges[0].end = ranges[0].end.max(ranges[1].end);
+        ranges[1] = 0..0;
+    }
+    ranges
+}
+
+impl SortedTag {
+    /// How well `search` (lowercased) matches this tag, best first. Text with
+    /// a colon also matches `namespace:subname`, so `character:twok` finds
+    /// `character:twokinds` while a subname containing a colon still matches
+    /// literally.
+    fn search_rank(&self, search: &str) -> Option<u8> {
+        #[cfg(test)]
+        tests::SEARCH_RANK_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let plain = match_rank(&self.subname_key, search);
+        let qualified = search.split_once(':').and_then(|(namespace, subname)| {
+            (self.namespace_key == namespace)
+                .then(|| match_rank(&self.subname_key, subname))
+                .flatten()
+        });
+        match (plain, qualified) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        }
+    }
+}
+
+/// Rank of `needle` in `text`, both lowercased: 0 exact, 1 prefix, 2 at the
+/// start of a word (after a character that is not a letter or digit), 3 any
+/// other substring, `None` when absent. The renderer's `rankMatches` uses the
+/// same rule.
+pub(crate) fn match_rank(text: &str, needle: &str) -> Option<u8> {
+    if text == needle {
+        return Some(0);
+    }
+    if text.starts_with(needle) {
+        return Some(1);
+    }
+    let mut found = false;
+    for (index, _) in text.match_indices(needle) {
+        found = true;
+        let before = text[..index].chars().next_back();
+        if before.is_some_and(|character| !character.is_alphanumeric()) {
+            return Some(2);
+        }
+    }
+    found.then_some(3)
 }
 
 impl TagListCache {
@@ -1459,7 +1610,17 @@ impl TagListCache {
         }
         let mut rows = tag_definition_rows(connection, None)?
             .into_iter()
-            .map(|row| (row.namespace.to_lowercase(), SortedTag { subname_key: row.subname.to_lowercase(), row }))
+            .map(|row| {
+                let namespace_key = row.namespace.to_lowercase();
+                (
+                    namespace_key.clone(),
+                    SortedTag {
+                        subname_key: row.subname.to_lowercase(),
+                        namespace_key,
+                        row,
+                    },
+                )
+            })
             .collect::<Vec<_>>();
         rows.sort_by(|(left_namespace, left), (right_namespace, right)| {
             (&left.subname_key, left_namespace, left.row.tag_id.0)
@@ -1527,4 +1688,225 @@ pub(super) fn tag_definition_rows(
         }
     };
     rows.map_err(LibraryError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    thread_local! {
+        pub(super) static SEARCH_RANK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn tag(subname: &str) -> SortedTag {
+        SortedTag {
+            subname_key: subname.to_owned(),
+            namespace_key: "general".into(),
+            row: TagDefinitionRow {
+                tag_id: crate::TagId(1),
+                namespace_id: TagNamespaceId(1),
+                namespace: "general".into(),
+                subname: subname.to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn unfiltered_tag_page_only_visits_offset_limit_and_one_lookahead() {
+        let entry = tag("cat");
+        for offset in [0, 500, 10_000] {
+            let mut visited = 0;
+            let entries = std::iter::repeat_n(&entry, 200_000).inspect(|_| visited += 1);
+            let (page, next) = tag_page_entries(entries, offset, 500);
+            assert_eq!(page.len(), 500);
+            assert_eq!(next, Some(offset + 500));
+            assert_eq!(visited, offset + 500 + 1);
+        }
+    }
+
+    #[test]
+    fn ranked_tag_page_seeks_prefixes_without_ranking_the_whole_cache() {
+        let tags = (0..200_000).map(|index| tag(&format!("image{index:06}"))).collect::<Vec<_>>();
+        for search in ["image", "general:image"] {
+            for offset in [0, 500, 10_000] {
+                SEARCH_RANK_CALLS.with(|calls| calls.set(0));
+                let (page, next) = matching_tag_page(&tags, None, Some(search), offset, 500);
+                assert_eq!(page.len(), 500);
+                assert_eq!(page[0].row.subname, format!("image{offset:06}"));
+                assert_eq!(page[499].row.subname, format!("image{:06}", offset + 499));
+                assert_eq!(next, Some(offset + 500));
+                SEARCH_RANK_CALLS.with(|calls| assert_eq!(calls.get(), offset + 501));
+            }
+        }
+    }
+
+    #[test]
+    fn lower_rank_pages_scan_once_and_preserve_ranked_offsets() {
+        let tags = (0..200_000)
+            .map(|index| tag(&format!("image{index:06}")))
+            .collect::<Vec<_>>();
+        for search in ["missing", "general:9999"] {
+            SEARCH_RANK_CALLS.with(|calls| calls.set(0));
+            let (page, next) = matching_tag_page(&tags, None, Some(search), 0, 12);
+            if search == "missing" {
+                assert!(page.is_empty());
+                assert_eq!(next, None);
+            } else {
+                assert_eq!(page.len(), 12);
+                assert_eq!(page[0].row.subname, "image009999");
+                assert_eq!(page[11].row.subname, "image099992");
+                assert_eq!(next, Some(12));
+            }
+            SEARCH_RANK_CALLS.with(|calls| assert_eq!(calls.get(), tags.len()));
+        }
+
+        let tags = [
+            tag("acat"), tag("b_cat"), tag("bcat"), tag("cat"),
+            tag("catfish"), tag("d_cat"), tag("ecat"),
+        ];
+        let expected = ["cat", "catfish", "b_cat", "d_cat", "acat", "bcat", "ecat"];
+        for offset in 0..=8 {
+            for limit in 0..=8 {
+                let (page, next) = matching_tag_page(&tags, None, Some("cat"), offset, limit);
+                let end = (offset + limit).min(expected.len());
+                assert_eq!(
+                    page.iter().map(|entry| entry.row.subname.as_str()).collect::<Vec<_>>(),
+                    expected[offset.min(expected.len())..end],
+                );
+                assert_eq!(
+                    next,
+                    (offset + limit < expected.len()).then_some(offset + limit),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn word_start_pages_stop_after_the_requested_window() {
+        let tags = (0..200_000)
+            .map(|index| tag(&format!("{index:06}_cat")))
+            .collect::<Vec<_>>();
+        for offset in [0, 500, 10_000] {
+            SEARCH_RANK_CALLS.with(|calls| calls.set(0));
+            let (page, next) = matching_tag_page(&tags, None, Some("cat"), offset, 500);
+            assert_eq!(page.len(), 500);
+            assert_eq!(page[0].row.subname, format!("{offset:06}_cat"));
+            assert_eq!(page[499].row.subname, format!("{:06}_cat", offset + 499));
+            assert_eq!(next, Some(offset + 500));
+            SEARCH_RANK_CALLS.with(|calls| assert_eq!(calls.get(), offset + 501));
+        }
+    }
+
+    #[test]
+    fn non_bmp_word_boundaries_match_renderer_ranks() {
+        assert_eq!(match_rank("\u{10400}cat", "cat"), Some(3));
+        assert_eq!(match_rank("\u{1D7CE}cat", "cat"), Some(3));
+        assert_eq!(match_rank("\u{1F408}cat", "cat"), Some(2));
+        assert_eq!(match_rank("\u{10400}cat cat", "cat"), Some(2));
+    }
+
+    #[test]
+    fn ranked_tag_pages_merge_qualified_and_literal_ranges_without_duplicates() {
+        let mut tags = [
+            ("cat", "bobcat"),
+            ("bar", "cat"),
+            ("cat", "cat"),
+            ("cat", "cat:cat"),
+            ("foo", "cat:cat"),
+            ("cat", "cat:catfish"),
+            ("cat", "catfish"),
+            ("cat", "wild_cat"),
+        ].map(|(namespace, subname)| {
+            let mut entry = tag(subname);
+            entry.namespace_key = namespace.into();
+            entry.row.namespace = namespace.into();
+            entry
+        });
+        tags.sort_by(|a, b| (&a.subname_key, &a.namespace_key).cmp(&(&b.subname_key, &b.namespace_key)));
+        let mut names = Vec::new();
+        let mut offset = 0;
+        loop {
+            let (page, next) = matching_tag_page(&tags, None, Some("cat:cat"), offset, 2);
+            names.extend(page.iter().map(|entry| (entry.row.namespace.as_str(), entry.row.subname.as_str())));
+            match next {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(names, [
+            ("cat", "cat"), ("cat", "cat:cat"), ("foo", "cat:cat"),
+            ("cat", "cat:catfish"), ("cat", "catfish"),
+            ("cat", "wild_cat"), ("cat", "bobcat"),
+        ]);
+        let (page, next) = matching_tag_page(&tags, Some("foo"), Some("cat:cat"), 0, 2);
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].row.namespace, "foo");
+        assert_eq!(page[0].row.subname, "cat:cat");
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn tag_page_boundaries_preserve_order_and_cursor() {
+        let tags = [tag("bobcat"), tag("cat"), tag("catfish"), tag("wild_cat")];
+        for (search, expected) in [
+            (None, ["bobcat", "cat", "catfish", "wild_cat"]),
+            (Some("cat"), ["cat", "catfish", "wild_cat", "bobcat"]),
+        ] {
+            for (offset, limit, end, next) in [
+                (0, 2, 2, Some(2)),
+                (2, 2, 4, None),
+                (3, 2, 4, None),
+                (4, 2, 4, None),
+                (5, 2, 4, None),
+                (0, 0, 0, Some(0)),
+                (0, 10, 4, None),
+            ] {
+                let (page, cursor) = matching_tag_page(&tags, None, search, offset, limit);
+                let names = page
+                    .iter()
+                    .map(|entry| entry.row.subname.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(names, expected[offset.min(4)..end]);
+                assert_eq!(cursor, next);
+            }
+        }
+        for (page, next) in [
+            matching_tag_page(&tags, None, Some("missing"), 0, 2),
+            tag_page_entries([].iter(), 0, 2),
+        ] {
+            assert!(page.is_empty());
+            assert_eq!(next, None);
+        }
+    }
+
+    #[test]
+    fn tag_page_preserves_namespace_filtering_and_blank_search_pagination() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        library
+            .ensure_tag_definitions(&[
+                "foo:ant".into(),
+                "bar:cat".into(),
+                "foo:cat".into(),
+                "foo:dog".into(),
+            ])
+            .unwrap();
+
+        for search in [None, Some("  ")] {
+            let (first, next, revision) = library.tag_page(Some("foo"), search, 0, 2).unwrap();
+            assert_eq!(
+                first.iter().map(|tag| tag.subname.as_str()).collect::<Vec<_>>(),
+                ["ant", "cat"]
+            );
+            assert!(first.iter().all(|tag| tag.namespace == "foo"));
+            assert_eq!(next, Some(2));
+            let (last, next, last_revision) = library
+                .tag_page(Some("foo"), search, next.unwrap(), 2)
+                .unwrap();
+            assert_eq!(last.len(), 1);
+            assert_eq!(last[0].subname, "dog");
+            assert_eq!(next, None);
+            assert_eq!(last_revision, revision);
+        }
+    }
 }

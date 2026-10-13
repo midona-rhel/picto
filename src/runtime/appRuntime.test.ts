@@ -23,6 +23,7 @@ vi.mock('./historyRuntime', () => ({ startHistoryRuntime: () => vi.fn() }));
 vi.mock('./inspectorSettle', () => ({ startInspectorSettle: () => vi.fn() }));
 vi.mock('./sidebarSettle', () => ({ startSidebarSettle: () => vi.fn() }));
 vi.mock('./associatedFilesRuntime', () => ({ startAssociatedFilesRuntime: () => vi.fn() }));
+vi.mock('./taskSettle', () => ({ startTaskSettle: () => vi.fn() }));
 
 import { startAppRuntime } from './appRuntime';
 

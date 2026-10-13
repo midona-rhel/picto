@@ -180,13 +180,30 @@ impl Library {
             |transaction, _, revision, snapshot| {
                 let mut output = crate::duplicate::resolve(
                     transaction,
-                    revision,
                     (*snapshot).clone(),
                     file_id_a,
                     file_id_b,
                     choice,
                     decided_at_ms,
                 )?;
+                let mut merge = Merge {
+                    record: true,
+                    ..Merge::default()
+                };
+                if let Some((survivor, losers)) = output.merge.take() {
+                    for loser in losers {
+                        merge_media(
+                            transaction,
+                            revision,
+                            &mut output.snapshot,
+                            survivor,
+                            loser,
+                            decided_at_ms,
+                            &mut merge,
+                        )?;
+                    }
+                    output.affected_roots |= &merge.affected;
+                }
                 if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
                     crate::smart::settle_affected(
                         transaction,
@@ -217,6 +234,9 @@ impl Library {
                     if output.history.changes_names() {
                         resources.push("search".into());
                     }
+                    resources.extend(merge.resources.iter().cloned());
+                    resources.sort();
+                    resources.dedup();
                     resources
                 } else {
                     vec!["duplicates".into()]
@@ -239,7 +259,15 @@ impl Library {
                         history: Some(HistoryEntry::for_command(
                             "duplicates.resolve",
                             "Resolve duplicate",
-                            SemanticChange::DuplicateResolution(output.history),
+                            if merge.changes.is_empty() {
+                                SemanticChange::DuplicateResolution(output.history)
+                            } else {
+                                SemanticChange::Compound(
+                                    std::iter::once(SemanticChange::DuplicateResolution(output.history))
+                                        .chain(merge.changes)
+                                        .collect(),
+                                )
+                            },
                         )),
                     },
                 ))

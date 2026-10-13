@@ -82,6 +82,9 @@ pub(crate) struct ResolutionOutput {
     pub snapshot: ProjectionSnapshot,
     pub affected_roots: RoaringBitmap,
     pub history: DuplicateHistoryState,
+    /// Keep-file resolutions: the winner's item, and the loser's items to
+    /// merge into it.
+    pub merge: Option<(MediaId, Vec<MediaId>)>,
 }
 
 pub(crate) fn record_detected(
@@ -477,7 +480,6 @@ pub(crate) fn affected_roots(
 
 pub(crate) fn resolve(
     transaction: &Transaction<'_>,
-    revision: u64,
     mut snapshot: ProjectionSnapshot,
     file_id_a: FileId,
     file_id_b: FileId,
@@ -499,6 +501,7 @@ pub(crate) fn resolve(
         .chain(file_media_ids(transaction, file_id_b)?)
         .collect::<BTreeSet<_>>();
     let pair_roots = roots_for_media(&snapshot, pair_media_ids.iter().copied());
+    let mut merge = None;
     let (after_status, winner_file_id, loser_file_id, rewired_media_ids, name_changes) =
         match choice {
             DuplicateResolutionChoice::KeepBoth => {
@@ -532,12 +535,20 @@ pub(crate) fn resolve(
                 } else {
                     file_id_a
                 };
-                let rewired_media_ids = file_media_ids(transaction, loser_file_id)?;
-                transaction.execute(
-                    "UPDATE media_item SET file_id = ?1 WHERE file_id = ?2",
-                    params![winner_file_id.0, loser_file_id.0],
-                )?;
-                let name_changes = duplicate_name_changes(transaction, &snapshot, &pair_media_ids)?;
+                // One file is one item: the loser's item is merged into the
+                // winner's (by the caller) rather than pointed at its file.
+                let survivor = file_media_ids(transaction, winner_file_id)?
+                    .first()
+                    .copied()
+                    .ok_or_else(|| {
+                        LibraryError::InvalidState(
+                            "the kept duplicate file is no longer in the library".into(),
+                        )
+                    })?;
+                merge = Some((survivor, file_media_ids(transaction, loser_file_id)?));
+                // The kept item takes the better name of the two.
+                let mut name_changes = duplicate_name_changes(transaction, &snapshot, &pair_media_ids)?;
+                name_changes.retain(|change| change.media_id == survivor);
                 apply_name_changes(
                     transaction,
                     &mut snapshot,
@@ -557,8 +568,7 @@ pub(crate) fn resolve(
                         winner_file_id.0
                     ],
                 )?;
-                enqueue_cleanup(transaction, loser_file_id, revision)?;
-                settle_rewired_media(transaction, &mut snapshot, &rewired_media_ids)?;
+                let rewired_media_ids = Vec::new();
                 (
                     DuplicateStatus::Resolved,
                     Some(winner_file_id),
@@ -583,6 +593,7 @@ pub(crate) fn resolve(
             pair_roots: Arc::new(pair_roots),
             name_changes: Arc::new(name_changes),
         },
+        merge,
     })
 }
 

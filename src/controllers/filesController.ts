@@ -20,7 +20,9 @@ import {
 } from '../platform/shellApi';
 import type { BaseScope, EntityTarget } from '../shared/types/canonical';
 import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
-import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { ImportStarted } from '../shared/types/generated/application/ImportStarted';
+import { showTask } from '../runtime/taskSettle';
+import { allowTaskAction } from '../runtime/taskGate';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import { getDefaultStore } from 'jotai';
 import { folderImportModalAtom, multiFileImportModalAtom, pictoPackModalAtom } from '../state/modals';
@@ -45,10 +47,12 @@ export interface MediaImportParams {
 
 const store = getDefaultStore();
 
-async function addMedia(paths: string[], params: MediaImportParams): Promise<ImportEnqueueReport> {
-  const report = await enqueueImport(paths, params);
+/** Start an import; its task takes the foreground with progress and controls. */
+async function addMedia(paths: string[], params: MediaImportParams): Promise<ImportStarted> {
+  const started = await enqueueImport(paths, params);
+  showTask(started.task_id);
   if (params.parent_folder_id != null) recordRecentFolderUse([params.parent_folder_id]);
-  return report;
+  return started;
 }
 
 function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
@@ -62,6 +66,7 @@ function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
 
 /** Resolve one multi-file batch through the user's single persisted import policy. */
 export async function requestMediaImport(paths: string[], params: MediaImportParams): Promise<void> {
+  if (!allowTaskAction('import')) return;
   if (paths.length <= 1 || params.group_files != null) {
     enqueueMediaImport(paths, params);
     return;
@@ -105,6 +110,7 @@ const MEDIA_IMPORT_FILTERS = [{
 
 /** Use the canonical desktop picker and import destination for a grid scope. */
 export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openFile'],
     multiple: true,
@@ -121,6 +127,7 @@ export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
 
 /** Use the canonical desktop picker and structure-preserving folder import. */
 export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openDirectory'],
     multiple: false,
@@ -155,11 +162,13 @@ export function pictoPackPathFromDrop(paths: string[]): string | null {
 }
 
 export async function openPictoPackImport(path: string): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const summary = await inspectPictoPack(path);
   store.set(pictoPackModalAtom, { open: true, mode: 'import', path, summary });
 }
 
 export async function chooseAndImportPictoPack(): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const result = await (window as any).picto.dialog.open({
     properties: ['openFile'],
     multiple: false,
@@ -173,6 +182,7 @@ export async function chooseAndImportPictoPack(): Promise<void> {
 
 /** Import copied files or a copied bitmap through the durable ingest queue. */
 export async function pasteImport(scope: BaseScope): Promise<void> {
+  if (!allowTaskAction('import')) return;
   const payload = await readClipboardImport();
   if (payload.paths.length === 0) {
     throw new Error('The clipboard does not contain importable files or an image.');
@@ -211,7 +221,7 @@ export const filesController = {
   addMedia(
     paths: string[],
     params: MediaImportParams,
-  ): Promise<ImportEnqueueReport> {
+  ): Promise<ImportStarted> {
     return addMedia(paths, params);
   },
 

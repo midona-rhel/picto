@@ -29,13 +29,14 @@ pub mod query_request;
 pub mod schema;
 pub mod selection;
 pub mod smart;
+pub mod subscription_counts;
 pub mod text_index;
 pub mod work_queue;
 
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
-pub use mutation::Library;
+pub use mutation::{Library, SharedFileMerge};
 pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};
 pub use query_request::{LoadStage, OpenCancellation, OpenStage};

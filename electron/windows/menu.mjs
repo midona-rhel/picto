@@ -28,6 +28,7 @@ export function createMenuManager({
     canRename: false,
     canCopyNames: false,
     canRegenerateThumbnails: false,
+    canImport: true,
   };
 
   // Menu clicks have no caller to reject to. A switch cancelled by quitting
@@ -207,15 +208,18 @@ export function createMenuManager({
           {
             label: 'Import Files…',
             accelerator: accelerator('file.import', 'CmdOrCtrl+I'),
+            enabled: commandContext.canImport !== false,
             click: () => sendToMainWindow('menu:import-files'),
           },
           {
             label: 'Import Folder…',
             accelerator: 'Shift+CmdOrCtrl+I',
+            enabled: commandContext.canImport !== false,
             click: () => sendToMainWindow('menu:import-folder'),
           },
           {
             label: commandContext.importPictoPackLabel || 'Import Picto Pack…',
+            enabled: commandContext.canImport !== false,
             click: () => sendToMainWindow('menu:import-picto-pack'),
           },
           { type: 'separator' },

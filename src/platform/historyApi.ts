@@ -4,7 +4,12 @@ import type { MutationReceipt } from '../shared/types/generated/application/Muta
 export interface HistoryEntrySummary {
   entry_id: number;
   command: string;
+  /** Developer wording; shown only for a command `describeHistoryEntry` does not know. */
   label: string;
+  /** Items the change touched, or 0 when it is not about items. */
+  count: number;
+  /** What it set: a status (`trash`, `inbox`, `active`), stars, or `add`/`remove`. */
+  detail: string | null;
 }
 
 export interface HistoryState {

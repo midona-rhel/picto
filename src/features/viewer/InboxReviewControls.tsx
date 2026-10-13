@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconX } from '@tabler/icons-react';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
@@ -24,30 +24,49 @@ export function resolveInboxReviewItemId(
 
 interface InboxReviewControlsProps {
   itemId: number;
-  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<void>;
+  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<boolean>;
   onAdvance: () => void;
 }
 
+// Match reviewFlash and the pill's exit transition in the stylesheet.
+const PULSE_DURATION_MS = 360;
 const EXIT_DURATION_MS = 120;
 
 export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReviewControlsProps) {
   const [decision, setDecision] = useState<InboxReviewDecision | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const inFlight = useRef(false);
+  const latestItemId = useRef(itemId);
   const acceptShortcut = getShortcut('inbox.accept')!;
   const rejectShortcut = getShortcut('inbox.reject')!;
 
   useEffect(() => {
+    latestItemId.current = itemId;
+    // Reconciliation can select the next item before this review has advanced.
+    if (inFlight.current) return;
     setDecision(null);
     setLeaving(false);
   }, [itemId]);
 
   const review = useCallback(async (nextDecision: InboxReviewDecision) => {
-    if (decision) return;
+    if (inFlight.current || decision) return;
+    inFlight.current = true;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setDecision(nextDecision);
     try {
-      await onCommit(itemId, nextDecision);
+      const [committed] = await Promise.all([
+        onCommit(itemId, nextDecision),
+        reducedMotion ? Promise.resolve() : new Promise<void>((resolve) => setTimeout(resolve, PULSE_DURATION_MS)),
+      ]);
+      if (!committed) {
+        setDecision(null);
+        setLeaving(false);
+        return;
+      }
       setLeaving(true);
-      await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
+      if (!reducedMotion) {
+        await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
+      }
       onAdvance();
     } catch (reason) {
       setDecision(null);
@@ -56,6 +75,12 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
         title: nextDecision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
         message: reason instanceof Error ? reason.message : String(reason),
       });
+    } finally {
+      inFlight.current = false;
+      if (latestItemId.current !== itemId) {
+        setDecision(null);
+        setLeaving(false);
+      }
     }
   }, [decision, itemId, onAdvance, onCommit]);
 
@@ -87,6 +112,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
           disabled={decision != null}
           onClick={() => { void review('accept'); }}
         >
+          <span className={styles.glow} aria-hidden="true" />
           <IconCheck size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>
@@ -99,6 +125,7 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
           disabled={decision != null}
           onClick={() => { void review('reject'); }}
         >
+          <span className={styles.glow} aria-hidden="true" />
           <IconX size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>

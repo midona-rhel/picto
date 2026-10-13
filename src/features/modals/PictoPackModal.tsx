@@ -5,6 +5,7 @@ import type { PictoPackModalState } from '../../state/modals';
 import { exportPictoPack, importPictoPack } from '../../platform/pictoPackApi';
 import { showErrorNotification, showSuccessNotification } from '../../shared/lib/notifications';
 import { t } from '../../i18n';
+import { allowTaskAction } from '../../runtime/taskGate';
 
 interface Props {
   state: PictoPackModalState;
@@ -36,6 +37,7 @@ export function PictoPackModal({ state, onClose }: Props) {
   const importing = state.mode === 'import';
   const summary = importing ? state.summary : null;
   const run = async () => {
+    if (importing && !allowTaskAction('import')) return;
     setBusy(true);
     try {
       if (state.mode === 'import') {

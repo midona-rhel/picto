@@ -86,6 +86,7 @@ import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
+import { allowTaskAction, taskGate, useTaskGate } from '../../runtime/taskGate';
 import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, openPictoPackImport, pasteImport, pictoPackPathFromDrop, requestMediaImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
@@ -115,6 +116,7 @@ import type { GridScrollPosition } from '../../shared/types/gridScroll';
 import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 import { t } from '../../i18n';
+import { requestPermanentDelete } from '../../controllers/permanentDeleteRequest';
 
 const store = getDefaultStore();
 interface GridScreenProps {
@@ -135,6 +137,7 @@ export function GridScreen({
   onScrollPositionChange,
 }: GridScreenProps) {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const importGate = useTaskGate('import');
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
   const controlPreferences = useAtomValue(controlPreferencesAtom);
@@ -279,6 +282,7 @@ export function GridScreen({
         return;
       }
 
+      if (!allowTaskAction('import')) return;
       // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
       if (localPaths.length === 1 && browserPaths.length === 0 && !mediaExt.test(localPaths[0])) {
@@ -399,16 +403,7 @@ export function GridScreen({
 
   const permanentlyDeleteSelection = useCallback((target = selectionTarget, count = selectionCount) => {
     if (!target) return;
-    store.set(confirmModalAtom, {
-      open: true,
-      title: t("Delete Permanently"),
-      message: `This will permanently delete ${count} item${count !== 1 ? 's' : ''}. This cannot be undone.`,
-      confirmLabel: t("Delete"),
-      danger: true,
-      onConfirm: () => {
-        void entityMutations.permanentlyDeleteTarget(target);
-      },
-    });
+    void requestPermanentDelete(target, count);
   }, [selectionTarget, selectionCount, clearSelection]);
 
   // ── Detail window communication ──
@@ -653,7 +648,8 @@ export function GridScreen({
       }
       if (scope.kind === 'inbox' && count > 0 && matchesShortcutDef(e, defs.reject)) {
         e.preventDefault();
-        void setSelectionLifecycle('trash');
+        const target = store.get(selectionTargetAtom);
+        if (target) void entityMutations.rejectTarget(target);
         return;
       }
 
@@ -762,10 +758,10 @@ export function GridScreen({
       ? null
       : currentItems[currentIndex + 1]?.root_id ?? currentItems[currentIndex - 1]?.root_id ?? null;
     inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
-    await entityMutations.setTargetLifecycle(
-      { kind: 'explicit', root_ids: [itemId] },
-      decision === 'accept' ? 'active' : 'trash',
-    );
+    const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
+    if (decision === 'reject') return entityMutations.rejectTarget(target);
+    await entityMutations.setTargetLifecycle(target, 'active');
+    return true;
   }, []);
 
   const resolveRootNeighbor = useCallback(async (session: NonNullable<typeof viewerSession>, delta: number) => {
@@ -906,6 +902,7 @@ export function GridScreen({
       onPasteImport: clipboardImportAvailable
         ? () => runImport(() => pasteImport(gridScope), t('Could not paste import'))
         : undefined,
+      importBlockedReason: taskGate('import').reason,
       onSortContents: gridScope.kind === 'folder'
         ? (field) => { void foldersController.sortContents(gridScope.folder_id, field); }
         : undefined,
@@ -981,14 +978,14 @@ export function GridScreen({
           description={emptyDesc}
           actions={showImport ? (
             <>
-              <EmptyStateAction onClick={() => {
+              <EmptyStateAction disabled={importGate.blocked} title={importGate.reason ?? undefined} onClick={() => {
                 void chooseAndImportFiles(gridScope).catch((err) => {
                   console.error('[grid] import files failed:', err);
                 });
               }}>
                 <IconUpload size={14} stroke={1.5} />
                 {t("Import Files")}</EmptyStateAction>
-              <EmptyStateAction onClick={() => {
+              <EmptyStateAction disabled={importGate.blocked} title={importGate.reason ?? undefined} onClick={() => {
                 void chooseAndImportFolder(gridScope).catch((err) => {
                   console.error('[grid] import folder failed:', err);
                 });
@@ -1127,6 +1124,7 @@ export function GridScreen({
             onSetAutoTags: () => {
               void openFolderAutoTagsEditor([folderId]);
             },
+            importDisabled: taskGate('import').blocked,
             onImport: () => {
               void (async () => {
                 const result = await (window as any).picto.dialog.open({
@@ -1589,7 +1587,7 @@ export function GridScreen({
             onRestore: () => { void setSelectionLifecycle('active', effectiveTarget); },
             onPermanentDelete: () => { permanentlyDeleteSelection(effectiveTarget, selCount); },
             onAccept: () => { void setSelectionLifecycle('active', effectiveTarget); },
-            onReject: () => { void setSelectionLifecycle('trash', effectiveTarget); },
+            onReject: () => { if (effectiveTarget) void entityMutations.rejectTarget(effectiveTarget); },
           });
           const menuId = contextMenu.openAt(pos, entries);
           if (openWithPending && singleItem?.content_hash) {

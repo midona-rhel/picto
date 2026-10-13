@@ -5,10 +5,11 @@ import { chooseAndImportFiles, chooseAndImportFolder, chooseAndImportPictoPack, 
 import { foldersController } from '../controllers/foldersController';
 import { windowController } from '../controllers/windowController';
 import { listen } from '../platform/ipc';
+import { taskGate } from './taskGate';
+import { tasksAtom } from './taskSettle';
 import { gridActiveAtom, gridItemsAtom, gridScopeAtom } from '../state/grid';
 import {
   batchRenameModalAtom,
-  confirmModalAtom,
   exportModalAtom,
   folderPickerModalAtom,
   smartFolderModalAtom,
@@ -24,6 +25,7 @@ import {
 import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
 import { showErrorNotification, showInfoNotification, showSuccessNotification } from '../shared/lib/notifications';
 import { t } from '../i18n';
+import { requestPermanentDelete } from '../controllers/permanentDeleteRequest';
 
 type ApplicationMenuEvent =
   | 'menu:import-files'
@@ -98,6 +100,7 @@ function menuContext(): Record<string, unknown> {
       && selected.length === count
       && selected.length > 0
       && selected.every((item) => item.kind === 'media' && Boolean(item.content_hash)),
+    canImport: !taskGate('import').blocked,
     importPictoPackLabel: t("Import Picto Pack..."),
     exportPictoPackLabel: t("Export as Picto Pack..."),
   };
@@ -216,7 +219,7 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
     return;
   }
   if (action === 'reject') {
-    await entityMutations.setTargetLifecycle(requireTarget(), 'trash');
+    await entityMutations.rejectTarget(requireTarget());
     return;
   }
   if (action === 'restore') {
@@ -224,16 +227,7 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
     return;
   }
   if (action === 'delete-permanently') {
-    const target = requireTarget();
-    const count = snapshot.count;
-    store.set(confirmModalAtom, {
-      open: true,
-      title: count === 1 ? t("Delete permanently?") : t("Delete {value0} items permanently?", { value0: count }),
-      message: 'This removes the files from the library and cannot be undone.',
-      confirmLabel: t("Delete Permanently"),
-      danger: true,
-      onConfirm: () => { void entityMutations.permanentlyDeleteTarget(target).catch(reportMenuError); },
-    });
+    await requestPermanentDelete(requireTarget(), snapshot.count, { onError: reportMenuError });
     return;
   }
   if (action === 'remove-from-folder') {
@@ -335,6 +329,7 @@ export function startApplicationMenuRuntime(): () => void {
   });
 
   disposers.push(store.sub(gridSelectionAtom, syncContext));
+  disposers.push(store.sub(tasksAtom, syncContext));
   disposers.push(store.sub(gridItemsAtom, syncContext));
   disposers.push(store.sub(gridScopeAtom, syncContext));
   disposers.push(store.sub(gridActiveAtom, syncContext));

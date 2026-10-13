@@ -218,6 +218,8 @@ pub fn import(
     application: &LibraryApplication,
     request: &PictoPackImportRequest,
 ) -> Result<PictoPackImportResult, String> {
+    let _import = crate::tasks::lock_import_start(application)?;
+    crate::tasks::ensure_can_start(application, crate::tasks::IMPORT_ACTION)?;
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("picto-pack-import".into())
@@ -1337,7 +1339,7 @@ mod tests {
         let history_before = destination.library().history().state();
         assert_eq!(
             history_before.undo.as_ref().unwrap().command,
-            "items.patch_metadata"
+            "items.set_notes"
         );
         assert_eq!(
             history_before.redo.as_ref().unwrap().command,

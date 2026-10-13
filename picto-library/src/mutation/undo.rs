@@ -305,6 +305,18 @@ pub(super) fn apply_semantic_change(
                 }
             }
         }
+        SemanticChange::MediaText { media_id, before, after } => {
+            let (expected, replacement) = if use_after { (before, after) } else { (after, before) };
+            let current = transaction.query_row("SELECT media_name, media_notes FROM media_item WHERE media_id = ?1", [media_id.0], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))?;
+            if current != *expected {
+                return Err(LibraryError::InvalidState("cannot replay history because media text changed".into()));
+            }
+            transaction.execute("UPDATE media_item SET media_name = ?2, media_notes = ?3 WHERE media_id = ?1", rusqlite::params![media_id.0, replacement.0, replacement.1])?;
+            let owner = snapshot.media_owner.get(media_id.0).copied().unwrap_or(RootId(media_id.0));
+            affected.insert(owner.0);
+            crate::fts::mark_one(transaction, owner, revision as i64)?;
+            resources.extend(["roots".into(), "search".into()]);
+        }
         SemanticChange::RootText { before, after } => {
             let (expected, replacement) = if use_after {
                 (before.as_ref(), after.as_ref())
@@ -898,6 +910,43 @@ pub(super) fn apply_semantic_change(
             if state.changes_names() {
                 resources.insert("search".into());
             }
+        }
+        SemanticChange::PermanentDelete(state) => {
+            if use_after {
+                let roots = state.roots.as_ref();
+                let mut existing = RoaringBitmap::new();
+                for kind in [RootKind::Media, RootKind::Collection] {
+                    if let Some(members) = snapshot.root_kinds.get(&kind) {
+                        existing |= members;
+                    }
+                }
+                if !roots.is_subset(&existing) {
+                    return Err(LibraryError::InvalidState(
+                        "cannot redo the delete because its items changed".into(),
+                    ));
+                }
+                let (next, _, receipt) = super::structure::delete_roots(
+                    transaction,
+                    revision,
+                    snapshot,
+                    roots,
+                    now_ms(),
+                    &std::collections::BTreeSet::new(),
+                )?;
+                *snapshot = next;
+                resources.extend(receipt.resources);
+            } else {
+                super::structure::restore_deleted_roots(transaction, revision, snapshot, state)?;
+                resources.extend(
+                    ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "recently_viewed", "tasks"]
+                        .map(str::to_owned),
+                );
+            }
+            *affected |= state.roots.as_ref();
+        }
+        SemanticChange::Relink(state) => {
+            super::merge::apply_relink(transaction, state, use_after)?;
+            resources.insert("subscriptions".into());
         }
         SemanticChange::Compound(changes) => {
             if use_after {
