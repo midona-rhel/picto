@@ -16,6 +16,9 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'items.set_rating': (count, detail) => {
     const stars = Number(detail ?? 0);
     if (!stars) return (count === 1 ? t('Cleared the rating of an item') : t('Cleared the rating of {value0} items', { value0: count.toLocaleString() }));
+    if (stars === 1) return count === 1
+      ? t('Rated an item 1 star')
+      : t('Rated {value0} items 1 star', { value0: count.toLocaleString() });
     return count === 1
       ? t('Rated an item {value0} stars', { value0: stars })
       : t('Rated {value0} items {value1} stars', { value0: count.toLocaleString(), value1: stars });

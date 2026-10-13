@@ -13,6 +13,8 @@ describe('describeHistoryEntry', () => {
     expect(describeHistoryEntry(entry('collections.detach', 1))).toBe('Removed an item from a collection');
     expect(describeHistoryEntry(entry('collections.organize', 4))).toBe('Grouped 4 items into a collection');
     expect(describeHistoryEntry(entry('items.set_rating', 5, '4'))).toBe('Rated 5 items 4 stars');
+    expect(describeHistoryEntry(entry('items.set_rating', 1, '1'))).toBe('Rated an item 1 star');
+    expect(describeHistoryEntry(entry('items.set_rating', 5, '1'))).toBe('Rated 5 items 1 star');
     expect(describeHistoryEntry(entry('items.set_rating', 1, '0'))).toBe('Cleared the rating of an item');
     expect(describeHistoryEntry(entry('items.apply_tags', 2, 'remove'))).toBe('Removed tags from 2 items');
     expect(describeHistoryEntry(entry('items.set_folder', 1, 'add'))).toBe('Added an item to a folder');
@@ -25,6 +27,7 @@ describe('describeHistoryEntry', () => {
 
   it('describes renderer metadata patches and watch edits accurately', () => {
     expect(describeHistoryEntry(entry('items.patch_metadata', 2, 'rating:4'))).toBe('Rated 2 items 4 stars');
+    expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'rating:1'))).toBe('Rated an item 1 star');
     expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'rating:0'))).toBe('Cleared the rating of an item');
     expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'notes'))).toBe('Changed notes');
     expect(describeHistoryEntry(entry('items.patch_metadata', 1, 'source_urls'))).toBe('Changed source links');
