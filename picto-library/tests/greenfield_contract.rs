@@ -5825,6 +5825,156 @@ fn a_permanent_delete_past_the_limit_cannot_be_undone_and_frees_its_files() {
 }
 
 #[test]
+fn permanent_delete_counts_collection_media_and_honors_zero_limit() {
+    for limit in [0, 1, 2] {
+        let directory = TempDir::new().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let a = library.ingest(&imported("member-a", Lifecycle::Inbox, &[])).unwrap().0;
+        let b = library.ingest(&imported("member-b", Lifecycle::Inbox, &[])).unwrap().0;
+        let (collection, _) = library.organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit { root_ids: vec![a, b] },
+            cover_root_id: a,
+            winning_collection_id: None,
+            name: Some("pair".into()),
+            notes: None,
+            modified_at_ms: 2,
+        }).unwrap();
+        library.history().clear();
+        let target = SelectionTarget::Explicit { root_ids: vec![collection] };
+        let summary = library.selection_summary(&target).unwrap();
+        assert_eq!(summary.selected_count, 1);
+        assert_eq!(summary.media_count, 2);
+        let (_, cleanup) = library.delete_rejected(&target, 10, limit).unwrap();
+        assert_eq!(library.history().state().undo.is_some(), limit == 2);
+        assert_eq!(cleanup.len(), if limit == 2 { 0 } else { 2 });
+        assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), cleanup.len());
+        if limit == 2 {
+            library.undo().unwrap().unwrap();
+            assert_eq!(library.details(collection).unwrap().root.media_count, 2);
+        }
+    }
+}
+
+#[test]
+fn permanent_delete_restores_recent_views_and_cascaded_work() {
+    use picto_library::database::WorkPriority;
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let a = library.ingest(&imported("work-a", Lifecycle::Trash, &[])).unwrap().0;
+    let b = library.ingest(&imported("work-b", Lifecycle::Trash, &[])).unwrap().0;
+    library.record_recent_view(a, 1234).unwrap();
+    library.record_recent_view(b, 5678).unwrap();
+    drop(library);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute(
+        "INSERT INTO work_item(work_id, root_id, work_type, status, priority, attempt_count,
+                               available_at, last_error, created_at, updated_at)
+         VALUES (1000, ?1, 'ai_tag', 'failed', 42, 3, 'later', 'retry me', 'created', 'updated')",
+        [a.0],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO work_item(work_id, media_item_id, work_type, status, priority,
+                               available_at, created_at, updated_at)
+         VALUES (1001, ?1, 'ai_tag', 'running', 17, 'now', 'created', 'updated')",
+        [b.0],
+    ).unwrap();
+    drop(connection);
+    let library = Library::open(&path).unwrap();
+    let target = SelectionTarget::Explicit { root_ids: vec![a, b] };
+    let receipt = library.permanently_delete(&target, 10, 2).unwrap().0;
+    assert!(receipt.resources.contains(&"recently_viewed".into()));
+    assert!(receipt.resources.contains(&"tasks".into()));
+    assert!(library.projections().snapshot().recent_views.is_empty());
+    library.database().maintenance_write(WorkPriority::Maintenance, |transaction| {
+        assert_eq!(transaction.query_row("SELECT COUNT(*) FROM work_item WHERE work_type = 'ai_tag'", [], |row| row.get::<_, u32>(0))?, 0);
+        // Another job may reuse the deleted queue ID before Undo.
+        transaction.execute("INSERT INTO work_item(work_id, file_hash, work_type, status, available_at, created_at, updated_at)
+                             VALUES (1001, 'unrelated', 'ai_tag', 'pending', 'now', 'now', 'now')", [])?;
+        Ok(())
+    }).unwrap();
+    for _ in 0..2 {
+        let receipt = library.undo().unwrap().unwrap();
+        assert!(receipt.resources.contains(&"recently_viewed".into()));
+        assert!(receipt.resources.contains(&"tasks".into()));
+        assert!(library.projections().snapshot().recent_views.contains(&(a, 1234)));
+        assert!(library.projections().snapshot().recent_views.contains(&(b, 5678)));
+        library.database().read(WorkPriority::VisibleRead, |connection| {
+            let views = connection.prepare("SELECT root_id, viewed_at_ms FROM recent_view ORDER BY root_id")?
+                .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            assert_eq!(views, vec![(a.0, 1234), (b.0, 5678)]);
+            let root_work = connection.query_row(
+                "SELECT status, priority, attempt_count, available_at, last_error, created_at, updated_at
+                 FROM work_item WHERE root_id = ?1 AND work_type = 'ai_tag'", [a.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?,
+                          row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?)),
+            )?;
+            assert_eq!(root_work, ("failed".into(), 42, 3, "later".into(), "retry me".into(), "created".into(), "updated".into()));
+            let media_work = connection.query_row(
+                "SELECT status, priority FROM work_item WHERE media_item_id = ?1 AND work_type = 'ai_tag'", [b.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )?;
+            assert_eq!(media_work, ("pending".into(), 17));
+            assert_eq!(connection.query_row("SELECT file_hash FROM work_item WHERE work_id = 1001", [], |row| row.get::<_, String>(0))?, "unrelated");
+            Ok(())
+        }).unwrap();
+        library.redo().unwrap().unwrap();
+    }
+    library.undo().unwrap().unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(library.projections().snapshot().recent_views.len(), 2);
+}
+
+#[test]
+fn permanent_delete_protects_files_from_cleanup_already_waiting_for_the_writer() {
+    use picto_library::database::WorkPriority;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let root = library.ingest(&imported("racing-delete", Lifecycle::Trash, &[])).unwrap().0;
+    library.history().clear();
+    let wait_for = |priority| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !library.database().has_higher_priority_waiter(priority) {
+            assert!(Instant::now() < deadline, "worker did not queue");
+            std::thread::yield_now();
+        }
+    };
+    std::thread::scope(|scope| {
+        let library = &library;
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let blocker = scope.spawn(move || library.database().maintenance_write(WorkPriority::Maintenance, |_| {
+            locked_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(())
+        }).unwrap());
+        locked_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let cleanup = scope.spawn(|| library.clean_pending_blobs(10, |_| {
+            panic!("cleanup removed a file promised to Undo");
+        }).unwrap());
+        wait_for(WorkPriority::Fts);
+        let deletion = scope.spawn(|| library.permanently_delete(
+            &SelectionTarget::Explicit { root_ids: vec![root] }, 10, 1,
+        ).unwrap());
+        wait_for(WorkPriority::Maintenance);
+        release_tx.send(()).unwrap();
+        blocker.join().unwrap();
+        deletion.join().unwrap();
+        assert_eq!(cleanup.join().unwrap(), 0);
+    });
+    library.undo().unwrap().unwrap();
+    assert!(library.details(root).is_ok());
+    library.redo().unwrap().unwrap();
+    assert_eq!(library.clean_pending_blobs(10, |_| panic!("redo lost protection")).unwrap(), 0);
+    library.history().clear();
+    assert_eq!(library.clean_pending_blobs(10, |_| Ok(())).unwrap(), 1);
+}
+
+#[test]
 fn rejecting_deletes_inbox_items_and_can_be_undone() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();

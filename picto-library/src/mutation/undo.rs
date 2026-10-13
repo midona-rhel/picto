@@ -926,7 +926,7 @@ pub(super) fn apply_semantic_change(
             } else {
                 super::structure::restore_deleted_roots(transaction, revision, snapshot, state)?;
                 resources.extend(
-                    ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation"]
+                    ["roots", "media", "sidebar", "tags", "folders", "collections", "search", "navigation", "recently_viewed", "tasks"]
                         .map(str::to_owned),
                 );
             }

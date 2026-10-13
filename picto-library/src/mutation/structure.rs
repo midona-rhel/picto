@@ -398,7 +398,6 @@ impl Library {
         label: &'static str,
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         let target = target.clone();
-        let protected_cleanup_files = self.history.protected_cleanup_files();
         let (receipt, cleanup) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let roots = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             if roots.is_empty() {
@@ -412,12 +411,12 @@ impl Library {
                     _ => "only Trash roots can be permanently deleted".into(),
                 }));
             }
-            let undoable = usize::try_from(roots.len()).is_ok_and(|count| count <= undo_limit);
+            let undoable = undo_limit > 0 && snapshot.media_count.sum(&roots) <= undo_limit as u128;
             let state = undoable
                 .then(|| capture_deleted_roots(transaction, &snapshot, &roots))
                 .transpose()?;
             // Files an undoable delete keeps are not freed now.
-            let mut protected = protected_cleanup_files.clone();
+            let mut protected = self.history.protected_cleanup_files();
             if let Some(state) = &state {
                 protected.extend(state.files.iter().copied());
             }
@@ -465,9 +464,9 @@ impl Library {
         limit: usize,
         mut delete: impl FnMut(&PendingBlobCleanup) -> Result<()>,
     ) -> Result<usize> {
-        let protected = self.history.protected_cleanup_files();
         self.database
             .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                let protected = self.history.protected_cleanup_files();
                 let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
                 let mut removed = 0;
                 for pending in cleanup {
@@ -768,6 +767,8 @@ pub(super) fn delete_roots(
             "folders".into(),
             "collections".into(),
             "search".into(),
+            "recently_viewed".into(),
+            "tasks".into(),
         ],
         roots.iter().map(RootId),
     );
@@ -838,6 +839,24 @@ pub(super) fn capture_deleted_roots(
         )?
         .query_map([&roots_json], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let recent_views = transaction
+        .prepare("SELECT root_id, viewed_at_ms FROM recent_view
+                  WHERE root_id IN (SELECT value FROM json_each(?1))")?
+        .query_map([&roots_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let work_items_json = transaction.query_row(
+        "SELECT json_group_array(json_object(
+             'root_id', root_id, 'media_item_id', media_item_id, 'file_id', file_id,
+             'file_hash', file_hash, 'work_type', work_type, 'status', status,
+             'priority', priority, 'attempt_count', attempt_count,
+             'available_at', available_at, 'last_error', last_error,
+             'created_at', created_at, 'updated_at', updated_at))
+         FROM work_item
+         WHERE root_id IN (SELECT value FROM json_each(?1))
+            OR media_item_id IN (SELECT value FROM json_each(?2))",
+        rusqlite::params![&roots_json, &media_json],
+        |row| row.get::<_, String>(0),
+    )?;
     let files = media_rows
         .iter()
         .map(|(_, _, _, file_id)| crate::FileId(*file_id))
@@ -854,6 +873,8 @@ pub(super) fn capture_deleted_roots(
         source_posts: Arc::new(source_posts),
         source_items: Arc::new(source_items),
         folder_covers: Arc::new(folder_covers),
+        recent_views: Arc::new(recent_views),
+        work_items_json: Arc::new(work_items_json),
         files: Arc::new(files),
     })
 }
@@ -927,6 +948,26 @@ pub(super) fn restore_deleted_roots(
         )?;
         crate::fts::mark_one(transaction, root.root_id, root.modified_at_ms)?;
     }
+    for (root, viewed_at_ms) in state.recent_views.iter() {
+        transaction.execute(
+            "INSERT INTO recent_view(root_id, viewed_at_ms) VALUES (?1, ?2)",
+            rusqlite::params![root, viewed_at_ms],
+        )?;
+    }
+    // Queue IDs may have been reused; restore jobs with fresh IDs, and let
+    // interrupted running jobs be claimed again rather than stranding them.
+    transaction.execute(
+        "INSERT INTO work_item
+             (root_id, media_item_id, file_id, file_hash, work_type, status,
+              priority, attempt_count, available_at, last_error, created_at, updated_at)
+         SELECT value ->> '$.root_id', value ->> '$.media_item_id',
+                value ->> '$.file_id', value ->> '$.file_hash', value ->> '$.work_type',
+                CASE value ->> '$.status' WHEN 'running' THEN 'pending' ELSE value ->> '$.status' END,
+                value ->> '$.priority', value ->> '$.attempt_count', value ->> '$.available_at',
+                value ->> '$.last_error', value ->> '$.created_at', value ->> '$.updated_at'
+         FROM json_each(?1)",
+        [state.work_items_json.as_str()],
+    )?;
     let mut provenance = transaction.prepare_cached(
         "INSERT INTO source_provenance (source_key, source_item_key, media_id, source_text)
          VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",

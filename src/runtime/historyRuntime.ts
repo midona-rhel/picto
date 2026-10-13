@@ -68,11 +68,12 @@ function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationR
   });
 }
 
-export async function announceUndoableMutation(command: string): Promise<void> {
+export async function announceUndoableMutation(command: string, previousEntryId?: number | null): Promise<void> {
   if (!ANNOUNCED_MUTATIONS.has(command)) return;
   try {
     const state = await getHistoryState();
     if (state.undo?.command !== command) return;
+    if (state.undo.entry_id === previousEntryId) return;
     showSuccessNotification({
       title: describeHistoryEntry(state.undo),
       message: '',

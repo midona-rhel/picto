@@ -6,14 +6,14 @@
 import { getDefaultStore } from 'jotai';
 import { t } from '../i18n';
 import { getSettings } from '../platform/settingsApi';
+import { getSelectionSummary } from '../platform/entityApi';
 import type { EntityTarget } from '../shared/types/canonical';
 import { confirmModalAtom } from '../state/modals';
 import { permanentlyDeleteTarget } from './entityMutations';
-
-const DEFAULT_UNDO_LIMIT = 500;
+import { showErrorNotification } from '../shared/lib/notifications';
 
 export function permanentDeleteMessage(count: number | null, undoLimit: number): string {
-  if (count != null && count <= undoLimit) {
+  if (undoLimit > 0 && count != null && count <= undoLimit) {
     return t('You can undo this until Picto closes. After that the files are removed.');
   }
   if (count == null) {
@@ -28,12 +28,24 @@ export function permanentDeleteMessage(count: number | null, undoLimit: number):
 
 export async function requestPermanentDelete(
   target: EntityTarget,
-  count: number | null,
-  options: { emptyTrash?: boolean; onError?: (error: unknown) => void } = {},
+  _count: number | null,
+  options: {
+    emptyTrash?: boolean;
+    onError?: (error: unknown) => void;
+    onlyNonUndoable?: boolean;
+    remove?: (target: EntityTarget) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const undoLimit = await getSettings()
     .then((settings) => settings.undoDeleteLimit)
-    .catch(() => DEFAULT_UNDO_LIMIT);
+    .catch(() => 0);
+  const summary = await getSelectionSummary(target);
+  const count = summary.selected_count;
+  const remove = options.remove ?? permanentlyDeleteTarget;
+  if (options.onlyNonUndoable && undoLimit > 0 && summary.media_count <= undoLimit) {
+    await remove(target);
+    return;
+  }
   getDefaultStore().set(confirmModalAtom, {
     open: true,
     title: options.emptyTrash
@@ -41,11 +53,13 @@ export async function requestPermanentDelete(
       : count === 1 || count == null
         ? t('Delete permanently?')
         : t('Delete {value0} items permanently?', { value0: count.toLocaleString() }),
-    message: permanentDeleteMessage(count, undoLimit),
+    message: permanentDeleteMessage(summary.media_count, undoLimit),
     confirmLabel: options.emptyTrash ? t('Delete All') : t('Delete Permanently'),
     danger: true,
     onConfirm: () => {
-      void permanentlyDeleteTarget(target).catch((error) => options.onError?.(error));
+      void remove(target).catch(options.onError ?? ((error) => {
+        showErrorNotification({ title: t('Delete Permanently'), message: error instanceof Error ? error.message : String(error) });
+      }));
     },
   });
 }

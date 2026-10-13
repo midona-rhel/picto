@@ -28,6 +28,8 @@ import { clearSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
+import { getHistoryState } from '../platform/historyApi';
+import { requestPermanentDelete } from './permanentDeleteRequest';
 
 const store = getDefaultStore();
 
@@ -90,12 +92,15 @@ export async function permanentlyDeleteTarget(target: EntityTarget): Promise<voi
 
 /**
  * Reject Inbox items: to Trash, or straight out of the library when the
- * "Rejected items" setting says so. Both can be undone.
+ * "Rejected items" setting says so. Confirm deletes that cannot be undone.
  */
 export async function rejectTarget(target: EntityTarget): Promise<void> {
   const action = await getSettings().then((settings) => settings.rejectAction).catch(() => 'trash' as const);
   if (action === 'delete') {
-    await deleteTarget(target, rejectDeleteItems, 'items.reject');
+    await requestPermanentDelete(target, null, {
+      onlyNonUndoable: true,
+      remove: (selection) => deleteTarget(selection, rejectDeleteItems, 'items.reject'),
+    });
     return;
   }
   await setTargetLifecycle(target, 'trash');
@@ -108,8 +113,9 @@ async function deleteTarget(
 ): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
+    const before = await getHistoryState().catch(() => undefined);
     await remove(target);
-    await announceUndoableMutation(command);
+    if (before) await announceUndoableMutation(command, before.undo?.entry_id ?? null);
 
     if (target.kind === 'explicit') {
       const deletedIds = new Set(target.root_ids);
