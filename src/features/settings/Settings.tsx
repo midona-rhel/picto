@@ -29,6 +29,7 @@ import {
   IconSearch,
   IconRefresh,
   IconSettings2,
+  IconTrash,
   IconSortAscending,
   IconSortDescending,
 } from '@tabler/icons-react';
@@ -142,6 +143,11 @@ const PANELS: PanelDef[] = [
     id: 'autoimport', label: t("Auto-Import"), icon: IconFolderDown,
     keywords: 'auto import watched folder watch files inbox recursive subfolders',
     description: t("Control imports from watched folders."),
+  },
+  {
+    id: 'deleting', label: t("Inbox & Deleting"), icon: IconTrash,
+    keywords: 'inbox reject rejected trash delete permanently undo restore empty',
+    description: t("What rejecting does, and how much a delete can be undone."),
   },
   {
     id: 'subscriptions', label: t("Subscriptions"), icon: IconDownload,
@@ -634,7 +640,7 @@ function CloudPanel({ initialSnapshot }: { initialSnapshot: CloudSnapshot | null
 }
 
 function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWillReset, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
-  panel: 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'subscriptions';
+  panel: 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'deleting' | 'subscriptions';
   onDirty: () => void;
   onResetViewOverrides: () => void;
   viewOverridesWillReset: boolean;
@@ -1024,6 +1030,45 @@ function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWi
         </>
       ) : null}
 
+      {panel === 'deleting' ? (
+        <>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>{t("Rejecting")}</div>
+              <Row label={t("Rejected items")}>
+                <CmSelect
+                  value={appSettings?.rejectAction ?? 'trash'}
+                  options={[
+                    { value: 'trash', label: t("Move to Trash") },
+                    { value: 'delete', label: t("Delete permanently") },
+                  ]}
+                  onChange={(value) => updateAppSetting({ rejectAction: value as AppSettings['rejectAction'] })}
+                />
+              </Row>
+              <p className={styles.settingHint}>
+                {t("Deleting skips Trash. Like any delete, it can be undone until Picto closes.")}</p>
+            </div>
+          </div>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>{t("Undoing deletes")}</div>
+              <Row label={t("Undo deletes of up to")}>
+                <CompactNumberInput
+                  label={t("Undo deletes of up to")}
+                  min={0}
+                  max={100_000}
+                  value={appSettings?.undoDeleteLimit ?? 500}
+                  commitOnChange
+                  onCommit={(value) => updateAppSetting({ undoDeleteLimit: value })}
+                />
+              </Row>
+              <p className={styles.settingHint}>
+                {t("A permanent delete of up to this many items keeps its files until Picto closes, so it can be undone. A larger delete removes them at once and asks first.")}</p>
+            </div>
+          </div>
+        </>
+      ) : null}
+
       {panel === 'subscriptions' ? (
         <>
         <div className={styles.settingsBlock}>
@@ -1135,6 +1180,18 @@ const ALL_SETTINGS: SettingRow[] = [
     label: t("Notifications"),
     keywords: 'notifications alerts popups success information warnings errors',
     panel: 'notifications',
+  },
+  {
+    id: 'deleting.reject',
+    label: t("Rejected items"),
+    keywords: 'inbox reject rejected trash delete permanently',
+    panel: 'deleting',
+  },
+  {
+    id: 'deleting.undo',
+    label: t("Undo deletes of up to"),
+    keywords: 'undo delete permanently restore trash empty limit',
+    panel: 'deleting',
   },
   {
     id: 'autoimport.behavior',
@@ -1407,10 +1464,10 @@ export function Settings() {
                 })}
               </div>
             )
-          ) : ['general', 'sidebar', 'controls', 'preview', 'notifications', 'autoimport', 'subscriptions'].includes(activePanel.id) ? (
+          ) : ['general', 'sidebar', 'controls', 'preview', 'notifications', 'autoimport', 'deleting', 'subscriptions'].includes(activePanel.id) ? (
             <>
               <PreferencePanel
-                panel={activePanel.id as 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'subscriptions'}
+                panel={activePanel.id as 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'deleting' | 'subscriptions'}
                 onDirty={markDirty}
                 onResetViewOverrides={() => {
                   setResetViewOverridesPending(true);

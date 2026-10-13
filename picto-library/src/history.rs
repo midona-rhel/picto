@@ -136,6 +136,131 @@ impl StructuralState {
     }
 }
 
+/// A `media_item` row: id, name, notes, file.
+pub type DeletedMediaRow = (u32, String, Option<String>, u32);
+/// A `source_provenance` row: source key, source item key, media, text.
+pub type DeletedProvenanceRow = (String, String, u32, Option<String>);
+
+/// Everything a permanent delete removed, so undo can put it back exactly:
+/// the roots' structure (rows, memberships, folder positions, collection
+/// orders) and the rows that pointed at them. The files stay on disk while
+/// the entry is in history (`protected_cleanup_files`).
+/// Rows a merge pointed from the merged-away item (or a collection it
+/// emptied) at the item that stays, so undo can point them back. Each move
+/// names the row, where it pointed before and where it points after.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RelinkState {
+    /// Source posts: post, root before, root after.
+    pub source_posts: Vec<(i64, u32, u32)>,
+    /// Source items: item, media before, media after.
+    pub source_items: Vec<(i64, u32, u32)>,
+    /// Provenance rows moved to another media item.
+    pub provenance: Vec<RelinkedProvenance>,
+    /// Folder covers: folder, root before, root after.
+    pub folder_covers: Vec<(u32, u32, u32)>,
+    /// Stable-key aliases: key, the item it named before (none for a new
+    /// alias), the item it names after.
+    pub aliases: Vec<(String, Option<u32>, u32)>,
+}
+
+/// A `source_provenance` row moved from one media item to another. When the
+/// target already had the same source, the moved row is dropped instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelinkedProvenance {
+    pub source_key: String,
+    pub source_item_key: String,
+    pub source_text: Option<String>,
+    pub from: u32,
+    pub to: u32,
+    pub target_had: bool,
+}
+
+impl RelinkState {
+    pub fn is_empty(&self) -> bool {
+        self.source_posts.is_empty()
+            && self.source_items.is_empty()
+            && self.provenance.is_empty()
+            && self.folder_covers.is_empty()
+            && self.aliases.is_empty()
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        (self.source_posts.len() + self.source_items.len() + self.folder_covers.len()) * 16
+            + self
+                .provenance
+                .iter()
+                .map(|row| {
+                    row.source_key.len()
+                        + row.source_item_key.len()
+                        + row.source_text.as_deref().map_or(0, str::len)
+                        + 24
+                })
+                .sum::<usize>()
+            + self.aliases.iter().map(|(key, _, _)| key.len() + 16).sum::<usize>()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeletedRootsState {
+    pub roots: Arc<RoaringBitmap>,
+    pub structure: StructuralState,
+    /// `library_item` rows of the roots and their media: id, stable key, kind.
+    pub items: Arc<Vec<(u32, String, u8)>>,
+    /// Stable identities retained from earlier item or collection merges.
+    pub aliases: Arc<Vec<(String, u32)>>,
+    /// `media_item` rows: id, name, notes, file.
+    pub media: Arc<Vec<DeletedMediaRow>>,
+    /// The media that are images.
+    pub image_media: Arc<RoaringBitmap>,
+    /// `source_provenance` rows: source key, source item key, media, text.
+    pub provenance: Arc<Vec<DeletedProvenanceRow>>,
+    /// Source posts that pointed at a deleted root, with that root.
+    pub source_posts: Arc<Vec<(i64, u32)>>,
+    /// Source items that pointed at a deleted media item, with that media.
+    pub source_items: Arc<Vec<(i64, u32)>>,
+    /// Folders whose cover was a deleted root.
+    pub folder_covers: Arc<Vec<(u32, u32)>>,
+    pub recent_views: Arc<Vec<(u32, i64)>>,
+    /// Cascaded queue rows, serialized for set-based restoration.
+    pub work_items_json: Arc<String>,
+    pub files: Arc<Vec<FileId>>,
+}
+
+impl DeletedRootsState {
+    fn estimated_bytes(&self) -> usize {
+        let roots = self
+            .structure
+            .roots
+            .iter()
+            .map(|root| root.stable_key.len() + root.name.len() + root.source_urls_json.len() + 96)
+            .sum::<usize>();
+        let items = self.items.iter().map(|(_, key, _)| key.len() + 16).sum::<usize>();
+        let aliases = self.aliases.iter().map(|(key, _)| key.len() + 8).sum::<usize>();
+        let media = self
+            .media
+            .iter()
+            .map(|(_, name, notes, _)| name.len() + notes.as_deref().map_or(0, str::len) + 24)
+            .sum::<usize>();
+        let provenance = self
+            .provenance
+            .iter()
+            .map(|(key, item, _, text)| key.len() + item.len() + text.as_deref().map_or(0, str::len) + 24)
+            .sum::<usize>();
+        roots
+            + items
+            + aliases
+            + media
+            + provenance
+            + self.structure.membership_bytes()
+            + (self.source_posts.len() + self.source_items.len() + self.folder_covers.len()) * 16
+            + self.recent_views.len() * 16
+            + self.work_items_json.len()
+            + self.files.len() * 4
+            + self.roots.serialized_size()
+            + self.image_media.serialized_size()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticChange {
     AuxiliaryJson {
@@ -218,6 +343,10 @@ pub enum SemanticChange {
         after: StructuralState,
     },
     DuplicateResolution(crate::duplicate::DuplicateHistoryState),
+    /// Undo restores the deleted roots; redo deletes them again.
+    PermanentDelete(Arc<DeletedRootsState>),
+    /// Rows a merge moved onto the item that stays.
+    Relink(Arc<RelinkState>),
     Compound(Vec<SemanticChange>),
 }
 
@@ -367,6 +496,8 @@ impl SemanticChange {
                     + after.membership_bytes()
             }
             Self::DuplicateResolution(state) => state.estimated_bytes(),
+            Self::PermanentDelete(state) => state.estimated_bytes(),
+            Self::Relink(state) => state.estimated_bytes(),
             Self::Compound(changes) => changes.iter().map(Self::estimated_bytes).sum(),
         }
     }
@@ -378,6 +509,7 @@ impl SemanticChange {
                     protected.insert(file_id);
                 }
             }
+            Self::PermanentDelete(state) => protected.extend(state.files.iter().copied()),
             Self::Compound(changes) => {
                 for change in changes {
                     change.protected_cleanup_files(protected);
@@ -393,6 +525,12 @@ pub struct HistoryEntry {
     pub entry_id: u64,
     pub command: String,
     pub label: String,
+    /// How many items the change touched (0 when it is not about items), so
+    /// the renderer can describe it in plain words.
+    pub count: u64,
+    /// What the change set, where the command alone does not say: the status
+    /// moved to, the rating given, or whether something was added or removed.
+    pub detail: Option<String>,
     pub change: SemanticChange,
     pub estimated_bytes: usize,
 }
@@ -413,9 +551,18 @@ impl HistoryEntry {
             entry_id: 0,
             command: command.into(),
             label: label.into(),
+            count: 0,
+            detail: None,
             change,
             estimated_bytes,
         }
+    }
+
+    /// Say how many items the change touched and, optionally, what it set.
+    pub fn about(mut self, count: u64, detail: Option<&str>) -> Self {
+        self.count = count;
+        self.detail = detail.map(str::to_owned);
+        self
     }
 
     fn summary(&self) -> HistoryEntrySummary {
@@ -423,6 +570,8 @@ impl HistoryEntry {
             entry_id: self.entry_id,
             command: self.command.clone(),
             label: self.label.clone(),
+            count: self.count,
+            detail: self.detail.clone(),
         }
     }
 }
@@ -431,7 +580,13 @@ impl HistoryEntry {
 pub struct HistoryEntrySummary {
     pub entry_id: u64,
     pub command: String,
+    /// A developer-facing fallback; the renderer words the change itself from
+    /// `command`, `count` and `detail`.
     pub label: String,
+    #[serde(default)]
+    pub count: u64,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

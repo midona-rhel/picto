@@ -10,7 +10,6 @@ import { tasksAtom } from './taskSettle';
 import { gridActiveAtom, gridItemsAtom, gridScopeAtom } from '../state/grid';
 import {
   batchRenameModalAtom,
-  confirmModalAtom,
   exportModalAtom,
   folderPickerModalAtom,
   smartFolderModalAtom,
@@ -26,6 +25,7 @@ import {
 import type { CanonicalEntityGridItem, EntityTarget } from '../shared/types/canonical';
 import { showErrorNotification, showInfoNotification, showSuccessNotification } from '../shared/lib/notifications';
 import { t } from '../i18n';
+import { requestPermanentDelete } from '../controllers/permanentDeleteRequest';
 
 type ApplicationMenuEvent =
   | 'menu:import-files'
@@ -219,7 +219,7 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
     return;
   }
   if (action === 'reject') {
-    await entityMutations.setTargetLifecycle(requireTarget(), 'trash');
+    await entityMutations.rejectTarget(requireTarget());
     return;
   }
   if (action === 'restore') {
@@ -227,16 +227,7 @@ async function runSelectionAction({ action, rating }: SelectionMenuPayload): Pro
     return;
   }
   if (action === 'delete-permanently') {
-    const target = requireTarget();
-    const count = snapshot.count;
-    store.set(confirmModalAtom, {
-      open: true,
-      title: count === 1 ? t("Delete permanently?") : t("Delete {value0} items permanently?", { value0: count }),
-      message: 'This removes the files from the library and cannot be undone.',
-      confirmLabel: t("Delete Permanently"),
-      danger: true,
-      onConfirm: () => { void entityMutations.permanentlyDeleteTarget(target).catch(reportMenuError); },
-    });
+    await requestPermanentDelete(requireTarget(), snapshot.count, { onError: reportMenuError });
     return;
   }
   if (action === 'remove-from-folder') {

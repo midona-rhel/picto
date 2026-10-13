@@ -989,7 +989,7 @@ impl Library {
             );
             Ok((
                 FolderDeleteResult {
-                    deleted_folder_ids,
+                    deleted_folder_ids: deleted_folder_ids.clone(),
                     fallback_folder_id,
                     receipt: receipt.clone(),
                 },
@@ -1000,7 +1000,8 @@ impl Library {
                         "folders.delete",
                         "Delete folders",
                         SemanticChange::Compound(history_changes),
-                    )),
+                    )
+                    .about(deleted_folder_ids.len() as u64, None)),
                 },
             ))
         })?;
@@ -1380,7 +1381,8 @@ impl Library {
                     "Remove from folder"
                 },
                 SemanticChange::Compound(history_changes),
-            );
+            )
+            .about(changed.len(), Some(if add { "add" } else { "remove" }));
             Ok((
                 receipt.clone(),
                 PublishedDelta {

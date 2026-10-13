@@ -84,11 +84,13 @@ pub(super) enum TaskUndo {
         before: Option<Box<FolderDefinitionState>>,
         after: Option<Box<FolderDefinitionState>>,
     },
+    Relink(Arc<crate::history::RelinkState>),
 }
 
 impl TaskUndo {
     fn into_change(self) -> SemanticChange {
         match self {
+            Self::Relink(state) => SemanticChange::Relink(state),
             Self::Structure {
                 affected,
                 before,
@@ -117,7 +119,7 @@ pub(super) fn record_task_undo(
     change: TaskUndo,
 ) -> Result<()> {
     let kind = match &change {
-        TaskUndo::Structure { .. } => "structure",
+        TaskUndo::Structure { .. } | TaskUndo::Relink(_) => "structure",
         TaskUndo::Folder { .. } => "folder",
     };
     let payload = bincode::serialize(&change)
@@ -666,11 +668,14 @@ impl Library {
                     std::iter::empty(),
                     untagged.iter().map(RootId),
                 )?;
-                crate::smart::settle_affected(transaction, &mut next, &untagged)?;
                 resources.extend(["roots".to_owned(), "tags".to_owned()]);
                 affected |= &untagged;
             }
             replay_task_undo(transaction, revision, task, "folder", &mut next, &mut affected, &mut resources)?;
+            crate::smart::settle_affected(transaction, &mut next, &affected)?;
+            if !Arc::ptr_eq(&snapshot.smart_results, &next.smart_results) {
+                resources.insert("smart_folders".into());
+            }
             transaction.execute("DELETE FROM task_undo WHERE task_id = ?1", [task.0])?;
             transaction.execute(
                 "UPDATE task SET state = 'reverted', scan_complete = 1,

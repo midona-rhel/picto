@@ -49,7 +49,8 @@ impl Library {
                             before,
                             after,
                         },
-                    )),
+                    )
+                    .about(selected.len(), None)),
                 },
             ))
         })?;
@@ -174,6 +175,7 @@ impl Library {
                 ],
                 output.affected.iter().map(RootId),
             );
+            let detached = output.root_ids.len() as u64;
             Ok((
                 (output.root_ids, receipt.clone()),
                 PublishedDelta {
@@ -187,7 +189,8 @@ impl Library {
                             before,
                             after,
                         },
-                    )),
+                    )
+                    .about(detached, None)),
                 },
             ))
         })?;
@@ -347,13 +350,54 @@ impl Library {
         Ok(receipt)
     }
 
+    /// Delete Trash roots for good. A delete of at most `undo_limit` roots is
+    /// undoable: its rows are kept in history and its files stay on disk
+    /// until the entry leaves history (when the app closes, or it falls off
+    /// the stack). A larger one cannot be undone and frees its files at once.
     pub fn permanently_delete(
         &self,
         target: &SelectionTarget,
         deleted_at_ms: i64,
+        undo_limit: usize,
+    ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
+        self.delete_permanently_from(
+            target,
+            deleted_at_ms,
+            undo_limit,
+            Lifecycle::Trash,
+            "items.delete",
+            "Delete permanently",
+        )
+    }
+
+    /// Reject Inbox roots straight out of the library (the setting that
+    /// skips Trash for rejected items). Undoable like `permanently_delete`.
+    pub fn delete_rejected(
+        &self,
+        target: &SelectionTarget,
+        deleted_at_ms: i64,
+        undo_limit: usize,
+    ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
+        self.delete_permanently_from(
+            target,
+            deleted_at_ms,
+            undo_limit,
+            Lifecycle::Inbox,
+            "items.reject",
+            "Reject",
+        )
+    }
+
+    fn delete_permanently_from(
+        &self,
+        target: &SelectionTarget,
+        deleted_at_ms: i64,
+        undo_limit: usize,
+        lifecycle: Lifecycle,
+        command: &'static str,
+        label: &'static str,
     ) -> Result<(MutationReceipt, Vec<crate::PendingBlobCleanup>)> {
         let target = target.clone();
-        let protected_cleanup_files = self.history.protected_cleanup_files();
         let (receipt, cleanup) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let roots = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
             if roots.is_empty() {
@@ -361,26 +405,43 @@ impl Library {
                     "permanent deletion requires at least one root".into(),
                 ));
             }
-            if !roots.is_subset(snapshot.lifecycle(Lifecycle::Trash)) {
-                return Err(LibraryError::InvalidInput(
-                    "only Trash roots can be permanently deleted".into(),
-                ));
+            if !roots.is_subset(snapshot.lifecycle(lifecycle)) {
+                return Err(LibraryError::InvalidInput(match lifecycle {
+                    Lifecycle::Inbox => "only Inbox roots can be rejected".into(),
+                    _ => "only Trash roots can be permanently deleted".into(),
+                }));
             }
-
+            let undoable = undo_limit > 0 && snapshot.media_count.sum(&roots) <= undo_limit as u128;
+            let state = undoable
+                .then(|| capture_deleted_roots(transaction, &snapshot, &roots))
+                .transpose()?;
+            // Files an undoable delete keeps are not freed now.
+            let mut protected = self.history.protected_cleanup_files();
+            if let Some(state) = &state {
+                protected.extend(state.files.iter().copied());
+            }
             let (next, cleanup, receipt) = delete_roots(
                 transaction,
                 revision,
                 &snapshot,
                 &roots,
                 deleted_at_ms,
-                &protected_cleanup_files,
+                &protected,
             )?;
+            let history = state.map(|state| {
+                HistoryEntry::for_command(
+                    command,
+                    label,
+                    SemanticChange::PermanentDelete(Arc::new(state)),
+                )
+                .about(roots.len(), None)
+            });
             Ok((
                 (receipt.clone(), cleanup),
                 PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: None,
+                    history,
                 },
             ))
         })?;
@@ -403,9 +464,9 @@ impl Library {
         limit: usize,
         mut delete: impl FnMut(&PendingBlobCleanup) -> Result<()>,
     ) -> Result<usize> {
-        let protected = self.history.protected_cleanup_files();
         self.database
             .maintenance_write(WorkPriority::Maintenance, |transaction| {
+                let protected = self.history.protected_cleanup_files();
                 let cleanup = crate::duplicate::ready_cleanup(transaction, &protected, limit)?;
                 let mut removed = 0;
                 for pending in cleanup {
@@ -706,10 +767,305 @@ pub(super) fn delete_roots(
             "folders".into(),
             "collections".into(),
             "search".into(),
+            "recently_viewed".into(),
+            "tasks".into(),
         ],
         roots.iter().map(RootId),
     );
     Ok((next, cleanup, receipt))
+}
+
+fn ids_json(ids: impl IntoIterator<Item = u32>) -> Result<String> {
+    Ok(serde_json::to_string(&ids.into_iter().collect::<Vec<_>>())?)
+}
+
+/// What a permanent delete of `roots` removes, read before it does.
+pub(super) fn capture_deleted_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ProjectionSnapshot,
+    roots: &RoaringBitmap,
+) -> Result<crate::history::DeletedRootsState> {
+    let mut media = RoaringBitmap::new();
+    for root_id in roots {
+        match snapshot.collection_orders.get(&RootId(root_id)) {
+            Some(members) => media.extend(members.iter().map(|member| member.0)),
+            None => {
+                media.insert(root_id);
+            }
+        }
+    }
+    let roots_json = ids_json(roots.iter())?;
+    let media_json = ids_json(media.iter())?;
+    let items_json = ids_json((roots | &media).iter())?;
+    let items = transaction
+        .prepare(
+            "SELECT local_id, stable_key, item_kind FROM library_item
+             WHERE local_id IN (SELECT value FROM json_each(?1)) ORDER BY local_id",
+        )?
+        .query_map([&items_json], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<(u32, String, u8)>>>()?;
+    let media_rows = transaction
+        .prepare(
+            "SELECT media_id, media_name, media_notes, file_id FROM media_item
+             WHERE media_id IN (SELECT value FROM json_each(?1)) ORDER BY media_id",
+        )?
+        .query_map([&media_json], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<crate::history::DeletedMediaRow>>>()?;
+    let aliases = transaction
+        .prepare(
+            "SELECT stable_key, local_id FROM library_item_alias
+             WHERE local_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&items_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let provenance = transaction
+        .prepare(
+            "SELECT source_key, source_item_key, media_id, source_text FROM source_provenance
+             WHERE media_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&media_json], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let source_posts = transaction
+        .prepare(
+            "SELECT source_post_id, root_item_id FROM source_post
+             WHERE root_item_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&roots_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let source_items = transaction
+        .prepare(
+            "SELECT source_item_id, media_item_id FROM source_item
+             WHERE media_item_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&media_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let folder_covers = transaction
+        .prepare(
+            "SELECT folder_id, cover_root_id FROM folder_definition
+             WHERE cover_root_id IN (SELECT value FROM json_each(?1))",
+        )?
+        .query_map([&roots_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let recent_views = transaction
+        .prepare("SELECT root_id, viewed_at_ms FROM recent_view
+                  WHERE root_id IN (SELECT value FROM json_each(?1))")?
+        .query_map([&roots_json], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let work_items_json = transaction.query_row(
+        "SELECT json_group_array(json_object(
+             'root_id', root_id, 'media_item_id', media_item_id, 'file_id', file_id,
+             'file_hash', file_hash, 'work_type', work_type, 'status', status,
+             'priority', priority, 'attempt_count', attempt_count,
+             'available_at', available_at, 'last_error', last_error,
+             'created_at', created_at, 'updated_at', updated_at))
+         FROM work_item
+         WHERE root_id IN (SELECT value FROM json_each(?1))
+            OR media_item_id IN (SELECT value FROM json_each(?2))",
+        rusqlite::params![&roots_json, &media_json],
+        |row| row.get::<_, String>(0),
+    )?;
+    let files = media_rows
+        .iter()
+        .map(|(_, _, _, file_id)| crate::FileId(*file_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(crate::history::DeletedRootsState {
+        roots: Arc::new(roots.clone()),
+        structure: capture_structure(transaction, snapshot, roots, None)?,
+        items: Arc::new(items),
+        aliases: Arc::new(aliases),
+        media: Arc::new(media_rows),
+        image_media: Arc::new(snapshot.image_media.as_ref() & &media),
+        provenance: Arc::new(provenance),
+        source_posts: Arc::new(source_posts),
+        source_items: Arc::new(source_items),
+        folder_covers: Arc::new(folder_covers),
+        recent_views: Arc::new(recent_views),
+        work_items_json: Arc::new(work_items_json),
+        files: Arc::new(files),
+    })
+}
+
+/// Undo a permanent delete: put back every row it removed and rebuild the
+/// roots' projections. Fails if the roots came back some other way or a file
+/// is already gone.
+pub(super) fn restore_deleted_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    state: &crate::history::DeletedRootsState,
+) -> Result<()> {
+    let roots = state.roots.as_ref();
+    let items_json = ids_json(state.items.iter().map(|(id, _, _)| *id))?;
+    let present: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM library_item WHERE local_id IN (SELECT value FROM json_each(?1))",
+        [&items_json],
+        |row| row.get(0),
+    )?;
+    if present != 0 {
+        return Err(LibraryError::InvalidState(
+            "cannot undo the delete because its items exist again".into(),
+        ));
+    }
+    let files_json = ids_json(state.files.iter().map(|file| file.0))?;
+    let files: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM media_file WHERE file_id IN (SELECT value FROM json_each(?1))",
+        [&files_json],
+        |row| row.get(0),
+    )?;
+    if usize::try_from(files).ok() != Some(state.files.len()) {
+        return Err(LibraryError::InvalidState(
+            "cannot undo the delete because its files were already removed".into(),
+        ));
+    }
+    // One file is one item: a file imported again since cannot come back
+    // as a second one.
+    let reimported: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM media_item WHERE file_id IN (SELECT value FROM json_each(?1))",
+        [&files_json],
+        |row| row.get(0),
+    )?;
+    if reimported != 0 {
+        return Err(LibraryError::InvalidState(
+            "cannot undo the delete because its files are in the library again".into(),
+        ));
+    }
+
+    let mut insert_item = transaction
+        .prepare_cached("INSERT INTO library_item(local_id, stable_key, item_kind) VALUES (?1, ?2, ?3)")?;
+    for (id, key, kind) in state.items.iter() {
+        insert_item.execute(rusqlite::params![id, key, kind])?;
+    }
+    drop(insert_item);
+    let mut insert_alias = transaction.prepare_cached(
+        "INSERT INTO library_item_alias(stable_key, local_id) VALUES (?1, ?2)",
+    )?;
+    for (key, id) in state.aliases.iter() {
+        insert_alias.execute(rusqlite::params![key, id])?;
+    }
+    drop(insert_alias);
+    let mut insert_media = transaction.prepare_cached(
+        "INSERT INTO media_item(media_id, media_name, media_notes, file_id) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for (id, name, notes, file_id) in state.media.iter() {
+        insert_media.execute(rusqlite::params![id, name, notes, file_id])?;
+    }
+    drop(insert_media);
+    for root in state.structure.roots.iter() {
+        transaction.execute(
+            "INSERT INTO library_root
+                 (root_id, name, notes, source_urls_json, cover_media_id, imported_at_ms,
+                  captured_at_ms, modified_at_ms, media_count, total_size_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                root.root_id.0,
+                root.name,
+                root.notes,
+                root.source_urls_json,
+                root.cover_media_id.0,
+                root.imported_at_ms,
+                root.captured_at_ms,
+                root.modified_at_ms,
+                root.media_count,
+                i64::try_from(root.total_size_bytes).map_err(|_| {
+                    LibraryError::InvalidState("root size exceeds SQLite range".into())
+                })?
+            ],
+        )?;
+        crate::fts::mark_one(transaction, root.root_id, root.modified_at_ms)?;
+    }
+    for (root, viewed_at_ms) in state.recent_views.iter() {
+        transaction.execute(
+            "INSERT INTO recent_view(root_id, viewed_at_ms) VALUES (?1, ?2)",
+            rusqlite::params![root, viewed_at_ms],
+        )?;
+    }
+    // Queue IDs may have been reused; restore jobs with fresh IDs, and let
+    // interrupted running jobs be claimed again rather than stranding them.
+    transaction.execute(
+        "INSERT INTO work_item
+             (root_id, media_item_id, file_id, file_hash, work_type, status,
+              priority, attempt_count, available_at, last_error, created_at, updated_at)
+         SELECT value ->> '$.root_id', value ->> '$.media_item_id',
+                value ->> '$.file_id', value ->> '$.file_hash', value ->> '$.work_type',
+                CASE value ->> '$.status' WHEN 'running' THEN 'pending' ELSE value ->> '$.status' END,
+                value ->> '$.priority', value ->> '$.attempt_count', value ->> '$.available_at',
+                value ->> '$.last_error', value ->> '$.created_at', value ->> '$.updated_at'
+         FROM json_each(?1)",
+        [state.work_items_json.as_str()],
+    )?;
+    let mut provenance = transaction.prepare_cached(
+        "INSERT INTO source_provenance (source_key, source_item_key, media_id, source_text)
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
+    )?;
+    for (key, item, media_id, text) in state.provenance.iter() {
+        provenance.execute(rusqlite::params![key, item, media_id, text])?;
+    }
+    drop(provenance);
+    for (post, root) in state.source_posts.iter() {
+        transaction.execute(
+            "UPDATE source_post SET root_item_id = ?2 WHERE source_post_id = ?1 AND root_item_id IS NULL",
+            rusqlite::params![post, root],
+        )?;
+    }
+    for (item, media_id) in state.source_items.iter() {
+        transaction.execute(
+            "UPDATE source_item SET media_item_id = ?2 WHERE source_item_id = ?1 AND media_item_id IS NULL",
+            rusqlite::params![item, media_id],
+        )?;
+    }
+    for (folder, root) in state.folder_covers.iter() {
+        transaction.execute(
+            "UPDATE folder_definition SET cover_root_id = ?2 WHERE folder_id = ?1 AND cover_root_id IS NULL",
+            rusqlite::params![folder, root],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE source_attempt_root
+         SET root_id = (SELECT local_id FROM library_item WHERE stable_key = root_stable_key)
+         WHERE root_id IS NULL
+           AND root_stable_key IN (
+               SELECT stable_key FROM library_item WHERE local_id IN (SELECT value FROM json_each(?1))
+           )",
+        [&items_json],
+    )?;
+    // The delete's tombstones and queued file removals no longer apply.
+    transaction.execute(
+        "DELETE FROM deletion_tombstone WHERE stable_key IN (
+             SELECT stable_key FROM library_item WHERE local_id IN (SELECT value FROM json_each(?1))
+         )",
+        [&items_json],
+    )?;
+    transaction.execute(
+        "DELETE FROM cloud_tombstone
+         WHERE object_kind = 'blob' AND EXISTS (
+             SELECT 1 FROM media_file file
+             WHERE file.file_id IN (SELECT value FROM json_each(?1))
+               AND (cloud_tombstone.object_key = file.content_hash
+                    OR cloud_tombstone.object_key LIKE file.content_hash || '.%')
+         )",
+        [&files_json],
+    )?;
+    transaction.execute(
+        "DELETE FROM blob_cleanup_queue WHERE file_id IN (SELECT value FROM json_each(?1))",
+        [&files_json],
+    )?;
+
+    restore_structure_bitmaps(transaction, revision, snapshot, roots, &state.structure)?;
+    restore_structure_orders(transaction, revision, snapshot, roots, &state.structure)?;
+    for root in state.structure.roots.iter().filter(|root| root.kind == RootKind::Media) {
+        Arc::make_mut(&mut snapshot.media_owner).insert(root.root_id.0, root.root_id);
+    }
+    for (root, members) in &state.structure.collections {
+        for media in members {
+            Arc::make_mut(&mut snapshot.media_owner).insert(media.0, *root);
+        }
+    }
+    *Arc::make_mut(&mut snapshot.image_media) |= state.image_media.as_ref();
+    crate::group::refresh_structural_projections(transaction, snapshot, roots)?;
+    snapshot.revision = revision;
+    Ok(())
 }
 
 pub(super) fn restore_structure(

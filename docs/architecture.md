@@ -17,6 +17,17 @@ media occurrences, and visible roots have separate identities. Attached collecti
 their root's lifecycle and folder placement. `All` contains active roots only; Inbox and Trash are
 separate lifecycle scopes.
 
+One file is exactly one media item, enforced by a unique index on `media_item(file_id)`. Every
+import resolves a file it already holds to that item: a standalone import adds its tags and
+provenance to it, a loose item joins a new collection that contains it, and an item already in
+another collection causes the overlapping sets to combine. Chained overlaps also combine,
+retaining every unique media item and merging tags, folders, notes, source links and the highest rating. Resolving a duplicate by
+keeping one file merges the other item into the kept one (tags, folder places, the higher rating,
+the lifecycle that keeps it most, notes and source links), undoably. A merged-away item's stable
+key stays in `library_item_alias`, so re-imports, Picto Packs and cloud copies resolve to the item
+that stays. Libraries from before the rule merge their shared files once at open
+(`Library::merge_shared_files`), after the schema migration's backup.
+
 Manual imports, watched folders, subscriptions, and retries enter one durable ingest path. See
 [Subscriptions](#subscriptions) for how source posts become standalone items or collections.
 
@@ -171,6 +182,17 @@ stored as 1,024-id chunks (`ordered_membership_chunk`); an append rewrites one c
 entry for a bitmap keeps only the members it changed, and replay checks and restores only those
 members: later edits to other roots never block an undo, while a later edit to the same roots
 does. Replay re-checks only the smart folders the replayed change can affect.
+
+A permanent delete (emptying Trash, or rejecting with the "Rejected items: Delete permanently"
+setting) is undoable when it holds at most `undoDeleteLimit` media items (default 500), counting
+collection members; zero disables delete undo. Its history entry
+keeps the deleted roots' structure and every row that pointed at them, and its files stay on disk
+while the entry is in history: `protected_cleanup_files` keeps them out of the blob cleanup, which
+removes them once the entry leaves history, at the latest when the app closes. A larger delete
+records no entry and frees its files at once; the renderer confirms nonundoable rejects using
+the backend-resolved selection, not the loaded grid window. History protection is registered
+before releasing the writer, and cleanup reads it after acquiring the same writer. Undo restores
+recent views and cascaded queue jobs, assigning new queue IDs and requeuing interrupted running jobs.
 
 Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
 subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only

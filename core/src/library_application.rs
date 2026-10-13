@@ -44,11 +44,16 @@ impl Default for AiWorkerStatus {
     }
 }
 
+/// Items a permanent delete may hold and still be undoable, by default.
+pub const DEFAULT_UNDO_DELETE_LIMIT: usize = 500;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LibraryHistoryEntrySummary {
     pub entry_id: u64,
     pub command: String,
     pub label: String,
+    pub count: u64,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +116,20 @@ impl LibraryApplication {
     }
 
     fn from_library(root: PathBuf, library: Library) -> Result<Self, String> {
+        // One file is one item. Libraries from before the rule merge the
+        // items that share a file, once; the schema migration took a backup.
+        // A failed merge commits nothing and is retried at the next open; the
+        // library stays usable meanwhile.
+        match library.merge_shared_files() {
+            Ok(merged) if merged.files != 0 => tracing::info!(
+                files = merged.files,
+                merged_items = merged.merged_items,
+                removed_collections = merged.removed_collections,
+                "Merged items that shared a file into one item each"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Could not merge items that share a file"),
+        }
         if let Some(receipt) = library
             .canonicalize_general_tag_namespace()
             .map_err(|error| format!("Failed to canonicalize General tags: {error}"))?
@@ -945,9 +964,40 @@ impl LibraryApplication {
     ) -> Result<picto_library::MutationReceipt, String> {
         let (receipt, _) = self
             .library
-            .permanently_delete(target, chrono::Utc::now().timestamp_millis())
+            .permanently_delete(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+            )
             .map_err(|error| error.to_string())?;
         Ok(receipt)
+    }
+
+    /// Reject Inbox items out of the library without passing through Trash.
+    pub fn reject_items(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<picto_library::MutationReceipt, String> {
+        let (receipt, _) = self
+            .library
+            .delete_rejected(
+                target,
+                chrono::Utc::now().timestamp_millis(),
+                self.undo_delete_limit()?,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(receipt)
+    }
+
+    /// How many items a permanent delete may hold and still be undoable
+    /// (the `undoDeleteLimit` setting).
+    fn undo_delete_limit(&self) -> Result<usize, String> {
+        Ok(self
+            .application_settings()?
+            .value
+            .get("undoDeleteLimit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(DEFAULT_UNDO_DELETE_LIMIT, |limit| limit.min(100_000) as usize))
     }
 
     pub fn duplicate_candidates(
@@ -1115,6 +1165,8 @@ fn map_history_entry(
         entry_id: value.entry_id,
         command: value.command,
         label: value.label,
+        count: value.count,
+        detail: value.detail,
     }
 }
 

@@ -1337,7 +1337,7 @@ mod tests {
         let history_before = destination.library().history().state();
         assert_eq!(
             history_before.undo.as_ref().unwrap().command,
-            "items.patch_metadata"
+            "items.set_notes"
         );
         assert_eq!(
             history_before.redo.as_ref().unwrap().command,

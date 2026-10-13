@@ -9,7 +9,9 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
+const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
+const MEDIA_ALIASES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-media-aliases";
 const IMPORT_TASKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-import-tasks";
 const NO_CLOUD_CLOCKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
 const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
@@ -29,6 +31,11 @@ const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-s
 const SCHEMA: &str = include_str!("schema_v1.sql");
 const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
+const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
+/// One file is one media item. Created with a new library; an existing one
+/// gets it once its shared files are merged (`Library::merge_shared_files`).
+pub(crate) const ONE_ITEM_PER_FILE: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_item_one_per_file ON media_item(file_id)";
 
 /// Create any missing accelerator index. Idempotent; runs at create and open.
 pub fn ensure_accelerator_indexes(connection: &Connection) -> Result<()> {
@@ -41,6 +48,8 @@ pub fn create(connection: &mut Connection) -> Result<()> {
     let result = (|| {
         connection.execute_batch(SCHEMA)?;
         connection.execute_batch(TASK_SCHEMA)?;
+        connection.execute_batch(ALIAS_SCHEMA)?;
+        connection.execute_batch(ONE_ITEM_PER_FILE)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
         connection.execute_batch(ACCELERATOR_INDEXES)?;
         connection.execute(
@@ -117,7 +126,9 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            IMPORT_TASKS_PREDECESSOR
+            TASK_ROLLBACK_PREDECESSOR
+                | MEDIA_ALIASES_PREDECESSOR
+                | IMPORT_TASKS_PREDECESSOR
                 | NO_CLOUD_CLOCKS_PREDECESSOR
                 | CHUNKED_ORDERS_PREDECESSOR
                 | WATCH_LIFECYCLE_PREDECESSOR
@@ -194,6 +205,8 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
@@ -244,6 +257,8 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
@@ -278,6 +293,8 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
                 IMPORT_TASKS_PREDECESSOR,
                 NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
@@ -358,6 +375,10 @@ pub fn migrate_for_open(
                 )?;
             }
             require_columns(connection, "ingest_job", &["task_id", "units", "prepared"])?;
+            // Merged-away items keep their stable key as an alias. The
+            // merge itself, and the one-item-per-file index after it, run
+            // once the library is open (`Library::merge_shared_files`).
+            connection.execute_batch(ALIAS_SCHEMA)?;
             // The per-field CRDT design was replaced by snapshot sync; nothing
             // ever wrote these tables.
             connection.execute_batch(
@@ -844,6 +865,106 @@ mod tests {
             count(&connection, "SELECT COUNT(*) FROM browsing_dirty_root"),
             1
         );
+    }
+
+    #[test]
+    fn combined_schema_migrates_both_feature_predecessors_with_backup_and_reopen() {
+        for predecessor in [
+            super::TASK_ROLLBACK_PREDECESSOR,
+            super::MEDIA_ALIASES_PREDECESSOR,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("library.sqlite");
+            let library = crate::Library::create(&path).unwrap();
+            let task = library
+                .create_task("import", "Paused import", "{}", true, false, 1)
+                .unwrap();
+            let folder = library
+                .create_folder_for_task("Task folder", None, task)
+                .unwrap()
+                .0;
+            library.set_task_paused(task, true).unwrap();
+            drop(library);
+            let connection = Connection::open(&path).unwrap();
+            if predecessor == super::MEDIA_ALIASES_PREDECESSOR {
+                connection.execute_batch(
+                    "DROP TABLE task_undo; DROP TABLE task_added_tag; DROP TABLE task_created_root;
+                     DROP INDEX idx_ingest_job_task; DROP INDEX idx_ingest_job_claim;
+                     ALTER TABLE ingest_job DROP COLUMN task_id;
+                     ALTER TABLE ingest_job DROP COLUMN units;
+                     ALTER TABLE ingest_job DROP COLUMN prepared;
+                     DROP TABLE task;",
+                ).unwrap();
+            } else {
+                connection
+                    .execute_batch(
+                        "DROP TABLE library_item_alias; DROP INDEX idx_media_item_one_per_file;",
+                    )
+                    .unwrap();
+            }
+            connection
+                .execute(
+                    "UPDATE library_meta SET schema_fingerprint = ?1",
+                    [predecessor],
+                )
+                .unwrap();
+            drop(connection);
+
+            let library = crate::Library::open(&path).unwrap();
+            library.merge_shared_files().unwrap();
+            if predecessor == super::TASK_ROLLBACK_PREDECESSOR {
+                assert_eq!(
+                    library.task(task).unwrap().unwrap().state,
+                    crate::TaskState::Paused
+                );
+                library.stop_task(task, true, 2).unwrap();
+                library.revert_task(task, 3).unwrap();
+                assert!(!library
+                    .folders()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row.folder_id == folder));
+            }
+            drop(library);
+            let connection = Connection::open(&path).unwrap();
+            assert_eq!(super::metadata(&connection).unwrap().1, SCHEMA_FINGERPRINT);
+            for table in ["task", "task_undo", "library_item_alias"] {
+                assert!(super::has_table(&connection, table).unwrap());
+            }
+            super::require_columns(&connection, "ingest_job", &["task_id", "units", "prepared"])
+                .unwrap();
+            assert_eq!(
+                count(
+                    &connection,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='idx_media_item_one_per_file'"
+                ),
+                1
+            );
+            drop(connection);
+            let backups = std::fs::read_dir(directory.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .ends_with(".backup")
+                        .then_some(path)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(backups.len(), 1);
+            let backup = Connection::open(&backups[0]).unwrap();
+            assert_eq!(super::metadata(&backup).unwrap().1, predecessor);
+            assert_eq!(
+                super::has_table(&backup, "task_undo").unwrap(),
+                predecessor == super::TASK_ROLLBACK_PREDECESSOR
+            );
+            assert_eq!(
+                super::has_table(&backup, "library_item_alias").unwrap(),
+                predecessor == super::MEDIA_ALIASES_PREDECESSOR
+            );
+            drop(crate::Library::open(&path).unwrap());
+        }
     }
 
     #[test]
