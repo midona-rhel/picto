@@ -1480,5 +1480,6 @@
   "A selected range lost its first or last item, so that range is no longer selected.": "Ein ausgewählter Bereich hat sein erstes oder letztes Element verloren und ist daher nicht mehr ausgewählt.",
   "Could not preview smart folder rules": "Vorschau der Regeln des intelligenten Ordners fehlgeschlagen",
   "Could not restore smart folder rules": "Regeln des intelligenten Ordners konnten nicht wiederhergestellt werden",
-  "Could not save smart folder": "Intelligenter Ordner konnte nicht gespeichert werden"
+  "Could not save smart folder": "Intelligenter Ordner konnte nicht gespeichert werden",
+  "Matches": "Treffer"
 }

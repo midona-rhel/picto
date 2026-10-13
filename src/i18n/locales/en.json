@@ -1480,5 +1480,6 @@
   "A selected range lost its first or last item, so that range is no longer selected.": "A selected range lost its first or last item, so that range is no longer selected.",
   "Could not preview smart folder rules": "Could not preview smart folder rules",
   "Could not restore smart folder rules": "Could not restore smart folder rules",
-  "Could not save smart folder": "Could not save smart folder"
+  "Could not save smart folder": "Could not save smart folder",
+  "Matches": "Matches"
 }
