@@ -152,4 +152,34 @@ describe('SidebarRow', () => {
 
     expect(screen.getByRole('button', { name: 'Resume all subscriptions' })).toBeInTheDocument();
   });
+
+  it('keeps disclosure presses away from the row so one click toggles once', () => {
+    const onToggleExpand = vi.fn();
+    const onPointerDown = vi.fn();
+    const onClick = vi.fn();
+    const onDoubleClick = vi.fn();
+    render(
+      <SidebarRow
+        variant="folder"
+        label="Huffslove"
+        hasChildren
+        expanded
+        onToggleExpand={onToggleExpand}
+        onPointerDown={onPointerDown}
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+      />,
+    );
+    const arrow = document.querySelector('[data-sidebar-disclosure]')!;
+
+    fireEvent.pointerDown(arrow, { button: 0, pointerId: 1 });
+    fireEvent.click(arrow);
+    fireEvent.click(arrow);
+    fireEvent.doubleClick(arrow);
+
+    expect(onToggleExpand).toHaveBeenCalledTimes(2);
+    expect(onPointerDown).not.toHaveBeenCalled();
+    expect(onClick).not.toHaveBeenCalled();
+    expect(onDoubleClick).not.toHaveBeenCalled();
+  });
 });
