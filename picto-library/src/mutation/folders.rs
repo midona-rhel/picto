@@ -68,6 +68,19 @@ impl Library {
         parent_id: Option<FolderId>,
         stable_key: String,
     ) -> Result<(FolderId, MutationReceipt)> {
+        self.create_folder_owned(name, parent_id, stable_key, None)
+    }
+
+    pub fn create_folder_for_task(
+        &self, name: &str, parent_id: Option<FolderId>, task: crate::TaskId,
+    ) -> Result<(FolderId, MutationReceipt)> {
+        self.create_folder_owned(name, parent_id, uuid::Uuid::new_v4().to_string(), Some(task))
+    }
+
+    fn create_folder_owned(
+        &self, name: &str, parent_id: Option<FolderId>, stable_key: String,
+        task: Option<crate::TaskId>,
+    ) -> Result<(FolderId, MutationReceipt)> {
         if name.trim().is_empty() {
             return Err(LibraryError::InvalidInput("folder name is empty".into()));
         }
@@ -79,6 +92,24 @@ impl Library {
         let name = name.trim().to_owned();
         let changed_at_ms = now_ms();
         let (folder_id, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
+            // Scan and preparation share this writer; only the first creator owns rollback.
+            if task.is_some() {
+                use rusqlite::OptionalExtension;
+                if let Some(id) = transaction.query_row(
+                    "SELECT folder_id FROM folder_definition WHERE parent_id IS ?1 AND name = ?2 LIMIT 1",
+                    rusqlite::params![parent_id.map(|id| id.0), name], |row| row.get::<_, u32>(0),
+                ).optional()? {
+                    let receipt = PublicationCoordinator::receipt(revision, Vec::new(), Vec::new());
+                    let mut next = (*snapshot).clone();
+                    next.revision = revision;
+                    return Ok(((FolderId(id), receipt.clone()), PublishedDelta {
+                        snapshot: next, receipt, history: None,
+                    }));
+                }
+            }
             validate_folder_parent(transaction, parent_id, None)?;
             let folder_id = FolderId(LibraryDatabase::allocate_id(transaction)?);
             let display_order = transaction.query_row(
@@ -121,6 +152,11 @@ impl Library {
                     folder_id.0
                 ))
             })?;
+            if let Some(task) = task {
+                super::tasks::record_task_undo(transaction, task, super::tasks::TaskUndo::Folder {
+                    folder_id, before: None, after: Some(Box::new(after.clone())),
+                })?;
+            }
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 vec!["folders".into(), "navigation".into()],
@@ -131,7 +167,7 @@ impl Library {
                 PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: Some(HistoryEntry::for_command(
+                    history: task.is_none().then(|| HistoryEntry::for_command(
                         "folders.create",
                         "Create folder",
                         SemanticChange::FolderDefinition {
@@ -376,16 +412,31 @@ impl Library {
         include_subfolders: bool,
         lifecycle: Lifecycle,
     ) -> Result<MutationReceipt> {
+        self.set_folder_watch_owned(folder_id, path, include_subfolders, lifecycle, None)
+    }
+
+    pub fn set_folder_watch_for_task(
+        &self, folder_id: FolderId, path: &str, include_subfolders: bool,
+        lifecycle: Lifecycle, task: crate::TaskId,
+    ) -> Result<MutationReceipt> {
+        self.set_folder_watch_owned(folder_id, path, include_subfolders, lifecycle, Some(task))
+    }
+
+    fn set_folder_watch_owned(
+        &self, folder_id: FolderId, path: &str, include_subfolders: bool,
+        lifecycle: Lifecycle, task: Option<crate::TaskId>,
+    ) -> Result<MutationReceipt> {
         let path = required_name("watch path", path)?;
         if lifecycle == Lifecycle::Trash {
             return Err(LibraryError::InvalidInput(
                 "watched folders import into Inbox or Active".into(),
             ));
         }
-        self.update_folder_definition(
+        self.update_folder_definition_owned(
             "folders.set_watch",
             "Set watched folder",
             folder_id,
+            task,
             move |transaction| {
                 if transaction.execute(
                     "UPDATE folder_definition
@@ -938,7 +989,7 @@ impl Library {
             );
             Ok((
                 FolderDeleteResult {
-                    deleted_folder_ids,
+                    deleted_folder_ids: deleted_folder_ids.clone(),
                     fallback_folder_id,
                     receipt: receipt.clone(),
                 },
@@ -949,7 +1000,8 @@ impl Library {
                         "folders.delete",
                         "Delete folders",
                         SemanticChange::Compound(history_changes),
-                    )),
+                    )
+                    .about(deleted_folder_ids.len() as u64, None)),
                 },
             ))
         })?;
@@ -966,7 +1018,19 @@ impl Library {
     where
         F: FnOnce(&rusqlite::Transaction<'_>) -> Result<()>,
     {
+        self.update_folder_definition_owned(command, label, folder_id, None, update)
+    }
+
+    fn update_folder_definition_owned<F>(
+        &self, command: &'static str, label: &'static str, folder_id: FolderId,
+        task: Option<crate::TaskId>, update: F,
+    ) -> Result<MutationReceipt>
+    where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<()>,
+    {
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
+            if let Some(task) = task {
+                super::tasks::require_running_task(transaction, task)?;
+            }
             let before = load_folder_definition(transaction, folder_id)?
                 .ok_or_else(|| LibraryError::NotFound(format!("folder {folder_id}")))?;
             update(transaction)?;
@@ -976,6 +1040,13 @@ impl Library {
                     folder_id.0
                 ))
             })?;
+            if let Some(task) = task {
+                if before != after {
+                    super::tasks::record_task_undo(transaction, task, super::tasks::TaskUndo::Folder {
+                        folder_id, before: Some(Box::new(before.clone())), after: Some(Box::new(after.clone())),
+                    })?;
+                }
+            }
             insert_cloud_journal(
                 transaction,
                 revision,
@@ -996,7 +1067,7 @@ impl Library {
                 PublishedDelta {
                     snapshot: next,
                     receipt,
-                    history: (before != after).then(|| {
+                    history: (task.is_none() && before != after).then(|| {
                         HistoryEntry::for_command(
                             command,
                             label,
@@ -1310,7 +1381,8 @@ impl Library {
                     "Remove from folder"
                 },
                 SemanticChange::Compound(history_changes),
-            );
+            )
+            .about(changed.len(), Some(if add { "add" } else { "remove" }));
             Ok((
                 receipt.clone(),
                 PublishedDelta {

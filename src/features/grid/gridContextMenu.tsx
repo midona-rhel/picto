@@ -105,6 +105,8 @@ export interface GridMenuContext {
   onNewSmartFolder?: () => void;
   onImportFiles?: () => void;
   onImportFolder?: () => void;
+  /** Why imports cannot start now (another is running), or null. */
+  importBlockedReason?: string | null;
   onPasteImport?: () => void;
   onSortContents?: (field: ContentSortField) => void;
   sortFields?: readonly ContentSortField[];
@@ -615,15 +617,18 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
     icon: <IconFileImport size={15} />,
     shortcut: kbd('file.import'),
     action: ctx.onImportFiles,
+    disabled: Boolean(ctx.importBlockedReason),
   }));
   if (ctx.onImportFolder) entries.push(item(t("Import Folder..."), {
     icon: <IconFolderPlus size={15} />,
     action: ctx.onImportFolder,
+    disabled: Boolean(ctx.importBlockedReason),
   }));
   if (ctx.onPasteImport) entries.push(item(t("Paste Import"), {
     icon: <IconClipboard size={15} />,
     shortcut: kbd('edit.paste'),
     action: ctx.onPasteImport,
+    disabled: Boolean(ctx.importBlockedReason),
   }));
   if (ctx.onImportFiles || ctx.onImportFolder || ctx.onPasteImport) entries.push(sep());
 

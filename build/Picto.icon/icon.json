@@ -9,10 +9,10 @@
         {
           "glass": true,
           "hidden": false,
-          "image-name": "01-spine.png",
-          "name": "01-spine",
+          "image-name": "01-book.png",
+          "name": "01-book",
           "position": {
-            "scale": 1,
+            "scale": 1.1428571428571428,
             "translation-in-points": [
               0,
               0
@@ -20,66 +20,10 @@
           }
         }
       ],
-      "lighting": "individual",
+      "lighting": "combined",
       "shadow": {
-        "kind": "neutral",
-        "opacity": 0.28
-      },
-      "specular": true,
-      "translucency": {
-        "enabled": false,
-        "value": 0
-      }
-    },
-    {
-      "blur-material": null,
-      "layers": [
-        {
-          "glass": true,
-          "hidden": false,
-          "image-name": "02-under-pages.png",
-          "name": "02-under-pages",
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        }
-      ],
-      "lighting": "individual",
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.28
-      },
-      "specular": true,
-      "translucency": {
-        "enabled": false,
-        "value": 0
-      }
-    },
-    {
-      "blur-material": null,
-      "layers": [
-        {
-          "glass": true,
-          "hidden": false,
-          "image-name": "03-open-book.png",
-          "name": "03-open-book",
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        }
-      ],
-      "lighting": "individual",
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.28
+        "kind": "none",
+        "opacity": 0
       },
       "specular": true,
       "translucency": {

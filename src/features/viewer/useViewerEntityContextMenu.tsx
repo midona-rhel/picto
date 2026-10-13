@@ -20,6 +20,7 @@ import { reverseImageSearch } from '../../platform/shellApi';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
 import { t } from '../../i18n';
+import { requestPermanentDelete } from '../../controllers/permanentDeleteRequest';
 
 interface ViewerEntityContextMenuOptions {
   hash: string | null;
@@ -189,14 +190,9 @@ export function useViewerEntityContextMenu({
       onRestore: target && lifecycle === 'trash'
         ? () => { void entityMutations.setTargetLifecycle(target, 'active'); }
         : undefined,
-      onPermanentDelete: target && lifecycle === 'trash' ? () => setConfirmModal({
-        open: true,
-        title: t("Delete Permanently?"),
-        message: 'This item and any unreferenced files will be deleted. This cannot be undone.',
-        confirmLabel: t("Delete Permanently"),
-        danger: true,
-        onConfirm: () => { void entityMutations.permanentlyDeleteTarget(target); },
-      }) : undefined,
+      onPermanentDelete: target && lifecycle === 'trash'
+        ? () => { void requestPermanentDelete(target, 1); }
+        : undefined,
     });
     const playbackEntries = flashPlayback ? buildFlashPlaybackContextEntries(flashPlayback) : [];
     const thumbnailEntries = captureCurrentFrame ? [{

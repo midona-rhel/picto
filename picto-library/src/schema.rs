@@ -9,7 +9,12 @@ use crate::query_request::{OpenCancellation, OpenStage};
 use crate::{LibraryError, Result};
 
 pub const SCHEMA_GENERATION: u32 = 1;
-pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
+pub const SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-10-13-task-rollback-aliases";
+const COMBINED_IMPORT_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-media-aliases-import-tasks";
+const TASK_ROLLBACK_PREDECESSOR: &str = "picto-library-schema-1-2026-10-13-task-rollback";
+const MEDIA_ALIASES_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-media-aliases";
+const IMPORT_TASKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-12-import-tasks";
+const NO_CLOUD_CLOCKS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-no-cloud-clocks";
 const CHUNKED_ORDERS_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-chunked-orders";
 const WATCH_LIFECYCLE_PREDECESSOR: &str = "picto-library-schema-1-2026-10-10-watch-lifecycle";
 const SOURCE_ROOTS_PREDECESSOR: &str = "picto-library-schema-1-2026-09-09-source-created-roots";
@@ -25,7 +30,13 @@ const PREVIOUS_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-30-nat
 const LEGACY_SCHEMA_FINGERPRINT: &str = "picto-library-schema-1-2026-08-29-fts-substring";
 
 const SCHEMA: &str = include_str!("schema_v1.sql");
+const TASK_SCHEMA: &str = include_str!("task_schema.sql");
 const ACCELERATOR_INDEXES: &str = include_str!("accelerator_indexes.sql");
+const ALIAS_SCHEMA: &str = include_str!("alias_schema.sql");
+/// One file is one media item. Created with a new library; an existing one
+/// gets it once its shared files are merged (`Library::merge_shared_files`).
+pub(crate) const ONE_ITEM_PER_FILE: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_item_one_per_file ON media_item(file_id)";
 
 /// Create any missing accelerator index. Idempotent; runs at create and open.
 pub fn ensure_accelerator_indexes(connection: &Connection) -> Result<()> {
@@ -37,6 +48,9 @@ pub fn create(connection: &mut Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;")?;
     let result = (|| {
         connection.execute_batch(SCHEMA)?;
+        connection.execute_batch(TASK_SCHEMA)?;
+        connection.execute_batch(ALIAS_SCHEMA)?;
+        connection.execute_batch(ONE_ITEM_PER_FILE)?;
         connection.execute_batch(include_str!("browsing_schema.sql"))?;
         connection.execute_batch(ACCELERATOR_INDEXES)?;
         connection.execute(
@@ -113,7 +127,12 @@ pub fn migrate_for_open(
     if generation != SCHEMA_GENERATION
         || !matches!(
             fingerprint.as_str(),
-            CHUNKED_ORDERS_PREDECESSOR
+            COMBINED_IMPORT_PREDECESSOR
+                | TASK_ROLLBACK_PREDECESSOR
+                | MEDIA_ALIASES_PREDECESSOR
+                | IMPORT_TASKS_PREDECESSOR
+                | NO_CLOUD_CLOCKS_PREDECESSOR
+                | CHUNKED_ORDERS_PREDECESSOR
                 | WATCH_LIFECYCLE_PREDECESSOR
                 | SOURCE_ROOTS_PREDECESSOR
                 | RESIDENT_PREDECESSOR
@@ -188,6 +207,11 @@ pub fn migrate_for_open(
             )?;
             }
             if ![
+                COMBINED_IMPORT_PREDECESSOR,
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
+                IMPORT_TASKS_PREDECESSOR,
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -236,6 +260,11 @@ pub fn migrate_for_open(
             // canonical rows at open, so only the dirty-root journal and its
             // triggers remain, redefined here once for every predecessor.
             if ![
+                COMBINED_IMPORT_PREDECESSOR,
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
+                IMPORT_TASKS_PREDECESSOR,
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 RESIDENT_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
@@ -268,6 +297,11 @@ pub fn migrate_for_open(
             // These predecessors change only derived storage. Their canonical
             // data and existing checkpoint representation are unchanged.
             if [
+                COMBINED_IMPORT_PREDECESSOR,
+                TASK_ROLLBACK_PREDECESSOR,
+                MEDIA_ALIASES_PREDECESSOR,
+                IMPORT_TASKS_PREDECESSOR,
+                NO_CLOUD_CLOCKS_PREDECESSOR,
                 CHUNKED_ORDERS_PREDECESSOR,
                 WATCH_LIFECYCLE_PREDECESSOR,
                 SOURCE_ROOTS_PREDECESSOR,
@@ -336,6 +370,20 @@ pub fn migrate_for_open(
             if !has_table(connection, "ordered_membership_chunk")? {
                 crate::ordering::migrate_single_blob_orders(connection)?;
             }
+            // Foreground tasks: imports record their task on each queued job.
+            connection.execute_batch(TASK_SCHEMA)?;
+            if !has_column(connection, "ingest_job", "task_id")? {
+                connection.execute_batch(
+                    "ALTER TABLE ingest_job ADD COLUMN task_id INTEGER REFERENCES task(task_id) ON DELETE SET NULL;
+                     ALTER TABLE ingest_job ADD COLUMN units INTEGER NOT NULL DEFAULT 1;
+                     ALTER TABLE ingest_job ADD COLUMN prepared INTEGER NOT NULL DEFAULT 1 CHECK (prepared IN (0, 1));",
+                )?;
+            }
+            require_columns(connection, "ingest_job", &["task_id", "units", "prepared"])?;
+            // Merged-away items keep their stable key as an alias. The
+            // merge itself, and the one-item-per-file index after it, run
+            // once the library is open (`Library::merge_shared_files`).
+            connection.execute_batch(ALIAS_SCHEMA)?;
             // The per-field CRDT design was replaced by snapshot sync; nothing
             // ever wrote these tables.
             connection.execute_batch(
@@ -454,6 +502,40 @@ mod tests {
     use crate::{LibraryDatabase, LibraryError};
 
     const OBSOLETE_BROWSING_TABLES: &str = "'browsing_summary_page','browsing_page','browsing_chunk','browsing_domain','browsing_text_dirty','browsing_name_dirty','browsing_name_manifest','browsing_name_node','browsing_name_keys'";
+
+    #[test]
+    fn subscription_outcome_indexes_are_installed_on_existing_library_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP INDEX idx_source_post_attempt_added;
+             DROP INDEX idx_source_file_attempt_retained;
+             DROP INDEX idx_subscription_run_latest;
+             DROP INDEX idx_subscription_run_active;",
+            )
+            .unwrap();
+        drop(connection);
+        for _ in 0..2 {
+            drop(LibraryDatabase::open(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            assert_eq!(
+                count(
+                    &connection,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN
+                 ('idx_source_post_attempt_added', 'idx_source_file_attempt_retained',
+                  'idx_subscription_run_latest', 'idx_subscription_run_active')"
+                ),
+                4
+            );
+            assert_eq!(super::validate(&connection).unwrap(), 1);
+        }
+        // Accelerator-only changes neither rewrite canonical state nor migrate it.
+        assert_eq!(fingerprint_of(&path), SCHEMA_FINGERPRINT);
+        assert_eq!(backups_in(directory.path()), 0);
+    }
 
     fn remove_browsing_schema(connection: &Connection) {
         connection
@@ -822,6 +904,226 @@ mod tests {
             count(&connection, "SELECT COUNT(*) FROM browsing_dirty_root"),
             1
         );
+    }
+
+    #[test]
+    fn combined_schema_migrates_feature_and_acceptance_predecessors_with_backup_and_reopen() {
+        for predecessor in [
+            super::COMBINED_IMPORT_PREDECESSOR,
+            super::TASK_ROLLBACK_PREDECESSOR,
+            super::MEDIA_ALIASES_PREDECESSOR,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("library.sqlite");
+            let library = crate::Library::create(&path).unwrap();
+            let task = library
+                .create_task("import", "Paused import", "{}", true, false, 1)
+                .unwrap();
+            let folder = library
+                .create_folder_for_task("Task folder", None, task)
+                .unwrap()
+                .0;
+            library.set_task_paused(task, true).unwrap();
+            drop(library);
+            let connection = Connection::open(&path).unwrap();
+            if predecessor == super::MEDIA_ALIASES_PREDECESSOR {
+                connection.execute_batch(
+                    "DROP TABLE task_undo; DROP TABLE task_added_tag; DROP TABLE task_created_root;
+                     DROP INDEX idx_ingest_job_task; DROP INDEX idx_ingest_job_claim;
+                     ALTER TABLE ingest_job DROP COLUMN task_id;
+                     ALTER TABLE ingest_job DROP COLUMN units;
+                     ALTER TABLE ingest_job DROP COLUMN prepared;
+                     DROP TABLE task;",
+                ).unwrap();
+            } else if predecessor == super::COMBINED_IMPORT_PREDECESSOR {
+                connection.execute_batch("DROP TABLE task_undo;").unwrap();
+            } else {
+                connection
+                    .execute_batch(
+                        "DROP TABLE library_item_alias; DROP INDEX idx_media_item_one_per_file;",
+                    )
+                    .unwrap();
+            }
+            connection
+                .execute(
+                    "UPDATE library_meta SET schema_fingerprint = ?1",
+                    [predecessor],
+                )
+                .unwrap();
+            drop(connection);
+
+            let library = crate::Library::open(&path).unwrap();
+            library.merge_shared_files().unwrap();
+            if predecessor == super::COMBINED_IMPORT_PREDECESSOR {
+                assert_eq!(library.task(task).unwrap().unwrap().state, crate::TaskState::Paused);
+                assert!(library.folders().unwrap().iter().any(|row| row.folder_id == folder));
+            }
+            if predecessor == super::TASK_ROLLBACK_PREDECESSOR {
+                assert_eq!(
+                    library.task(task).unwrap().unwrap().state,
+                    crate::TaskState::Paused
+                );
+                library.stop_task(task, true, 2).unwrap();
+                library.revert_task(task, 3).unwrap();
+                assert!(!library
+                    .folders()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row.folder_id == folder));
+            }
+            drop(library);
+            let connection = Connection::open(&path).unwrap();
+            assert_eq!(super::metadata(&connection).unwrap().1, SCHEMA_FINGERPRINT);
+            for table in ["task", "task_undo", "library_item_alias"] {
+                assert!(super::has_table(&connection, table).unwrap());
+            }
+            super::require_columns(&connection, "ingest_job", &["task_id", "units", "prepared"])
+                .unwrap();
+            assert_eq!(
+                count(
+                    &connection,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='idx_media_item_one_per_file'"
+                ),
+                1
+            );
+            drop(connection);
+            let backups = std::fs::read_dir(directory.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .ends_with(".backup")
+                        .then_some(path)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(backups.len(), 1);
+            let backup = Connection::open(&backups[0]).unwrap();
+            assert_eq!(super::metadata(&backup).unwrap().1, predecessor);
+            assert_eq!(
+                super::has_table(&backup, "task_undo").unwrap(),
+                predecessor == super::TASK_ROLLBACK_PREDECESSOR
+            );
+            assert_eq!(
+                super::has_table(&backup, "library_item_alias").unwrap(),
+                predecessor != super::TASK_ROLLBACK_PREDECESSOR
+            );
+            drop(crate::Library::open(&path).unwrap());
+        }
+    }
+
+    #[test]
+    fn import_task_rollback_migration_backs_up_and_reopens() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE task_undo;
+            INSERT INTO task(task_id, kind, title, state, input_json, created_at_ms)
+            VALUES (1, 'import', 'Paused', 'paused', '{}', 1);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1",
+                [super::IMPORT_TASKS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+        drop(LibraryDatabase::open(&database_path).unwrap());
+        let connection = Connection::open(&database_path).unwrap();
+        assert!(super::has_table(&connection, "task_undo").unwrap());
+        assert_eq!(
+            connection
+                .query_row("SELECT state FROM task WHERE task_id=1", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "paused"
+        );
+        let backups = std::fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".pre-migration-")
+                    .then_some(path)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert!(!super::has_table(&backup, "task_undo").unwrap());
+        drop(connection);
+        drop(LibraryDatabase::open(&database_path).unwrap());
+    }
+
+    #[test]
+    fn open_adds_import_tasks_to_the_previous_schema_and_keeps_queued_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&database_path).unwrap());
+
+        // The predecessor had no task tables and no task columns on jobs.
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "DROP INDEX IF EXISTS idx_ingest_job_task;
+                 DROP INDEX IF EXISTS idx_ingest_job_claim;
+                 ALTER TABLE ingest_job DROP COLUMN task_id;
+                 ALTER TABLE ingest_job DROP COLUMN units;
+                 ALTER TABLE ingest_job DROP COLUMN prepared;
+                 DROP TABLE task_added_tag;
+                 DROP TABLE task_created_root;
+                 DROP TABLE task;
+                 INSERT INTO ingest_job
+                     (job_key, source_kind, source_path, payload_json, status,
+                      attempt_count, available_at, created_at, updated_at)
+                 VALUES ('queued', 'manual', '/a.png', '{}', 'pending', 0, 'now', 'now', 'now');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE library_meta SET schema_fingerprint = ?1 WHERE singleton = 1",
+                [super::NO_CLOUD_CLOCKS_PREDECESSOR],
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(LibraryDatabase::open(&database_path).unwrap());
+        let migrated = Connection::open(&database_path).unwrap();
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT schema_fingerprint FROM library_meta WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            SCHEMA_FINGERPRINT,
+        );
+        // A job queued before the upgrade stays claimable: no task, read already.
+        assert_eq!(
+            migrated
+                .query_row(
+                    "SELECT task_id IS NULL, units, prepared FROM ingest_job WHERE job_key = 'queued'",
+                    [],
+                    |row| Ok((row.get::<_, bool>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                )
+                .unwrap(),
+            (true, 1, 1),
+        );
+        for table in ["task", "task_created_root", "task_added_tag"] {
+            assert!(super::has_table(&migrated, table).unwrap(), "{table} was not created");
+        }
+        // Reopening the migrated file needs no further migration.
+        drop(migrated);
+        drop(LibraryDatabase::open(&database_path).unwrap());
     }
 
     #[test]

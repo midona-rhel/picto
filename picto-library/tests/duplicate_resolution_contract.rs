@@ -1,9 +1,8 @@
-use picto_library::predicate::{FilterClause, FilterExpr, ItemSort, ViewQuerySpec};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
     DuplicateResolutionChoice, DuplicateStatus, FileId, GroupRequest, ImmutableMediaFacts,
     LabColor, Library, Lifecycle, PreparedCollectionImport, PreparedImport, Rating, RootDetails,
-    RootId, SmartFolderInput,
+    RootId,
 };
 use tempfile::TempDir;
 
@@ -67,20 +66,6 @@ fn named_import(key: &str, hash: &str, name: &str, color: LabColor) -> PreparedI
 
 fn file_id(library: &Library, root_id: RootId) -> FileId {
     library.details(root_id).unwrap().media[0].file_id
-}
-
-fn smart_input(name: &str, filter: FilterClause) -> SmartFolderInput {
-    SmartFolderInput {
-        name: name.into(),
-        parent_id: None,
-        icon: None,
-        color: None,
-        notes: None,
-        view: ViewQuerySpec {
-            filter: FilterExpr::Clause(filter),
-            sort: ItemSort::default(),
-        },
-    }
 }
 
 fn assert_root_metadata_unchanged(before: &RootDetails, after: &RootDetails) {
@@ -365,135 +350,81 @@ fn rescanning_replaces_detected_pairs_without_reopening_keep_both_decisions() {
     }));
 }
 
-#[test]
-fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots() {
-    let directory = TempDir::new().unwrap();
-    let path = directory.path().join("library.sqlite");
-    let library = Library::create(&path).unwrap();
-    let loser_color = LabColor {
-        l: 40.0,
-        a: 60.0,
-        b: 30.0,
-        weight: 1.0,
-    };
-    let winner_color = LabColor {
-        l: 25.0,
-        a: -20.0,
-        b: -50.0,
-        weight: 1.0,
-    };
-    let support_color = LabColor {
-        l: 80.0,
+fn color(l: f32) -> LabColor {
+    LabColor {
+        l,
         a: 0.0,
         b: 0.0,
         weight: 1.0,
-    };
-    let losers = library
-        .ingest_conversion_batch(&[
-            imported(
-                "loser-member",
-                "shared-loser",
-                "image/png",
-                1_024,
-                Some(800),
-                Some(600),
-                None,
-                loser_color,
-            ),
-            imported(
-                "loser-standalone",
-                "shared-loser",
-                "image/png",
-                1_024,
-                Some(800),
-                Some(600),
-                None,
-                LabColor {
-                    l: 1.0,
-                    a: 1.0,
-                    b: 1.0,
-                    weight: 1.0,
-                },
-            ),
-        ])
-        .unwrap();
-    let loser_member = losers[0].0;
-    let loser_standalone = losers[1].0;
-    let (support, _) = library
-        .ingest(&imported(
-            "support",
-            "support",
-            "application/pdf",
-            256,
-            None,
-            None,
-            None,
-            support_color,
-        ))
-        .unwrap();
-    let (winner, _) = library
-        .ingest(&imported(
-            "winner",
-            "winner",
-            "video/mp4",
-            4_096,
-            Some(1_920),
-            Some(1_080),
-            Some(4_000),
-            winner_color.clone(),
-        ))
-        .unwrap();
-    let (collection, _) = library
-        .organize_into_collection(&GroupRequest {
-            target: SelectionTarget::Explicit {
-                root_ids: vec![loser_member, support],
+    }
+}
+
+fn root_count(library: &Library) -> i64 {
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))?)
             },
-            cover_root_id: loser_member,
-            winning_collection_id: None,
-            name: Some("Preserved collection".into()),
-            notes: None,
-            modified_at_ms: 1_700_000_000_050,
+        )
+        .unwrap()
+}
+
+fn provenance_media(library: &Library, source_item_key: &str) -> Vec<u32> {
+    library
+        .database()
+        .read(
+            picto_library::database::WorkPriority::VisibleRead,
+            |connection| {
+                Ok(connection
+                    .prepare(
+                        "SELECT media_id FROM source_provenance
+                         WHERE source_item_key = ?1 ORDER BY media_id",
+                    )?
+                    .query_map([source_item_key], |row| row.get(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?)
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn keep_file_merges_the_losing_item_into_the_kept_one_and_undoes_exactly() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (folder, _) = library.create_folder("Kept place", None).unwrap();
+    let (neighbour, _) = library
+        .ingest(&{
+            let mut input = named_import("neighbour", "neighbour-file", "Neighbour", color(10.0));
+            input.folders = vec![folder];
+            input
         })
         .unwrap();
-    let (image_smart, _) = library
-        .create_smart_folder(smart_input(
-            "Images",
-            FilterClause::Mime {
-                values: vec!["image/png".into()],
-                families: Vec::new(),
-            },
-        ))
-        .unwrap();
-    let (video_smart, _) = library
-        .create_smart_folder(smart_input(
-            "Videos",
-            FilterClause::Mime {
-                values: vec!["video/mp4".into()],
-                families: Vec::new(),
-            },
-        ))
-        .unwrap();
-
-    let loser_file = file_id(&library, loser_standalone);
+    let mut loser_input = named_import("loser", "loser-file", "Loser", color(20.0));
+    loser_input.tags = vec!["kept:from-loser".into()];
+    loser_input.rating = Rating::Four;
+    loser_input.notes = Some("Loser note".into());
+    loser_input.folders = vec![folder];
+    let (loser, _) = library.ingest(&loser_input).unwrap();
+    let mut winner_input = named_import("winner", "winner-file", "Winner", color(30.0));
+    winner_input.tags = vec!["kept:from-winner".into()];
+    winner_input.rating = Rating::Two;
+    winner_input.lifecycle = Lifecycle::Inbox;
+    let (winner, _) = library.ingest(&winner_input).unwrap();
+    let loser_file = file_id(&library, loser);
     let winner_file = file_id(&library, winner);
-    let collection_before = library.details(collection).unwrap();
-    let standalone_before = library.details(loser_standalone).unwrap();
-    let order_before = library.projections().snapshot().collection_orders[&collection].clone();
-    assert_eq!(
-        library.projections().snapshot().smart_results[&image_smart.0].len(),
-        2
-    );
-    assert_eq!(
-        library.projections().snapshot().smart_results[&video_smart.0].len(),
-        1
-    );
+    let loser_before = library.details(loser).unwrap();
+    let winner_before = library.details(winner).unwrap();
+    let folder_before = library.projections().snapshot().folder_orders[&folder].clone();
+    assert_eq!(folder_before.as_ref(), &vec![neighbour, loser]);
 
     library
         .record_duplicate_pair(loser_file, winner_file, 1, 1_700_000_000_100)
         .unwrap()
         .unwrap();
-    library.publication().flush();
-    let result = library
+    library
         .resolve_duplicate(
             loser_file,
             winner_file,
@@ -504,115 +435,229 @@ fn keep_file_rewires_every_occurrence_and_settles_exactly_without_changing_roots
         )
         .unwrap();
 
-    assert_eq!(
-        result.receipt.resources,
-        vec!["duplicates", "library", "smart_folders"]
-    );
-    assert_eq!(
-        library
-            .duplicate_pairs(Some(DuplicateStatus::Resolved), 10)
-            .unwrap()[0]
-            .winner_file_id,
-        Some(winner_file)
-    );
-    library
-        .database()
-        .read(
-            picto_library::database::WorkPriority::VisibleRead,
-            |connection| {
-                let occurrences = connection
-                    .prepare(
-                        "SELECT media_id, file_id FROM media_item
-                         WHERE media_id IN (?1, ?2) ORDER BY media_id",
-                    )?
-                    .query_map([loser_member.0, loser_standalone.0], |row| {
-                        Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
-                    })?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                assert_eq!(
-                    occurrences,
-                    vec![
-                        (loser_member.0, winner_file.0),
-                        (loser_standalone.0, winner_file.0)
-                    ]
-                );
-                assert_eq!(
-                    connection.query_row(
-                        "SELECT COUNT(*) FROM source_provenance
-                         WHERE media_id IN (?1, ?2)",
-                        [loser_member.0, loser_standalone.0],
-                        |row| row.get::<_, u32>(0)
-                    )?,
-                    2
-                );
-                Ok(())
-            },
-        )
-        .unwrap();
-
-    let collection_after = library.details(collection).unwrap();
-    let standalone_after = library.details(loser_standalone).unwrap();
-    assert_root_metadata_unchanged(&collection_before, &collection_after);
-    assert_root_metadata_unchanged(&standalone_before, &standalone_after);
-    assert_eq!(collection_after.root.total_size_bytes, 4_096 + 256);
-    assert_eq!(standalone_after.root.total_size_bytes, 4_096);
-    assert_eq!(
-        library.projections().snapshot().collection_orders[&collection],
-        order_before
-    );
-    let snapshot = library.projections().snapshot();
-    assert!(!snapshot.mime["image/png"].contains(collection.0));
-    assert!(!snapshot.mime["image/png"].contains(loser_standalone.0));
-    assert!(snapshot.mime["video/mp4"].contains(collection.0));
-    assert!(snapshot.mime["video/mp4"].contains(loser_standalone.0));
-    assert!(snapshot.mime["application/pdf"].contains(collection.0));
-    assert_eq!(snapshot.width.value(collection.0), Some(1_920));
-    assert_eq!(snapshot.height.value(collection.0), Some(1_080));
-    assert_eq!(snapshot.duration.value(collection.0), Some(4_000));
-    assert_eq!(
-        snapshot.cover_palettes.get(collection.0).unwrap().as_ref(),
-        &[winner_color]
-    );
-    assert!(!snapshot.roots_with_images.contains(collection.0));
-    assert!(!snapshot.roots_with_images.contains(loser_standalone.0));
-    assert_eq!(snapshot.smart_results[&image_smart.0].len(), 0);
-    assert_eq!(snapshot.smart_results[&video_smart.0].len(), 3);
+    let merged = |library: &Library| {
+        assert_eq!(root_count(library), 2);
+        assert!(library.details(loser).is_err());
+        let kept = library.details(winner).unwrap();
+        let snapshot = library.projections().snapshot();
+        let tag = |name: &str| snapshot.tag_ids_by_name[name];
+        let mut tags = kept.tag_ids.clone();
+        tags.sort_unstable();
+        let mut expected = vec![tag("kept:from-loser"), tag("kept:from-winner")];
+        expected.sort_unstable();
+        assert_eq!(tags, expected);
+        assert_eq!(kept.rating, Rating::Four);
+        assert_eq!(kept.lifecycle, Lifecycle::Active);
+        assert_eq!(kept.root.notes.as_deref(), Some("Loser note"));
+        assert_eq!(
+            kept.root.source_urls,
+            vec![
+                "https://example.test/winner".to_string(),
+                "https://example.test/loser".to_string()
+            ]
+        );
+        assert_eq!(kept.media[0].file_id, winner_file);
+        assert_eq!(
+            snapshot.folder_orders[&folder].as_ref(),
+            &vec![neighbour, winner]
+        );
+        assert_eq!(provenance_media(library, "loser"), vec![winner.0]);
+        assert_eq!(snapshot.tags[&tag("kept:from-loser")].len(), 1);
+    };
+    merged(&library);
+    // The loser's file waits for the entry to leave history.
     assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
-
-    let journal = library.pending_cloud_journal(100).unwrap();
-    assert_eq!(journal.last().unwrap().operation_kind, "duplicate.resolve");
-    let event = library.publication().flush().unwrap();
-    assert_eq!(event.revision, result.receipt.revision);
-    assert_eq!(event.resources, result.receipt.resources);
 
     library.undo().unwrap().unwrap();
-    assert_eq!(file_id(&library, loser_standalone), loser_file);
+    assert_eq!(root_count(&library), 3);
+    assert_root_metadata_unchanged(&loser_before, &library.details(loser).unwrap());
+    assert_root_metadata_unchanged(&winner_before, &library.details(winner).unwrap());
+    assert_eq!(file_id(&library, loser), loser_file);
     assert_eq!(
-        library.details(collection).unwrap().root.total_size_bytes,
-        1_024 + 256
+        library.projections().snapshot().folder_orders[&folder],
+        folder_before
     );
-    assert!(library.projections().snapshot().mime["image/png"].contains(collection.0));
+    assert_eq!(provenance_media(&library, "loser"), vec![loser.0]);
     assert_eq!(
-        library.projections().snapshot().smart_results[&image_smart.0].len(),
-        2
+        library
+            .duplicate_pairs(Some(DuplicateStatus::Detected), 10)
+            .unwrap()
+            .len(),
+        1
     );
-    assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
 
     library.redo().unwrap().unwrap();
-    assert_eq!(file_id(&library, loser_standalone), winner_file);
-    assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+    merged(&library);
+
+    // Re-importing the merged-away item resolves to the one that stays.
+    let (again, _) = library.ingest(&loser_input).unwrap();
+    assert_eq!(again, winner);
+    assert_eq!(root_count(&library), 2);
     drop(library);
 
     let reopened = Library::open(&path).unwrap();
     assert_eq!(reopened.history().state().entries, 0);
     assert_eq!(
-        reopened.pending_blob_cleanup(10).unwrap(),
-        vec![picto_library::PendingBlobCleanup {
-            file_id: loser_file,
-            content_hash: "shared-loser".into(),
-            file_path: "/tmp/loser-standalone.bin".into(),
-        }]
+        reopened
+            .pending_blob_cleanup(10)
+            .unwrap()
+            .into_iter()
+            .map(|pending| pending.file_id)
+            .collect::<Vec<_>>(),
+        vec![loser_file]
     );
+}
+
+#[test]
+fn keep_file_takes_a_losing_member_out_of_its_collection_without_its_tags() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut member = named_import("member", "member-file", "Member", color(20.0));
+    member.tags = vec!["post:only".into()];
+    let (collection, _) = library
+        .ingest_collection(&PreparedCollectionImport {
+            members: vec![
+                member,
+                named_import("support-a", "support-a-file", "Support A", color(30.0)),
+                named_import("support-b", "support-b-file", "Support B", color(40.0)),
+            ],
+            cover_index: 0,
+            existing_root_id: None,
+            name: Some("Post".into()),
+            modified_at_ms: 1_700_000_000_000,
+        })
+        .unwrap();
+    let before = library.details(collection).unwrap();
+    let loser_media = before.media[0].clone();
+    let (winner, _) = library
+        .ingest(&named_import("winner", "winner-file", "Winner", color(50.0)))
+        .unwrap();
+    let winner_file = file_id(&library, winner);
+    library
+        .record_duplicate_pair(loser_media.file_id, winner_file, 0, 1_700_000_000_100)
+        .unwrap()
+        .unwrap();
+    library
+        .resolve_duplicate(
+            loser_media.file_id,
+            winner_file,
+            DuplicateResolutionChoice::KeepFile {
+                winner_file_id: winner_file,
+            },
+            1_700_000_000_200,
+        )
+        .unwrap();
+
+    let after = library.details(collection).unwrap();
+    assert_eq!(
+        after.media.iter().map(|media| media.media_name.as_str()).collect::<Vec<_>>(),
+        vec!["Support A", "Support B"]
+    );
+    assert_eq!(after.root.cover_media_id, after.media[0].media_id);
+    assert_eq!(after.root.name, "Post");
+    let post_tag = library.projections().snapshot().tag_ids_by_name["post:only"];
+    assert!(!library.details(winner).unwrap().tag_ids.contains(&post_tag));
+    assert_eq!(provenance_media(&library, "member"), vec![winner.0]);
+
+    library.undo().unwrap().unwrap();
+    let restored = library.details(collection).unwrap();
+    assert_eq!(restored.media, before.media);
+    assert_eq!(restored.root.cover_media_id, before.root.cover_media_id);
+    assert_eq!(restored.tag_ids, before.tag_ids);
+    assert_eq!(provenance_media(&library, "member"), vec![loser_media.media_id.0]);
+}
+
+#[test]
+fn keep_file_removes_a_collection_it_empties_and_points_its_post_at_the_kept_item() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (only, _) = library
+        .ingest(&named_import("only", "only-file", "Only", color(20.0)))
+        .unwrap();
+    // A collection down to one item: group two, then take one out.
+    let (other, _) = library
+        .ingest(&named_import("other", "other-file", "Other", color(25.0)))
+        .unwrap();
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit {
+                root_ids: vec![only, other],
+            },
+            cover_root_id: only,
+            winning_collection_id: None,
+            name: Some("Single".into()),
+            notes: None,
+            modified_at_ms: 1_700_000_000_050,
+        })
+        .unwrap();
+    library
+        .detach_collection_member(collection, picto_library::MediaId(other.0), 1_700_000_000_060)
+        .unwrap();
+    library
+        .apply_tags(
+            &SelectionTarget::Explicit {
+                root_ids: vec![collection],
+            },
+            &["set:tag".to_string()],
+            true,
+        )
+        .unwrap();
+    let (winner, _) = library
+        .ingest(&named_import("winner", "winner-file", "Winner", color(50.0)))
+        .unwrap();
+    let post_root = |library: &Library| -> Option<u32> {
+        library
+            .database()
+            .read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(connection.query_row(
+                        "SELECT root_item_id FROM source_post WHERE post_key = 'post'",
+                        [],
+                        |row| row.get(0),
+                    )?)
+                },
+            )
+            .unwrap()
+    };
+    library
+        .database()
+        .maintenance_write(picto_library::database::WorkPriority::Cloud, |transaction| {
+            transaction.execute(
+                "INSERT INTO source_post (site_id, post_key, root_item_id, created_at, updated_at)
+                 VALUES ('fixture', 'post', ?1, 'now', 'now')",
+                [collection.0],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let only_file = library.details(collection).unwrap().media[0].file_id;
+    let winner_file = file_id(&library, winner);
+    library
+        .record_duplicate_pair(only_file, winner_file, 0, 1_700_000_000_100)
+        .unwrap()
+        .unwrap();
+    library
+        .resolve_duplicate(
+            only_file,
+            winner_file,
+            DuplicateResolutionChoice::KeepFile {
+                winner_file_id: winner_file,
+            },
+            1_700_000_000_200,
+        )
+        .unwrap();
+    assert!(library.details(collection).is_err());
+    let set_tag = library.projections().snapshot().tag_ids_by_name["set:tag"];
+    assert!(library.details(winner).unwrap().tag_ids.contains(&set_tag));
+    assert_eq!(post_root(&library), Some(winner.0));
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(post_root(&library), Some(collection.0));
+    let restored = library.details(collection).unwrap();
+    assert_eq!(restored.media.len(), 1);
+    assert!(restored.tag_ids.contains(&set_tag));
+    assert!(!library.details(winner).unwrap().tag_ids.contains(&set_tag));
 }
 
 #[test]
@@ -684,12 +729,11 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
         )
         .unwrap();
     assert!(result.receipt.resources.contains(&"library".to_string()));
-    assert_eq!(order(), vec![between, weak_root, meaningful_root]);
-    for root_id in [weak_root, meaningful_root] {
-        let details = library.details(root_id).unwrap();
-        assert_eq!(details.root.name, "A quiet landscape");
-        assert_eq!(details.media[0].media_name, "A quiet landscape");
-    }
+    // The kept item takes the better name; the other is merged into it.
+    assert_eq!(order(), vec![between, weak_root]);
+    let details = library.details(weak_root).unwrap();
+    assert_eq!(details.root.name, "A quiet landscape");
+    assert_eq!(details.media[0].media_name, "A quiet landscape");
 
     library.undo().unwrap().unwrap();
     assert_eq!(order(), vec![weak_root, between, meaningful_root]);
@@ -703,13 +747,11 @@ fn duplicate_merge_upgrades_weak_standalone_names_and_replays_them_exactly() {
     );
 
     library.redo().unwrap().unwrap();
-    assert_eq!(order(), vec![between, weak_root, meaningful_root]);
-    for root_id in [weak_root, meaningful_root] {
-        assert_eq!(
-            library.details(root_id).unwrap().root.name,
-            "A quiet landscape"
-        );
-    }
+    assert_eq!(order(), vec![between, weak_root]);
+    assert_eq!(
+        library.details(weak_root).unwrap().root.name,
+        "A quiet landscape"
+    );
 }
 
 #[test]
@@ -763,16 +805,18 @@ fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection()
         .record_duplicate_pair(weak_media.file_id, standalone_file, 0, 1_700_000_000_100)
         .unwrap()
         .unwrap();
+    // Keep the member's file: the loose item merges into the collection.
     library
         .resolve_duplicate(
             weak_media.file_id,
             standalone_file,
             DuplicateResolutionChoice::KeepFile {
-                winner_file_id: standalone_file,
+                winner_file_id: weak_media.file_id,
             },
             1_700_000_000_200,
         )
         .unwrap();
+    assert!(library.details(standalone).is_err());
 
     let details = library.details(collection).unwrap();
     assert_eq!(details.root.name, "Collection-owned title");
@@ -786,6 +830,10 @@ fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection()
         "Meaningful member title"
     );
     library.undo().unwrap().unwrap();
+    assert_eq!(
+        library.details(standalone).unwrap().root.name,
+        "Meaningful member title"
+    );
     let details = library.details(collection).unwrap();
     assert_eq!(details.root.name, "Collection-owned title");
     assert_eq!(
@@ -797,75 +845,4 @@ fn duplicate_merge_upgrades_collection_members_without_renaming_the_collection()
             .media_name,
         "gelbooru_14583420"
     );
-}
-
-#[test]
-fn duplicate_publication_uses_the_shared_broad_receipt_cap() {
-    let directory = TempDir::new().unwrap();
-    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let color = LabColor {
-        l: 50.0,
-        a: 0.0,
-        b: 0.0,
-        weight: 1.0,
-    };
-    let inputs = (0..=picto_library::publication::MAX_RECEIPT_IDS)
-        .map(|index| {
-            imported(
-                &format!("cap-loser-{index}"),
-                "cap-shared-loser",
-                "image/png",
-                100,
-                Some(10),
-                Some(10),
-                None,
-                color.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut loser_roots = Vec::with_capacity(inputs.len());
-    for chunk in inputs.chunks(picto_library::ingest::MAX_INGEST_BATCH) {
-        loser_roots.extend(
-            library
-                .ingest_conversion_batch(chunk)
-                .unwrap()
-                .into_iter()
-                .map(|(root_id, _)| root_id),
-        );
-    }
-    let (winner, _) = library
-        .ingest(&imported(
-            "cap-winner",
-            "cap-winner",
-            "image/jpeg",
-            200,
-            Some(20),
-            Some(20),
-            None,
-            color,
-        ))
-        .unwrap();
-    let loser_file = file_id(&library, loser_roots[0]);
-    let winner_file = file_id(&library, winner);
-    library.publication().flush();
-
-    let detection = library
-        .record_duplicate_pair(loser_file, winner_file, 0, 1_700_000_000_100)
-        .unwrap()
-        .unwrap();
-    assert!(detection.item_ids.is_empty());
-    library.publication().flush();
-    let resolution = library
-        .resolve_duplicate(
-            loser_file,
-            winner_file,
-            DuplicateResolutionChoice::KeepFile {
-                winner_file_id: winner_file,
-            },
-            1_700_000_000_200,
-        )
-        .unwrap();
-    assert!(resolution.receipt.item_ids.is_empty());
-    assert!(resolution.affected_root_ids.is_empty());
-    assert!(library.publication().flush().unwrap().item_ids.is_empty());
 }

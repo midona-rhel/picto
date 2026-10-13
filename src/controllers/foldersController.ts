@@ -1,6 +1,7 @@
 /** Folder CRUD through the replacement transaction and invalidation boundary. */
 
 import { getDefaultStore } from 'jotai';
+import { allowTaskAction } from '../runtime/taskGate';
 import {
   addMedia,
   clearFolderWatchConfig,
@@ -188,6 +189,7 @@ export const foldersController = {
   },
 
   async addMedia(folderPath: string, parentFolderId: number | null): Promise<void> {
+    if (!allowTaskAction('import')) return;
     await addMedia([folderPath], {
       lifecycle: 'active',
       parent_folder_id: parentFolderId,

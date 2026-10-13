@@ -44,6 +44,7 @@ import {
 } from './tagPreferences';
 import styles from './TagManagerScreen.module.css';
 import { t } from '../../i18n';
+import { rankMatches } from '../../shared/lib/searchRank';
 
 const PAGE_SIZE = 500;
 const PICKER_PAGE_SIZE = 40;
@@ -368,9 +369,11 @@ export function TagManagerScreen() {
           });
           return page.tags.find((tag) => tagKey(tag) === name) ?? null;
         })).then((records) => ({
-          tags: records
-            .filter((tag): tag is CanonicalTagRecord => tag != null)
-            .filter((tag) => !query.trim() || tag.subname.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
+          tags: rankMatches(
+            records.filter((tag): tag is CanonicalTagRecord => tag != null),
+            query,
+            (tag) => [tag.subname],
+          ),
           next_cursor: null,
           revision: 0,
         }))
@@ -521,11 +524,15 @@ export function TagManagerScreen() {
     : tags.length;
   const browseRows = useMemo<TagBrowseRow[]>(() => {
     const rows: TagBrowseRow[] = [];
-    const ordered = [...tags].sort((left, right) => (
+    const sections = new Map<string, CanonicalTagRecord[]>();
+    // Search results arrive ranked (exact match first); letter sections would
+    // scatter them, so they stay in one section in that order.
+    const searching = query.trim().length > 0;
+    const ordered = searching ? tags : [...tags].sort((left, right) => (
       left.subname.localeCompare(right.subname, undefined, { sensitivity: 'base', numeric: true })
     ));
-    const sections = new Map<string, CanonicalTagRecord[]>();
-    for (const tag of ordered) {
+    if (searching && ordered.length > 0) sections.set(t("Matches"), [...ordered]);
+    for (const tag of searching ? [] : ordered) {
       const first = tag.subname.trim().charAt(0).toLocaleUpperCase();
       const label = /[\p{L}\p{N}]/u.test(first) ? first : '#';
       const section = sections.get(label) ?? [];
@@ -548,7 +555,7 @@ export function TagManagerScreen() {
       rows.push({ kind: 'skeleton', key: `skeleton-row-${index}` });
     }
     return rows;
-  }, [columnCount, tags, virtualItemCount]);
+  }, [columnCount, query, tags, virtualItemCount]);
   const tagVirtualizer = useVirtualizer({
     count: browseRows.length,
     getScrollElement: () => tagCanvasRef.current,

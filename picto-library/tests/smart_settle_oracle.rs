@@ -11,7 +11,7 @@ use picto_library::predicate::{
 use picto_library::query::{matching_roots, ItemScope, MediaMatches, RootQuery};
 use picto_library::selection::SelectionTarget;
 use picto_library::{
-    ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating, RootId, SmartFolderId,
+    DuplicateResolutionChoice, ImmutableMediaFacts, Library, Lifecycle, PreparedImport, Rating, RootId, SmartFolderId,
     SmartFolderInput, TagId,
 };
 
@@ -104,6 +104,17 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
         .collect::<Vec<_>>();
     let (folder_a, _) = library.create_folder("A", None).unwrap();
     let (folder_b, _) = library.create_folder("B", None).unwrap();
+    // Items kept apart from the edits, each merged once into an edited item
+    // (a duplicate resolved by keeping the edited item's file).
+    let mut merge_pool = library
+        .ingest_batch(&(ROOTS..ROOTS + 40).map(root).collect::<Vec<_>>())
+        .unwrap()
+        .into_iter()
+        .map(|(root_id, _)| root_id)
+        .collect::<Vec<_>>();
+    library.add_to_folder(&explicit(merge_pool[..20].to_vec()), folder_a).unwrap();
+    library.add_to_folder(&explicit(merge_pool[10..30].to_vec()), folder_b).unwrap();
+    library.set_rating(&explicit(merge_pool[..15].to_vec()), Rating::Five).unwrap();
     let t = |name: &str| tag_id(&library, name).unwrap();
     let edits_start = 1_800_000_000_000_u64;
 
@@ -145,13 +156,15 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
         folders.push((id, effective));
     }
 
+    // Undo steps replay edits, not the setup above.
+    library.history().clear();
     let mut rng = Rng(0x5eed_1234_abcd_0001);
     let mut clock = edits_start as i64;
     for step in 0..STEPS {
         clock += 1_000;
         let pick = rng.subset(&ids, 30);
         let tag = format!("t{}", rng.below(8));
-        match rng.below(11) {
+        match rng.below(12) {
             0 => drop(library.apply_tags(&explicit(pick), &[tag], true).unwrap()),
             1 => drop(library.apply_tags(&explicit(pick), &[tag], false).unwrap()),
             2 => drop(library.set_rating(&explicit(pick), Rating::ALL[rng.below(Rating::ALL.len())]).unwrap()),
@@ -177,6 +190,24 @@ fn incremental_smart_folder_results_always_match_a_fresh_evaluation() {
                 }
             }
             9 => drop(library.undo().unwrap()),
+            10 => {
+                if let Some(loser) = merge_pool.pop() {
+                    let survivor = ids[rng.below(ids.len())];
+                    let file = |root| library.details(root).unwrap().media[0].file_id;
+                    let (loser_file, survivor_file) = (file(loser), file(survivor));
+                    library.record_duplicate_pair(loser_file, survivor_file, 0, clock).unwrap();
+                    drop(
+                        library
+                            .resolve_duplicate(
+                                loser_file,
+                                survivor_file,
+                                DuplicateResolutionChoice::KeepFile { winner_file_id: survivor_file },
+                                clock,
+                            )
+                            .unwrap(),
+                    );
+                }
+            }
             _ => drop(library.redo().unwrap()),
         }
         library.settle_fts(usize::MAX).unwrap();

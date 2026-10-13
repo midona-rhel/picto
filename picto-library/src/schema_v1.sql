@@ -301,7 +301,11 @@ CREATE TABLE ingest_job (
     available_at TEXT NOT NULL,
     last_error TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    task_id INTEGER REFERENCES task(task_id) ON DELETE SET NULL,
+    units INTEGER NOT NULL DEFAULT 1,
+    -- 0 while a task's file waits to be read and hashed (a pending payload).
+    prepared INTEGER NOT NULL DEFAULT 1 CHECK (prepared IN (0, 1))
 ) STRICT;
 
 CREATE TABLE work_item (

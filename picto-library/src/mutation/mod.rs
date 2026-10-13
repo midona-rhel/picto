@@ -36,11 +36,15 @@ mod smart_folders;
 mod imports;
 mod duplicates;
 mod structure;
+mod merge;
 mod undo;
+pub(crate) mod tasks;
 use tags::*;
 use folders::*;
 use smart_folders::*;
 use structure::*;
+use merge::*;
+pub use merge::SharedFileMerge;
 use undo::*;
 
 struct PublishedDelta {
@@ -57,6 +61,12 @@ struct PublishedDelta {
 impl crate::database::PublicationDelta for PublishedDelta {
     fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
         let snapshot = &mut self.snapshot;
+        if crate::subscription_counts::SubscriptionCounts::dirty(transaction)? {
+            snapshot.subscription_counts = Arc::new(
+                crate::subscription_counts::SubscriptionCounts::read(transaction)?,
+            );
+            transaction.execute("UPDATE temp.subscription_counts_dirty SET dirty = 0", [])?;
+        }
         // Most publications change no drawing fact; do not copy the drawing
         // index for them.
         let dirty = if crate::browsing::DrawingIndex::journal_is_dirty(transaction)? {
@@ -1290,7 +1300,7 @@ impl Library {
     pub fn set_rating(&self, target: &SelectionTarget, rating: Rating) -> Result<MutationReceipt> {
         self.bitmap_partition_mutation(
             WorkPriority::ForegroundMutation,
-            "items.patch_metadata",
+            "items.set_rating",
             "Change rating",
             BitmapDomain::Rating,
             rating.bitmap_key(),
@@ -1313,6 +1323,12 @@ impl Library {
                 "metadata patch does not change a supported field".into(),
             ));
         }
+        let detail = match (rating, notes.is_some(), source_urls.is_some()) {
+            (Some(rating), false, false) => Some(format!("rating:{}", rating.bitmap_key())),
+            (None, true, false) => Some("notes".to_owned()),
+            (None, false, true) => Some("source_urls".to_owned()),
+            _ => None,
+        };
         let target = target.clone();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
@@ -1438,7 +1454,8 @@ impl Library {
                 "items.patch_metadata",
                 "Change metadata",
                 SemanticChange::Compound(changes),
-            );
+            )
+            .about(selection.len(), detail.as_deref());
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1579,7 +1596,8 @@ impl Library {
                     before: Arc::new(before),
                     after: Arc::new(after),
                 },
-            );
+            )
+            .about(changed.len(), None);
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1600,7 +1618,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
-            "items.patch_metadata",
+            "items.set_notes",
             "Change notes",
             TextMutation::Notes(notes.filter(|value| !value.is_empty())),
             modified_at_ms,
@@ -1615,7 +1633,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
-            "items.patch_metadata",
+            "items.set_source_urls",
             "Change source URLs",
             TextMutation::SourceUrls(source_urls),
             modified_at_ms,
@@ -1807,8 +1825,20 @@ impl Library {
                 resources.clone(),
                 selection.iter().map(RootId),
             );
+            let detail = match domain {
+                BitmapDomain::Lifecycle => Lifecycle::ALL
+                    .into_iter()
+                    .find(|value| value.bitmap_key() == destination)
+                    .map(|value| format!("{value:?}").to_lowercase()),
+                BitmapDomain::Rating => Rating::ALL
+                    .iter()
+                    .position(|value| value.bitmap_key() == destination)
+                    .map(|stars| stars.to_string()),
+                BitmapDomain::Tag => None,
+            };
             let history = (!changes.is_empty()).then(|| {
                 HistoryEntry::for_command(command, label, SemanticChange::Compound(changes))
+                    .about(selection.len(), detail.as_deref())
             });
             Ok((
                 receipt.clone(),
@@ -1835,13 +1865,15 @@ impl Library {
     ) -> Result<T> {
         let projections = self.projections.clone();
         let publication = self.publication.clone();
-        let (output, _, history_entry) = self.database.published_write(
+        let (output, _, ()) = self.database.published_write(
             priority,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| operation(transaction, revision, snapshot),
-            move |_, delta| publish_delta(&projections, &publication, delta),
+            |_, delta| {
+                // Cleanup shares this writer: protect retained files before releasing it.
+                push_history(&self.history, publish_delta(&projections, &publication, delta));
+            },
         )?;
-        push_history(&self.history, history_entry);
         Ok(output)
     }
 
@@ -1965,7 +1997,7 @@ fn required_name(kind: &str, name: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-fn load_root_text(
+pub(crate) fn load_root_text(
     transaction: &rusqlite::Transaction<'_>,
     roots: &RoaringBitmap,
 ) -> Result<Vec<crate::history::RootTextState>> {

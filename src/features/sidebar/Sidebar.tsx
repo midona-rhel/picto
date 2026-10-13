@@ -69,6 +69,7 @@ import {
 } from './quickAccessPreferences';
 import styles from './Sidebar.module.css';
 import { chooseAndImportFolder, filesController } from '../../controllers/filesController';
+import { taskGate } from '../../runtime/taskGate';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
 import { refreshSubscriptionsWorkspace } from '../../runtime/subscriptionsSettle';
@@ -78,6 +79,7 @@ import { contentSortSubmenu } from '../folders/folderContextMenu';
 import { useScrollToTop } from '../../shared/hooks/useScrollToTop';
 import { ScrollToTopButton } from '../../shared/ui/ScrollToTopButton/ScrollToTopButton';
 import { t, translateMessage } from '../../i18n';
+import { requestPermanentDelete } from '../../controllers/permanentDeleteRequest';
 
 const IC = 19;
 const SIDEBAR_RETURN_TO_TOP_THRESHOLD = 360;
@@ -684,7 +686,7 @@ export function Sidebar() {
     const folderId = parseFolderId(node.id);
     if (folderId == null) return;
     const isExpanded = !collapsed.has(node.id);
-    const hasChildren = folderList.some(({ node: n }) => n.parent_id === node.id);
+    const hasChildren = folderNodes.some((child) => child.parent_id === node.id);
     const allExpandableIds = expandableNodeIds(folderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const entries: MenuEntry[] = [
@@ -715,7 +717,7 @@ export function Sidebar() {
         void openFolderAutoTagsEditor([folderId]);
       } },
       { separator: true },
-      { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, action: () => {
+      { label: t("Import Folder Here..."), icon: <IconFolderPlus size={14} />, disabled: taskGate('import').blocked, action: () => {
         void chooseAndImportFolder({ kind: 'folder', folder_id: folderId });
       } },
       { label: t("Attach Watched Folder..."), icon: <IconWatchFolder size={14} />, action: () => {
@@ -784,7 +786,7 @@ export function Sidebar() {
     const currentPayload = buildSmartFolderPayloadFromNode(node);
     const isGroup = isSmartFolderGroup(node);
     const isExpanded = !collapsed.has(node.id);
-    const hasChildren = smartList.some(({ node: child }) => child.parent_id === node.id);
+    const hasChildren = smartFolderNodes.some((child) => child.parent_id === node.id);
     const allExpandableIds = expandableNodeIds(smartFolderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const moveTargets = availableTreeMoveTargetIds(smartFolderNodes, [node.id]);
@@ -1014,14 +1016,7 @@ export function Sidebar() {
         danger: true,
         keywords: 'delete remove trash permanently',
         action: () => {
-          store.set(confirmModalAtom, {
-            open: true,
-            title: t("Empty Trash"),
-            message: 'Permanently delete every item in Trash? This cannot be undone.',
-            confirmLabel: t("Delete All"),
-            danger: true,
-            onConfirm: () => entityMutations.permanentlyDeleteTarget(target),
-          });
+          void requestPermanentDelete(target, node.count ?? null, { emptyTrash: true });
         },
       },
       {
@@ -1334,6 +1329,7 @@ export function Sidebar() {
               },
               {
                 label: t("Import Folder..."), icon: <IconFolderPlus size={14} />,
+                disabled: taskGate('import').blocked,
                 action: () => { void chooseAndImportFolder({ kind: 'all' }); },
               },
             ]);

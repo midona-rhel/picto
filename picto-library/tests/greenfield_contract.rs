@@ -574,7 +574,7 @@ fn alphabetical_projection_is_current_before_fts_and_survives_root_history_and_r
     drop(library);
     let library = Library::open(&path).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 104).unwrap();
+    library.permanently_delete(&target, 104, 0, false).unwrap();
     verify(&library);
     drop(library);
     verify(&Library::open(&path).unwrap());
@@ -1401,7 +1401,7 @@ fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     library
-        .permanently_delete(&target, 1_700_000_000_100)
+        .permanently_delete(&target, 1_700_000_000_100, 0, false)
         .unwrap();
     assert!(library.ingest(&input).is_err());
 
@@ -2811,7 +2811,7 @@ fn recent_view_membership_tracks_clear_undo_deletion_and_reopen() {
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![first] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 3).unwrap();
+    library.permanently_delete(&target, 3, 0, false).unwrap();
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, true]);
     drop(library);
     let reopened = Library::open(&path).unwrap();
@@ -2833,7 +2833,7 @@ fn root_membership_checks_only_candidates_without_building_query_order() {
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, true, false, false, false, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![second] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 1_700_000_001_000).unwrap();
+    library.permanently_delete(&target, 1_700_000_001_000, 0, false).unwrap();
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, false, false, false, false, true]);
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     assert!(library.root_membership(&all, &[]).unwrap().is_empty());
@@ -3548,10 +3548,21 @@ fn smart_folder_definitions_are_typed_cycle_safe_and_session_undoable() {
     assert_eq!(deleted.deleted_smart_folder_ids.len(), 3);
     assert_eq!(deleted.fallback_smart_folder_id, None);
     assert!(library.smart_folders().unwrap().is_empty());
+    let entry = library.history().state().undo.unwrap();
+    assert_eq!(entry.command, "smart_folders.delete");
+    assert_eq!(entry.count, 3);
     library.undo().unwrap().unwrap();
     assert_eq!(library.smart_folders().unwrap().len(), 3);
+    assert_eq!(library.history().state().redo.unwrap(), entry);
     library.redo().unwrap().unwrap();
     assert!(library.smart_folders().unwrap().is_empty());
+    assert_eq!(library.history().state().undo.unwrap(), entry);
+
+    library.undo().unwrap().unwrap();
+    let deleted = library.delete_smart_folder(child).unwrap();
+    assert_eq!(deleted.deleted_smart_folder_ids, vec![child]);
+    assert_eq!(library.smart_folders().unwrap().len(), 2);
+    assert_eq!(library.history().state().undo.unwrap().count, 1);
 }
 
 #[test]
@@ -3964,7 +3975,7 @@ fn repeated_collection_import_merges_new_members_without_replacing_its_name() {
 }
 
 #[test]
-fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
+fn exact_hash_collection_member_takes_in_the_loose_item_holding_its_file() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut original = imported("collection-existing", Lifecycle::Inbox, &["state:original"]);
@@ -3988,39 +3999,21 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
         })
         .unwrap();
 
+    // One file is one item: the loose copy becomes the post's member.
     assert_ne!(collection, existing_root);
     let inbox = library
         .query(&query(ItemScope::Inbox), &PageRequest::default())
         .unwrap();
-    assert_eq!(inbox.total, 2);
-    assert_eq!(inbox.media_count, 4);
-    let exact_matches = library
-        .query(
-            &query(ItemScope::MediaMatches {
-                item_id: collection.0,
-            }),
-            &PageRequest::default(),
-        )
-        .unwrap();
-    assert_eq!(exact_matches.total, 2);
-    assert_eq!(
-        exact_matches
-            .items
-            .iter()
-            .map(|item| item.root_id)
-            .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from([existing_root, collection])
-    );
-    assert_eq!(
-        library.projections().snapshot().collection_orders[&collection].len(),
-        3
-    );
+    assert_eq!(inbox.total, 1);
+    assert_eq!(inbox.media_count, 3);
     let snapshot = library.projections().snapshot();
+    let members = snapshot.collection_orders[&collection].clone();
+    assert_eq!(members.len(), 3);
+    assert_eq!(members[0], picto_library::MediaId(existing_root.0));
+    assert_eq!(snapshot.media_owner.get(existing_root.0), Some(&collection));
     let incoming_tag = snapshot.tag_ids_by_name["state:incoming"];
     let original_tag = snapshot.tag_ids_by_name["state:original"];
-    assert!(!snapshot.tags[&incoming_tag].contains(existing_root.0));
     assert!(snapshot.tags[&incoming_tag].contains(collection.0));
-    assert!(snapshot.tags[&original_tag].contains(existing_root.0));
     assert!(snapshot.tags[&original_tag].contains(collection.0));
     library
         .database()
@@ -4035,7 +4028,7 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
                 assert_eq!(
                     connection.query_row("SELECT COUNT(*) FROM media_item", [], |row| row
                         .get::<_, i64>(0))?,
-                    4
+                    3
                 );
                 assert_eq!(
                     connection.query_row(
@@ -4052,7 +4045,7 @@ fn exact_hash_collection_member_reuses_file_without_absorbing_its_owner() {
 }
 
 #[test]
-fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
+fn a_shared_file_combines_collections_and_keeps_both_sets_of_tags() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut first_member = imported(
@@ -4094,12 +4087,12 @@ fn exact_hash_collection_tags_never_flow_to_other_collections_or_standalones() {
         .unwrap();
 
     let snapshot = library.projections().snapshot();
-    let first_tag = snapshot.tag_ids_by_name["collection:first"];
-    let second_tag = snapshot.tag_ids_by_name["collection:second"];
-    assert!(snapshot.tags[&first_tag].contains(first_collection.0));
-    assert!(!snapshot.tags[&first_tag].contains(second_collection.0));
-    assert!(snapshot.tags[&second_tag].contains(second_collection.0));
-    assert!(!snapshot.tags[&second_tag].contains(first_collection.0));
+    assert_eq!(first_collection, second_collection);
+    assert_eq!(snapshot.collection_orders[&first_collection].len(), 3);
+    for name in ["collection:first", "collection:second"] {
+        let tag = snapshot.tag_ids_by_name[name];
+        assert!(snapshot.tags[&tag].contains(first_collection.0));
+    }
 }
 
 #[test]
@@ -4144,100 +4137,6 @@ fn exact_hash_standalone_import_collapses_into_collection_and_donates_its_tags()
     let snapshot = library.projections().snapshot();
     let donated = snapshot.tag_ids_by_name["standalone:donated"];
     assert!(snapshot.tags[&donated].contains(collection.0));
-}
-
-#[test]
-fn exact_hash_standalone_tags_fan_out_to_every_owner_across_lifecycles() {
-    let directory = TempDir::new().unwrap();
-    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
-    let shared_hash = "shared-owner-fan-out-hash";
-    let standalone_inputs = [
-        ("fan-out-active", Lifecycle::Active),
-        ("fan-out-inbox", Lifecycle::Inbox),
-        ("fan-out-trash", Lifecycle::Trash),
-    ]
-    .map(|(key, lifecycle)| {
-        let mut input = imported(key, lifecycle, &[]);
-        input.facts.content_hash = shared_hash.into();
-        input
-    });
-    let standalone_roots = library
-        .ingest_conversion_batch(&standalone_inputs)
-        .unwrap()
-        .into_iter()
-        .map(|(root_id, _)| root_id)
-        .collect::<Vec<_>>();
-
-    let mut collection_member = imported(
-        "fan-out-collection-member",
-        Lifecycle::Inbox,
-        &["collection:local"],
-    );
-    collection_member.facts.content_hash = shared_hash.into();
-    let (collection, _) = library
-        .ingest_collection(&picto_library::PreparedCollectionImport {
-            members: vec![
-                collection_member,
-                imported("fan-out-collection-support", Lifecycle::Inbox, &[]),
-            ],
-            cover_index: 0,
-            existing_root_id: None,
-            name: Some("Fan-out collection".into()),
-            modified_at_ms: 1_700_000_007_000,
-        })
-        .unwrap();
-    let (unrelated, _) = library
-        .ingest(&imported("fan-out-unrelated", Lifecycle::Active, &[]))
-        .unwrap();
-
-    let visible_roots_before = library
-        .database()
-        .read(
-            picto_library::database::WorkPriority::VisibleRead,
-            |connection| {
-                Ok(
-                    connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                )
-            },
-        )
-        .unwrap();
-    let mut incoming = imported(
-        "fan-out-incoming-standalone",
-        Lifecycle::Inbox,
-        &["standalone:incoming"],
-    );
-    incoming.facts.content_hash = shared_hash.into();
-    let (retained, _) = library.ingest(&incoming).unwrap();
-
-    assert_eq!(retained, standalone_roots[0]);
-    assert_eq!(
-        library
-            .database()
-            .read(
-                picto_library::database::WorkPriority::VisibleRead,
-                |connection| {
-                    Ok(
-                        connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| {
-                            row.get::<_, i64>(0)
-                        })?,
-                    )
-                },
-            )
-            .unwrap(),
-        visible_roots_before
-    );
-    let snapshot = library.projections().snapshot();
-    let incoming_tag = snapshot.tag_ids_by_name["standalone:incoming"];
-    for owner in standalone_roots.iter().copied().chain([collection]) {
-        assert!(snapshot.tags[&incoming_tag].contains(owner.0));
-    }
-    assert!(!snapshot.tags[&incoming_tag].contains(unrelated.0));
-    let collection_tag = snapshot.tag_ids_by_name["collection:local"];
-    for standalone in standalone_roots {
-        assert!(!snapshot.tags[&collection_tag].contains(standalone.0));
-    }
 }
 
 #[test]
@@ -4548,7 +4447,7 @@ fn text_projection_tracks_sqlite_through_structural_history_and_checkpoint_reope
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 44).unwrap();
+    library.permanently_delete(&target, 44, 0, false).unwrap();
     verify(&library);
 }
 
@@ -5429,7 +5328,7 @@ fn collection_members_retain_notes_through_group_cover_undo_and_ungroup() {
     let mut second_import = imported("noted-two", Lifecycle::Active, &[]);
     second_import.notes = Some("Second member note".into());
     let converted = library
-        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .ingest_batch(&[first_import.clone(), second_import.clone()])
         .unwrap();
     let first = converted[0].0;
     let second = converted[1].0;
@@ -5599,17 +5498,17 @@ fn recent_views_are_active_only_timestamp_ordered_and_clear_is_session_undoable(
 }
 
 #[test]
-fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
+fn permanent_delete_past_the_undo_limit_queues_its_blobs_at_once() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
     let library = Library::create(&path).unwrap();
     let shared_hash = "shared-content";
     let mut first_import = imported("delete-first", Lifecycle::Active, &["creator:one"]);
-    first_import.facts.content_hash = shared_hash.into();
+    first_import.facts.content_hash = "first-content".into();
     let mut second_import = imported("delete-second", Lifecycle::Active, &["creator:two"]);
     second_import.facts.content_hash = shared_hash.into();
     let converted = library
-        .ingest_conversion_batch(&[first_import.clone(), second_import.clone()])
+        .ingest_batch(&[first_import.clone(), second_import.clone()])
         .unwrap();
     library
         .database()
@@ -5637,9 +5536,10 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&first_target, 1_700_000_000_500)
+        .permanently_delete(&first_target, 1_700_000_000_500, 0, false)
         .unwrap();
-    assert!(cleanup.is_empty());
+    assert_eq!(cleanup.len(), 1);
+    assert_eq!(cleanup[0].file_path, first_import.file_path);
     assert_eq!(library.history().state().entries, history_before_delete);
 
     let second_target = SelectionTarget::Explicit {
@@ -5650,7 +5550,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&second_target, 1_700_000_000_600)
+        .permanently_delete(&second_target, 1_700_000_000_600, 0, false)
         .unwrap();
     assert_eq!(cleanup.len(), 1);
     assert_eq!(cleanup[0].file_path, second_import.file_path);
@@ -5684,7 +5584,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
                     connection.query_row("SELECT COUNT(*) FROM blob_cleanup_queue", [], |row| {
                         row.get::<_, i64>(0)
                     })?,
-                    1
+                    2
                 );
                 let (object_key, retention_days): (String, i64) = connection.query_row(
                     "SELECT object_key,
@@ -5712,8 +5612,345 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
                 Ok(())
             })
             .unwrap(),
-        1
+        2
     );
-    assert_eq!(removed, vec![shared_hash]);
+    assert_eq!(removed, vec!["first-content", shared_hash]);
     assert!(reopened.pending_blob_cleanup(10).unwrap().is_empty());
+}
+
+/// Everything a user can see of the library that a delete and its undo touch.
+fn observable(library: &Library, folder: picto_library::FolderId) -> String {
+    let snapshot = library.projections().snapshot();
+    let mut roots = Vec::new();
+    for kind in [picto_library::RootKind::Media, picto_library::RootKind::Collection] {
+        if let Some(members) = snapshot.root_kinds.get(&kind) {
+            roots.extend(members.iter());
+        }
+    }
+    roots.sort_unstable();
+    let mut out = String::new();
+    for root in roots {
+        let mut details = library.details(picto_library::RootId(root)).unwrap();
+        details.revision = 0;
+        out.push_str(&format!("{details:?}\n"));
+    }
+    let counts = library.counts().unwrap();
+    out.push_str(&format!("all={} inbox={} trash={}\n", counts.all, counts.inbox, counts.trash));
+    let provenance = library
+        .database()
+        .read(picto_library::database::WorkPriority::VisibleRead, |connection| {
+            Ok(connection.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT media_id) FROM source_provenance",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )?)
+        })
+        .unwrap();
+    out.push_str(&format!("provenance={provenance:?}\n"));
+    out.push_str(&format!("folder={:?}\n", snapshot.folder_orders.get(&folder)));
+    for scope in [ItemScope::All, ItemScope::Trash, ItemScope::Folder { folder_id: folder }] {
+        let page = library
+            .query(&query(scope.clone()), &PageRequest { cursor: None, limit: 100 })
+            .unwrap();
+        out.push_str(&format!(
+            "{scope:?}={:?}\n",
+            page.items.iter().map(|item| item.root_id.0).collect::<Vec<_>>()
+        ));
+    }
+    out
+}
+
+#[test]
+fn a_permanent_delete_within_the_limit_can_be_undone_and_redone_exactly() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (folder, _) = library.create_folder("Kept", None).unwrap();
+    let mut roots = Vec::new();
+    for key in ["delete-a", "delete-b", "delete-c", "keep-d"] {
+        let mut input = imported(key, Lifecycle::Active, &["shared", key]);
+        input.folders = vec![folder];
+        input.rating = Rating::Four;
+        roots.push(library.ingest(&input).unwrap().0);
+    }
+    let (collection, _) = library
+        .organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit { root_ids: vec![roots[1], roots[2]] },
+            cover_root_id: roots[2],
+            winning_collection_id: None,
+            name: Some("pair".into()),
+            notes: None,
+            modified_at_ms: 2,
+        })
+        .unwrap();
+    let doomed = SelectionTarget::Explicit { root_ids: vec![roots[0], collection] };
+    library.set_lifecycle(&doomed, Lifecycle::Trash).unwrap();
+    library.history().clear();
+    let before = observable(&library, folder);
+
+    library.permanently_delete(&doomed, 10, 500, false).unwrap();
+    let deleted = observable(&library, folder);
+    assert_ne!(deleted, before);
+    assert_eq!(library.history().state().undo.unwrap().command, "items.delete");
+    // The files are kept while the delete can be undone.
+    assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+
+    library.undo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), before);
+    library.redo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), deleted);
+    library.undo().unwrap().unwrap();
+    assert_eq!(observable(&library, folder), before);
+
+    // The restored library is what its rows say: a reopen rebuilds the same.
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(observable(&library, folder), before);
+}
+
+#[test]
+fn a_permanent_delete_past_the_limit_cannot_be_undone_and_frees_its_files() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let mut roots = Vec::new();
+    for key in ["over-a", "over-b"] {
+        roots.push(library.ingest(&imported(key, Lifecycle::Trash, &[])).unwrap().0);
+    }
+    library.history().clear();
+    let target = SelectionTarget::Explicit { root_ids: roots };
+
+    library.permanently_delete(&target, 10, 1, false).unwrap();
+    assert!(library.history().state().undo.is_none());
+    assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), 2);
+}
+
+#[test]
+fn permanent_delete_counts_collection_media_and_honors_zero_limit() {
+    for limit in [0, 1, 2] {
+        let directory = TempDir::new().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let a = library.ingest(&imported("member-a", Lifecycle::Inbox, &[])).unwrap().0;
+        let b = library.ingest(&imported("member-b", Lifecycle::Inbox, &[])).unwrap().0;
+        let (collection, _) = library.organize_into_collection(&GroupRequest {
+            target: SelectionTarget::Explicit { root_ids: vec![a, b] },
+            cover_root_id: a,
+            winning_collection_id: None,
+            name: Some("pair".into()),
+            notes: None,
+            modified_at_ms: 2,
+        }).unwrap();
+        library.history().clear();
+        let target = SelectionTarget::Explicit { root_ids: vec![collection] };
+        let summary = library.selection_summary(&target).unwrap();
+        assert_eq!(summary.selected_count, 1);
+        assert_eq!(summary.media_count, 2);
+        if limit < 2 {
+            let revision = library.database().revision().unwrap();
+            assert!(matches!(library.delete_rejected(&target, 10, limit, true),
+                Err(picto_library::LibraryError::UndoLimitExceeded)));
+            assert_eq!(library.database().revision().unwrap(), revision);
+            assert!(library.details(collection).is_ok());
+            assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+        }
+        let (_, cleanup) = library.delete_rejected(&target, 10, limit, false).unwrap();
+        assert_eq!(library.history().state().undo.is_some(), limit == 2);
+        assert_eq!(cleanup.len(), if limit == 2 { 0 } else { 2 });
+        assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), cleanup.len());
+        if limit == 2 {
+            library.undo().unwrap().unwrap();
+            assert_eq!(library.details(collection).unwrap().root.media_count, 2);
+        }
+    }
+}
+
+#[test]
+fn permanent_delete_restores_recent_views_and_cascaded_work() {
+    use picto_library::database::WorkPriority;
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let a = library.ingest(&imported("work-a", Lifecycle::Trash, &[])).unwrap().0;
+    let b = library.ingest(&imported("work-b", Lifecycle::Trash, &[])).unwrap().0;
+    library.record_recent_view(a, 1234).unwrap();
+    library.record_recent_view(b, 5678).unwrap();
+    drop(library);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute(
+        "INSERT INTO work_item(work_id, root_id, work_type, status, priority, attempt_count,
+                               available_at, last_error, created_at, updated_at)
+         VALUES (1000, ?1, 'ai_tag', 'failed', 42, 3, 'later', 'retry me', 'created', 'updated')",
+        [a.0],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO work_item(work_id, media_item_id, work_type, status, priority,
+                               available_at, created_at, updated_at)
+         VALUES (1001, ?1, 'ai_tag', 'running', 17, 'now', 'created', 'updated')",
+        [b.0],
+    ).unwrap();
+    drop(connection);
+    let library = Library::open(&path).unwrap();
+    let target = SelectionTarget::Explicit { root_ids: vec![a, b] };
+    let receipt = library.permanently_delete(&target, 10, 2, false).unwrap().0;
+    assert!(receipt.resources.contains(&"recently_viewed".into()));
+    assert!(receipt.resources.contains(&"tasks".into()));
+    assert!(library.projections().snapshot().recent_views.is_empty());
+    library.database().maintenance_write(WorkPriority::Maintenance, |transaction| {
+        assert_eq!(transaction.query_row("SELECT COUNT(*) FROM work_item WHERE work_type = 'ai_tag'", [], |row| row.get::<_, u32>(0))?, 0);
+        // Another job may reuse the deleted queue ID before Undo.
+        transaction.execute("INSERT INTO work_item(work_id, file_hash, work_type, status, available_at, created_at, updated_at)
+                             VALUES (1001, 'unrelated', 'ai_tag', 'pending', 'now', 'now', 'now')", [])?;
+        Ok(())
+    }).unwrap();
+    for _ in 0..2 {
+        let receipt = library.undo().unwrap().unwrap();
+        assert!(receipt.resources.contains(&"recently_viewed".into()));
+        assert!(receipt.resources.contains(&"tasks".into()));
+        assert!(library.projections().snapshot().recent_views.contains(&(a, 1234)));
+        assert!(library.projections().snapshot().recent_views.contains(&(b, 5678)));
+        library.database().read(WorkPriority::VisibleRead, |connection| {
+            let views = connection.prepare("SELECT root_id, viewed_at_ms FROM recent_view ORDER BY root_id")?
+                .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            assert_eq!(views, vec![(a.0, 1234), (b.0, 5678)]);
+            let root_work = connection.query_row(
+                "SELECT status, priority, attempt_count, available_at, last_error, created_at, updated_at
+                 FROM work_item WHERE root_id = ?1 AND work_type = 'ai_tag'", [a.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?,
+                          row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?)),
+            )?;
+            assert_eq!(root_work, ("failed".into(), 42, 3, "later".into(), "retry me".into(), "created".into(), "updated".into()));
+            let media_work = connection.query_row(
+                "SELECT status, priority FROM work_item WHERE media_item_id = ?1 AND work_type = 'ai_tag'", [b.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )?;
+            assert_eq!(media_work, ("pending".into(), 17));
+            assert_eq!(connection.query_row("SELECT file_hash FROM work_item WHERE work_id = 1001", [], |row| row.get::<_, String>(0))?, "unrelated");
+            Ok(())
+        }).unwrap();
+        library.redo().unwrap().unwrap();
+    }
+    library.undo().unwrap().unwrap();
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(library.projections().snapshot().recent_views.len(), 2);
+}
+
+#[test]
+fn permanent_delete_protects_files_from_cleanup_already_waiting_for_the_writer() {
+    use picto_library::database::WorkPriority;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let root = library.ingest(&imported("racing-delete", Lifecycle::Trash, &[])).unwrap().0;
+    library.history().clear();
+    let wait_for = |priority| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !library.database().has_higher_priority_waiter(priority) {
+            assert!(Instant::now() < deadline, "worker did not queue");
+            std::thread::yield_now();
+        }
+    };
+    std::thread::scope(|scope| {
+        let library = &library;
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let blocker = scope.spawn(move || library.database().maintenance_write(WorkPriority::Maintenance, |_| {
+            locked_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(())
+        }).unwrap());
+        locked_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let cleanup = scope.spawn(|| library.clean_pending_blobs(10, |_| {
+            panic!("cleanup removed a file promised to Undo");
+        }).unwrap());
+        wait_for(WorkPriority::Fts);
+        let deletion = scope.spawn(|| library.permanently_delete(
+            &SelectionTarget::Explicit { root_ids: vec![root] }, 10, 1, true,
+        ).unwrap());
+        wait_for(WorkPriority::Maintenance);
+        release_tx.send(()).unwrap();
+        blocker.join().unwrap();
+        deletion.join().unwrap();
+        assert_eq!(cleanup.join().unwrap(), 0);
+    });
+    library.undo().unwrap().unwrap();
+    assert!(library.details(root).is_ok());
+    library.redo().unwrap().unwrap();
+    assert_eq!(library.clean_pending_blobs(10, |_| panic!("redo lost protection")).unwrap(), 0);
+    library.history().clear();
+    assert_eq!(library.clean_pending_blobs(10, |_| Ok(())).unwrap(), 1);
+}
+
+#[test]
+fn rejecting_deletes_inbox_items_and_can_be_undone() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let inbox = library.ingest(&imported("rejected", Lifecycle::Inbox, &["x"])).unwrap().0;
+    let active = library.ingest(&imported("accepted", Lifecycle::Active, &["x"])).unwrap().0;
+    library.history().clear();
+
+    let only_active = SelectionTarget::Explicit { root_ids: vec![active] };
+    assert!(library.delete_rejected(&only_active, 10, 500, false).is_err());
+    let target = SelectionTarget::Explicit { root_ids: vec![inbox] };
+    library.delete_rejected(&target, 10, 500, false).unwrap();
+    assert!(library.details(inbox).is_err());
+    assert_eq!(library.history().state().undo.unwrap().command, "items.reject");
+
+    library.undo().unwrap().unwrap();
+    let restored = library.details(inbox).unwrap();
+    assert_eq!(restored.lifecycle, Lifecycle::Inbox);
+    assert_eq!(restored.tag_ids.len(), 1);
+}
+
+#[test]
+fn permanent_delete_guard_rejects_query_growth_without_changing_anything() {
+    for lifecycle in [Lifecycle::Inbox, Lifecycle::Trash] {
+        let directory = TempDir::new().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let first = library.ingest(&imported("first", lifecycle, &[])).unwrap().0;
+        let target = SelectionTarget::Query {
+            query: query(if lifecycle == Lifecycle::Inbox { ItemScope::Inbox } else { ItemScope::Trash }),
+            excluded_root_ids: vec![],
+        };
+        assert_eq!(library.selection_summary(&target).unwrap().media_count, 1);
+        // The query grows after the renderer's preflight, before the writer resolves it.
+        let second = library.ingest(&imported("second", lifecycle, &[])).unwrap().0;
+        library.history().clear();
+        let revision = library.database().revision().unwrap();
+        let delete = |require_undoable| {
+            if lifecycle == Lifecycle::Inbox { library.delete_rejected(&target, 10, 1, require_undoable) }
+            else { library.permanently_delete(&target, 10, 1, require_undoable) }
+        };
+        assert!(matches!(delete(true), Err(picto_library::LibraryError::UndoLimitExceeded)));
+        assert_eq!(library.database().revision().unwrap(), revision);
+        assert!(library.details(first).is_ok());
+        assert!(library.details(second).is_ok());
+        assert!(library.history().state().undo.is_none());
+        assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+        // Only a separately confirmed retry may drop the constraint.
+        delete(false).unwrap();
+        assert!(library.details(first).is_err());
+        assert!(library.details(second).is_err());
+        assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), 2);
+    }
+}
+#[test]
+fn metadata_patch_history_describes_the_fields_the_renderer_changed() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let (root, _) = library.ingest(&imported("patch-description", Lifecycle::Active, &[])).unwrap();
+    let target = SelectionTarget::Explicit { root_ids: vec![root] };
+    for (rating, notes, urls, expected) in [
+        (Some(Rating::Four), None, None, Some("rating:4")),
+        (Some(Rating::Unrated), None, None, Some("rating:0")),
+        (None, Some(Some("note".into())), None, Some("notes")),
+        (None, None, Some(vec!["https://example.test/new".into()]), Some("source_urls")),
+        (Some(Rating::Five), Some(None), None, None),
+    ] {
+        library.patch_metadata(&target, rating, notes, urls, 42).unwrap();
+        let entry = library.history().state().undo.unwrap();
+        assert_eq!(entry.command, "items.patch_metadata");
+        assert_eq!(entry.detail.as_deref(), expected);
+    }
 }

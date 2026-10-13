@@ -2,6 +2,7 @@
  * ModalLayer — renders all application modals. Placed once in AppShell.
  */
 
+import { allowTaskAction } from '../../runtime/taskGate';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   confirmModalAtom,
@@ -63,6 +64,7 @@ export function ModalLayer() {
   const submitMultiFileImport = (groupFiles: boolean) => {
     const request = multiFileImport;
     setMultiFileImport({ ...request, open: false });
+    if (!allowTaskAction('import')) return;
     void filesController.addMedia(request.paths, {
       lifecycle: request.lifecycle,
       parent_folder_id: request.parentFolderId,
@@ -83,7 +85,7 @@ export function ModalLayer() {
     <>
       <ConfirmModal
         open={confirm.open}
-        onClose={() => setConfirm({ ...confirm, open: false })}
+        onClose={() => { confirm.onCancel?.(); setConfirm({ ...confirm, open: false }); }}
         onConfirm={() => { confirm.onConfirm(); setConfirm({ ...confirm, open: false }); }}
         title={confirm.title}
         message={confirm.message}
@@ -201,6 +203,7 @@ export function ModalLayer() {
         path={folderImport.path}
         targetFolderId={folderImport.targetFolderId}
         onImport={(options) => {
+          if (!allowTaskAction('import')) return;
           void filesController.addMedia([folderImport.path], {
             preserve_structure: options.preserveStructure,
             include_subfolders: options.includeSubfolders,

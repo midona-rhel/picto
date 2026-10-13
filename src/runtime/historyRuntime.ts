@@ -12,6 +12,7 @@ import {
   showSuccessNotification,
 } from '../shared/lib/notifications';
 import { t } from '../i18n';
+import { describeHistoryEntry } from './historyMessages';
 
 let operationPending = false;
 
@@ -23,6 +24,8 @@ const ANNOUNCED_MUTATIONS = new Set([
   'collections.ungroup',
   'folders.delete',
   'items.apply_ai_tags',
+  'items.delete',
+  'items.reject',
   'items.rename_many',
   'smart_folders.delete',
   'tags.delete',
@@ -56,8 +59,8 @@ async function perform(direction: 'undo' | 'redo'): Promise<void> {
 function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationResult): void {
   const reverse = direction === 'undo' ? result.state.redo : result.state.undo;
   showInfoNotification({
-    title: `${direction === 'undo' ? 'Undid' : 'Redid'} ${result.entry.label}`,
-    message: '',
+    title: direction === 'undo' ? t('Undone') : t('Redone'),
+    message: describeHistoryEntry(result.entry),
     action: reverse ? {
       label: direction === 'undo' ? t("Redo") : t("Undo"),
       onClick: () => { void perform(direction === 'undo' ? 'redo' : 'undo'); },
@@ -65,13 +68,14 @@ function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationR
   });
 }
 
-export async function announceUndoableMutation(command: string): Promise<void> {
+export async function announceUndoableMutation(command: string, previousEntryId?: number | null): Promise<void> {
   if (!ANNOUNCED_MUTATIONS.has(command)) return;
   try {
     const state = await getHistoryState();
     if (state.undo?.command !== command) return;
+    if (state.undo.entry_id === previousEntryId) return;
     showSuccessNotification({
-      title: state.undo.label,
+      title: describeHistoryEntry(state.undo),
       message: '',
       action: {
         label: t("Undo"),

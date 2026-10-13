@@ -366,8 +366,12 @@ pub fn dispatch_library(
             read(application.patch_metadata(&input.target, &input.patch)?)
         }
         "items.delete" => {
-            let input: TargetInput = parse(args_json)?;
-            read(application.delete_items(&input.target)?)
+            let input: DeleteItemsInput = parse(args_json)?;
+            read(application.delete_items(&input.target, input.require_undoable)?)
+        }
+        "items.reject_delete" => {
+            let input: DeleteItemsInput = parse(args_json)?;
+            read(application.reject_items(&input.target, input.require_undoable)?)
         }
         "items.organize_into_collection" => {
             let input: picto_library::OrganizeCollectionInput = parse(args_json)?;
@@ -519,7 +523,39 @@ pub fn dispatch_library(
             read(application.patch_view_preferences(&input.scope, &input.value)?)
         }
         "settings.view.reset" => read(application.reset_view_preferences()?),
-        "tasks.get" => read(crate::tasks::snapshot_library(application)?),
+        "tasks.list" => read(crate::tasks::foreground_tasks(application)?),
+        "tasks.failures" => {
+            let input: TaskInput = parse(args_json)?;
+            read(crate::tasks::task_failures(application, input.task_id)?)
+        }
+        "tasks.pause" | "tasks.resume" => {
+            let input: TaskInput = parse(args_json)?;
+            application
+                .library()
+                .set_task_paused(picto_library::TaskId(input.task_id), command == "tasks.pause")
+                .map_err(|error| error.to_string())?;
+            read(crate::tasks::foreground_tasks(application)?)
+        }
+        "tasks.stop" => {
+            let input: TaskStopInput = parse(args_json)?;
+            application
+                .library()
+                .stop_task(
+                    picto_library::TaskId(input.task_id),
+                    input.undo,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .map_err(|error| error.to_string())?;
+            read(crate::tasks::foreground_tasks(application)?)
+        }
+        "tasks.dismiss" => {
+            let input: TaskInput = parse(args_json)?;
+            application
+                .library()
+                .dismiss_task(picto_library::TaskId(input.task_id))
+                .map_err(|error| error.to_string())?;
+            read(crate::tasks::foreground_tasks(application)?)
+        }
         "cloud.providers.detect" => read(crate::cloud::provider::detect_roots()),
         "cloud.status.get" => read(crate::cloud::status_library(application)?),
         "cloud.configuration.get" => read(crate::cloud::configuration_library(application)?),
@@ -776,7 +812,7 @@ pub async fn dispatch_library_async(
         }
         "imports.enqueue" => {
             let input: crate::library_import::ManualImportInput = parse(args_json)?;
-            read(crate::library_import::enqueue_manual_import(application, &input).await?)
+            read(crate::import_tasks::start_manual_import(application, &input)?)
         }
         "imports.folder.analyze" => {
             let input: crate::library_import::FolderTreeAnalysisInput = parse(args_json)?;
@@ -862,6 +898,18 @@ struct QueryFacetsInput {
 }
 
 #[derive(Deserialize)]
+struct TaskInput {
+    task_id: i64,
+}
+
+#[derive(Deserialize)]
+struct TaskStopInput {
+    task_id: i64,
+    #[serde(default)]
+    undo: bool,
+}
+
+#[derive(Deserialize)]
 struct RootInput {
     root_id: picto_library::RootId,
 }
@@ -869,6 +917,17 @@ struct RootInput {
 #[derive(Deserialize)]
 struct TargetInput {
     target: picto_library::selection::SelectionTarget,
+}
+
+#[derive(Deserialize)]
+struct DeleteItemsInput {
+    target: picto_library::selection::SelectionTarget,
+    #[serde(default = "require_delete_undo")]
+    require_undoable: bool,
+}
+
+fn require_delete_undo() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

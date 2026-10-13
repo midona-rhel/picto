@@ -11,6 +11,7 @@ import { getDefaultStore } from 'jotai';
 import {
   applyEntityTags,
   deleteItems,
+  rejectDeleteItems,
   getSelectionSummary,
   getCollectionNoteDraft,
   patchMediaEntities,
@@ -19,6 +20,7 @@ import {
   setItemLifecycle,
 } from '../platform/entityApi';
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
+import { getSettings } from '../platform/settingsApi';
 import { recordRecentItems } from '../shared/hooks/useRecentItems';
 import { recordRecentFolderUse } from '../shared/hooks/useRecentFolders';
 import type { CollectionNoteDraft, EntityTarget, Lifecycle, Rating, SelectionSummary } from '../shared/types/canonical';
@@ -26,6 +28,8 @@ import { clearSelectionAtom } from '../state/selection';
 import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
+import { getHistoryState } from '../platform/historyApi';
+import { requestPermanentDelete } from './permanentDeleteRequest';
 
 const store = getDefaultStore();
 
@@ -82,10 +86,37 @@ export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecy
   settleSelectionAfterMutation();
 }
 
-export async function permanentlyDeleteTarget(target: EntityTarget): Promise<void> {
+export async function permanentlyDeleteTarget(target: EntityTarget, requireUndoable = true): Promise<void> {
+  await deleteTarget(target, deleteItems, 'items.delete', requireUndoable);
+}
+
+/**
+ * Reject Inbox items: to Trash, or straight out of the library when the
+ * "Rejected items" setting says so. Confirm deletes that cannot be undone.
+ */
+export async function rejectTarget(target: EntityTarget): Promise<boolean> {
+  const action = await getSettings().then((settings) => settings.rejectAction).catch(() => 'trash' as const);
+  if (action === 'delete') {
+    return requestPermanentDelete(target, null, {
+      onlyNonUndoable: true,
+      remove: (selection, requireUndoable) => deleteTarget(selection, rejectDeleteItems, 'items.reject', requireUndoable),
+    });
+  }
+  await setTargetLifecycle(target, 'trash');
+  return true;
+}
+
+async function deleteTarget(
+  target: EntityTarget,
+  remove: (target: EntityTarget, requireUndoable: boolean) => Promise<unknown>,
+  command: string,
+  requireUndoable: boolean,
+): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
-    await deleteItems(target);
+    const before = await getHistoryState().catch(() => undefined);
+    await remove(target, requireUndoable);
+    if (before) await announceUndoableMutation(command, before.undo?.entry_id ?? null);
 
     if (target.kind === 'explicit') {
       const deletedIds = new Set(target.root_ids);
