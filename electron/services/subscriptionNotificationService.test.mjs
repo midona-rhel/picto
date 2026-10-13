@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createSubscriptionNotificationService,
+  installDockBadgeClearing,
   showSubscriptionSettlementNotification,
 } from './subscriptionNotificationService.mjs';
 
@@ -120,5 +121,44 @@ describe('subscription OS notifications', () => {
       newItems: 20_000,
     });
     expect(setBadge).toHaveBeenCalledWith('9999');
+  });
+});
+
+describe('dock badge', () => {
+  function dockApp() {
+    const listeners = new Map();
+    return {
+      dock: { setBadge: vi.fn() },
+      on: (event, listener) => listeners.set(event, listener),
+      emit: (event) => listeners.get(event)?.(),
+    };
+  }
+
+  it('is set for items that arrive in the background and cleared on focus or activate', () => {
+    const { Notification } = notificationMock();
+    const app = dockApp();
+    installDockBadgeClearing({ app, platform: 'darwin' });
+    showSubscriptionSettlementNotification({ Notification, app, platform: 'darwin', newItems: 100 });
+    expect(app.dock.setBadge).toHaveBeenLastCalledWith('100');
+    app.emit('browser-window-focus');
+    expect(app.dock.setBadge).toHaveBeenLastCalledWith('');
+    showSubscriptionSettlementNotification({ Notification, app, platform: 'darwin', newItems: 3 });
+    app.emit('activate');
+    expect(app.dock.setBadge).toHaveBeenLastCalledWith('');
+  });
+
+  it('is not set while a Picto window has focus', () => {
+    const { Notification, show } = notificationMock();
+    const app = dockApp();
+    showSubscriptionSettlementNotification({ Notification, app, platform: 'darwin', newItems: 5, appFocused: true });
+    expect(app.dock.setBadge).not.toHaveBeenCalled();
+    expect(show).toHaveBeenCalledOnce();
+  });
+
+  it('does nothing off macOS', () => {
+    const app = dockApp();
+    installDockBadgeClearing({ app, platform: 'win32' });
+    app.emit('browser-window-focus');
+    expect(app.dock.setBadge).not.toHaveBeenCalled();
   });
 });

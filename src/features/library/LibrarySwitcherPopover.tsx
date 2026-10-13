@@ -8,6 +8,7 @@ import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { isLibraryOpenCancelled } from './libraryOpenCancellation';
 import styles from './LibrarySwitcherPopover.module.css';
 import { t } from '../../i18n';
+import { rankMatches } from '../../shared/lib/searchRank';
 
 // The gate's `library-open-failed` event already drives the UI for an open
 // that fails; a cancelled one (superseded, closed, quitting) is no error.
@@ -100,9 +101,7 @@ export function LibrarySwitcherPopover({
   }, { priority: 100, allowInEditable: true });
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((entry) => entry.name.toLowerCase().includes(q));
+    return rankMatches(entries, query, (entry) => [entry.name]);
   }, [entries, query]);
 
   const rect = rectToCSS(anchor);

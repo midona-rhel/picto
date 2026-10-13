@@ -503,6 +503,40 @@ mod tests {
 
     const OBSOLETE_BROWSING_TABLES: &str = "'browsing_summary_page','browsing_page','browsing_chunk','browsing_domain','browsing_text_dirty','browsing_name_dirty','browsing_name_manifest','browsing_name_node','browsing_name_keys'";
 
+    #[test]
+    fn subscription_outcome_indexes_are_installed_on_existing_library_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        drop(LibraryDatabase::create(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP INDEX idx_source_post_attempt_added;
+             DROP INDEX idx_source_file_attempt_retained;
+             DROP INDEX idx_subscription_run_latest;
+             DROP INDEX idx_subscription_run_active;",
+            )
+            .unwrap();
+        drop(connection);
+        for _ in 0..2 {
+            drop(LibraryDatabase::open(&path).unwrap());
+            let connection = Connection::open(&path).unwrap();
+            assert_eq!(
+                count(
+                    &connection,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN
+                 ('idx_source_post_attempt_added', 'idx_source_file_attempt_retained',
+                  'idx_subscription_run_latest', 'idx_subscription_run_active')"
+                ),
+                4
+            );
+            assert_eq!(super::validate(&connection).unwrap(), 1);
+        }
+        // Accelerator-only changes neither rewrite canonical state nor migrate it.
+        assert_eq!(fingerprint_of(&path), SCHEMA_FINGERPRINT);
+        assert_eq!(backups_in(directory.path()), 0);
+    }
+
     fn remove_browsing_schema(connection: &Connection) {
         connection
             .execute_batch("ALTER TABLE source_attempt_root DROP COLUMN created_root")

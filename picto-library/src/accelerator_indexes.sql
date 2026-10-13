@@ -7,8 +7,15 @@ CREATE INDEX IF NOT EXISTS idx_subscription_source_post_post ON subscription_sou
 CREATE INDEX IF NOT EXISTS idx_subscription_source_post_query ON subscription_source_post(query_id);
 CREATE INDEX IF NOT EXISTS idx_subscription_source_post_run ON subscription_source_post(last_seen_run_id);
 CREATE INDEX IF NOT EXISTS idx_subscription_run_query_query ON subscription_run_query(query_id);
+CREATE INDEX IF NOT EXISTS idx_subscription_run_latest ON subscription_run(subscription_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_subscription_run_active ON subscription_run(subscription_id)
+    WHERE status IN ('pending', 'running');
 CREATE INDEX IF NOT EXISTS idx_source_post_attempt_post ON source_post_attempt(source_post_id);
 CREATE INDEX IF NOT EXISTS idx_source_file_attempt_item ON source_file_attempt(source_item_id);
+-- Historical subscription totals visit successful outcomes, not every retry,
+-- skipped post or failed download accumulated by scheduled runs.
+CREATE INDEX IF NOT EXISTS idx_source_post_attempt_added ON source_post_attempt(run_query_id, source_post_id) WHERE state = 'added';
+CREATE INDEX IF NOT EXISTS idx_source_file_attempt_retained ON source_file_attempt(attempt_id, source_item_id) WHERE state = 'retained';
 CREATE INDEX IF NOT EXISTS idx_subscription_run_source_item_item ON subscription_run_source_item(source_item_id);
 CREATE INDEX IF NOT EXISTS idx_source_attempt_root_root ON source_attempt_root(root_id);
 CREATE INDEX IF NOT EXISTS idx_folder_cover_root ON folder_definition(cover_root_id);

@@ -122,6 +122,7 @@ pub fn decode(payload: &[u8], revision: u64) -> Result<ProjectionSnapshot> {
         })
         .collect::<Result<_>>()?;
     Ok(ProjectionSnapshot {
+        subscription_counts: std::sync::Arc::default(),
         revision,
         // Resident text, names, drawing facts and navigation state are rebuilt
         // from canonical rows by ProjectionStore::load, never checkpointed.

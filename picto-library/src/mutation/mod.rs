@@ -61,6 +61,12 @@ struct PublishedDelta {
 impl crate::database::PublicationDelta for PublishedDelta {
     fn settle(&mut self, transaction: &rusqlite::Transaction<'_>) -> Result<()> {
         let snapshot = &mut self.snapshot;
+        if crate::subscription_counts::SubscriptionCounts::dirty(transaction)? {
+            snapshot.subscription_counts = Arc::new(
+                crate::subscription_counts::SubscriptionCounts::read(transaction)?,
+            );
+            transaction.execute("UPDATE temp.subscription_counts_dirty SET dirty = 0", [])?;
+        }
         // Most publications change no drawing fact; do not copy the drawing
         // index for them.
         let dirty = if crate::browsing::DrawingIndex::journal_is_dirty(transaction)? {

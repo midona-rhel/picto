@@ -265,6 +265,7 @@ impl LibraryDatabase {
     }
 
     fn from_writer(path: PathBuf, writer: Connection) -> Result<Self> {
+        crate::subscription_counts::initialize(&writer)?;
         Ok(Self {
             path: path.clone(),
             writer: Mutex::new(writer),
@@ -283,6 +284,12 @@ impl LibraryDatabase {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn subscription_counts(
+        &self,
+    ) -> Result<crate::subscription_counts::SubscriptionCounts> {
+        crate::subscription_counts::SubscriptionCounts::read(&self.writer.lock())
     }
 
     pub fn revision(&self) -> Result<u64> {
@@ -442,9 +449,11 @@ impl LibraryDatabase {
         // Maintenance writes publish no snapshot, so they must leave every
         // fact the resident model mirrors untouched. The journal proves it;
         // returning here rolls the transaction back.
-        if crate::browsing::DrawingIndex::journal_is_dirty(&transaction)? {
+        if crate::browsing::DrawingIndex::journal_is_dirty(&transaction)?
+            || crate::subscription_counts::SubscriptionCounts::dirty(&transaction)?
+        {
             return Err(LibraryError::InvalidState(
-                "maintenance write changed browsing facts without publishing a projection".into(),
+                "maintenance write changed resident facts without publishing a projection".into(),
             ));
         }
         transaction.commit()?;

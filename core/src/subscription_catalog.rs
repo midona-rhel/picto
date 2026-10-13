@@ -214,8 +214,10 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
         .auxiliary_read_consistent(
             picto_library::database::WorkPriority::VisibleRead,
             |connection, projection| {
-                let mut subscriptions = query_subscription_views(connection)?;
-                let mut queries = query_views_by_subscription(connection)?;
+                let mut subscriptions =
+                    query_subscription_views(connection, &projection.subscription_counts)?;
+                let mut queries =
+                    query_views_by_subscription(connection, &projection.subscription_counts)?;
                 let (mut destinations, mut covers) = subscription_settings_by_id_library(
                     connection,
                     application.blobs(),
@@ -249,106 +251,10 @@ pub fn list_library(application: &LibraryApplication) -> Result<SubscriptionList
 
 fn query_subscription_views(
     connection: &rusqlite::Connection,
+    counts: &picto_library::subscription_counts::SubscriptionCounts,
 ) -> rusqlite::Result<Vec<SubscriptionView>> {
     connection
-        .prepare(
-            "WITH active_runs AS (
-                 SELECT *
-                 FROM subscription_run
-                 WHERE status IN ('pending', 'running')
-             ),
-             latest_run_ids AS (
-                 SELECT subscription_id, MAX(run_id) AS run_id
-                 FROM subscription_run
-                 GROUP BY subscription_id
-             ),
-             root_totals AS (
-                 SELECT ssp.subscription_id,
-                        COUNT(DISTINCT post.root_item_id) AS root_count
-                 FROM subscription_source_post ssp
-                 JOIN source_post post ON post.source_post_id = ssp.source_post_id
-                 WHERE post.root_item_id IS NOT NULL
-                 GROUP BY ssp.subscription_id
-             ),
-             issue_totals AS (
-                 SELECT subscription_id, COUNT(*) AS issue_count
-                 FROM subscription_issue
-                 WHERE status = 'open'
-                 GROUP BY subscription_id
-             ),
-             traversed_posts AS (
-                 SELECT srq.run_id,
-                        COUNT(DISTINCT attempt.attempt_id) AS posts_traversed,
-                        COUNT(DISTINCT CASE WHEN attempt.state = 'skipped'
-                                            THEN attempt.attempt_id END) AS posts_skipped
-                 FROM subscription_run_query srq
-                 LEFT JOIN source_post_attempt attempt
-                   ON attempt.run_query_id = srq.run_query_id
-                 GROUP BY srq.run_id
-             ),
-             item_progress AS (
-                 SELECT srq.run_id,
-                        COUNT(DISTINCT CASE WHEN attempt.state = 'added'
-                                            THEN attempt.attempt_id END) AS posts_added,
-                        COUNT(DISTINCT file.file_attempt_id) AS discovered,
-                        COUNT(DISTINCT CASE WHEN file.state IN ('staged', 'retained')
-                                            THEN file.file_attempt_id END) AS downloaded,
-                        COUNT(DISTINCT CASE WHEN file.state = 'retained'
-                                            THEN file.file_attempt_id END) AS ingested,
-                        COUNT(DISTINCT CASE WHEN file.state = 'failed'
-                                            THEN file.file_attempt_id END) AS failed,
-                        0 AS deleted
-                 FROM subscription_run_query srq
-                 LEFT JOIN source_post_attempt attempt
-                   ON attempt.run_query_id = srq.run_query_id
-                 LEFT JOIN source_file_attempt file USING(attempt_id)
-                 GROUP BY srq.run_id
-             )
-             SELECT s.subscription_id, s.name, s.schedule, s.paused,
-                    s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
-                    active.run_id,
-                    CASE
-                        WHEN active.status = 'pending'
-                         AND active.failure_kind IS NOT NULL
-                        THEN active.failure_kind
-                        ELSE COALESCE(active.status, latest.status)
-                    END,
-                    COALESCE(root_totals.root_count, 0),
-                    COALESCE(issue_totals.issue_count, 0),
-                    COALESCE(traversed_posts.posts_traversed, 0),
-                    COALESCE(item_progress.posts_added, 0),
-                    COALESCE(traversed_posts.posts_skipped, 0),
-                    COALESCE(item_progress.discovered, 0),
-                    COALESCE(item_progress.downloaded, 0),
-                    COALESCE(item_progress.ingested, 0),
-                    COALESCE(item_progress.failed, 0),
-                    COALESCE(item_progress.deleted, 0),
-                    (SELECT COUNT(*)
-                     FROM subscription_run_query query
-                     JOIN source_post_attempt duplicate USING(run_query_id)
-                     JOIN source_item existing USING(source_post_id)
-                     WHERE query.run_id = COALESCE(active.run_id, latest.run_id)
-                       AND ((duplicate.state = 'skipped'
-                             AND duplicate.terminal_reason = 'exact_duplicate'
-                             AND existing.media_item_id IS NOT NULL)
-                            OR EXISTS(SELECT 1 FROM source_file_attempt file
-                                      WHERE file.attempt_id = duplicate.attempt_id
-                                        AND file.source_item_id = existing.source_item_id
-                                        AND file.state = 'duplicate')))
-             FROM subscription s
-             LEFT JOIN active_runs active
-               ON active.subscription_id = s.subscription_id
-             LEFT JOIN latest_run_ids latest_id
-               ON latest_id.subscription_id = s.subscription_id
-             LEFT JOIN subscription_run latest ON latest.run_id = latest_id.run_id
-             LEFT JOIN root_totals USING (subscription_id)
-             LEFT JOIN issue_totals USING (subscription_id)
-             LEFT JOIN traversed_posts
-               ON traversed_posts.run_id = COALESCE(active.run_id, latest.run_id)
-             LEFT JOIN item_progress
-               ON item_progress.run_id = COALESCE(active.run_id, latest.run_id)
-             ORDER BY s.name, s.subscription_id",
-        )?
+        .prepare(include_str!("subscription_views.sql"))?
         .query_map([], |row| {
             Ok(SubscriptionView {
                 subscription_id: row.get(0)?,
@@ -360,7 +266,7 @@ fn query_subscription_views(
                 next_run_at: row.get(6)?,
                 active_run_id: row.get(7)?,
                 status: row.get(8)?,
-                root_count: row.get(9)?,
+                root_count: counts.posts(row.get(0)?),
                 open_issue_count: row.get(10)?,
                 cover_file_hash: None,
                 cover_focus_x: 500,
@@ -1703,50 +1609,11 @@ fn normalize_destination_policy(
 
 fn query_views_by_subscription(
     connection: &rusqlite::Connection,
+    counts: &picto_library::subscription_counts::SubscriptionCounts,
 ) -> rusqlite::Result<HashMap<i64, Vec<SubscriptionQueryView>>> {
-    let mut statement = connection.prepare(
-        "WITH added_source_posts AS (
-             SELECT run_query.query_id, attempt.source_post_id
-             FROM subscription_run_query run_query
-             JOIN source_post_attempt attempt USING(run_query_id)
-             WHERE attempt.state = 'added'
-             GROUP BY run_query.query_id, attempt.source_post_id
-         ),
-         source_counts AS (
-             SELECT ssp.query_id,
-                    COUNT(DISTINCT post.source_post_id) AS post_count,
-                    COUNT(DISTINCT si.media_item_id) AS media_count
-             FROM subscription_source_post ssp
-             JOIN added_source_posts added
-               ON added.query_id = ssp.query_id
-              AND added.source_post_id = ssp.source_post_id
-             JOIN source_post post ON post.source_post_id = ssp.source_post_id
-             LEFT JOIN source_item si
-               ON si.source_post_id = ssp.source_post_id
-              AND si.state = 'ingested'
-             WHERE post.root_item_id IS NOT NULL
-             GROUP BY ssp.query_id
-         ),
-         successful_runs AS (
-             SELECT query_id, COUNT(*) AS run_count
-             FROM subscription_run_query
-             WHERE status = 'succeeded'
-             GROUP BY query_id
-         )
-         SELECT q.subscription_id, q.query_id, q.site_id, q.query_kind, q.query_text,
-                    q.display_name, q.notes, q.group_posts, q.paused, q.initial_run_complete,
-                    COALESCE(q.resume_cursor = '', 0),
-                    q.last_success_at, q.last_failure_at, q.last_failure_kind,
-                    q.last_failure_message,
-                    COALESCE(source_counts.post_count, 0),
-                    COALESCE(source_counts.media_count, 0),
-                    COALESCE(successful_runs.run_count, 0)
-             FROM subscription_query q
-             LEFT JOIN source_counts ON source_counts.query_id = q.query_id
-             LEFT JOIN successful_runs ON successful_runs.query_id = q.query_id
-             ORDER BY q.subscription_id, q.query_id",
-    )?;
+    let mut statement = connection.prepare(include_str!("subscription_query_views.sql"))?;
     let rows = statement.query_map([], |row| {
+        let totals = counts.query(row.get(1)?);
         Ok((
             row.get::<_, i64>(0)?,
             SubscriptionQueryView {
@@ -1764,9 +1631,9 @@ fn query_views_by_subscription(
                 last_failure_at: row.get(12)?,
                 last_failure_kind: row.get(13)?,
                 last_failure_message: row.get(14)?,
-                post_count: row.get(15)?,
-                media_count: row.get(16)?,
-                successful_run_count: row.get(17)?,
+                post_count: totals.posts,
+                media_count: totals.media,
+                successful_run_count: totals.successful_runs,
             },
         ))
     })?;
@@ -2064,7 +1931,100 @@ mod tests {
     use rusqlite::params;
 
     #[test]
-    fn query_counts_exclude_skipped_posts_linked_by_duplicate_metadata() {
+    fn historical_counts_deduplicate_and_attribute_retained_files_to_their_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("counts.db");
+        let mut connection = rusqlite::Connection::open(&path).unwrap();
+        picto_library::schema::create(&mut connection).unwrap();
+        connection.execute_batch(
+            "INSERT INTO subscription(subscription_id, subscription_key, name, schedule, created_at)
+             VALUES (1, 'one', 'One', 'manual', 'now'), (2, 'two', 'Two', 'manual', 'now');
+             INSERT INTO subscription_query(query_id, query_key, subscription_id, site_id, domain_key, query_kind, query_text)
+             VALUES (1, 'q1', 1, 'test', 'test', 'tag', 'one'),
+                    (2, 'q2', 1, 'test', 'test', 'tag', 'two'),
+                    (3, 'q3', 2, 'test', 'test', 'tag', 'three');
+             INSERT INTO subscription_run(run_id, subscription_id, requested_by, status, created_at)
+             VALUES (1, 1, 'user', 'succeeded', 'now'), (2, 1, 'user', 'succeeded', 'later'),
+                    (3, 2, 'user', 'succeeded', 'now');
+             INSERT INTO subscription_run_query(run_query_id, run_id, query_id, status, available_at)
+             VALUES (1, 1, 1, 'succeeded', 'now'), (2, 1, 2, 'succeeded', 'now'),
+                    (3, 2, 1, 'succeeded', 'later'), (4, 3, 3, 'succeeded', 'now');
+             INSERT INTO source_post(source_post_id, site_id, post_key, created_at, updated_at)
+             VALUES (1, 'test', 'shared', 'now', 'now');
+             INSERT INTO source_item(source_item_id, source_post_id, item_key, position, state, created_at, updated_at)
+             VALUES (1, 1, 'first', 0, 'ingested', 'now', 'now'),
+                    (2, 1, 'second', 1, 'ingested', 'now', 'now');
+             INSERT INTO source_post_attempt(attempt_id, run_query_id, source_post_id, state, started_at)
+             VALUES (1, 1, 1, 'added', 'now'), (2, 2, 1, 'added', 'now'),
+                    (3, 3, 1, 'added', 'later'), (4, 4, 1, 'skipped', 'now');
+             INSERT INTO source_file_attempt(attempt_id, source_item_id, state)
+             VALUES (1, 1, 'retained'), (1, 2, 'duplicate'),
+                    (2, 1, 'duplicate'), (2, 2, 'retained'),
+                    (3, 1, 'retained'), (3, 2, 'failed'),
+                    (4, 1, 'duplicate'), (4, 2, 'duplicate');",
+        ).unwrap();
+        let library = picto_library::Library::open(&path).unwrap();
+        let counts = library.projections().snapshot().subscription_counts.clone();
+        drop(library);
+        let queries = super::query_views_by_subscription(&connection, &counts).unwrap();
+        assert_eq!(
+            (queries[&1][0].post_count, queries[&1][0].media_count),
+            (1, 1)
+        );
+        assert_eq!(
+            (queries[&1][1].post_count, queries[&1][1].media_count),
+            (1, 1)
+        );
+        assert_eq!(
+            (queries[&2][0].post_count, queries[&2][0].media_count),
+            (0, 0)
+        );
+        let subscriptions = super::query_subscription_views(&connection, &counts).unwrap();
+        assert_eq!(subscriptions[0].root_count, 1);
+        assert_eq!(subscriptions[1].root_count, 0);
+        // Only the latest run contributes progress; lifetime counts stay distinct.
+        assert_eq!(subscriptions[0].progress.posts_added, 1);
+        assert_eq!(subscriptions[0].progress.ingested, 1);
+
+        // Refresh work must not grow with successful retained history either.
+        let steps = || {
+            [
+                include_str!("subscription_views.sql"),
+                include_str!("subscription_query_views.sql"),
+            ]
+            .map(|sql| {
+                let mut statement = connection.prepare(sql).unwrap();
+                {
+                    let mut rows = statement.query([]).unwrap();
+                    while rows.next().unwrap().is_some() {}
+                }
+                statement.get_status(rusqlite::StatementStatus::VmStep)
+            })
+        };
+        let before = steps();
+        connection.execute_batch(
+            "WITH RECURSIVE n(id) AS (VALUES(2) UNION ALL SELECT id + 1 FROM n WHERE id < 10001)
+             INSERT INTO source_post(source_post_id, site_id, post_key, created_at, updated_at)
+             SELECT id, 'test', CAST(id AS TEXT), 'now', 'now' FROM n;
+             INSERT INTO source_item(source_post_id, item_key, position, state, created_at, updated_at)
+             SELECT source_post_id, 'failed', 0, 'failed', 'now', 'now' FROM source_post WHERE source_post_id > 1;
+             INSERT INTO source_post_attempt(run_query_id, source_post_id, state, started_at)
+             SELECT 1, source_post_id, 'added', 'now' FROM source_post WHERE source_post_id > 1;
+             INSERT INTO source_file_attempt(attempt_id, source_item_id, state)
+             SELECT a.attempt_id, i.source_item_id, 'retained'
+             FROM source_post_attempt a JOIN source_item i USING(source_post_id)
+             WHERE a.source_post_id > 1;",
+        ).unwrap();
+        for (before, after) in before.into_iter().zip(steps()) {
+            assert!(
+                after < before * 2,
+                "refresh work grew from {before} to {after} steps"
+            );
+        }
+    }
+
+    #[test]
+    fn query_counts_are_what_runs_imported_not_what_remains_in_the_library() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         let definition = NewSubscription {
@@ -2152,6 +2112,7 @@ mod tests {
                                      '2026-08-30T00:00:02Z')",
                             params![source_post_id, format!("media-{offset}"), item_id],
                         )?;
+                        let source_item_id = transaction.last_insert_rowid();
                         transaction.execute(
                             "INSERT INTO subscription_source_post
                                  (subscription_id, query_id, source_post_id, last_seen_run_id)
@@ -2175,6 +2136,15 @@ mod tests {
                                 },
                             ],
                         )?;
+                        transaction.execute(
+                            "INSERT INTO source_file_attempt(attempt_id, source_item_id, state)
+                             VALUES (?1, ?2, ?3)",
+                            params![
+                                transaction.last_insert_rowid(),
+                                source_item_id,
+                                if offset == 0 { "retained" } else { "duplicate" }
+                            ],
+                        )?;
                     }
                     Ok(())
                 },
@@ -2193,6 +2163,109 @@ mod tests {
             .unwrap();
         assert_eq!(query.post_count, 1);
         assert_eq!(query.media_count, 1);
+
+        // Emptying the trash deletes the imported item; what the run imported
+        // does not change.
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _revision| {
+                    transaction.execute_batch(
+                        "DELETE FROM library_root WHERE root_id = 5000;
+                         DELETE FROM media_item WHERE media_id = 5000;
+                         DELETE FROM library_item WHERE local_id = 5000;",
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let subscription = super::list_library(&application)
+            .unwrap()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.subscription_id == subscription_id)
+            .unwrap();
+        assert_eq!(subscription.root_count, 1);
+        assert_eq!(subscription.queries[0].post_count, 1);
+        assert_eq!(subscription.queries[0].media_count, 1);
+
+        // A new run rediscovers the deleted item, resetting its source state.
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["tests".to_owned()],
+                [],
+                |transaction, _| {
+                    transaction.execute_batch(
+                        "UPDATE subscription_run SET status = 'succeeded';
+                     UPDATE subscription_run_query SET status = 'succeeded';",
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        application
+            .request_subscription_run_library(subscription_id, "2026-08-31T00:00:00Z")
+            .unwrap();
+        let run = crate::library_subscription_state::claim_next_query(
+            &application,
+            &mut crate::subscriptions::DomainSchedule::new(),
+            "2026-08-31T00:00:01Z",
+        )
+        .unwrap()
+        .unwrap();
+        let items = crate::library_subscription_state::record_post(
+            &application,
+            run.run_query_id,
+            &crate::subscriptions::NormalizedPost {
+                site_id: "konachan".into(),
+                post_key: "post-0".into(),
+                canonical_url: None,
+                creator_name: None,
+                title: None,
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+                items: vec![crate::subscriptions::NormalizedItem {
+                    item_key: "media-0".into(),
+                    position: 0,
+                    media_url: Some("https://example.org/media.png".into()),
+                    canonical_url: None,
+                }],
+            },
+            "2026-08-31T00:00:02Z",
+        )
+        .unwrap();
+        let assert_counts = |application: &LibraryApplication| {
+            let list = super::list_library(application).unwrap();
+            let subscription = &list.subscriptions[0];
+            assert_eq!(subscription.root_count, 1);
+            assert_eq!(subscription.queries[0].post_count, 1);
+            assert_eq!(subscription.queries[0].media_count, 1);
+        };
+        assert_counts(&application);
+        crate::library_subscription_state::mark_source_item_failed(
+            &application,
+            run.run_query_id,
+            subscription_id,
+            run.query_id,
+            items["media-0"],
+            "redownload failed",
+            "2026-08-31T00:00:03Z",
+        )
+        .unwrap();
+        assert_counts(&application);
+        let progress = super::list_library(&application).unwrap().subscriptions[0].progress;
+        assert_eq!(progress.posts_added, 0);
+        assert_eq!(progress.ingested, 0);
+        assert_eq!(progress.failed, 1);
+        drop(application);
+        let application = LibraryApplication::open(directory.path().join("library")).unwrap();
+        assert_counts(&application);
     }
 
     #[test]

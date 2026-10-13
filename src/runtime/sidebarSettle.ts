@@ -8,11 +8,14 @@ export function startSidebarSettle(): () => void {
       console.error('sidebar refresh failed', error);
     });
   };
+  // Every resource behind a sidebar count. Duplicate scans and resolutions
+  // announce only `duplicates`, which the Duplicates count reads.
   const unregister = [
     libraryInvalidation.register('sidebar', refresh),
     libraryInvalidation.register('folders', refresh),
     libraryInvalidation.register('smart_folders', refresh),
     libraryInvalidation.register('tags', refresh),
+    libraryInvalidation.register('duplicates', refresh),
   ];
 
   return () => {
