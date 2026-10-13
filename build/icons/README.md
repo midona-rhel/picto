@@ -4,7 +4,7 @@
 
 The macOS layer uses the 1024×1024 canvas and stays flat and opaque: no rounded-square mask, baked blur, highlight, refraction, or shadow belongs in the source artwork. `npm run generate:app-icons` renders it and writes `build/Picto.icon`, whose single group applies Liquid Glass and specular lighting with combined lighting and no drop shadow. Icon Composer's tile fills the whole canvas while the flat master's tile is 896 px, so the layer is scaled by 1024/896 to keep the book the same size relative to its tile on every platform.
 
-The macOS package points directly at `build/Picto.icon`. Electron Builder compiles it with Xcode 26 or newer `actool`, embeds the resulting `Assets.car`, and also generates the legacy ICNS representation. Do not replace this with a manually composited PNG or ICNS fallback.
+The macOS package points directly at `build/Picto.icon`. Its PNG layer is generated, not tracked. Both `npm run dist:electron` and the alpha packaging script regenerate it from the SVG before packaging. Electron Builder compiles it with Xcode 26 or newer `actool`, embeds the resulting `Assets.car`, and also generates the legacy ICNS representation. Do not replace this with a manually composited PNG or ICNS fallback.
 
 `picto-library-folder.svg` is the neutral folder artwork for Picto `.library` packages. The generator produces `library.icns` for macOS Finder, `library.ico` for Windows library folders, and a PNG preview used by release audits. Linux has no portable per-directory icon contract across file managers, so the source remains available to Picto without writing desktop-specific metadata.
 

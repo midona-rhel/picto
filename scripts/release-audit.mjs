@@ -51,7 +51,6 @@ const approvedReleaseIcons = new Set([
   'build/picto-pack.png',
   'build/picto-pack.icns',
   'build/picto-pack.ico',
-  'build/Picto.icon/Assets/01-book.png',
 ]);
 const macHomePrefix = `/${'Users'}/`;
 const windowsHomePattern = new RegExp(`[A-Z]:\\\\${'Users'}\\\\`, 'i');
@@ -107,6 +106,7 @@ assert(
 
 const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
 const expectedMacIconLayers = ['01-book.png'];
+assert(packageManifest.scripts['predist:electron'] === 'npm run generate:app-icons', 'direct packaging must regenerate icon assets');
 assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain the book as one material group');
 for (const [index, imageName] of expectedMacIconLayers.entries()) {
   const group = iconComposer.groups?.[index];

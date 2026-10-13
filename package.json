@@ -26,6 +26,7 @@
     "prebuild": "npm run prepare:viewer-assets",
     "build": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
     "build:electron": "npm run check:localization && tsc && vite build && npm run generate:license-notices",
+    "predist:electron": "npm run generate:app-icons",
     "dist:electron": "electron-builder",
     "preview": "vite preview",
     "test": "vitest",
