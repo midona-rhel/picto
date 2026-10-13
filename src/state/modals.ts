@@ -13,6 +13,7 @@ export interface ConfirmModalState {
   confirmLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
+  onCancel?: () => void;
 }
 
 const confirmClosed: ConfirmModalState = {

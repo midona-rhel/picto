@@ -24,7 +24,7 @@ export function resolveInboxReviewItemId(
 
 interface InboxReviewControlsProps {
   itemId: number;
-  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<void>;
+  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<boolean>;
   onAdvance: () => void;
 }
 
@@ -45,7 +45,11 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
     if (decision) return;
     setDecision(nextDecision);
     try {
-      await onCommit(itemId, nextDecision);
+      if (!await onCommit(itemId, nextDecision)) {
+        setDecision(null);
+        setLeaving(false);
+        return;
+      }
       setLeaving(true);
       await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
       onAdvance();

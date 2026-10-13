@@ -574,7 +574,7 @@ fn alphabetical_projection_is_current_before_fts_and_survives_root_history_and_r
     drop(library);
     let library = Library::open(&path).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 104, 0).unwrap();
+    library.permanently_delete(&target, 104, 0, false).unwrap();
     verify(&library);
     drop(library);
     verify(&Library::open(&path).unwrap());
@@ -1401,7 +1401,7 @@ fn canonical_ingest_is_idempotent_by_stable_or_source_identity() {
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     library
-        .permanently_delete(&target, 1_700_000_000_100, 0)
+        .permanently_delete(&target, 1_700_000_000_100, 0, false)
         .unwrap();
     assert!(library.ingest(&input).is_err());
 
@@ -2811,7 +2811,7 @@ fn recent_view_membership_tracks_clear_undo_deletion_and_reopen() {
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [true, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![first] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 3, 0).unwrap();
+    library.permanently_delete(&target, 3, 0, false).unwrap();
     assert_eq!(library.root_membership(&recent, &candidates).unwrap(), [false, true]);
     drop(library);
     let reopened = Library::open(&path).unwrap();
@@ -2833,7 +2833,7 @@ fn root_membership_checks_only_candidates_without_building_query_order() {
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, true, false, false, false, true]);
     let target = SelectionTarget::Explicit { root_ids: vec![second] };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
-    library.permanently_delete(&target, 1_700_000_001_000, 0).unwrap();
+    library.permanently_delete(&target, 1_700_000_001_000, 0, false).unwrap();
     assert_eq!(library.root_membership(&all, &candidates).unwrap(), [true, false, false, false, false, true]);
     assert_eq!(library.query_statistics().order_builds, before.order_builds);
     assert!(library.root_membership(&all, &[]).unwrap().is_empty());
@@ -4548,7 +4548,7 @@ fn text_projection_tracks_sqlite_through_structural_history_and_checkpoint_reope
     };
     library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
     verify(&library);
-    library.permanently_delete(&target, 44, 0).unwrap();
+    library.permanently_delete(&target, 44, 0, false).unwrap();
     verify(&library);
 }
 
@@ -5637,7 +5637,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&first_target, 1_700_000_000_500, 0)
+        .permanently_delete(&first_target, 1_700_000_000_500, 0, false)
         .unwrap();
     assert!(cleanup.is_empty());
     assert_eq!(library.history().state().entries, history_before_delete);
@@ -5650,7 +5650,7 @@ fn permanent_delete_is_non_undoable_and_only_queues_unreferenced_blobs() {
         .unwrap();
     let history_before_delete = library.history().state().entries;
     let (_, cleanup) = library
-        .permanently_delete(&second_target, 1_700_000_000_600, 0)
+        .permanently_delete(&second_target, 1_700_000_000_600, 0, false)
         .unwrap();
     assert_eq!(cleanup.len(), 1);
     assert_eq!(cleanup[0].file_path, second_import.file_path);
@@ -5788,7 +5788,7 @@ fn a_permanent_delete_within_the_limit_can_be_undone_and_redone_exactly() {
     library.history().clear();
     let before = observable(&library, folder);
 
-    library.permanently_delete(&doomed, 10, 500).unwrap();
+    library.permanently_delete(&doomed, 10, 500, false).unwrap();
     let deleted = observable(&library, folder);
     assert_ne!(deleted, before);
     assert_eq!(library.history().state().undo.unwrap().command, "items.delete");
@@ -5819,7 +5819,7 @@ fn a_permanent_delete_past_the_limit_cannot_be_undone_and_frees_its_files() {
     library.history().clear();
     let target = SelectionTarget::Explicit { root_ids: roots };
 
-    library.permanently_delete(&target, 10, 1).unwrap();
+    library.permanently_delete(&target, 10, 1, false).unwrap();
     assert!(library.history().state().undo.is_none());
     assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), 2);
 }
@@ -5844,7 +5844,15 @@ fn permanent_delete_counts_collection_media_and_honors_zero_limit() {
         let summary = library.selection_summary(&target).unwrap();
         assert_eq!(summary.selected_count, 1);
         assert_eq!(summary.media_count, 2);
-        let (_, cleanup) = library.delete_rejected(&target, 10, limit).unwrap();
+        if limit < 2 {
+            let revision = library.database().revision().unwrap();
+            assert!(matches!(library.delete_rejected(&target, 10, limit, true),
+                Err(picto_library::LibraryError::UndoLimitExceeded)));
+            assert_eq!(library.database().revision().unwrap(), revision);
+            assert!(library.details(collection).is_ok());
+            assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+        }
+        let (_, cleanup) = library.delete_rejected(&target, 10, limit, false).unwrap();
         assert_eq!(library.history().state().undo.is_some(), limit == 2);
         assert_eq!(cleanup.len(), if limit == 2 { 0 } else { 2 });
         assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), cleanup.len());
@@ -5882,7 +5890,7 @@ fn permanent_delete_restores_recent_views_and_cascaded_work() {
     drop(connection);
     let library = Library::open(&path).unwrap();
     let target = SelectionTarget::Explicit { root_ids: vec![a, b] };
-    let receipt = library.permanently_delete(&target, 10, 2).unwrap().0;
+    let receipt = library.permanently_delete(&target, 10, 2, false).unwrap().0;
     assert!(receipt.resources.contains(&"recently_viewed".into()));
     assert!(receipt.resources.contains(&"tasks".into()));
     assert!(library.projections().snapshot().recent_views.is_empty());
@@ -5958,7 +5966,7 @@ fn permanent_delete_protects_files_from_cleanup_already_waiting_for_the_writer()
         }).unwrap());
         wait_for(WorkPriority::Fts);
         let deletion = scope.spawn(|| library.permanently_delete(
-            &SelectionTarget::Explicit { root_ids: vec![root] }, 10, 1,
+            &SelectionTarget::Explicit { root_ids: vec![root] }, 10, 1, true,
         ).unwrap());
         wait_for(WorkPriority::Maintenance);
         release_tx.send(()).unwrap();
@@ -5983,9 +5991,9 @@ fn rejecting_deletes_inbox_items_and_can_be_undone() {
     library.history().clear();
 
     let only_active = SelectionTarget::Explicit { root_ids: vec![active] };
-    assert!(library.delete_rejected(&only_active, 10, 500).is_err());
+    assert!(library.delete_rejected(&only_active, 10, 500, false).is_err());
     let target = SelectionTarget::Explicit { root_ids: vec![inbox] };
-    library.delete_rejected(&target, 10, 500).unwrap();
+    library.delete_rejected(&target, 10, 500, false).unwrap();
     assert!(library.details(inbox).is_err());
     assert_eq!(library.history().state().undo.unwrap().command, "items.reject");
 
@@ -5993,6 +6001,39 @@ fn rejecting_deletes_inbox_items_and_can_be_undone() {
     let restored = library.details(inbox).unwrap();
     assert_eq!(restored.lifecycle, Lifecycle::Inbox);
     assert_eq!(restored.tag_ids.len(), 1);
+}
+
+#[test]
+fn permanent_delete_guard_rejects_query_growth_without_changing_anything() {
+    for lifecycle in [Lifecycle::Inbox, Lifecycle::Trash] {
+        let directory = TempDir::new().unwrap();
+        let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+        let first = library.ingest(&imported("first", lifecycle, &[])).unwrap().0;
+        let target = SelectionTarget::Query {
+            query: query(if lifecycle == Lifecycle::Inbox { ItemScope::Inbox } else { ItemScope::Trash }),
+            excluded_root_ids: vec![],
+        };
+        assert_eq!(library.selection_summary(&target).unwrap().media_count, 1);
+        // The query grows after the renderer's preflight, before the writer resolves it.
+        let second = library.ingest(&imported("second", lifecycle, &[])).unwrap().0;
+        library.history().clear();
+        let revision = library.database().revision().unwrap();
+        let delete = |require_undoable| {
+            if lifecycle == Lifecycle::Inbox { library.delete_rejected(&target, 10, 1, require_undoable) }
+            else { library.permanently_delete(&target, 10, 1, require_undoable) }
+        };
+        assert!(matches!(delete(true), Err(picto_library::LibraryError::UndoLimitExceeded)));
+        assert_eq!(library.database().revision().unwrap(), revision);
+        assert!(library.details(first).is_ok());
+        assert!(library.details(second).is_ok());
+        assert!(library.history().state().undo.is_none());
+        assert!(library.pending_blob_cleanup(10).unwrap().is_empty());
+        // Only a separately confirmed retry may drop the constraint.
+        delete(false).unwrap();
+        assert!(library.details(first).is_err());
+        assert!(library.details(second).is_err());
+        assert_eq!(library.pending_blob_cleanup(10).unwrap().len(), 2);
+    }
 }
 #[test]
 fn metadata_patch_history_describes_the_fields_the_renderer_changed() {

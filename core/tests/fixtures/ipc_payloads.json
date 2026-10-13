@@ -711,7 +711,21 @@
           1,
           2
         ]
-      }
+      },
+      "require_undoable": false
+    }
+  ],
+  [
+    "items.delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "require_undoable": true
     }
   ],
   [
@@ -890,7 +904,8 @@
         "excluded_root_ids": [
           2
         ]
-      }
+      },
+      "require_undoable": true
     }
   ],
   [
@@ -2568,7 +2583,21 @@
           1,
           2
         ]
-      }
+      },
+      "require_undoable": false
+    }
+  ],
+  [
+    "items.reject_delete",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          1,
+          2
+        ]
+      },
+      "require_undoable": true
     }
   ],
   [

@@ -41,7 +41,7 @@ describe('InboxReviewControls', () => {
 
   it('accepts with Z and advances only after persistence and the exit animation', async () => {
     let resolveCommit: (() => void) | null = null;
-    const onCommit = vi.fn(() => new Promise<void>((resolve) => { resolveCommit = resolve; }));
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { resolveCommit = () => resolve(true); }));
     const onAdvance = vi.fn();
     render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
 
@@ -80,7 +80,7 @@ describe('InboxReviewControls', () => {
   });
 
   it('retargets the persistent controls without replaying their mount transition', () => {
-    const onCommit = vi.fn(() => new Promise<void>(() => {}));
+    const onCommit = vi.fn(() => new Promise<boolean>(() => {}));
     const onAdvance = vi.fn();
     const { rerender } = render(
       <InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />,
@@ -92,5 +92,21 @@ describe('InboxReviewControls', () => {
     expect(document.querySelector('[data-inbox-review-controls]')).toBe(controls);
     fireEvent.click(screen.getByRole('button', { name: 'Accept item' }));
     expect(onCommit).toHaveBeenCalledWith(43, 'accept');
+  });
+
+  it('keeps the current item and resets the controls when confirmation is cancelled', async () => {
+    let cancel!: () => void;
+    const onCommit = vi.fn(() => new Promise<boolean>((resolve) => { cancel = () => resolve(false); }));
+    const onAdvance = vi.fn();
+    render(<InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reject item' }));
+    await act(async () => { vi.runAllTimers(); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    await act(async () => { cancel(); });
+    await act(async () => { vi.runAllTimers(); });
+    expect(onAdvance).not.toHaveBeenCalled();
+    expect(showErrorNotification).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-inbox-review-controls]')).toHaveAttribute('data-review-decision', 'idle');
+    expect(screen.getByRole('button', { name: 'Reject item' })).toBeEnabled();
   });
 });

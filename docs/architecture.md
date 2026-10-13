@@ -182,6 +182,11 @@ records no entry and frees its files at once; the renderer confirms nonundoable 
 the backend-resolved selection, not the loaded grid window. History protection is registered
 before releasing the writer, and cleanup reads it after acquiring the same writer. Undo restores
 recent views and cascaded queue jobs, assigning new queue IDs and requeuing interrupted running jobs.
+When the renderer promises undo, it sends `require_undoable`; the serialized writer checks the
+resolved selection against the limit and refuses the delete if it no longer fits. Only a fresh
+nonundoable confirmation permits a retry without that constraint. Delete requests await both
+confirmation and persistence, returning success only after the mutation commits; cancellation
+or failure never advances Inbox review.
 
 Receipts stay precise. Item ids qualify only `library`; bookkeeping receipts (tasks,
 subscriptions, settings) never widen a frame to a broad change. `smart_folders` is announced only
