@@ -170,7 +170,7 @@ fn a_post_whose_files_another_collection_holds_creates_nothing() {
 }
 
 #[test]
-fn a_post_sharing_one_file_with_another_collection_leaves_it_there() {
+fn a_post_sharing_one_file_combines_both_complete_sets() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let (first, _) = library
@@ -186,9 +186,9 @@ fn a_post_sharing_one_file_with_another_collection_leaves_it_there() {
             imported("second-d", "file-d"),
         ]))
         .unwrap();
-    assert_ne!(second, first);
-    assert_eq!(members(&library, first).len(), 2);
-    assert_eq!(members(&library, second).len(), 2);
+    assert_eq!(second, first);
+    assert_eq!(members(&library, first).len(), 4);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_root"), 1);
     assert_eq!(shared_files(&library), 0);
 }
 
@@ -403,4 +403,86 @@ fn an_older_library_merges_every_shared_file_once_and_keeps_its_counts() {
         ),
         1
     );
+}
+
+#[test]
+fn a_post_bridging_two_collections_preserves_their_metadata_and_reopens() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (folder, _) = library.create_folder("Second set", None).unwrap();
+    let mut a = imported("a", "a");
+    a.tags = vec!["first".into()];
+    a.notes = Some("First note".into());
+    let (first, _) = library.ingest_collection(&collection(vec![a, imported("b", "b")])).unwrap();
+    let mut c = imported("c", "c");
+    c.tags = vec!["second".into()];
+    c.rating = Rating::Five;
+    c.lifecycle = Lifecycle::Active;
+    c.notes = Some("Second note".into());
+    c.folders = vec![folder];
+    c.source_urls = vec!["https://example.test/second".into()];
+    let mut d = imported("d", "d");
+    d.lifecycle = Lifecycle::Active;
+    let (second, _) = library.ingest_collection(&collection(vec![c, d])).unwrap();
+    let second_key = library.database().read(picto_library::database::WorkPriority::VisibleRead,
+        |db| Ok(db.query_row("SELECT stable_key FROM library_item WHERE local_id = ?1", [second.0], |row| row.get::<_, String>(0))?)).unwrap();
+    library.database().maintenance_write(picto_library::database::WorkPriority::Cloud, |tx| {
+        tx.execute("INSERT INTO source_post(site_id,post_key,root_item_id,created_at,updated_at) VALUES('fixture','bridge-source',?1,'now','now')", [second.0])?;
+        Ok(())
+    }).unwrap();
+    let mut bridge = imported("bridge-a", "a");
+    bridge.tags = vec!["bridge".into()];
+    let (combined, receipt) = library.ingest_collection(&collection(vec![bridge, imported("bridge-c", "c")])).unwrap();
+    assert_eq!(combined, first);
+    assert!(receipt.item_ids.contains(&second));
+    assert_eq!(members(&library, combined).len(), 4);
+    assert_eq!(shared_files(&library), 0);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_root"), 1);
+    assert_eq!(scalar(&library, "SELECT root_item_id FROM source_post WHERE post_key='bridge-source'"), i64::from(first.0));
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    let details = library.details(combined).unwrap();
+    let snapshot = library.projections().snapshot();
+    for tag in ["first", "second", "bridge"] {
+        assert!(details.tag_ids.contains(&snapshot.tag_ids_by_name[tag]));
+    }
+    assert_eq!(details.rating, Rating::Five);
+    assert_eq!(details.lifecycle, Lifecycle::Active);
+    assert_eq!(details.folder_ids, vec![folder]);
+    assert_eq!(details.root.notes.as_deref(), Some("First note\n\nSecond note"));
+    assert_eq!(details.root.source_urls, vec!["https://example.test/second"]);
+    assert_eq!(members(&library, combined).len(), 4);
+    let alias = library.database().read(picto_library::database::WorkPriority::VisibleRead,
+        |db| Ok(db.query_row("SELECT local_id FROM library_item_alias WHERE stable_key = ?1", [&second_key], |row| row.get::<_, u32>(0))?)).unwrap();
+    assert_eq!(alias, first.0);
+}
+
+#[test]
+fn migration_combines_chained_overlaps_without_splitting_any_original_set() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let (a, _) = library.ingest_collection(&collection(vec![imported("a1", "a1"), imported("a2", "a2")])).unwrap();
+    let (b, _) = library.ingest_collection(&collection(vec![imported("b1", "b1"), imported("b2", "b2")])).unwrap();
+    let (c, _) = library.ingest_collection(&collection(vec![imported("c1", "c1"), imported("c2", "c2")])).unwrap();
+    let (am, bm, cm) = (members(&library, a), members(&library, b), members(&library, c));
+    drop(library);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("DROP INDEX idx_media_item_one_per_file").unwrap();
+    share_file(&db, am[0], &[bm[0]]);
+    share_file(&db, bm[1], &[cm[0]]);
+    drop(db);
+    let library = Library::open(&path).unwrap();
+    let report = library.merge_shared_files().unwrap();
+    assert_eq!(report.files, 2);
+    assert_eq!(report.merged_items, 2);
+    assert_eq!(report.removed_collections, 2);
+    assert_eq!(members(&library, a), vec![am[0], am[1], bm[1], cm[1]]);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_root"), 1);
+    assert_eq!(shared_files(&library), 0);
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(library.merge_shared_files().unwrap(), SharedFileMerge::default());
+    assert_eq!(members(&library, a).len(), 4);
 }

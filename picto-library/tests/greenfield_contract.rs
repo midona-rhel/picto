@@ -4034,7 +4034,7 @@ fn exact_hash_collection_member_takes_in_the_loose_item_holding_its_file() {
 }
 
 #[test]
-fn a_file_another_collection_holds_stays_there_and_keeps_its_tags() {
+fn a_shared_file_combines_collections_and_keeps_both_sets_of_tags() {
     let directory = TempDir::new().unwrap();
     let library = Library::create(directory.path().join("library.sqlite")).unwrap();
     let mut first_member = imported(
@@ -4075,16 +4075,12 @@ fn a_file_another_collection_holds_stays_there_and_keeps_its_tags() {
         })
         .unwrap();
 
-    // The shared file stays in the first collection; the second post leaves
-    // it out, which leaves one item: no collection.
     let snapshot = library.projections().snapshot();
-    assert_eq!(snapshot.collection_orders[&first_collection].len(), 2);
-    assert!(!snapshot.collection_orders.contains_key(&second_collection));
-    let first_tag = snapshot.tag_ids_by_name["collection:first"];
-    assert!(snapshot.tags[&first_tag].contains(first_collection.0));
-    assert!(!snapshot.tags[&first_tag].contains(second_collection.0));
-    if let Some(second_tag) = snapshot.tag_ids_by_name.get("collection:second") {
-        assert!(!snapshot.tags[second_tag].contains(first_collection.0));
+    assert_eq!(first_collection, second_collection);
+    assert_eq!(snapshot.collection_orders[&first_collection].len(), 3);
+    for name in ["collection:first", "collection:second"] {
+        let tag = snapshot.tag_ids_by_name[name];
+        assert!(snapshot.tags[&tag].contains(first_collection.0));
     }
 }
 

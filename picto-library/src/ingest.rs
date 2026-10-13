@@ -16,20 +16,9 @@ use crate::{LibraryError, Result};
 // retaining nearly all of the transaction amortization from a 64-item batch.
 pub const MAX_INGEST_BATCH: usize = 48;
 
-/// How an import found the media item it reused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Reuse {
-    /// The same source item or stable key: this import was seen before.
-    Identity,
-    /// Only the same file: another import already holds it.
-    File,
-}
-
 pub(crate) struct IngestResult {
     pub root_id: RootId,
     pub created_root: bool,
-    /// Set when the import resolved to an existing media item.
-    pub reused: Option<Reuse>,
     pub snapshot: ProjectionSnapshot,
     pub resources: Vec<String>,
     pub bitmap_keys: Vec<BitmapKey>,
@@ -39,25 +28,18 @@ pub(crate) struct IngestResult {
 
 /// Import one file. One file is one media item: an import whose source item,
 /// stable key or file the library already holds resolves to that item (adding
-/// its tags and provenance) instead of creating another. A collection member
-/// (`as_member`) whose file another collection already holds leaves that
-/// collection's tags alone: one post's tags do not flow to another's.
+/// its tags and provenance) instead of creating another. Collection
+/// imports combine overlapping collections, including their tags.
 pub(crate) fn insert_one(
     transaction: &Transaction<'_>,
     revision: u64,
     mut snapshot: ProjectionSnapshot,
     input: &PreparedImport,
-    as_member: bool,
 ) -> Result<IngestResult> {
     if let Some(existing) = existing_import(transaction, &snapshot, input)? {
         let mut affected_roots =
             refresh_existing_file(transaction, &mut snapshot, existing.media_id, input)?;
-        let held_by_collection = existing.root_id.0 != existing.media_id.0;
-        let tag_roots = if as_member && existing.reuse == Reuse::File && held_by_collection {
-            RoaringBitmap::new()
-        } else {
-            RoaringBitmap::from_iter([existing.root_id.0])
-        };
+        let tag_roots = RoaringBitmap::from_iter([existing.root_id.0]);
         let mut bitmap_keys = Vec::new();
         for raw_name in &input.tags {
             let name = canonical_tag_name(raw_name)?;
@@ -110,7 +92,6 @@ pub(crate) fn insert_one(
         return Ok(IngestResult {
             root_id: existing.root_id,
             created_root: false,
-            reused: Some(existing.reuse),
             snapshot,
             resources: vec!["roots".into(), "tags".into()],
             bitmap_keys,
@@ -406,7 +387,6 @@ pub(crate) fn insert_one(
     Ok(IngestResult {
         root_id,
         created_root: true,
-        reused: None,
         snapshot,
         resources: vec![
             "roots".into(),
@@ -630,7 +610,6 @@ fn refresh_existing_file(
 struct ExistingImport {
     media_id: MediaId,
     root_id: RootId,
-    reuse: Reuse,
 }
 
 /// The media item an import resolves to, if the library already has it: by
@@ -674,8 +653,8 @@ fn existing_import(
             "stable and source identities resolve to different media".into(),
         ));
     }
-    let (media_id, reuse) = if let Some(media_id) = stable_media.or(source_media) {
-        (media_id, Reuse::Identity)
+    let media_id = if let Some(media_id) = stable_media.or(source_media) {
+        media_id
     } else if let Some(media_id) = transaction
         .prepare_cached(
             "SELECT media.media_id
@@ -688,7 +667,7 @@ fn existing_import(
         .query_row([&input.facts.content_hash], |row| row.get::<_, u32>(0))
         .optional()?
     {
-        (media_id, Reuse::File)
+        media_id
     } else {
         return Ok(None);
     };
@@ -699,7 +678,6 @@ fn existing_import(
             .get(media_id)
             .copied()
             .unwrap_or(RootId(media_id)),
-        reuse,
     }))
 }
 

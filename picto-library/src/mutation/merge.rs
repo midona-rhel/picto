@@ -34,6 +34,45 @@ fn owner(snapshot: &ProjectionSnapshot, media: MediaId) -> Result<RootId> {
         .ok_or_else(|| LibraryError::InvalidState(format!("media {} has no owning root", media.0)))
 }
 
+/// Combine overlapping sets before removing shared media. Reuse ordinary
+/// grouping, but preserve metadata and references from every absorbed root.
+pub(super) fn combine_overlapping_roots(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: u64,
+    snapshot: &mut ProjectionSnapshot,
+    roots: &[RootId],
+    winner: RootId,
+    now: i64,
+    merge: &mut Merge,
+) -> Result<()> {
+    for root in roots.iter().copied().filter(|root| *root != winner) {
+        for change in hand_over(transaction, snapshot, root, winner, now)? {
+            apply_semantic_change(transaction, revision, snapshot, &change, true,
+                &mut merge.affected, &mut merge.resources)?;
+        }
+        let mut relink = relink_root(transaction, root, winner)?;
+        if snapshot.collection_orders.contains_key(&root) {
+            relink.aliases = aliases_for(transaction, root.0, winner.0)?;
+            merge.removed_collections += 1;
+        }
+        push_relink(transaction, relink, merge)?;
+    }
+    let notes = root_text(transaction, winner)?.notes;
+    super::imports::settle_lifecycles(snapshot, roots, &mut HashSet::new());
+    let output = crate::group::organize(transaction, revision, snapshot.clone(), &GroupRequest {
+        target: SelectionTarget::Explicit { root_ids: roots.to_vec() },
+        cover_root_id: winner,
+        winning_collection_id: Some(winner),
+        name: None,
+        notes,
+        modified_at_ms: now,
+    }, false, None)?;
+    *snapshot = output.snapshot;
+    merge.affected |= &output.affected;
+    merge.resources.extend(["roots", "collections", "tags", "folders", "sidebar", "search"].map(str::to_owned));
+    Ok(())
+}
+
 fn lifecycle_of(snapshot: &ProjectionSnapshot, root: RootId) -> Result<Lifecycle> {
     Lifecycle::ALL
         .into_iter()
@@ -365,18 +404,23 @@ fn relink_media(
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    state.aliases = transaction
+    state.aliases = aliases_for(transaction, loser.0, survivor.0)?;
+    Ok(state)
+}
+
+fn aliases_for(transaction: &rusqlite::Transaction<'_>, from: u32, to: u32) -> Result<Vec<(String, Option<u32>, u32)>> {
+    let mut aliases = transaction
         .prepare_cached("SELECT stable_key FROM library_item_alias WHERE local_id = ?1")?
-        .query_map([loser.0], |row| row.get::<_, String>(0))?
-        .map(|key| key.map(|key| (key, Some(loser.0), survivor.0)))
+        .query_map([from], |row| row.get::<_, String>(0))?
+        .map(|key| key.map(|key| (key, Some(from), to)))
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let own_key = transaction.query_row(
         "SELECT stable_key FROM library_item WHERE local_id = ?1",
-        [loser.0],
+        [from],
         |row| row.get::<_, String>(0),
     )?;
-    state.aliases.push((own_key, None, survivor.0));
-    Ok(state)
+    aliases.push((own_key, None, to));
+    Ok(aliases)
 }
 
 /// Point a relink's rows at their `after` targets, or back at their `before`
@@ -486,7 +530,7 @@ pub struct SharedFileMerge {
     pub files: u64,
     /// Items merged into another and removed.
     pub merged_items: u64,
-    /// Collections left empty by the merge and removed.
+    /// Collections absorbed by the merge and removed.
     pub removed_collections: u64,
 }
 
@@ -495,7 +539,8 @@ impl Library {
     /// share a file into one, then enforce it with a unique index. Libraries
     /// made before the rule could hold a file standalone and in collections,
     /// or several times over. The item that stays is the one in the oldest
-    /// collection, otherwise the oldest loose one. Runs at open (after the
+    /// collection, otherwise the oldest loose one. Overlapping collections
+    /// combine before deduplication so no original set is split. Runs at open (after the
     /// schema migration took its backup) and clears history, as a repair.
     pub fn merge_shared_files(&self) -> Result<SharedFileMerge> {
         let enforced = self.database.read(WorkPriority::CorrectnessRecovery, |connection| {
@@ -541,6 +586,15 @@ impl Library {
             for group in groups {
                 let survivor = survivor_of(transaction, &next, &group)?;
                 for loser in group.into_iter().filter(|media| *media != survivor) {
+                    let winner_root = owner(&next, survivor)?;
+                    let loser_root = owner(&next, loser)?;
+                    if winner_root != loser_root
+                        && next.collection_orders.contains_key(&winner_root)
+                        && next.collection_orders.contains_key(&loser_root)
+                    {
+                        combine_overlapping_roots(transaction, revision, &mut next,
+                            &[winner_root, loser_root], winner_root, now, &mut merge)?;
+                    }
                     merge_media(transaction, revision, &mut next, survivor, loser, now, &mut merge)?;
                     report.merged_items += 1;
                 }

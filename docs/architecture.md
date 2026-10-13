@@ -20,7 +20,8 @@ separate lifecycle scopes.
 One file is exactly one media item, enforced by a unique index on `media_item(file_id)`. Every
 import resolves a file it already holds to that item: a standalone import adds its tags and
 provenance to it, a loose item joins a new collection that contains it, and an item already in
-another collection stays there while the new collection leaves it out. Resolving a duplicate by
+another collection causes the overlapping sets to combine. Chained overlaps also combine,
+retaining every unique media item and merging tags, folders, notes, source links and the highest rating. Resolving a duplicate by
 keeping one file merges the other item into the kept one (tags, folder places, the higher rating,
 the lifecycle that keeps it most, notes and source links), undoably. A merged-away item's stable
 key stays in `library_item_alias`, so re-imports, Picto Packs and cloud copies resolve to the item

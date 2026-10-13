@@ -45,7 +45,7 @@ impl Library {
             let mut folder_ids = HashSet::new();
             let mut affected = RoaringBitmap::new();
             for input in inputs {
-                let output = ingest::insert_one(transaction, revision, next, input, false)?;
+                let output = ingest::insert_one(transaction, revision, next, input)?;
                 next = output.snapshot;
                 root_ids.push(output.root_id);
                 if output.created_root {
@@ -139,9 +139,8 @@ impl Library {
 
     /// Import a post's files as one collection. A file the library already
     /// holds is never copied: a loose item joins the new collection (as
-    /// grouping would), and an item already in another collection stays there
-    /// and the new collection leaves it out. A post whose every file is held
-    /// elsewhere creates nothing and points at the first of them.
+    /// grouping would). Existing collections sharing any of its files combine
+    /// with the post, keeping each original set complete without copying media.
     fn ingest_collection_with(
         &self,
         input: &PreparedCollectionImport,
@@ -184,7 +183,7 @@ impl Library {
             let mut ingest_affected = RoaringBitmap::new();
             let mut outputs = Vec::with_capacity(input.members.len());
             for member in &input.members {
-                let output = ingest::insert_one(transaction, revision, next, member, true)?;
+                let output = ingest::insert_one(transaction, revision, next, member)?;
                 next = output.snapshot;
                 if output.created_root {
                     created_root_ids.push(output.root_id);
@@ -193,33 +192,9 @@ impl Library {
                 bitmap_keys.extend(output.bitmap_keys);
                 folder_ids.extend(output.folder_ids);
                 ingest_affected |= &output.affected_roots;
-                outputs.push((output.root_id, output.reused));
+                outputs.push(output.root_id);
             }
-            // Roots this post already owns: its existing root, and whatever its
-            // members resolved to by their own identity.
-            let anchors = input
-                .existing_root_id
-                .into_iter()
-                .chain(outputs.iter().filter_map(|(root, reused)| {
-                    (*reused != Some(ingest::Reuse::File)).then_some(*root)
-                }))
-                .collect::<HashSet<_>>();
-            let is_collection = |root: RootId| {
-                next.root_kinds
-                    .get(&RootKind::Collection)
-                    .is_some_and(|collections| collections.contains(root.0))
-            };
-            let held_elsewhere = |root: RootId, reused: Option<ingest::Reuse>| {
-                reused == Some(ingest::Reuse::File) && is_collection(root) && !anchors.contains(&root)
-            };
-            let mut omitted = Vec::new();
-            for (index, (root, reused)) in outputs.iter().copied().enumerate() {
-                if held_elsewhere(root, reused) {
-                    if !omitted.contains(&root) {
-                        omitted.push(root);
-                    }
-                    continue;
-                }
+            for (index, root) in outputs.iter().copied().enumerate() {
                 root_ids.push(root);
                 if input.existing_root_id.is_none() && index == input.cover_index {
                     requested_cover = Some(root);
@@ -243,20 +218,16 @@ impl Library {
                         .is_some_and(|collections| collections.contains(root.0))
                 })
                 .collect::<Vec<_>>();
-            if existing_collections.len() > 1 {
-                return Err(LibraryError::InvalidState(
-                    "one source collection resolved to multiple existing collections".into(),
-                ));
-            }
             let winning_collection_id = existing_collections.first().copied();
             let creates_collection = ordered_roots.len() >= 2 && winning_collection_id.is_none();
             let requested_cover = requested_cover.filter(|root| ordered_roots.contains(root));
-            let (published_root, mut affected) = if ordered_roots.is_empty() {
-                (
-                    omitted[0],
-                    omitted.iter().map(|root| root.0).collect::<RoaringBitmap>(),
-                )
-            } else if ordered_roots.len() >= 2 {
+            let (published_root, mut affected) = if let Some(winner) = winning_collection_id.filter(|_| ordered_roots.len() >= 2) {
+                    let mut merge = Merge::default();
+                    combine_overlapping_roots(transaction, revision, &mut next,
+                        &ordered_roots, winner, input.modified_at_ms, &mut merge)?;
+                    resources.extend(merge.resources);
+                    (winner, merge.affected)
+                } else if ordered_roots.len() >= 2 {
                     // A loose item that joins the post may sit in another
                     // lifecycle; the set takes the one that keeps it most.
                     settle_lifecycles(&mut next, &ordered_roots, &mut bitmap_keys);
@@ -334,7 +305,9 @@ impl Library {
             let receipt = PublicationCoordinator::receipt(
                 revision,
                 resources,
-                std::iter::once(published_root),
+                affected.iter()
+                    .filter(|id| *id == published_root.0 || snapshot.root_kinds.values().any(|roots| roots.contains(*id)))
+                    .map(RootId),
             );
             Ok((
                 (published_root, receipt.clone()),
@@ -351,7 +324,7 @@ impl Library {
 
 /// Move `roots` into the lifecycle among them that keeps an item most (Active,
 /// then Inbox, then Trash), so they can be grouped.
-fn settle_lifecycles(
+pub(super) fn settle_lifecycles(
     snapshot: &mut ProjectionSnapshot,
     roots: &[RootId],
     bitmap_keys: &mut HashSet<BitmapKey>,
