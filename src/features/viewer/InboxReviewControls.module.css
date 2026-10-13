@@ -20,8 +20,13 @@
     transform 120ms var(--ease-default);
 }
 
-.pill::after {
-  border-radius: inherit;
+/*
+ * The shared glass (`.floatingGlassSurface::after`) sets its own radius with
+ * the same specificity, so which one won depended on stylesheet order and the
+ * pill could render square. The doubled class wins regardless.
+ */
+.pill.pill::after {
+  border-radius: 999px;
 }
 
 .leaving {
