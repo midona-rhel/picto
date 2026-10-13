@@ -5,6 +5,8 @@
 //! Prints `ROW|operation|size|median ms|p90 ms|samples`. Local measurement only:
 //! never commit its output.
 //! Add `--membership-only` after the numeric arguments to stop after the focused membership rows.
+//! Add `--subscriptions-only` for the catalog SQL with 10 then 100 runs of
+//! history, fixed retained outcomes, and tags on 20% of the library's roots.
 use std::time::Instant;
 
 use picto_library::predicate::{
@@ -22,6 +24,9 @@ type R<T> = Result<T, Box<dyn std::error::Error>>;
 const VOCAB: usize = 20_000;
 const BASE_MS: u64 = 1_700_000_000_000;
 
+#[path = "library_ops_benchmark/subscriptions.rs"]
+mod subscriptions;
+
 fn main() -> R<()> {
     let roots = arg(1, 1_000_000);
     let runs = arg(2, 5);
@@ -32,17 +37,29 @@ fn main() -> R<()> {
     let path = dir.path().join("audit.sqlite");
     let mut library = Library::create(&path)?;
     let fixture_started = Instant::now();
+    let subscriptions_only = std::env::args().any(|arg| arg == "--subscriptions-only");
 
     // --- fixture: ingest ---
     let t = Instant::now();
     let mut ids: Vec<RootId> = Vec::with_capacity(roots);
     for start in (0..roots).step_by(picto_library::ingest::MAX_INGEST_BATCH) {
         let end = (start + picto_library::ingest::MAX_INGEST_BATCH).min(roots);
-        for (id, _) in library.ingest_batch(&(start..end).map(prepared).collect::<Vec<_>>())? {
+        let batch = (start..end).map(|index| {
+            let mut item = prepared(index);
+            if subscriptions_only && index >= roots / 5 {
+                item.tags.clear();
+            }
+            item
+        }).collect::<Vec<_>>();
+        for (id, _) in library.ingest_batch(&batch)? {
             ids.push(id);
         }
     }
     println!("FIXTURE ingest_{roots}_s={:.1}", t.elapsed().as_secs_f64());
+
+    if subscriptions_only {
+        return subscriptions::run(&library, roots, runs);
+    }
 
     // --- fixture: settle FTS so name text filters see every root ---
     let t = Instant::now();
