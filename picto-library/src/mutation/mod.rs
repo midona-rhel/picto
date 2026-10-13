@@ -1296,7 +1296,7 @@ impl Library {
     pub fn set_rating(&self, target: &SelectionTarget, rating: Rating) -> Result<MutationReceipt> {
         self.bitmap_partition_mutation(
             WorkPriority::ForegroundMutation,
-            "items.patch_metadata",
+            "items.set_rating",
             "Change rating",
             BitmapDomain::Rating,
             rating.bitmap_key(),
@@ -1319,6 +1319,12 @@ impl Library {
                 "metadata patch does not change a supported field".into(),
             ));
         }
+        let detail = match (rating, notes.is_some(), source_urls.is_some()) {
+            (Some(rating), false, false) => Some(format!("rating:{}", rating.bitmap_key())),
+            (None, true, false) => Some("notes".to_owned()),
+            (None, false, true) => Some("source_urls".to_owned()),
+            _ => None,
+        };
         let target = target.clone();
         let receipt = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
             let selection = crate::selection::resolve_with(transaction, &snapshot, &target, Some((&self.match_cache, &self.order_cache)))?;
@@ -1444,7 +1450,8 @@ impl Library {
                 "items.patch_metadata",
                 "Change metadata",
                 SemanticChange::Compound(changes),
-            );
+            )
+            .about(selection.len(), detail.as_deref());
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1585,7 +1592,8 @@ impl Library {
                     before: Arc::new(before),
                     after: Arc::new(after),
                 },
-            );
+            )
+            .about(changed.len(), None);
             Ok((
                 receipt.clone(),
                 PublishedDelta {
@@ -1606,7 +1614,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
-            "items.patch_metadata",
+            "items.set_notes",
             "Change notes",
             TextMutation::Notes(notes.filter(|value| !value.is_empty())),
             modified_at_ms,
@@ -1621,7 +1629,7 @@ impl Library {
     ) -> Result<MutationReceipt> {
         self.text_mutation(
             target,
-            "items.patch_metadata",
+            "items.set_source_urls",
             "Change source URLs",
             TextMutation::SourceUrls(source_urls),
             modified_at_ms,
@@ -1813,8 +1821,20 @@ impl Library {
                 resources.clone(),
                 selection.iter().map(RootId),
             );
+            let detail = match domain {
+                BitmapDomain::Lifecycle => Lifecycle::ALL
+                    .into_iter()
+                    .find(|value| value.bitmap_key() == destination)
+                    .map(|value| format!("{value:?}").to_lowercase()),
+                BitmapDomain::Rating => Rating::ALL
+                    .iter()
+                    .position(|value| value.bitmap_key() == destination)
+                    .map(|stars| stars.to_string()),
+                BitmapDomain::Tag => None,
+            };
             let history = (!changes.is_empty()).then(|| {
                 HistoryEntry::for_command(command, label, SemanticChange::Compound(changes))
+                    .about(selection.len(), detail.as_deref())
             });
             Ok((
                 receipt.clone(),

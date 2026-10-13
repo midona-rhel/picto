@@ -49,7 +49,8 @@ impl Library {
                             before,
                             after,
                         },
-                    )),
+                    )
+                    .about(selected.len(), None)),
                 },
             ))
         })?;
@@ -174,6 +175,7 @@ impl Library {
                 ],
                 output.affected.iter().map(RootId),
             );
+            let detached = output.root_ids.len() as u64;
             Ok((
                 (output.root_ids, receipt.clone()),
                 PublishedDelta {
@@ -187,7 +189,8 @@ impl Library {
                             before,
                             after,
                         },
-                    )),
+                    )
+                    .about(detached, None)),
                 },
             ))
         })?;

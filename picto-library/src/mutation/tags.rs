@@ -739,7 +739,8 @@ impl Library {
                         "tags.group.rename",
                         "Merge tag namespaces",
                         SemanticChange::Compound(changes),
-                    )),
+                    )
+                    .about(0, Some("merge"))),
                 },
             ))
         })?;
@@ -956,7 +957,8 @@ impl Library {
                         },
                         label,
                         SemanticChange::Compound(history_changes),
-                    )),
+                    )
+                    .about(0, destination.is_some().then_some("merge"))),
                 },
             ))
         })?;
@@ -1087,7 +1089,8 @@ impl Library {
                 "items.apply_tags",
                 if add { "Add tags" } else { "Remove tags" },
                 SemanticChange::Compound(changes),
-            );
+            )
+            .about(affected.len(), Some(if add { "add" } else { "remove" }));
             Ok((
                 receipt.clone(),
                 PublishedDelta {
