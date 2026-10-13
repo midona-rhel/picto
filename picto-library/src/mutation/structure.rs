@@ -908,6 +908,26 @@ pub(super) fn restore_deleted_roots(
             "cannot undo the delete because its items exist again".into(),
         ));
     }
+    // Aliases and primary keys live in separate tables, so their UNIQUE
+    // constraints alone cannot detect an identity reused since deletion.
+    if !state.aliases.is_empty() {
+        let keys = serde_json::to_string(
+            &state.aliases.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+        )?;
+        let reused: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM json_each(?1) saved
+                 CROSS JOIN library_item item ON item.stable_key = saved.value
+             )",
+            [keys],
+            |row| row.get(0),
+        )?;
+        if reused {
+            return Err(LibraryError::InvalidState(
+                "cannot undo the delete because a saved alias is now a live item's primary key".into(),
+            ));
+        }
+    }
     let files_json = ids_json(state.files.iter().map(|file| file.0))?;
     let files: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM media_file WHERE file_id IN (SELECT value FROM json_each(?1))",

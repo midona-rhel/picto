@@ -472,6 +472,59 @@ fn a_post_bridging_two_collections_preserves_their_metadata_and_reopens() {
 }
 
 #[test]
+fn delete_undo_rejects_an_alias_reused_as_a_live_primary_key() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("library.sqlite");
+    let library = Library::create(&path).unwrap();
+    let mut first_input = imported("first", "first-file");
+    first_input.source_identity = None;
+    let mut old_input = imported("merged-key", "old-file");
+    old_input.source_identity = None;
+    let (first, _) = library.ingest(&first_input).unwrap();
+    let (old, _) = library.ingest(&old_input).unwrap();
+    drop(library);
+
+    // Reproduce a shared-file library from before the one-item-per-file rule.
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("DROP INDEX idx_media_item_one_per_file").unwrap();
+    share_file(&db, MediaId(first.0), &[MediaId(old.0)]);
+    drop(db);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(library.merge_shared_files().unwrap().merged_items, 1);
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias WHERE stable_key = 'merged-key'"), 1);
+
+    let target = SelectionTarget::Explicit { root_ids: vec![first] };
+    library.set_lifecycle(&target, Lifecycle::Trash).unwrap();
+    library.history().clear();
+    library.permanently_delete(&target, 2000, 500).unwrap();
+    let mut replacement = imported("merged-key", "replacement-file");
+    replacement.source_identity = None;
+    replacement.imported_at_ms = 2_000_000_000_000;
+    let (replacement_id, _) = library.ingest(&replacement).unwrap();
+    let before = library.details(replacement_id).unwrap();
+    let history = library.history().state();
+    assert_eq!(history.undo.as_ref().unwrap().command, "items.delete");
+
+    for _ in 0..2 {
+        let error = library.undo().unwrap_err();
+        assert!(matches!(error, picto_library::LibraryError::InvalidState(message)
+            if message.contains("alias") && message.contains("primary key")));
+        assert_eq!(library.details(replacement_id).unwrap(), before);
+        assert_eq!(library.history().state(), history);
+        assert_eq!(library.projections().snapshot().revision, before.revision);
+        assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item"), 1);
+        assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias"), 0);
+        assert!(library.details(first).is_err());
+    }
+
+    drop(library);
+    let library = Library::open(&path).unwrap();
+    assert_eq!(library.details(replacement_id).unwrap(), before);
+    assert!(library.details(first).is_err());
+    assert_eq!(scalar(&library, "SELECT COUNT(*) FROM library_item_alias"), 0);
+}
+
+#[test]
 fn migration_combines_chained_overlaps_without_splitting_any_original_set() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("library.sqlite");
