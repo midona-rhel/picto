@@ -229,8 +229,15 @@ fn delete_platform_credential(site_category: &str) -> Result<(), String> {
 
     match find_generic_password(None, SERVICE_NAME, site_category) {
         Ok((_password, item)) => {
+            // `delete` reports nothing, so check the item is really gone: a
+            // refused delete must surface, or callers would drop their
+            // record of a secret the keychain still holds.
             item.delete();
-            Ok(())
+            match find_generic_password(None, SERVICE_NAME, site_category) {
+                Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+                Ok(_) => Err("Keyring delete error: the keychain kept the item".into()),
+                Err(error) => Err(format!("Keyring delete error: {error}")),
+            }
         }
         Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
         Err(error) => Err(format!("Keyring delete error: {error}")),
