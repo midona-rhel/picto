@@ -355,8 +355,8 @@ describe('direct-site authentication', () => {
 
   it.each([
     'twitter', 'newgrounds', 'hentaifoundry', 'furaffinity', 'danbooru',
-    'patreon', 'fanbox', 'subscribestar', 'idolcomplex',
-    'sankaku', 'yandere', 'konachan', 'safebooru', 'e621', 'ehentai',
+    'patreon', 'fanbox', 'subscribestar',
+    'yandere', 'safebooru', 'e621', 'ehentai',
   ])(
     'opens %s with a fresh browser-identical session and only storage access enabled',
     async (siteId) => {
@@ -593,24 +593,6 @@ describe('direct-site authentication', () => {
     expect(persistCredential).not.toHaveBeenCalled();
     expect(sessions.getAuthSessionState()).toMatchObject({ status: 'active' });
     expect(sessions.getAuthSessionState().message).toContain('browser check');
-  });
-
-  it('persists OAuth2 results through the same host boundary', async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ client_id: 'client', client_secret: 'secret' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'access' }) });
-    const browser = createBrowserWindowMock();
-    const { sessions, persistCredential } = createHarness(browser, { fetchImpl });
-
-    await sessions.startAuthSession('baraag');
-    const authUrl = new URL(browser.instances[0].loadedUrl);
-    const callback = `https://picto.app/oauth/callback?code=code&state=${authUrl.searchParams.get('state')}`;
-    await browser.instances[0].webContents.listeners.get('will-redirect')({ preventDefault: vi.fn() }, callback);
-    await settle();
-
-    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
-      site_id: 'baraag', credential_type: 'oauth_token', oauth_token: 'access',
-    }));
   });
 
   it('uses gallery-dl DeviantArt OAuth and keeps its refresh token plus session cookies', async () => {

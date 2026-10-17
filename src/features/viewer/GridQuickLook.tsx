@@ -14,6 +14,8 @@ interface GridQuickLookProps {
   recordItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
+  /** The item on screen, which trails `currentIndex` until its image is decoded. */
+  onDisplayedItemChange?: (itemId: number | null) => void;
 }
 
 export function GridQuickLook(props: GridQuickLookProps) {
@@ -31,6 +33,19 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const contentIndex = retainedIndex >= 0 || !currentItem ? displayedIndex : 0;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
+  const contentReady = currentItem?.kind === 'collection' || mediaReady;
+  // What the content reports as on screen: the item under review counts as
+  // shown only once it has drawn.
+  const [shownItemId, setShownItemId] = useState<number | null>(null);
+  const markCollectionShown = useCallback(
+    (shown: boolean) => setShownItemId(shown ? currentItem?.root_id ?? null : null),
+    [currentItem?.root_id],
+  );
+  const { onDisplayedItemChange } = props;
+  useEffect(() => {
+    onDisplayedItemChange?.(shownItemId);
+  }, [shownItemId, onDisplayedItemChange]);
+  useEffect(() => () => onDisplayedItemChange?.(null), [onDisplayedItemChange]);
 
   useEffect(() => {
     const requestedItem = props.items[props.currentIndex] ?? null;
@@ -84,7 +99,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const totalCount = props.totalCount ?? props.items.length;
   return (
     <QuickLookHost
-      contentReady={currentItem.kind === 'collection' || mediaReady}
+      contentReady={contentReady}
       currentIndex={(props.windowStart ?? 0) + displayedIndex}
       totalCount={totalCount}
       canPrevious={(props.windowStart ?? 0) + displayedIndex > 0}
@@ -100,6 +115,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
           onNavigate={props.onNavigate}
           onClose={() => props.onClose(currentItem.root_id)}
           recordItemId={props.recordItemId === null ? null : currentItem.root_id}
+          onShownChange={markCollectionShown}
         />
       ) : (
         <QuickLookContent
@@ -113,6 +129,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
             ? decodedThumbnailUrl ?? undefined
             : undefined}
           onReady={markMediaReady}
+          onShownItemChange={setShownItemId}
         />
       )}
     </QuickLookHost>

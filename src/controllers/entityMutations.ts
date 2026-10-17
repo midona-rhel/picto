@@ -80,10 +80,22 @@ export async function removeTargetTags(target: EntityTarget, tags: string[]): Pr
   await announceUndoableMutation('items.apply_tags');
 }
 
-export async function setTargetLifecycle(target: EntityTarget, lifecycle: Lifecycle): Promise<void> {
+/**
+ * `keepSelection`: the caller already moved the selection on (an Inbox
+ * review advances before its save lands), so the save must not clear it.
+ */
+export interface MutationSelectionOptions {
+  keepSelection?: boolean;
+}
+
+export async function setTargetLifecycle(
+  target: EntityTarget,
+  lifecycle: Lifecycle,
+  options: MutationSelectionOptions = {},
+): Promise<void> {
   await setItemLifecycle(target, lifecycle);
   await announceUndoableMutation('items.set_lifecycle');
-  settleSelectionAfterMutation();
+  if (!options.keepSelection) settleSelectionAfterMutation();
 }
 
 export async function permanentlyDeleteTarget(target: EntityTarget, requireUndoable = true): Promise<void> {
@@ -94,15 +106,19 @@ export async function permanentlyDeleteTarget(target: EntityTarget, requireUndoa
  * Reject Inbox items: to Trash, or straight out of the library when the
  * "Rejected items" setting says so. Confirm deletes that cannot be undone.
  */
-export async function rejectTarget(target: EntityTarget): Promise<boolean> {
+export async function rejectTarget(
+  target: EntityTarget,
+  options: MutationSelectionOptions = {},
+): Promise<boolean> {
   const action = await getSettings().then((settings) => settings.rejectAction).catch(() => 'trash' as const);
   if (action === 'delete') {
     return requestPermanentDelete(target, null, {
       onlyNonUndoable: true,
-      remove: (selection, requireUndoable) => deleteTarget(selection, rejectDeleteItems, 'items.reject', requireUndoable),
+      remove: (selection, requireUndoable) =>
+        deleteTarget(selection, rejectDeleteItems, 'items.reject', requireUndoable, options),
     });
   }
-  await setTargetLifecycle(target, 'trash');
+  await setTargetLifecycle(target, 'trash', options);
   return true;
 }
 
@@ -111,6 +127,7 @@ async function deleteTarget(
   remove: (target: EntityTarget, requireUndoable: boolean) => Promise<unknown>,
   command: string,
   requireUndoable: boolean,
+  options: MutationSelectionOptions = {},
 ): Promise<void> {
   store.set(permanentDeletesInFlightAtom, (count) => count + 1);
   try {
@@ -125,7 +142,7 @@ async function deleteTarget(
       if (viewer && deletedIds.has(viewer.currentItemId)) store.set(viewerSessionAtom, null);
       if (quickLook && deletedIds.has(quickLook.currentItemId)) store.set(quickLookSessionAtom, null);
     }
-    settleSelectionAfterMutation();
+    if (!options.keepSelection) settleSelectionAfterMutation();
   } finally {
     store.set(permanentDeletesInFlightAtom, (count) => Math.max(0, count - 1));
   }

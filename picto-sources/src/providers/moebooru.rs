@@ -294,7 +294,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::providers::{konachan, yandere};
+    use crate::providers::yandere;
     use crate::{CanonicalTag, SourcePartition};
 
     fn request() -> DiscoveryRequest {
@@ -359,48 +359,43 @@ mod tests {
     }
 
     #[test]
-    fn builds_direct_bounded_page_requests_for_each_site() {
+    fn builds_direct_bounded_page_requests() {
         let mut request = request();
         request.cursor = Some("7".to_string());
 
-        for (config, expected) in [
-            (yandere::CONFIG, "https://yande.re/post.json"),
-            (konachan::CONFIG, "https://konachan.com/post.json"),
-        ] {
-            let url = request_url(config, &request).unwrap();
-            assert_eq!(url.as_str().split('?').next(), Some(expected));
-            let pairs = url.query_pairs().collect::<BTreeMap<_, _>>();
-            assert_eq!(
-                pairs.get("tags").map(|value| value.as_ref()),
-                Some("landscape rating:s")
-            );
-            assert_eq!(pairs.get("limit").map(|value| value.as_ref()), Some("2"));
-            assert_eq!(pairs.get("page").map(|value| value.as_ref()), Some("7"));
-        }
+        let (config, expected) = (yandere::CONFIG, "https://yande.re/post.json");
+        let url = request_url(config, &request).unwrap();
+        assert_eq!(url.as_str().split('?').next(), Some(expected));
+        let pairs = url.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            pairs.get("tags").map(|value| value.as_ref()),
+            Some("landscape rating:s")
+        );
+        assert_eq!(pairs.get("limit").map(|value| value.as_ref()), Some("2"));
+        assert_eq!(pairs.get("page").map(|value| value.as_ref()), Some("7"));
     }
 
     #[test]
     fn maps_shared_fields_and_site_identity() {
-        for config in [yandere::CONFIG, konachan::CONFIG] {
-            let batch = normalize(config, &request(), response()).unwrap();
-            let post = &batch.posts[0];
-            assert_eq!(post.site_id, config.id);
-            assert_eq!(
-                post.canonical_url.as_deref(),
-                Some(format!("{}/post/show/42", config.root).as_str())
-            );
-            assert_eq!(post.created_at.as_deref(), Some("1788018233"));
-            assert!(post.tags.contains(&CanonicalTag::new("", "landscape")));
-            assert!(post.tags.contains(&CanonicalTag::new("", "artist_name")));
-            assert!(post.tags.contains(&CanonicalTag::new("rating", "safe")));
-            assert_eq!(post.media[0].stable_id, format!("{}:42:0", config.id));
-            assert_eq!(
-                post.media[0].file_name.as_deref(),
-                Some("8a796db7a449fe90d2037fe8b92d461a.jpg")
-            );
-            assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/jpeg"));
-            assert!(batch.posts[1].media.is_empty());
-        }
+        let config = yandere::CONFIG;
+        let batch = normalize(config, &request(), response()).unwrap();
+        let post = &batch.posts[0];
+        assert_eq!(post.site_id, config.id);
+        assert_eq!(
+            post.canonical_url.as_deref(),
+            Some(format!("{}/post/show/42", config.root).as_str())
+        );
+        assert_eq!(post.created_at.as_deref(), Some("1788018233"));
+        assert!(post.tags.contains(&CanonicalTag::new("", "landscape")));
+        assert!(post.tags.contains(&CanonicalTag::new("", "artist_name")));
+        assert!(post.tags.contains(&CanonicalTag::new("rating", "safe")));
+        assert_eq!(post.media[0].stable_id, format!("{}:42:0", config.id));
+        assert_eq!(
+            post.media[0].file_name.as_deref(),
+            Some("8a796db7a449fe90d2037fe8b92d461a.jpg")
+        );
+        assert_eq!(post.media[0].mime_hint.as_deref(), Some("image/jpeg"));
+        assert!(batch.posts[1].media.is_empty());
     }
 
     #[test]

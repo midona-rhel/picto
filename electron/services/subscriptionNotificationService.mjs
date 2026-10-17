@@ -4,29 +4,14 @@ function parseCoreJson(serialized) {
   return JSON.parse(serialized);
 }
 
-/**
- * The dock badge says "new items arrived while you were away". The user sees
- * new items in the inbox once a Picto window has focus, so focusing clears it
- * and a run that settles while focused never sets it.
- */
-export function installDockBadgeClearing({ app, platform = process.platform }) {
-  if (platform !== 'darwin' || !app.dock) return;
-  const clear = () => app.dock.setBadge('');
-  app.on('browser-window-focus', clear);
-  app.on('activate', clear);
-}
-
 export function showSubscriptionSettlementNotification({
   Notification,
   app,
   platform = process.platform,
   newItems,
-  appFocused = false,
 }) {
+  // The app badge is the Inbox count (inboxBadgeService), not this.
   const count = Math.max(0, Math.trunc(Number(newItems) || 0));
-  if (platform === 'darwin' && count > 0 && app.dock && !appFocused) {
-    app.dock.setBadge(String(Math.min(9_999, count)));
-  }
   if (!Notification.isSupported()) return;
   const body = count === 0
     ? 'All subscriptions finished. No new library items were added.'
@@ -40,7 +25,6 @@ export function createSubscriptionNotificationService({
   invokeSerialized,
   getCurrentLibraryRoot,
   platform = process.platform,
-  isAppFocused = () => false,
 }) {
   const batchRunIds = new Set();
   let batchActive = false;
@@ -94,9 +78,7 @@ export function createSubscriptionNotificationService({
     ))).size;
     batchRunIds.clear();
     batchActive = false;
-    showSubscriptionSettlementNotification({
-      Notification, app, platform, newItems, appFocused: isAppFocused(),
-    });
+    showSubscriptionSettlementNotification({ Notification, app, platform, newItems });
   }
 
   function refresh() {

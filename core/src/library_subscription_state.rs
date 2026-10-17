@@ -757,7 +757,7 @@ pub fn mark_source_item_staged(
                 )?;
                 transaction.execute(
                     "UPDATE source_item SET state = 'downloaded', last_error = NULL, updated_at = ?1
-                     WHERE source_item_id = ?2 AND state = 'pending'",
+                     WHERE source_item_id = ?2 AND state IN ('pending', 'failed')",
                     params![now, source_item_id],
                 )?;
                 transaction.execute(
@@ -925,6 +925,16 @@ fn record_post_in(
                  media_url = COALESCE(excluded.media_url, source_item.media_url),
                  canonical_url = COALESCE(excluded.canonical_url, source_item.canonical_url),
                  state = CASE
+                     -- A file that already failed in this run stays failed:
+                     -- seeing its post again (as each later file of the post
+                     -- reports in) must not reopen it, or the post never settles.
+                     WHEN source_item.state = 'failed'
+                      AND EXISTS (
+                          SELECT 1 FROM subscription_run_source_item linked
+                          WHERE linked.run_query_id = ?7
+                            AND linked.source_item_id = source_item.source_item_id
+                      )
+                     THEN 'failed'
                      WHEN source_item.media_item_id IS NULL
                       AND (SELECT root_item_id FROM source_post
                            WHERE source_post_id = source_item.source_post_id) IS NULL
@@ -947,6 +957,7 @@ fn record_post_in(
                 item.media_url,
                 item.canonical_url,
                 now,
+                run_query_id,
             ],
         )?;
         let source_item_id = transaction.query_row(
@@ -1365,7 +1376,7 @@ fn write_transition(
         .map_err(|error| error.to_string())
 }
 
-fn settle_run(
+pub(crate) fn settle_run(
     transaction: &Transaction<'_>,
     run_id: i64,
     now: &str,
@@ -1505,6 +1516,111 @@ mod tests {
         }).unwrap();
         assert_eq!(status, "succeeded");
         assert_eq!(cursor.as_deref(), Some("after-skipped"));
+    }
+
+    #[test]
+    fn every_failed_file_of_a_post_stays_failed_until_the_post_settles() {
+        // Pawchive: both files of a post return 403. Each failure re-records
+        // the post; that must not reopen the file that failed before it.
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let definition = NewSubscription {
+            name: "Failing files".into(),
+            schedule: "manual".into(),
+            initial_post_limit: None,
+            periodic_post_limit: None,
+            queries: vec![NewSubscriptionQuery {
+                site_id: "e621".into(),
+                query_text: "example".into(),
+                display_name: None,
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (id, _) = application
+            .create_subscription_definition_library(&definition, "2026-08-29T00:00:00Z")
+            .unwrap();
+        let claim = |now: &str| {
+            application.request_subscription_run_library(id, now).unwrap();
+            claim_next_query(&application, &mut DomainSchedule::new(), now)
+                .unwrap()
+                .unwrap()
+        };
+        let post = |site_id: &str| NormalizedPost {
+            site_id: site_id.to_owned(),
+            post_key: "post".into(),
+            canonical_url: None,
+            creator_name: None,
+            title: None,
+            description: None,
+            captured_at: None,
+            metadata_json: None,
+            items: ["first", "second"]
+                .into_iter()
+                .enumerate()
+                .map(|(position, key)| NormalizedItem {
+                    item_key: key.into(),
+                    position: position as i64,
+                    media_url: None,
+                    canonical_url: None,
+                })
+                .collect(),
+        };
+        let states = || -> Vec<(String, String)> {
+            application
+                .library()
+                .auxiliary_read(WorkPriority::VisibleRead, |connection| {
+                    let mut statement = connection.prepare(
+                        "SELECT item_key, state FROM source_item ORDER BY position",
+                    )?;
+                    let rows = statement
+                        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    Ok(rows)
+                })
+                .unwrap()
+        };
+        let query = claim("2026-08-29T00:00:01Z");
+        let fail = |query: &ClaimedQueryRun, key: &str, now: &str| {
+            let ids = record_post(&application, query.run_query_id, &post(&query.site_id), now).unwrap();
+            mark_source_item_failed(
+                &application,
+                query.run_query_id,
+                query.subscription_id,
+                query.query_id,
+                ids[key],
+                "media host returned 403 Forbidden",
+                now,
+            )
+            .unwrap();
+        };
+        fail(&query, "first", "2026-08-29T00:00:02Z");
+        fail(&query, "second", "2026-08-29T00:00:03Z");
+        assert_eq!(
+            states(),
+            vec![("first".into(), "failed".into()), ("second".into(), "failed".into())]
+        );
+        assert!(settled_post_outcome(&application, &query, "post").is_ok());
+
+        // A retry in the same run downloads the file again and clears the failure.
+        let ids = record_post(
+            &application,
+            query.run_query_id,
+            &post(&query.site_id),
+            "2026-08-29T00:00:04Z",
+        )
+        .unwrap();
+        mark_source_item_staged(
+            &application,
+            query.run_query_id,
+            ids["first"],
+            "retried-hash",
+            "/tmp/retried",
+            1,
+            "2026-08-29T00:00:05Z",
+        )
+        .unwrap();
+        assert_eq!(states()[0], ("first".into(), "downloaded".into()));
     }
 
     #[test]

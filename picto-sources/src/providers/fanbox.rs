@@ -466,10 +466,11 @@ fn post_media(
     post_id: &str,
     canonical_url: &str,
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
+    // The cover is a thumbnail of the post, not part of it: only the post's
+    // own images and files are its media. It used to come first, so media
+    // without their own id keep the keys they had, counted after its slot.
     let mut candidates = Vec::new();
-    if let Some(url) = text(post, "coverImageUrl") {
-        candidates.push((None, original_cover_url(url), None));
-    }
+    let former_cover_slot = usize::from(text(post, "coverImageUrl").is_some());
     let body = post.get("body");
     for key in ["images", "files"] {
         if let Some(values) = body
@@ -525,7 +526,7 @@ fn post_media(
         let stable_id = source_id
             .filter(|id| !id.trim().is_empty())
             .map(|id| format!("fanbox:{post_id}:{id}"))
-            .unwrap_or_else(|| format!("fanbox:{post_id}:{}", media.len()));
+            .unwrap_or_else(|| format!("fanbox:{post_id}:{}", media.len() + former_cover_slot));
         media.push(
             MediaDescriptorBuilder::new(stable_id, media.len() as u32, url)
                 .canonical_url(canonical_url)
@@ -584,14 +585,6 @@ fn safe_html_media_url(raw: &str, kind: HtmlMediaKind) -> Option<String> {
             .any(|domain| host == *domain || host.ends_with(&format!(".{domain}"))),
     };
     trusted.then(|| url.to_string())
-}
-
-fn original_cover_url(raw: &str) -> String {
-    static TRANSFORM: OnceLock<Regex> = OnceLock::new();
-    TRANSFORM
-        .get_or_init(|| Regex::new(r"/c/[0-9A-Za-z_]+/").expect("valid FANBOX transform regex"))
-        .replace(raw, "/")
-        .into_owned()
 }
 
 fn push_media_candidate(
@@ -700,7 +693,7 @@ fn file_name_from_url(raw: &str) -> Option<String> {
 }
 
 fn html_media_regex() -> &'static Regex {
-    static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
         Regex::new(r#"(?:href=\"([^\"]+)\"|data-src-original=\"([^\"]+)\")"#)
             .expect("valid FANBOX media regex")
@@ -863,13 +856,15 @@ mod tests {
         .unwrap();
         let post = normalize_post(discovered, fixture).unwrap();
         assert_eq!(post.name.as_deref(), Some("A FANBOX post"));
-        assert_eq!(post.media.len(), 4);
+        assert_eq!(post.media.len(), 3);
         assert_eq!(post.media[0].position, 0);
+        assert!(post.media.iter().all(|media| !media.url.contains("cover")));
+        // Media without their own id keep the keys they had with the cover.
         assert_eq!(
-            post.media[0].url,
-            "https://downloads.fanbox.cc/images/cover.jpg"
+            post.media.iter().map(|media| media.stable_id.as_str()).collect::<Vec<_>>(),
+            vec!["fanbox:112233:image-1", "fanbox:112233:file-1", "fanbox:112233:3"]
         );
-        assert_eq!(post.media[3].position, 3);
+        assert_eq!(post.media[2].position, 2);
         assert!(!crate::media::is_unsupported_archive("attachment.zip"));
         assert!(crate::media::is_unsupported_archive("attachment.rar"));
         assert!(post

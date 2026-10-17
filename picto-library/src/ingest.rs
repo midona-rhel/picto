@@ -908,7 +908,6 @@ mod weak_name_tests {
             "rule34_1263248",
             "twitter_2085395535410712592",
             "ehentai_8df0b5400a",
-            "idolcomplex_1084425",
             // OnlyFans file stems ("0ig3r76odf_source", "3840x5766_<hex>")
             // never become names because the provider emits a title. Plain
             // hexadecimal stems are covered in the test above.

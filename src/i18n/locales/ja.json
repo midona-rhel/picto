@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "項目を星 1 つに評価しました",
   "Rated {value0} items 1 star": "{value0} 件を星 1 つに評価しました",
   "Delete undo is disabled. This cannot be undone.": "削除の取り消しは無効です。この操作は取り消せません。",
-  "This delete can no longer be undone. Delete permanently anyway?": "この削除は取り消せなくなりました。それでも完全に削除しますか？"
+  "This delete can no longer be undone. Delete permanently anyway?": "この削除は取り消せなくなりました。それでも完全に削除しますか？",
+  "The next items could not be loaded.": "次の項目を読み込めませんでした。"
 }

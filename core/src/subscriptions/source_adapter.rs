@@ -2,7 +2,7 @@ use serde::Serialize;
 use url::Url;
 
 use crate::subscriptions::sites::{
-    build_url, normalize_archive_creator_url, normalize_baraag_username,
+    build_url, normalize_archive_creator_url,
     normalize_ehentai_gallery_url, normalize_fanbox_creator, normalize_furaffinity_username,
     normalize_newgrounds_username, normalize_onlyfans_creator, normalize_patreon_creator,
     normalize_subscribestar_query, normalize_tumblr_blog, normalize_twitter_username, site_by_id,
@@ -47,9 +47,6 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
                     .map(ToOwned::to_owned)
             })
             .unwrap_or_else(|| trimmed.to_string());
-    }
-    if site_id == "baraag" && query_kind == "user" {
-        return normalize_baraag_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "deviantart" && query_kind == "user" {
         return build_url("deviantart", trimmed)
@@ -137,9 +134,6 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
                 .to_string(),
         );
     }
-    if site_id == "baraag" {
-        normalize_baraag_username(query_text)?;
-    }
     if site_id == "deviantart" && build_url("deviantart", query_text).is_none() {
         return Err(
             "DeviantArt subscriptions require a safe username or canonical profile/gallery URL"
@@ -179,11 +173,8 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
             | "rule34"
             | "danbooru"
             | "yandere"
-            | "konachan"
             | "safebooru"
             | "e621"
-            | "idolcomplex"
-            | "sankaku"
     ) {
         if let Some(token) = query_text.split_whitespace().find(|token| {
             let token = token.to_ascii_lowercase();
@@ -300,10 +291,6 @@ mod tests {
             "artist-name"
         );
         assert_eq!(
-            normalize_query_text("baraag", "user", "https://baraag.net/@Blue_/media"),
-            "Blue_"
-        );
-        assert_eq!(
             normalize_query_text(
                 "deviantart",
                 "user",
@@ -345,10 +332,6 @@ mod tests {
         assert!(validate_query_text("danbooru", "1girl id:<123").is_err());
         assert!(validate_query_text("gelbooru", "1girl sort:id:asc").is_err());
         assert!(validate_query_text("danbooru", "1girl order:id_asc").is_err());
-        assert!(validate_query_text("idolcomplex", "solo").is_ok());
-        assert!(validate_query_text("idolcomplex", "solo id_range:123").is_err());
-        assert!(validate_query_text("sankaku", "solo rating:safe").is_ok());
-        assert!(validate_query_text("sankaku", "solo order:random").is_err());
         assert!(validate_query_text("pixivuser", "173530").is_ok());
         assert!(validate_query_text("pixivuser", "artist-name").is_err());
         assert!(validate_query_text("hentaifoundry", "artist-name").is_ok());
@@ -358,9 +341,6 @@ mod tests {
         )
         .is_ok());
         assert!(validate_query_text("hentaifoundry", "artist/name").is_err());
-        assert!(validate_query_text("baraag", "@Blue_").is_ok());
-        assert!(validate_query_text("baraag", "https://baraag.net/@Blue_/media").is_ok());
-        assert!(validate_query_text("baraag", "https://example.com/@Blue_").is_err());
         assert!(validate_query_text("deviantart", "artist-name").is_ok());
         assert!(validate_query_text(
             "deviantart",
@@ -474,7 +454,7 @@ mod tests {
 
     #[test]
     fn public_booru_sources_are_search_only_and_reserve_order_tokens() {
-        for site_id in ["rule34", "yandere", "konachan", "safebooru", "e621"] {
+        for site_id in ["rule34", "yandere", "safebooru", "e621"] {
             assert_eq!(infer_query_kind(site_id), "search");
             assert!(validate_query_kind(site_id, "search").is_ok());
             assert!(validate_query_kind(site_id, "user").is_err());
