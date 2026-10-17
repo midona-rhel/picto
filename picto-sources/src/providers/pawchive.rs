@@ -105,6 +105,11 @@ mod tests {
             .media
             .iter()
             .all(|media| media.url.starts_with("https://file.pawchive.pw/data/")));
+        // The file host answers a browser User-Agent with 403 Forbidden.
+        assert!(post.media.iter().all(|media| {
+            media.headers.get("User-Agent").map(String::as_str)
+                == Some(crate::http::APPLICATION_USER_AGENT)
+        }));
         assert!(post
             .tags
             .contains(&CanonicalTag::new("series", "Example Series")));
