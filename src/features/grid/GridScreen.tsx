@@ -810,6 +810,9 @@ export function GridScreen({
     scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
+  const reviewDestinationRef = useRef<{ mode: 'quicklook' | 'detail'; itemId: number | null } | null>(null);
+  const reviewPaused = useAtomValue(confirmModalAtom).open;
+
   /** Show `itemId` in the review's view (Quick Look or detail), or close it. */
   const showReviewItem = useCallback((mode: 'quicklook' | 'detail', itemId: number | null) => {
     const next = itemId == null ? null : createViewerSession(itemsRef.current, itemId);
@@ -842,23 +845,35 @@ export function GridScreen({
    * If the save fails or is cancelled, the view goes back to the item.
    */
   const reviewInboxItem = useCallback((itemId: number, decision: InboxReviewDecision) => {
+    // A reject that deletes asks first; nothing else is reviewed until it is answered.
+    if (store.get(confirmModalAtom).open) return;
     const currentItems = itemsRef.current;
     const index = currentItems.findIndex((item) => item.root_id === itemId);
     const nextItemId = index < 0
       ? null
       : currentItems[index + 1]?.root_id ?? currentItems[index - 1]?.root_id ?? null;
-    const mode = quickLookSessionRef.current ? 'quicklook' : 'detail';
+    const mode: 'quicklook' | 'detail' = quickLookSessionRef.current ? 'quicklook' : 'detail';
     // A scroll still coasting through this item must not carry into the next.
     suppressScrollMomentum();
     showReviewItem(mode, nextItemId);
+    // Where this review left the view. Only while the view is still there
+    // (and this is still the latest review) may a failed save bring the item back.
+    const destination = { mode, itemId: nextItemId };
+    reviewDestinationRef.current = destination;
 
     const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
     const saved = decision === 'reject'
       ? entityMutations.rejectTarget(target)
       : entityMutations.setTargetLifecycle(target, 'active').then(() => true);
     const returnToItem = () => {
-      const stillOpen = mode === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current;
-      if (stillOpen && itemsRef.current.some((item) => item.root_id === itemId)) showReviewItem(mode, itemId);
+      if (reviewDestinationRef.current !== destination) return;
+      reviewDestinationRef.current = null;
+      const session = mode === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current;
+      // The last item closes the view, so "still there" is "still closed".
+      const stillThere = destination.itemId == null
+        ? session == null
+        : session?.currentItemId === destination.itemId;
+      if (stillThere && itemsRef.current.some((item) => item.root_id === itemId)) showReviewItem(mode, itemId);
     };
     void saved
       .then((committed) => { if (!committed) returnToItem(); })
@@ -1686,6 +1701,7 @@ export function GridScreen({
         <InboxReviewControls
           itemId={inboxReviewItemId}
           onReview={reviewInboxItem}
+          paused={reviewPaused}
         />
       ) : null}
 

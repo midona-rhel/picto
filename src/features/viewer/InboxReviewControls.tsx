@@ -28,6 +28,11 @@ interface InboxReviewControlsProps {
    * in the background, coming back to this item if the save does not happen.
    */
   onReview: (itemId: number, decision: InboxReviewDecision) => void;
+  /**
+   * While a review waits on a question (a reject that deletes asks first),
+   * the controls take no input, and their shortcuts reach nothing else.
+   */
+  paused?: boolean;
 }
 
 // Matches reviewFlash in the stylesheet.
@@ -37,7 +42,7 @@ const FLASH_DURATION_MS = 360;
  * Accept and Reject for the item being viewed. The controls stay put from
  * one item to the next; a press only flashes the button it hit.
  */
-export function InboxReviewControls({ itemId, onReview }: InboxReviewControlsProps) {
+export function InboxReviewControls({ itemId, onReview, paused = false }: InboxReviewControlsProps) {
   const [flash, setFlash] = useState<{ decision: InboxReviewDecision; key: number } | null>(null);
   // The item last reviewed, until the owner moves on: a second press (or a
   // press racing the next render) must not review it twice.
@@ -55,13 +60,13 @@ export function InboxReviewControls({ itemId, onReview }: InboxReviewControlsPro
   useEffect(() => () => clearTimeout(flashTimer.current), []);
 
   const review = useCallback((decision: InboxReviewDecision) => {
-    if (reviewedItemId.current === itemId) return;
+    if (paused || reviewedItemId.current === itemId) return;
     reviewedItemId.current = itemId;
     setFlash((current) => ({ decision, key: (current?.key ?? 0) + 1 }));
     clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), FLASH_DURATION_MS);
     onReview(itemId, decision);
-  }, [itemId, onReview]);
+  }, [itemId, onReview, paused]);
 
   useShortcutScope((event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -88,6 +93,7 @@ export function InboxReviewControls({ itemId, onReview }: InboxReviewControlsPro
           type="button"
           className={`${styles.action} ${styles.accept} ${flash?.decision === 'accept' ? styles.chosen : ''}`}
           aria-label={t("Accept item")}
+          disabled={paused}
           onClick={() => review('accept')}
         >
           <span key={flash?.decision === 'accept' ? flash.key : 0} className={styles.glow} aria-hidden="true" />
@@ -100,6 +106,7 @@ export function InboxReviewControls({ itemId, onReview }: InboxReviewControlsPro
           type="button"
           className={`${styles.action} ${styles.reject} ${flash?.decision === 'reject' ? styles.chosen : ''}`}
           aria-label={t("Reject item")}
+          disabled={paused}
           onClick={() => review('reject')}
         >
           <span key={flash?.decision === 'reject' ? flash.key : 0} className={styles.glow} aria-hidden="true" />

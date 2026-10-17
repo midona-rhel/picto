@@ -87,6 +87,20 @@ describe('InboxReviewControls', () => {
     expect(onReview).toHaveBeenCalledTimes(3);
   });
 
+  it('takes no input while a review waits on a question, then resumes', () => {
+    const onReview = vi.fn();
+    const { rerender } = render(<InboxReviewControls itemId={43} onReview={onReview} paused />);
+
+    fireEvent.keyDown(window, { key: 'x' });
+    fireEvent.keyDown(window, { key: 'z' });
+    expect(screen.getByRole('button', { name: 'Reject item' })).toBeDisabled();
+    expect(onReview).not.toHaveBeenCalled();
+
+    rerender(<InboxReviewControls itemId={43} onReview={onReview} />);
+    fireEvent.keyDown(window, { key: 'z' });
+    expect(onReview).toHaveBeenCalledWith(43, 'accept');
+  });
+
   it('ignores repeated and modified key presses', () => {
     const onReview = vi.fn();
     render(<InboxReviewControls itemId={42} onReview={onReview} />);
