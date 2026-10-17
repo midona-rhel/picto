@@ -1,4 +1,5 @@
 pub mod pixiv_oauth;
+pub mod retired_sites;
 pub mod sites;
 pub mod source_adapter;
 

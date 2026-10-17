@@ -1376,7 +1376,7 @@ fn write_transition(
         .map_err(|error| error.to_string())
 }
 
-fn settle_run(
+pub(crate) fn settle_run(
     transaction: &Transaction<'_>,
     run_id: i64,
     now: &str,

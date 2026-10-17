@@ -142,7 +142,7 @@ impl LibraryApplication {
         }
         let blobs = BlobStore::open(&root)
             .map_err(|error| format!("Failed to open blob store: {error}"))?;
-        Ok(Self {
+        let application = Self {
             root,
             library: Arc::new(library),
             blobs: Arc::new(blobs),
@@ -152,7 +152,19 @@ impl LibraryApplication {
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
             ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
             import_start: std::sync::Mutex::new(()),
-        })
+        };
+        // Retired sources: pause their subscriptions with a note and remove
+        // their saved sign-ins, once.
+        match crate::subscriptions::retired_sites::settle_retired_sites(&application) {
+            Ok(settled) if settled != Default::default() => tracing::info!(
+                paused_queries = settled.paused_queries,
+                removed_credentials = settled.removed_credentials,
+                "Retired sources: paused their subscriptions and removed their sign-ins"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Could not settle retired sources"),
+        }
+        Ok(application)
     }
 
     pub fn root(&self) -> &Path {

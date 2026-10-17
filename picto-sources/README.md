@@ -46,10 +46,10 @@ registry. Provider fixture tests and live certification use that production path
 
 | Family | Providers | Reused composition |
 |---|---|---|
-| Booru APIs | Danbooru, e621, Gelbooru, Rule34, Safebooru, Yande.re, Konachan, Idol Complex, Sankaku | JSON/XML page request, keyset/page cursor, one-media post mapping, category tags |
+| Booru APIs | Danbooru, e621, Gelbooru, Rule34, Safebooru, Yande.re | JSON/XML page request, keyset/page cursor, one-media post mapping, category tags |
 | Creator APIs | Pixiv search, Pixiv user, FANBOX | JSON pagination, multi-media post mapping, creator/general tags |
 | Paid creator feeds | Patreon, SubscribeStar, OnlyFans | Opaque cursors, access warnings, multi-media posts; OnlyFans adds purchases/messages/feed partitions and DRM media resolution |
-| Social/account feeds | Baraag, DeviantArt, Twitter/X, Newgrounds, Fur Affinity, Hentai Foundry | Account/query normalization, HTML or JSON discovery, post-detail mapping |
+| Social/account feeds | DeviantArt, Twitter/X, Newgrounds, Fur Affinity, Hentai Foundry | Account/query normalization, HTML or JSON discovery, post-detail mapping |
 | Gallery/archive feeds | E-Hentai/ExHentai, Pawchive | Paged gallery/archive discovery, atomic collection assembly, bounded media downloads |
 
 Family fixtures prove shared composition; every provider also owns focused parser and cursor tests.

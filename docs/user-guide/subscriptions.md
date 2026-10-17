@@ -31,12 +31,8 @@ grouping).
 | Danbooru | Search | `1girl solo` | Optional |
 | Safebooru | Search | `1girl solo` | Optional |
 | Yande.re | Search | `landscape` | Optional |
-| Konachan | Search | `landscape` | Optional |
 | e621 | Search | `canine solo` | Optional |
-| Idol Complex | Search | `solo` | Recommended for full access |
-| Sankaku | Search | `solo rating:safe` | Recommended for full access |
 | Hentai Foundry | Account | `username` | Optional |
-| Baraag | Account | `username` | Optional |
 | DeviantArt | Account | `username` | Optional |
 | Twitter / X | Account | `username` | Required |
 | Newgrounds | Account | `username` | Recommended for full access |
@@ -50,6 +46,10 @@ grouping).
 
 "Search" sources take tags or search text. "Account" sources take a user name, ID or creator URL.
 Anonymous Danbooru searches allow at most two tags.
+
+Konachan, Sankaku, Idol Complex and Baraag are no longer supported. Subscriptions to them are paused
+with a note saying so, and their saved logins are removed. Items they already imported stay in the
+library.
 
 E-Hentai is not in the source picker. See [Gallery downloads](#gallery-downloads).
 
