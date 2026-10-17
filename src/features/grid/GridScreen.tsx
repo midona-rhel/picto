@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
+import { createInboxReviewer, type InboxReviewer } from './inboxReview';
 import { getShortcut, gridRemovalAction, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import {
   activeNodeIdAtom,
@@ -810,17 +811,6 @@ export function GridScreen({
     scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
-  // Items whose review is still being saved, and saved items the list has
-  // not dropped yet: the review must not land on them again.
-  const reviewsInFlightRef = useRef(new Set<number>());
-  const reviewedLeavingRef = useRef(new Set<number>());
-  useEffect(() => {
-    const listed = new Set(items.map((item) => item.root_id));
-    for (const id of reviewedLeavingRef.current) {
-      if (!listed.has(id)) reviewedLeavingRef.current.delete(id);
-    }
-  }, [items]);
-  const reviewDestinationRef = useRef<{ mode: 'quicklook' | 'detail'; itemId: number | null } | null>(null);
   const reviewPaused = useAtomValue(confirmModalAtom).open;
 
   /** Show `itemId` in the review's view (Quick Look or detail), or close it. */
@@ -846,72 +836,37 @@ export function GridScreen({
     });
   }, [closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
 
-  /**
-   * Accept or reject the item under review. The view moves to the next item
-   * at once, chosen now by id, and the change is saved in the background:
-   * waiting for the save made every review take most of a second, and the
-   * view then found its place by index after the item had left the list,
-   * which could briefly show the wrong item (one an undo had just put back).
-   * If the save fails or is cancelled, the view goes back to the item.
-   */
-  const reviewInboxItem = useCallback((itemId: number, decision: InboxReviewDecision) => {
-    // A reject that deletes asks first; nothing else is reviewed until it is answered.
-    if (store.get(confirmModalAtom).open) return;
-    const inFlight = reviewsInFlightRef.current;
-    if (inFlight.has(itemId)) return;
-    const currentItems = itemsRef.current;
-    const index = currentItems.findIndex((item) => item.root_id === itemId);
-    const leaving = reviewedLeavingRef.current;
-    const open = (item: { root_id: number }) =>
-      item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
-    const nextItemId = index < 0
-      ? null
-      : currentItems.slice(index + 1).find(open)?.root_id
-        ?? currentItems.slice(0, index).reverse().find(open)?.root_id
-        ?? null;
-    inFlight.add(itemId);
-    const mode: 'quicklook' | 'detail' = quickLookSessionRef.current ? 'quicklook' : 'detail';
-    // A scroll still coasting through this item must not carry into the next.
-    suppressScrollMomentum();
-    showReviewItem(mode, nextItemId);
-    // With nothing left to show, the departing item must not stay selected
-    // while it saves; a failed save reselects it when it comes back.
-    if (nextItemId == null) entityMutations.settleSelectionAfterMutation();
-    // Where this review left the view. Only while the view is still there
-    // (and this is still the latest review) may a failed save bring the item back.
-    const destination = { mode, itemId: nextItemId };
-    reviewDestinationRef.current = destination;
-
-    const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
-    // The selection already moved to the next item; the save leaves it there.
-    const saved = decision === 'reject'
-      ? entityMutations.rejectTarget(target, { keepSelection: true })
-      : entityMutations.setTargetLifecycle(target, 'active', { keepSelection: true }).then(() => true);
-    const returnToItem = () => {
-      if (reviewDestinationRef.current !== destination) return;
-      reviewDestinationRef.current = null;
-      const session = mode === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current;
-      // The last item closes the view, so "still there" is "still closed".
-      const stillThere = destination.itemId == null
-        ? session == null
-        : session?.currentItemId === destination.itemId;
-      if (stillThere && itemsRef.current.some((item) => item.root_id === itemId)) showReviewItem(mode, itemId);
-    };
-    void saved
-      .then((committed) => {
-        inFlight.delete(itemId);
-        if (!committed) returnToItem();
-        else if (itemsRef.current.some((item) => item.root_id === itemId)) leaving.add(itemId);
-      })
-      .catch((reason) => {
-        inFlight.delete(itemId);
-        returnToItem();
-        showErrorNotification({
-          title: decision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
-          message: reason instanceof Error ? reason.message : String(reason),
-        });
-      });
-  }, [showReviewItem]);
+  const showReviewItemRef = useRef(showReviewItem);
+  showReviewItemRef.current = showReviewItem;
+  const reviewerRef = useRef<InboxReviewer | null>(null);
+  reviewerRef.current ??= createInboxReviewer({
+    items: () => itemsRef.current,
+    view: () => (quickLookSessionRef.current ? 'quicklook' : 'detail'),
+    shownItemId: (view) =>
+      (view === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current)?.currentItemId ?? null,
+    show: (view, itemId) => showReviewItemRef.current(view, itemId),
+    clearSelection: () => entityMutations.settleSelectionAfterMutation(),
+    isAsking: () => store.get(confirmModalAtom).open,
+    suppressScrollMomentum,
+    save: (itemId, decision) => {
+      const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
+      // The selection already moved on; the save leaves it there.
+      return decision === 'reject'
+        ? entityMutations.rejectTarget(target, { keepSelection: true })
+        : entityMutations.setTargetLifecycle(target, 'active', { keepSelection: true }).then(() => true);
+    },
+    reportFailure: (decision, reason) => showErrorNotification({
+      title: decision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
+      message: reason instanceof Error ? reason.message : String(reason),
+    }),
+  });
+  const reviewer = reviewerRef.current;
+  useEffect(() => { reviewer.itemsChanged(); }, [items, reviewer]);
+  /** Accept or reject the item under review (see `inboxReview.ts`). */
+  const reviewInboxItem = useCallback(
+    (itemId: number, decision: InboxReviewDecision) => reviewer.review(itemId, decision),
+    [reviewer],
+  );
 
   const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
     const canImport = gridScope.kind !== 'trash'

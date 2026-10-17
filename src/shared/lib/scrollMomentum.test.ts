@@ -44,6 +44,13 @@ describe('suppressScrollMomentum', () => {
     expect(wheel(55).defaultPrevented).toBe(false);
   });
 
+  it('lets a scroll in the other direction through at once', () => {
+    coasting(20);
+    suppressScrollMomentum();
+    expect(wheel(-12).defaultPrevented).toBe(false);
+    expect(wheel(-12).defaultPrevented).toBe(false);
+  });
+
   it('does nothing when no scroll is under way', () => {
     vi.advanceTimersByTime(1_000);
     suppressScrollMomentum();

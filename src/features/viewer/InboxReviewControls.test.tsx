@@ -79,7 +79,7 @@ describe('InboxReviewControls', () => {
     fireEvent.keyDown(window, { key: 'x' });
     expect(onReview).toHaveBeenLastCalledWith(43, 'reject');
 
-    // The save of 43 failed: the view is back on it.
+    // The view comes back to 43 (the owner's rollback is tested in inboxReview.test.ts).
     rerender(<InboxReviewControls itemId={44} onReview={onReview} />);
     rerender(<InboxReviewControls itemId={43} onReview={onReview} />);
     fireEvent.keyDown(window, { key: 'z' });
