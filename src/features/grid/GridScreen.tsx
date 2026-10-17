@@ -810,6 +810,16 @@ export function GridScreen({
     scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
+  // Items whose review is still being saved, and saved items the list has
+  // not dropped yet: the review must not land on them again.
+  const reviewsInFlightRef = useRef(new Set<number>());
+  const reviewedLeavingRef = useRef(new Set<number>());
+  useEffect(() => {
+    const listed = new Set(items.map((item) => item.root_id));
+    for (const id of reviewedLeavingRef.current) {
+      if (!listed.has(id)) reviewedLeavingRef.current.delete(id);
+    }
+  }, [items]);
   const reviewDestinationRef = useRef<{ mode: 'quicklook' | 'detail'; itemId: number | null } | null>(null);
   const reviewPaused = useAtomValue(confirmModalAtom).open;
 
@@ -847,11 +857,19 @@ export function GridScreen({
   const reviewInboxItem = useCallback((itemId: number, decision: InboxReviewDecision) => {
     // A reject that deletes asks first; nothing else is reviewed until it is answered.
     if (store.get(confirmModalAtom).open) return;
+    const inFlight = reviewsInFlightRef.current;
+    if (inFlight.has(itemId)) return;
     const currentItems = itemsRef.current;
     const index = currentItems.findIndex((item) => item.root_id === itemId);
+    const leaving = reviewedLeavingRef.current;
+    const open = (item: { root_id: number }) =>
+      item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
     const nextItemId = index < 0
       ? null
-      : currentItems[index + 1]?.root_id ?? currentItems[index - 1]?.root_id ?? null;
+      : currentItems.slice(index + 1).find(open)?.root_id
+        ?? currentItems.slice(0, index).reverse().find(open)?.root_id
+        ?? null;
+    inFlight.add(itemId);
     const mode: 'quicklook' | 'detail' = quickLookSessionRef.current ? 'quicklook' : 'detail';
     // A scroll still coasting through this item must not carry into the next.
     suppressScrollMomentum();
@@ -876,8 +894,13 @@ export function GridScreen({
       if (stillThere && itemsRef.current.some((item) => item.root_id === itemId)) showReviewItem(mode, itemId);
     };
     void saved
-      .then((committed) => { if (!committed) returnToItem(); })
+      .then((committed) => {
+        inFlight.delete(itemId);
+        if (!committed) returnToItem();
+        else if (itemsRef.current.some((item) => item.root_id === itemId)) leaving.add(itemId);
+      })
       .catch((reason) => {
+        inFlight.delete(itemId);
         returnToItem();
         showErrorNotification({
           title: decision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
