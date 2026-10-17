@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "Arvioitiin kohde yhdellä tähdellä",
   "Rated {value0} items 1 star": "Arvioitiin {value0} kohdetta yhdellä tähdellä",
   "Delete undo is disabled. This cannot be undone.": "Poistojen kumoaminen on poistettu käytöstä. Tätä ei voi kumota.",
-  "This delete can no longer be undone. Delete permanently anyway?": "Tätä poistoa ei voi enää kumota. Poistetaanko silti pysyvästi?"
+  "This delete can no longer be undone. Delete permanently anyway?": "Tätä poistoa ei voi enää kumota. Poistetaanko silti pysyvästi?",
+  "The next items could not be loaded.": "Seuraavia kohteita ei voitu ladata."
 }

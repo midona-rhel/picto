@@ -44,12 +44,18 @@ export interface MediaViewProps {
   ratingItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
+  /**
+   * The current item once its image is on screen, else null: the previous
+   * image stays up until the next one's thumbnail is decoded.
+   */
+  onDisplayedItemChange?: (itemId: number | null) => void;
 }
 
 const NAV_SIZE = 120;
 
 export function MediaView({
   items, currentIndex, totalCount, windowStart = 0, backLabel, recordItemId, ratingItemId, onNavigate, onClose,
+  onDisplayedItemChange,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
@@ -111,6 +117,21 @@ export function MediaView({
     isVideo: !isImage,
     neighborHashes,
   });
+
+  // An image is shown once its thumbnail has decoded (or failed, showing its
+  // broken state); other media once their renderer reports ready.
+  const [rendererReadyHash, setRendererReadyHash] = useState<string | null>(null);
+  const markRendererReady = useCallback(() => setRendererReadyHash(currentHash), [currentHash]);
+  const shownItemId = !currentHash
+    ? null
+    : isImage
+      ? (pipeline.displayedHash === currentHash && pipeline.thumbSettled ? currentItemId : null)
+      : (rendererReadyHash === currentHash ? currentItemId : null);
+  useEffect(() => {
+    onDisplayedItemChange?.(shownItemId);
+  }, [shownItemId, onDisplayedItemChange]);
+  // Closing leaves nothing shown, so a reopened viewer starts not ready.
+  useEffect(() => () => onDisplayedItemChange?.(null), [onDisplayedItemChange]);
 
   // ── Image size — derived from the DISPLAYED item, not the requested one ──
   const displayedItem = pipeline.displayedHash
@@ -261,6 +282,7 @@ export function MediaView({
             onFlashPlaybackChange={setFlashPlayback}
             onFlashContextMenu={contextMenu.open}
             onFrameCaptureChange={handleFrameCaptureChange}
+            onReady={markRendererReady}
           />
         </div>
       ) : !isImage ? (
@@ -275,6 +297,7 @@ export function MediaView({
           onPdfZoomPercentChange={setPdfZoomPercent}
           mediaAutoPlay={rendererKind === 'video' ? previewPreferences.videoAutoPlay : undefined}
           mediaLoop={rendererKind === 'video' ? previewPreferences.videoLoop : undefined}
+          onReady={markRendererReady}
         />
       ) : (
         <div ref={containerRef} className={`${styles.zoomContainer} ${zoom.isDragging ? styles.dragging : ''}`}

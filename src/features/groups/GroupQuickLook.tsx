@@ -8,6 +8,7 @@ interface GroupQuickLookContentProps {
   onNavigate: (delta: number) => void;
   onClose: () => void;
   recordItemId?: number | null;
+  onShownChange?: (shown: boolean) => void;
 }
 
 export function GroupQuickLookContent({
@@ -17,6 +18,7 @@ export function GroupQuickLookContent({
   onNavigate,
   onClose,
   recordItemId,
+  onShownChange,
 }: GroupQuickLookContentProps) {
   return (
     <div className={styles.frame} data-group-quick-look>
@@ -29,6 +31,7 @@ export function GroupQuickLookContent({
         onNavigateRoot={onNavigate}
         onClose={onClose}
         recordItemId={recordItemId}
+        onShownChange={onShownChange}
       />
     </div>
   );

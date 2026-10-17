@@ -41,11 +41,17 @@ interface QuickLookContentProps extends QuickLookProps {
   thumbnailReady?: boolean;
   thumbnailUrlOverride?: string;
   onReady: () => void;
+  /**
+   * The current item once it is on screen, else null: an image once its
+   * thumbnail has decoded (or failed), other media once their player or
+   * renderer reports ready.
+   */
+  onShownItemChange?: (itemId: number | null) => void;
 }
 
 export function QuickLookContent({
   items, currentIndex, totalCount, windowStart = 0, metadataRootId, recordItemId, onNavigate, onClose, onReady,
-  thumbnailReady = false, thumbnailUrlOverride,
+  thumbnailReady = false, thumbnailUrlOverride, onShownItemChange,
 }: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
@@ -97,8 +103,19 @@ export function QuickLookContent({
   });
 
   useEffect(() => {
-    if (!isImage || thumbnailReady || pipeline.thumbLoaded || pipeline.fullVisible) onReady();
-  }, [isImage, onReady, pipeline.fullVisible, pipeline.thumbLoaded, thumbnailReady]);
+    // A failed load is settled too: it shows its broken state.
+    if (!isImage || thumbnailReady || pipeline.thumbLoaded || pipeline.thumbSettled || pipeline.fullVisible) onReady();
+  }, [isImage, onReady, pipeline.fullVisible, pipeline.thumbLoaded, pipeline.thumbSettled, thumbnailReady]);
+
+  const [rendererReadyHash, setRendererReadyHash] = useState<string | null>(null);
+  const markRendererReady = useCallback(() => setRendererReadyHash(currentHash), [currentHash]);
+  const shownItemId = !currentHash
+    ? null
+    : isImage
+      ? (pipeline.displayedHash === currentHash && (pipeline.thumbSettled || thumbnailReady) ? currentItemId : null)
+      : (rendererReadyHash === currentHash ? currentItemId : null);
+  useEffect(() => { onShownItemChange?.(shownItemId); }, [shownItemId, onShownItemChange]);
+  useEffect(() => () => onShownItemChange?.(null), [onShownItemChange]);
 
   // Image size from displayed item
   const displayedItem = pipeline.displayedHash
@@ -189,6 +206,7 @@ export function QuickLookContent({
             src={mediaFileUrl(thumbHash, currentMime)}
             waveformSrc={thumbUrl}
             muted={false}
+            onReady={markRendererReady}
           />
         ) : isVideo ? (
           <VideoPlayer
@@ -196,12 +214,14 @@ export function QuickLookContent({
             src={mediaFileUrl(thumbHash, currentMime)}
             autoPlay={previewPreferences.videoAutoPlay}
             loop={previewPreferences.videoLoop}
+            onReady={markRendererReady}
           />
         ) : !isImage ? (
           <DetailMediaRenderer
             hash={currentHash}
             mimeType={currentMime}
             displayName={currentItem.name}
+            onReady={markRendererReady}
           />
         ) : (
           <ImageCrossfadeFrame
