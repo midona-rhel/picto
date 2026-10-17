@@ -761,9 +761,15 @@ fn post_media(
         });
     }
 
+    // The file host refuses a browser User-Agent that comes without a
+    // browser's session (403 Forbidden), so files are fetched as Picto.
     let headers = BTreeMap::from([
         ("Accept-Encoding".to_string(), "identity".to_string()),
         ("Referer".to_string(), canonical_url.to_string()),
+        (
+            "User-Agent".to_string(),
+            crate::http::APPLICATION_USER_AGENT.to_string(),
+        ),
     ]);
     let mut seen = BTreeSet::new();
     let mut media = Vec::new();
