@@ -63,6 +63,28 @@ describe('permanentDeleteMessage', () => {
     if (confirmRetry) expect(remove).toHaveBeenLastCalledWith(target, false);
   });
 
+  it('asks one question at a time when deletes overlap', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ undoDeleteLimit: 0 } as Awaited<ReturnType<typeof getSettings>>);
+    vi.mocked(getSelectionSummary).mockResolvedValue({ selected_count: 1, media_count: 1 } as SelectionSummary);
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const store = getDefaultStore();
+    const first = requestPermanentDelete({ kind: 'explicit', root_ids: [4] }, 1, { remove });
+    await vi.waitFor(() => expect(store.get(confirmModalAtom).open).toBe(true));
+    const firstQuestion = store.get(confirmModalAtom);
+    const second = requestPermanentDelete({ kind: 'explicit', root_ids: [5] }, 1, { remove });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The second waits; it does not replace the open question.
+    expect(store.get(confirmModalAtom)).toBe(firstQuestion);
+
+    firstQuestion.onCancel?.();
+    await expect(first).resolves.toBe(false);
+    await vi.waitFor(() => expect(store.get(confirmModalAtom)).not.toBe(firstQuestion));
+    store.get(confirmModalAtom).onConfirm();
+    await expect(second).resolves.toBe(true);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith({ kind: 'explicit', root_ids: [5] }, false);
+  });
+
   it('does not report success before the confirmed mutation finishes, or after failure', async () => {
     vi.mocked(getSettings).mockResolvedValue({ undoDeleteLimit: 0 } as Awaited<ReturnType<typeof getSettings>>);
     vi.mocked(getSelectionSummary).mockResolvedValue({ selected_count: 1, media_count: 1 } as SelectionSummary);
