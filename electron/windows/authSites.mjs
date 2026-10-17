@@ -1,5 +1,3 @@
-const IDOL_COMPLEX_LOGIN_URL = 'https://login.idol.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=idol-web-app&redirect_uri=https%3A%2F%2Fwww.idolcomplex.com%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fwww.idolcomplex.com%2Fen%2Flogin&theme=black&route=login&lang=en';
-const SANKAKU_LOGIN_URL = 'https://login.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=sankaku-web-app&redirect_uri=https%3A%2F%2Fsankaku.app%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fsankaku.app%2F&theme=black&route=login&lang=en';
 const WIDE_AUTH_WINDOW = Object.freeze({ width: 1000, height: 760, minWidth: 760, minHeight: 640 });
 
 const cookieSite = (id, label, loginUrl, cookieUrl, options = {}) => Object.freeze({
@@ -26,15 +24,6 @@ export const AUTH_SITES = Object.freeze({
     strategy: 'account_api',
     loginUrl: 'https://rule34.xxx/index.php?code=00&page=account&s=login',
     optionsUrl: 'https://rule34.xxx/index.php?page=account&s=options',
-  }),
-  baraag: Object.freeze({
-    id: 'baraag',
-    label: 'Baraag',
-    strategy: 'oauth2',
-    loginUrl: 'https://baraag.net/auth/sign_in',
-    registerUrl: 'https://baraag.net/api/v1/apps',
-    authorizeUrl: 'https://baraag.net/oauth/authorize',
-    tokenUrl: 'https://baraag.net/oauth/token',
   }),
   tumblr: Object.freeze({
     id: 'tumblr',
@@ -142,28 +131,7 @@ export const AUTH_SITES = Object.freeze({
     cookieUrl: 'https://onlyfans.com',
     cookieNames: Object.freeze(['sess', 'auth_id', 'auth_uid']),
   }),
-  idolcomplex: cookieSite(
-    'idolcomplex',
-    'Idol Complex',
-    IDOL_COMPLEX_LOGIN_URL,
-    'https://www.idolcomplex.com',
-    {
-      cookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
-      authenticatedCookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
-    },
-  ),
-  sankaku: cookieSite(
-    'sankaku',
-    'Sankaku',
-    SANKAKU_LOGIN_URL,
-    'https://sankaku.app',
-    {
-      cookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
-      authenticatedCookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
-    },
-  ),
   yandere: cookieSite('yandere', 'Yande.re', 'https://yande.re/user/login', 'https://yande.re'),
-  konachan: cookieSite('konachan', 'Konachan', 'https://konachan.com/user/login', 'https://konachan.com'),
   safebooru: cookieSite('safebooru', 'Safebooru', 'https://safebooru.org/index.php?page=account&s=login&code=00', 'https://safebooru.org'),
   e621: cookieSite(
     'e621',

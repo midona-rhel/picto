@@ -22,8 +22,8 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
 
 | Group | Sources |
 |---|---|
-| Boorus and tag search | Danbooru, e621, Gelbooru, Idol Complex, Konachan, Rule34.xxx, Safebooru, Sankaku, Yande.re |
-| Artists and accounts | Baraag, DeviantArt, Fur Affinity, Hentai Foundry, Newgrounds, Pixiv (search and users), Twitter / X |
+| Boorus and tag search | Danbooru, e621, Gelbooru, Rule34.xxx, Safebooru, Yande.re |
+| Artists and accounts | DeviantArt, Fur Affinity, Hentai Foundry, Newgrounds, Pixiv (search and users), Twitter / X |
 | Creator platforms | OnlyFans, Patreon, pixivFANBOX, SubscribeStar |
 | Galleries and archives | E-Hentai / ExHentai galleries (via **Add Gallery**), Pawchive |
 

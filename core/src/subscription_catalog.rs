@@ -2033,7 +2033,7 @@ mod tests {
             initial_post_limit: Some(1),
             periodic_post_limit: Some(1),
             queries: vec![NewSubscriptionQuery {
-                site_id: "konachan".into(),
+                site_id: "yandere".into(),
                 query_text: "example".into(),
                 display_name: None,
                 notes: None,
@@ -2099,7 +2099,7 @@ mod tests {
                         transaction.execute(
                             "INSERT INTO source_post
                                  (site_id, post_key, root_item_id, created_at, updated_at)
-                             VALUES ('konachan', ?1, ?2, '2026-08-30T00:00:02Z',
+                             VALUES ('yandere', ?1, ?2, '2026-08-30T00:00:02Z',
                                      '2026-08-30T00:00:02Z')",
                             params![format!("post-{offset}"), item_id],
                         )?;
@@ -2222,7 +2222,7 @@ mod tests {
             &application,
             run.run_query_id,
             &crate::subscriptions::NormalizedPost {
-                site_id: "konachan".into(),
+                site_id: "yandere".into(),
                 post_key: "post-0".into(),
                 canonical_url: None,
                 creator_name: None,
