@@ -19,9 +19,23 @@ const NEW_GESTURE_RATIO = 1.6;
 
 let release: (() => void) | null = null;
 
+// The wheel input seen before the switch: whether a gesture is under way,
+// and how strong it was, so the first event after the switch is judged
+// against the old gesture rather than assumed to be part of it.
+let lastWheelAt = Number.NEGATIVE_INFINITY;
+let lastWheelMagnitude = 0;
+if (typeof window !== 'undefined') {
+  window.addEventListener('wheel', (event) => {
+    lastWheelAt = Date.now();
+    lastWheelMagnitude = Math.abs(event.deltaX) + Math.abs(event.deltaY);
+  }, { capture: true, passive: true });
+}
+
 export function suppressScrollMomentum(): void {
   release?.();
-  let lastMagnitude = Number.POSITIVE_INFINITY;
+  // Without recent wheel input, there is no gesture to swallow.
+  if (Date.now() - lastWheelAt > QUIET_MS) return;
+  let lastMagnitude = lastWheelMagnitude;
   let quiet: ReturnType<typeof setTimeout> | undefined;
   const onWheel = (event: WheelEvent) => {
     const magnitude = Math.abs(event.deltaX) + Math.abs(event.deltaY);
@@ -36,7 +50,6 @@ export function suppressScrollMomentum(): void {
     quiet = setTimeout(stop, QUIET_MS);
   };
   const limit = setTimeout(() => stop(), LIMIT_MS);
-  // Without any wheel input, there is no gesture to swallow.
   quiet = setTimeout(stop, QUIET_MS);
   function stop() {
     clearTimeout(quiet);

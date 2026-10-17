@@ -8,10 +8,24 @@ function wheel(deltaY: number): WheelEvent {
 }
 
 describe('suppressScrollMomentum', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  // Each test starts well after the last one's wheel input.
+  let now = Date.now();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    now += 60_000;
+    vi.setSystemTime(now);
+  });
   afterEach(() => { vi.runAllTimers(); vi.useRealTimers(); });
 
+  /** A scroll already coasting when the view switches. */
+  function coasting(deltaY: number) {
+    vi.advanceTimersByTime(1_000);
+    wheel(deltaY);
+    vi.advanceTimersByTime(16);
+  }
+
   it('swallows a coasting scroll until it pauses', () => {
+    coasting(48);
     suppressScrollMomentum();
     for (const delta of [40, 32, 25, 18, 12]) {
       expect(wheel(delta).defaultPrevented).toBe(true);
@@ -22,6 +36,7 @@ describe('suppressScrollMomentum', () => {
   });
 
   it('lets a new, stronger flick through at once', () => {
+    coasting(12);
     suppressScrollMomentum();
     expect(wheel(10).defaultPrevented).toBe(true);
     vi.advanceTimersByTime(16);
@@ -30,12 +45,16 @@ describe('suppressScrollMomentum', () => {
   });
 
   it('does nothing when no scroll is under way', () => {
+    vi.advanceTimersByTime(1_000);
     suppressScrollMomentum();
-    vi.advanceTimersByTime(100);
+    // Not even the first notch of a scroll started right after the switch.
+    expect(wheel(5).defaultPrevented).toBe(false);
+    vi.advanceTimersByTime(16);
     expect(wheel(5).defaultPrevented).toBe(false);
   });
 
   it('never swallows input for long', () => {
+    coasting(8);
     suppressScrollMomentum();
     for (let elapsed = 0; elapsed < 1_300; elapsed += 16) {
       wheel(8);
