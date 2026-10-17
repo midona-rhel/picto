@@ -41,7 +41,44 @@ pub struct RetiredSitesSettled {
 
 /// Pause retired sources' queries with a note and remove their saved
 /// sign-ins. Changes nothing once that is done, so it runs at every open.
+///
+/// The keychain secret goes first and the library row only after it, so a
+/// keychain that refuses this time is tried again at the next open.
 pub fn settle_retired_sites(application: &LibraryApplication) -> Result<RetiredSitesSettled, String> {
+    settle_retired_sites_with(application, crate::credential_store::delete_credential)
+}
+
+fn settle_retired_sites_with(
+    application: &LibraryApplication,
+    delete_secret: impl Fn(&str) -> Result<(), String>,
+) -> Result<RetiredSitesSettled, String> {
+    let saved = application
+        .library()
+        .auxiliary_read(
+            picto_library::database::WorkPriority::CorrectnessRecovery,
+            |connection| {
+                let mut statement =
+                    connection.prepare("SELECT 1 FROM credential WHERE site_id = ?1")?;
+                let mut saved = Vec::new();
+                for (site_id, _) in RETIRED_SITES {
+                    if statement.exists([site_id])? {
+                        saved.push(*site_id);
+                    }
+                }
+                Ok(saved)
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let removable: Vec<&str> = saved
+        .into_iter()
+        .filter(|site_id| match delete_secret(site_id) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(site_id, %error, "Could not remove a retired source's saved sign-in");
+                false
+            }
+        })
+        .collect();
     let now = chrono::Utc::now().to_rfc3339();
     let settled = application
         .library()
@@ -51,7 +88,6 @@ pub fn settle_retired_sites(application: &LibraryApplication) -> Result<RetiredS
             [],
             |transaction, _| {
                 let mut settled = RetiredSitesSettled::default();
-                let mut removed = Vec::new();
                 for (site_id, name) in RETIRED_SITES {
                     let message = retired_site_message(name);
                     settled.paused_queries += transaction.execute(
@@ -62,26 +98,16 @@ pub fn settle_retired_sites(application: &LibraryApplication) -> Result<RetiredS
                            AND NOT (paused = 1 AND last_failure_message IS ?2)",
                         rusqlite::params![site_id, message, now, RETIRED_FAILURE_KIND],
                     )?;
-                    if transaction.execute("DELETE FROM credential WHERE site_id = ?1", [site_id])? != 0 {
-                        removed.push(*site_id);
-                    }
                 }
-                settled.removed_credentials = removed.len();
-                Ok((settled != RetiredSitesSettled::default()).then_some((settled, removed)))
+                for site_id in &removable {
+                    settled.removed_credentials +=
+                        transaction.execute("DELETE FROM credential WHERE site_id = ?1", [site_id])?;
+                }
+                Ok((settled != RetiredSitesSettled::default()).then_some(settled))
             },
         )
         .map_err(|error| error.to_string())?;
-    let Some(((settled, removed), _)) = settled else {
-        return Ok(RetiredSitesSettled::default());
-    };
-    for site_id in removed {
-        // The library row is gone either way; a secret the keychain no longer
-        // holds is nothing to remove.
-        if let Err(error) = crate::credential_store::delete_credential(site_id) {
-            tracing::warn!(site_id, %error, "Could not remove a retired source's saved sign-in");
-        }
-    }
-    Ok(settled)
+    Ok(settled.map(|(settled, _)| settled).unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -105,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_sources_are_paused_with_a_note_and_lose_their_sign_ins_once() {
+    fn retired_sources_are_paused_and_lose_their_sign_ins_keychain_first() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
         application
@@ -131,13 +157,27 @@ mod tests {
             )
             .unwrap();
 
+        // A keychain that refuses keeps the row, so the next open tries again.
         assert_eq!(
-            settle_retired_sites(&application).unwrap(),
+            settle_retired_sites_with(&application, |_| Err("keychain locked".into())).unwrap(),
             RetiredSitesSettled {
                 paused_queries: 1,
+                removed_credentials: 0,
+            }
+        );
+        let deleted = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            settle_retired_sites_with(&application, |site_id| {
+                deleted.borrow_mut().push(site_id.to_string());
+                Ok(())
+            })
+            .unwrap(),
+            RetiredSitesSettled {
+                paused_queries: 0,
                 removed_credentials: 1,
             }
         );
+        assert_eq!(deleted.into_inner(), vec!["sankaku".to_string()]);
         assert_eq!(
             query_state(&application, "sankaku"),
             (true, Some(retired_site_message("Sankaku")))
@@ -159,7 +199,7 @@ mod tests {
 
         // Once is enough.
         assert_eq!(
-            settle_retired_sites(&application).unwrap(),
+            settle_retired_sites_with(&application, |site_id| panic!("{site_id} again")).unwrap(),
             RetiredSitesSettled::default()
         );
     }
