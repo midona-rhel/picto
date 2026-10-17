@@ -812,10 +812,14 @@ export function GridScreen({
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
   const reviewPaused = useAtomValue(confirmModalAtom).open;
-  // Quick Look keeps drawing the previous item until the next one's image is
-  // decoded; the review waits for it so a press never reviews an unseen item.
+  // Quick Look and the media viewer keep drawing the previous item until the
+  // next one's image is decoded; the review waits for it so a press never
+  // reviews an item that is not on screen yet. Collections show at once.
   const [quickLookShownId, setQuickLookShownId] = useState<number | null>(null);
-  const reviewReady = !quickLookSession || quickLookShownId === quickLookSession.currentItemId;
+  const [detailShownId, setDetailShownId] = useState<number | null>(null);
+  const reviewReady = quickLookSession
+    ? quickLookShownId === quickLookSession.currentItemId
+    : !viewerSession || viewerItem?.kind === 'collection' || detailShownId === viewerSession.currentItemId;
 
   /** Show `itemId` in the review's view (Quick Look or detail), or close it. */
   const showReviewItem = useCallback((mode: 'quicklook' | 'detail', itemId: number | null) => {
@@ -1668,6 +1672,7 @@ export function GridScreen({
           recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateRootDetail}
           onClose={closeRootDetail}
+          onDisplayedItemChange={setDetailShownId}
         />
       )}
 

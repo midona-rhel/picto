@@ -44,12 +44,18 @@ export interface MediaViewProps {
   ratingItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
+  /**
+   * The current item once its image is on screen, else null: the previous
+   * image stays up until the next one's thumbnail is decoded.
+   */
+  onDisplayedItemChange?: (itemId: number | null) => void;
 }
 
 const NAV_SIZE = 120;
 
 export function MediaView({
   items, currentIndex, totalCount, windowStart = 0, backLabel, recordItemId, ratingItemId, onNavigate, onClose,
+  onDisplayedItemChange,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.root_id ?? 0;
@@ -111,6 +117,11 @@ export function MediaView({
     isVideo: !isImage,
     neighborHashes,
   });
+
+  const shownItemId = currentHash && pipeline.displayedHash === currentHash ? currentItemId : null;
+  useEffect(() => {
+    onDisplayedItemChange?.(shownItemId);
+  }, [shownItemId, onDisplayedItemChange]);
 
   // ── Image size — derived from the DISPLAYED item, not the requested one ──
   const displayedItem = pipeline.displayedHash
