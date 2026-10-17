@@ -117,19 +117,6 @@ pub static SITES: &[SiteEntry] = &[
         oauth_provider: None,
     },
     SiteEntry {
-        id: "baraag",
-        domain: "baraag.net",
-        credential_owner_site_id: "baraag",
-        name: "Baraag",
-        example_query: "username",
-        supports_query: false,
-        supports_account: true,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        credential_types: OAUTH_CREDENTIAL_TYPES,
-        oauth_provider: Some("mastodon"),
-    },
-    SiteEntry {
         id: "deviantart",
         domain: "deviantart.com",
         credential_owner_site_id: "deviantart",
@@ -234,49 +221,10 @@ pub static SITES: &[SiteEntry] = &[
         oauth_provider: None,
     },
     SiteEntry {
-        id: "idolcomplex",
-        domain: "idolcomplex.com",
-        credential_owner_site_id: "idolcomplex",
-        name: "Idol Complex",
-        example_query: "solo",
-        supports_query: true,
-        supports_account: false,
-        auth_required_for_full_access: true,
-        auth_strictly_required: false,
-        credential_types: COOKIE_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
-        id: "sankaku",
-        domain: "sankaku.app",
-        credential_owner_site_id: "sankaku",
-        name: "Sankaku",
-        example_query: "solo rating:safe",
-        supports_query: true,
-        supports_account: false,
-        auth_required_for_full_access: true,
-        auth_strictly_required: false,
-        credential_types: COOKIE_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
         id: "yandere",
         domain: "yande.re",
         credential_owner_site_id: "yandere",
         name: "Yande.re",
-        example_query: "landscape",
-        supports_query: true,
-        supports_account: false,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        credential_types: COOKIE_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
-        id: "konachan",
-        domain: "konachan.com",
-        credential_owner_site_id: "konachan",
-        name: "Konachan",
         example_query: "landscape",
         supports_query: true,
         supports_account: false,
@@ -355,9 +303,6 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "hentaifoundry" => normalize_hentaifoundry_username(query)
             .ok()
             .and_then(|username| build_hentaifoundry_url(&username)),
-        "baraag" => normalize_mastodon_username(query, "baraag.net")
-            .ok()
-            .and_then(|username| build_mastodon_user_url("baraag.net", &username)),
         "deviantart" => normalize_deviantart_username(query)
             .ok()
             .and_then(|username| build_deviantart_gallery_url(&username)),
@@ -383,10 +328,7 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "onlyfans" => normalize_onlyfans_creator(query)
             .ok()
             .and_then(|creator| build_onlyfans_creator_url(&creator)),
-        "idolcomplex" => build_booru_url("https://www.idolcomplex.com/en/posts", query),
-        "sankaku" => build_booru_url("https://sankaku.app/", query),
         "yandere" => build_booru_url("https://yande.re/post", query),
-        "konachan" => build_booru_url("https://konachan.com/post", query),
         "safebooru" => build_booru_url("https://safebooru.org/index.php?page=post&s=list", query),
         "e621" => build_booru_url("https://e621.net/posts", query),
         "ehentai" => normalize_ehentai_gallery_url(query).ok(),
@@ -576,86 +518,6 @@ fn build_newgrounds_profile_url(username: &str) -> Option<String> {
     url.set_host(Some(&format!("{username}.newgrounds.com")))
         .ok()?;
     url.set_path("/");
-    Some(url.to_string())
-}
-
-pub fn normalize_baraag_username(raw: &str) -> Result<String, String> {
-    normalize_mastodon_username(raw, "baraag.net")
-}
-
-fn normalize_mastodon_username(raw: &str, host: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("Mastodon subscriptions require a username".to_string());
-    }
-
-    let username = if let Ok(url) = Url::parse(trimmed) {
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str() != Some(host)
-            || url.username() != ""
-            || url.password().is_some()
-            || url.port().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err("Mastodon subscriptions require a canonical profile URL".to_string());
-        }
-        let segments: Vec<_> = url
-            .path_segments()
-            .into_iter()
-            .flatten()
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        match segments.as_slice() {
-            [profile] if profile.starts_with('@') => profile[1..].to_string(),
-            [profile, "media"] if profile.starts_with('@') => profile[1..].to_string(),
-            ["users", profile] => (*profile).to_string(),
-            _ => return Err("Mastodon subscriptions require a canonical profile URL".to_string()),
-        }
-    } else {
-        trimmed.strip_prefix('@').unwrap_or(trimmed).to_string()
-    };
-
-    if !valid_mastodon_account(&username) {
-        return Err("Mastodon subscriptions require a safe account handle".to_string());
-    }
-    Ok(username)
-}
-
-fn valid_mastodon_account(value: &str) -> bool {
-    let mut parts = value.split('@');
-    let username = parts.next().unwrap_or_default();
-    let domain = parts.next();
-    if parts.next().is_some()
-        || username.is_empty()
-        || username.len() > 64
-        || !username
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return false;
-    }
-    domain.is_none_or(|domain| {
-        !domain.is_empty()
-            && domain.len() <= 253
-            && domain.split('.').all(|label| {
-                !label.is_empty()
-                    && label.len() <= 63
-                    && !label.starts_with('-')
-                    && !label.ends_with('-')
-                    && label
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            })
-    })
-}
-
-fn build_mastodon_user_url(host: &str, username: &str) -> Option<String> {
-    let mut url = Url::parse(&format!("https://{host}")).ok()?;
-    url.path_segments_mut()
-        .ok()?
-        .push(&format!("@{username}"))
-        .push("media");
     Some(url.to_string())
 }
 
@@ -1157,7 +1019,6 @@ mod tests {
                 "rule34",
                 "danbooru",
                 "hentaifoundry",
-                "baraag",
                 "deviantart",
                 "twitter",
                 "newgrounds",
@@ -1166,17 +1027,14 @@ mod tests {
                 "fanbox",
                 "subscribestar",
                 "onlyfans",
-                "idolcomplex",
-                "sankaku",
                 "yandere",
-                "konachan",
                 "safebooru",
                 "e621",
                 "ehentai",
                 "pawchive",
             ])
         );
-        assert_eq!(SITES.len(), 23);
+        assert_eq!(SITES.len(), 19);
     }
 
     #[test]
@@ -1246,13 +1104,6 @@ mod tests {
     }
 
     #[test]
-    fn baraag_uses_its_managed_mastodon_oauth_contract() {
-        let baraag = site_by_id("baraag").unwrap();
-        assert_eq!(baraag.credential_types, OAUTH_CREDENTIAL_TYPES);
-        assert_eq!(baraag.oauth_provider, Some("mastodon"));
-    }
-
-    #[test]
     fn twitter_requires_the_direct_site_cookie_session() {
         let twitter = site_by_id("twitter").unwrap();
         assert!(twitter.auth_required_for_full_access);
@@ -1287,10 +1138,6 @@ mod tests {
             Some("https://www.hentai-foundry.com/pictures/user/artist-name")
         );
         assert_eq!(
-            build_url("baraag", "Blue_").as_deref(),
-            Some("https://baraag.net/@Blue_/media")
-        );
-        assert_eq!(
             build_url("deviantart", "https://deviantart.com/artist-name/gallery/").as_deref(),
             Some("https://www.deviantart.com/artist-name/gallery/")
         );
@@ -1323,20 +1170,8 @@ mod tests {
             Some("https://subscribestar.art/creator-name")
         );
         assert_eq!(
-            build_url("idolcomplex", "solo rating:safe").as_deref(),
-            Some("https://www.idolcomplex.com/en/posts?tags=solo+rating%3Asafe")
-        );
-        assert_eq!(
-            build_url("sankaku", "solo rating:safe").as_deref(),
-            Some("https://sankaku.app/?tags=solo+rating%3Asafe")
-        );
-        assert_eq!(
             build_url("yandere", "1girl solo&rating:safe").as_deref(),
             Some("https://yande.re/post?tags=1girl+solo%26rating%3Asafe")
-        );
-        assert_eq!(
-            build_url("konachan", "landscape").as_deref(),
-            Some("https://konachan.com/post?tags=landscape")
         );
         assert_eq!(
             build_url("safebooru", "1girl solo").as_deref(),
@@ -1546,42 +1381,6 @@ mod tests {
                 normalize_hentaifoundry_username(value).as_deref(),
                 Ok("artist-name"),
                 "accepted input should normalize: {value}"
-            );
-        }
-    }
-
-    #[test]
-    fn baraag_accepts_local_profiles_and_safe_federated_handles() {
-        for value in [
-            "Blue_",
-            "@Blue_",
-            "http://baraag.net/@Blue_",
-            "https://baraag.net/@Blue_/media",
-            "https://baraag.net/users/Blue_",
-        ] {
-            assert_eq!(
-                normalize_baraag_username(value).as_deref(),
-                Ok("Blue_"),
-                "accepted input should normalize: {value}"
-            );
-        }
-        assert_eq!(
-            normalize_baraag_username("Remote_User@example.social").as_deref(),
-            Ok("Remote_User@example.social")
-        );
-        for value in [
-            "artist/name",
-            "artist@-example.social",
-            "artist@example..social",
-            "https://example.com/@Blue_",
-            "https://baraag.net/@Blue_/12345",
-            "https://user:pass@baraag.net/@Blue_",
-            "https://baraag.net:8443/@Blue_",
-            "https://baraag.net/@Blue_?page=2",
-        ] {
-            assert!(
-                normalize_baraag_username(value).is_err(),
-                "unsafe input accepted: {value}"
             );
         }
     }
