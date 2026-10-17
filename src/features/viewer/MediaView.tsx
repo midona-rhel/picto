@@ -125,6 +125,8 @@ export function MediaView({
   useEffect(() => {
     onDisplayedItemChange?.(shownItemId);
   }, [shownItemId, onDisplayedItemChange]);
+  // Closing leaves nothing shown, so a reopened viewer starts not ready.
+  useEffect(() => () => onDisplayedItemChange?.(null), [onDisplayedItemChange]);
 
   // ── Image size — derived from the DISPLAYED item, not the requested one ──
   const displayedItem = pipeline.displayedHash

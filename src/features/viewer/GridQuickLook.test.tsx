@@ -124,7 +124,7 @@ describe('GridQuickLook', () => {
     const items = [portrait, landscape];
     const onDisplayedItemChange = vi.fn();
     const props = { ...callbacks, items, onDisplayedItemChange };
-    const { rerender } = render(<GridQuickLook {...props} currentIndex={0} />);
+    const { rerender, unmount } = render(<GridQuickLook {...props} currentIndex={0} />);
     // Nothing is shown until the first image has drawn.
     expect(onDisplayedItemChange).not.toHaveBeenCalledWith(portrait.root_id);
     await decodeThumbnail('portrait');
@@ -135,6 +135,10 @@ describe('GridQuickLook', () => {
     await decodeThumbnail('landscape');
     await decodeThumbnail('landscape');
     expect(onDisplayedItemChange).toHaveBeenLastCalledWith(landscape.root_id);
+
+    // Closing leaves nothing shown.
+    unmount();
+    expect(onDisplayedItemChange).toHaveBeenLastCalledWith(null);
   });
 
   it('keeps the previous image at its own size until the next image thumbnail is decoded', async () => {

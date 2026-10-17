@@ -40,6 +40,8 @@ export function GridQuickLook(props: GridQuickLookProps) {
   useEffect(() => {
     onDisplayedItemChange?.(shownItemId);
   }, [shownItemId, onDisplayedItemChange]);
+  // Closing leaves nothing shown, so a reopened viewer starts not ready.
+  useEffect(() => () => onDisplayedItemChange?.(null), [onDisplayedItemChange]);
 
   useEffect(() => {
     const requestedItem = props.items[props.currentIndex] ?? null;
