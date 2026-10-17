@@ -33,10 +33,13 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const contentIndex = retainedIndex >= 0 || !currentItem ? displayedIndex : 0;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
+  // Nothing counts as shown until the first image has drawn.
+  const contentReady = currentItem?.kind === 'collection' || mediaReady;
+  const shownItemId = contentReady ? displayedItem?.root_id ?? null : null;
   const { onDisplayedItemChange } = props;
   useEffect(() => {
-    onDisplayedItemChange?.(displayedItem?.root_id ?? null);
-  }, [displayedItem?.root_id, onDisplayedItemChange]);
+    onDisplayedItemChange?.(shownItemId);
+  }, [shownItemId, onDisplayedItemChange]);
 
   useEffect(() => {
     const requestedItem = props.items[props.currentIndex] ?? null;
@@ -90,7 +93,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const totalCount = props.totalCount ?? props.items.length;
   return (
     <QuickLookHost
-      contentReady={currentItem.kind === 'collection' || mediaReady}
+      contentReady={contentReady}
       currentIndex={(props.windowStart ?? 0) + displayedIndex}
       totalCount={totalCount}
       canPrevious={(props.windowStart ?? 0) + displayedIndex > 0}

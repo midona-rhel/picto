@@ -125,6 +125,9 @@ describe('GridQuickLook', () => {
     const onDisplayedItemChange = vi.fn();
     const props = { ...callbacks, items, onDisplayedItemChange };
     const { rerender } = render(<GridQuickLook {...props} currentIndex={0} />);
+    // Nothing is shown until the first image has drawn.
+    expect(onDisplayedItemChange).not.toHaveBeenCalledWith(portrait.root_id);
+    await decodeThumbnail('portrait');
     expect(onDisplayedItemChange).toHaveBeenLastCalledWith(portrait.root_id);
 
     rerender(<GridQuickLook {...props} currentIndex={1} />);

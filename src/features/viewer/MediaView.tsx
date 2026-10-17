@@ -118,7 +118,10 @@ export function MediaView({
     neighborHashes,
   });
 
-  const shownItemId = currentHash && pipeline.displayedHash === currentHash ? currentItemId : null;
+  // Shown once its thumbnail has decoded (or failed, showing its broken state).
+  const shownItemId = currentHash && pipeline.displayedHash === currentHash && pipeline.thumbSettled
+    ? currentItemId
+    : null;
   useEffect(() => {
     onDisplayedItemChange?.(shownItemId);
   }, [shownItemId, onDisplayedItemChange]);
