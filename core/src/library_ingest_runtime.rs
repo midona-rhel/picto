@@ -1033,6 +1033,109 @@ mod tests {
     }
 
     #[test]
+    fn a_post_sharing_a_file_with_another_collection_settles_every_source_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = LibraryApplication::create(directory.path().join("library")).unwrap();
+        let sourced = |path: &str, post: &str, item: &str, color: [u8; 4]| {
+            let mut input = image_import(&directory.path().join(path), &format!("{post}:{item}"), color);
+            input.source_identity = Some(picto_library::SourceIdentity {
+                source_key: format!("fixture:{post}"),
+                source_item_key: item.into(),
+                source_text: None,
+                source_attempt_id: None,
+            });
+            input
+        };
+        let collection_job = |key: &str, members: Vec<PreparedImport>| PreparedIngestJob {
+            job_key: key.into(),
+            source_kind: "manual".into(),
+            source_path: members[0].file_path.clone(),
+            source_item_id: None,
+            delete_after_ingest: false,
+            payload: PreparedIngestPayload::Collection(PreparedCollectionImport {
+                members,
+                cover_index: 0,
+                existing_root_id: None,
+                name: Some(key.into()),
+                modified_at_ms: 1_700_000_000_000,
+            }),
+        };
+        let first = vec![
+            sourced("a1.png", "a", "1", [10, 20, 30, 255]),
+            sourced("a2.png", "a", "2", [40, 50, 60, 255]),
+        ];
+        application
+            .library()
+            .enqueue_ingest_job(&collection_job("first", first), "2026-10-17T12:00:00Z")
+            .unwrap();
+        let first_root = run_batch(&application, 64).unwrap().root_ids[0];
+
+        // A later post mirrors the first file and adds two new ones.
+        application
+            .library()
+            .auxiliary_write(
+                picto_library::database::WorkPriority::ForegroundMutation,
+                ["subscriptions".to_string()],
+                [],
+                |transaction, _| {
+                    transaction.execute_batch(
+                        "INSERT INTO source_post (source_post_id, site_id, post_key, created_at, updated_at)
+                         VALUES (9, 'fixture', 'b', 'now', 'now');
+                         INSERT INTO source_item (source_post_id, item_key, position, state, created_at, updated_at)
+                         VALUES (9, 'shared', 0, 'downloaded', 'now', 'now'),
+                                (9, 'new-1', 1, 'downloaded', 'now', 'now'),
+                                (9, 'new-2', 2, 'downloaded', 'now', 'now');",
+                    )?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let shared = image_import(&directory.path().join("b-shared.png"), "b:shared", [10, 20, 30, 255]);
+        let mut shared = shared;
+        shared.source_identity = Some(picto_library::SourceIdentity {
+            source_key: "fixture:b".into(),
+            source_item_key: "shared".into(),
+            source_text: None,
+            source_attempt_id: None,
+        });
+        let second = vec![
+            shared,
+            sourced("b1.png", "b", "new-1", [70, 80, 90, 255]),
+            sourced("b2.png", "b", "new-2", [100, 110, 120, 255]),
+        ];
+        application
+            .library()
+            .enqueue_ingest_job(&collection_job("second", second), "2026-10-17T12:00:01Z")
+            .unwrap();
+        let report = run_batch(&application, 64).unwrap();
+        assert_eq!(report.ingested, 1);
+        // Overlapping collections combine, so the post joins the first one.
+        assert_eq!(report.root_ids, vec![first_root]);
+
+        let first_media = application.library().details(first_root).unwrap().media[0].media_id;
+        let states = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(connection
+                        .prepare(
+                            "SELECT item_key, state, media_item_id FROM source_item
+                             WHERE source_post_id = 9 ORDER BY position",
+                        )?
+                        .query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<u32>>(2)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?)
+                },
+            )
+            .unwrap();
+        assert_eq!(states[0], ("shared".into(), "ingested".into(), Some(first_media.0)));
+        assert!(states[1..].iter().all(|(_, state, media)| state == "ingested" && media.is_some()));
+        assert_eq!(application.library().details(first_root).unwrap().media.len(), 4);
+    }
+
+    #[test]
     fn auto_tag_enabled_collection_queues_only_the_coherent_collection_root() {
         let directory = tempfile::tempdir().unwrap();
         let application = LibraryApplication::create(directory.path().join("library")).unwrap();
