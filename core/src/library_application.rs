@@ -1045,6 +1045,11 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    /// Items in the Inbox, for the app badge.
+    pub fn inbox_count(&self) -> u64 {
+        self.library.inbox_count()
+    }
+
     pub fn sidebar_counts(&self) -> Result<picto_library::SidebarCounts, String> {
         self.library
             .sidebar_counts()
