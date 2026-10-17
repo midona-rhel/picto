@@ -38,7 +38,7 @@ describe('InboxReviewControls', () => {
   });
 
   it('reviews with Z and X at once, without waiting for the save', () => {
-    const onReview = vi.fn();
+    const onReview = vi.fn(() => true);
     render(<InboxReviewControls itemId={42} onReview={onReview} />);
 
     expect(document.querySelector('[data-tooltip-label="Accept"]')).toHaveAttribute('data-tooltip-shortcut-id', 'inbox.accept');
@@ -51,7 +51,7 @@ describe('InboxReviewControls', () => {
   });
 
   it.each(['Accept', 'Reject'])('flashes %s and stays on screen while the next item takes over', (action) => {
-    const onReview = vi.fn();
+    const onReview = vi.fn(() => true);
     const { rerender } = render(<InboxReviewControls itemId={42} onReview={onReview} />);
     const controls = document.querySelector('[data-inbox-review-controls]');
 
@@ -67,28 +67,32 @@ describe('InboxReviewControls', () => {
     expect(screen.getByRole('button', { name: `${action} item` })).toBeEnabled();
   });
 
-  it('reviews an item once, then the next one, and the same one again if the view comes back to it', () => {
-    const onReview = vi.fn();
-    const { rerender } = render(<InboxReviewControls itemId={42} onReview={onReview} />);
+  it('flashes only when the owner takes the review', () => {
+    // The owner refuses a second review of an item it is still saving.
+    const taken = new Set<number>();
+    const onReview = vi.fn((itemId: number) => {
+      if (taken.has(itemId)) return false;
+      taken.add(itemId);
+      return true;
+    });
+    render(<InboxReviewControls itemId={42} onReview={onReview} />);
+    const controls = document.querySelector('[data-inbox-review-controls]');
 
     fireEvent.keyDown(window, { key: 'z' });
+    expect(controls).toHaveAttribute('data-review-decision', 'accept');
+    act(() => { vi.advanceTimersByTime(360); });
     fireEvent.keyDown(window, { key: 'x' });
-    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(onReview).toHaveBeenLastCalledWith(42, 'reject');
+    expect(controls).toHaveAttribute('data-review-decision', 'idle');
 
-    rerender(<InboxReviewControls itemId={43} onReview={onReview} />);
+    // Once the owner takes reviews of it again (its save failed), so do the controls.
+    taken.delete(42);
     fireEvent.keyDown(window, { key: 'x' });
-    expect(onReview).toHaveBeenLastCalledWith(43, 'reject');
-
-    // The view comes back to 43 (the owner's rollback is tested in inboxReview.test.ts).
-    rerender(<InboxReviewControls itemId={44} onReview={onReview} />);
-    rerender(<InboxReviewControls itemId={43} onReview={onReview} />);
-    fireEvent.keyDown(window, { key: 'z' });
-    expect(onReview).toHaveBeenLastCalledWith(43, 'accept');
-    expect(onReview).toHaveBeenCalledTimes(3);
+    expect(controls).toHaveAttribute('data-review-decision', 'reject');
   });
 
   it('takes no input while a review waits on a question, then resumes', () => {
-    const onReview = vi.fn();
+    const onReview = vi.fn(() => true);
     const { rerender } = render(<InboxReviewControls itemId={43} onReview={onReview} paused />);
 
     fireEvent.keyDown(window, { key: 'x' });
@@ -102,7 +106,7 @@ describe('InboxReviewControls', () => {
   });
 
   it('ignores repeated and modified key presses', () => {
-    const onReview = vi.fn();
+    const onReview = vi.fn(() => true);
     render(<InboxReviewControls itemId={42} onReview={onReview} />);
     fireEvent.keyDown(window, { key: 'z', repeat: true });
     fireEvent.keyDown(window, { key: 'z', metaKey: true });

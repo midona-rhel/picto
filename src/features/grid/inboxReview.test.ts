@@ -97,7 +97,7 @@ describe('createInboxReviewer', () => {
     review.reviewer.review(2, 'accept');
     // Both are saving: nothing is left to show.
     expect(review.shown).toBeNull();
-    review.reviewer.review(1, 'accept');
+    expect(review.reviewer.review(1, 'accept')).toBe(false);
     expect(review.host.save).toHaveBeenCalledTimes(2);
   });
 
@@ -113,10 +113,21 @@ describe('createInboxReviewer', () => {
     review.drop(2, 3);
   });
 
+  it('takes the item again once its save fails, even if it is already back in view', async () => {
+    const review = setup([1, 2, 3]);
+    review.reviewer.review(1, 'accept');
+    review.navigate(1);
+    expect(review.reviewer.review(1, 'accept')).toBe(false);
+    review.saves.get(1)!.reject(new Error('locked'));
+    await review.settle();
+    expect(review.shown).toBe(1);
+    expect(review.reviewer.review(1, 'reject')).toBe(true);
+  });
+
   it('takes no review while a question is waiting', () => {
     const review = setup([1, 2]);
     review.ask(true);
-    review.reviewer.review(1, 'reject');
+    expect(review.reviewer.review(1, 'reject')).toBe(false);
     expect(review.shown).toBe(1);
     expect(review.host.save).not.toHaveBeenCalled();
     review.ask(false);

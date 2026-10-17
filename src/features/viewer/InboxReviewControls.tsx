@@ -26,8 +26,10 @@ interface InboxReviewControlsProps {
   /**
    * Review the item. The owner moves on to the next item at once and saves
    * in the background, coming back to this item if the save does not happen.
+   * Returns false when it did not take the review (the item is already
+   * being saved, or a question is open).
    */
-  onReview: (itemId: number, decision: InboxReviewDecision) => void;
+  onReview: (itemId: number, decision: InboxReviewDecision) => boolean;
   /**
    * While a review waits on a question (a reject that deletes asks first),
    * the controls take no input, and their shortcuts reach nothing else.
@@ -44,28 +46,18 @@ const FLASH_DURATION_MS = 360;
  */
 export function InboxReviewControls({ itemId, onReview, paused = false }: InboxReviewControlsProps) {
   const [flash, setFlash] = useState<{ decision: InboxReviewDecision; key: number } | null>(null);
-  // The item last reviewed, until the owner moves on: a second press (or a
-  // press racing the next render) must not review it twice.
-  const reviewedItemId = useRef<number | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const acceptShortcut = getShortcut('inbox.accept')!;
   const rejectShortcut = getShortcut('inbox.reject')!;
 
-  useEffect(() => {
-    // Moving to an item (including back to one whose save failed) makes it
-    // reviewable.
-    if (reviewedItemId.current !== itemId) reviewedItemId.current = null;
-  }, [itemId]);
-
   useEffect(() => () => clearTimeout(flashTimer.current), []);
 
   const review = useCallback((decision: InboxReviewDecision) => {
-    if (paused || reviewedItemId.current === itemId) return;
-    reviewedItemId.current = itemId;
+    // The owner refuses a second review of an item it is still saving.
+    if (paused || !onReview(itemId, decision)) return;
     setFlash((current) => ({ decision, key: (current?.key ?? 0) + 1 }));
     clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), FLASH_DURATION_MS);
-    onReview(itemId, decision);
   }, [itemId, onReview, paused]);
 
   useShortcutScope((event) => {
