@@ -2,14 +2,24 @@ import { describe, expect, it, vi } from 'vitest';
 import { createInboxReviewer, type InboxReviewHost, type ReviewView } from './inboxReview';
 
 /** A host with a real list and view, and saves the test settles by hand. */
-function setup(ids: number[], view: ReviewView = 'quicklook') {
+function setup(ids: number[], view: ReviewView = 'quicklook', following: number[] = []) {
   let items = ids.map((root_id) => ({ root_id }));
+  let pendingWindow = following.map((root_id) => ({ root_id }));
+  let finishLoad: (() => void) | null = null;
   let shown: number | null = ids[0] ?? null;
   let selected: number | null = shown;
   let asking = false;
   const saves = new Map<number, { resolve: (committed: boolean) => void; reject: (reason: unknown) => void }>();
   const host: InboxReviewHost = {
     items: () => items,
+    hasFollowing: () => pendingWindow.length > 0,
+    loadFollowing: vi.fn(() => new Promise<void>((resolve) => {
+      finishLoad = () => {
+        items = [...items, ...pendingWindow];
+        pendingWindow = [];
+        resolve();
+      };
+    })),
     view: () => view,
     shownItemId: () => shown,
     show: vi.fn((_view, itemId) => { shown = itemId; selected = itemId; }),
@@ -30,6 +40,7 @@ function setup(ids: number[], view: ReviewView = 'quicklook') {
     get selected() { return selected; },
     navigate(itemId: number | null) { shown = itemId; selected = itemId; },
     ask(value: boolean) { asking = value; },
+    async loadWindow() { finishLoad?.(); await settle(); },
     /** The list drops saved items, as a refresh after the save does. */
     drop(...gone: number[]) {
       items = items.filter((item) => !gone.includes(item.root_id));
@@ -122,6 +133,26 @@ describe('createInboxReviewer', () => {
     await review.settle();
     expect(review.shown).toBe(1);
     expect(review.reviewer.review(1, 'reject')).toBe(true);
+  });
+
+  it('loads the following window instead of stepping back at its edge', async () => {
+    const review = setup([1, 2], 'quicklook', [3, 4]);
+    review.navigate(2);
+    review.reviewer.review(2, 'accept');
+    // Still on 2 while the next window loads, never back to 1.
+    expect(review.shown).toBe(2);
+    expect(review.host.loadFollowing).toHaveBeenCalled();
+    await review.loadWindow();
+    expect(review.shown).toBe(3);
+  });
+
+  it('stays where the user went while the following window loads', async () => {
+    const review = setup([1, 2], 'quicklook', [3]);
+    review.navigate(2);
+    review.reviewer.review(2, 'accept');
+    review.navigate(1);
+    await review.loadWindow();
+    expect(review.shown).toBe(1);
   });
 
   it('takes no review while a question is waiting', () => {

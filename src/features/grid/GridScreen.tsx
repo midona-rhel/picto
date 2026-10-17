@@ -823,13 +823,14 @@ export function GridScreen({
 
   /** Show `itemId` in the review's view (Quick Look or detail), or close it. */
   const showReviewItem = useCallback((mode: 'quicklook' | 'detail', itemId: number | null) => {
-    const next = itemId == null ? null : createViewerSession(itemsRef.current, itemId);
+    const loaded = store.get(gridSessionAtom).items;
+    const next = itemId == null ? null : createViewerSession(loaded, itemId);
     if (!next) {
       if (mode === 'quicklook') closeQuickLook();
       else closeRootDetail();
       return;
     }
-    const nextItem = itemsRef.current.find((item) => item.root_id === next.currentItemId);
+    const nextItem = loaded.find((item) => item.root_id === next.currentItemId);
     // A collection's details load while it opens instead of before.
     if (nextItem?.kind === 'collection') void viewerController.prefetchItemDetails(nextItem.root_id).catch(() => {});
     if (mode === 'quicklook') setQuickLookSession(next);
@@ -848,7 +849,17 @@ export function GridScreen({
   showReviewItemRef.current = showReviewItem;
   const reviewerRef = useRef<InboxReviewer | null>(null);
   reviewerRef.current ??= createInboxReviewer({
-    items: () => itemsRef.current,
+    // The store, not the last render: a window loaded for the review is
+    // there before it renders.
+    items: () => store.get(gridSessionAtom).items,
+    hasFollowing: () => {
+      const session = store.get(gridSessionAtom);
+      return session.windowStart + session.items.length < (session.totalCount ?? 0);
+    },
+    loadFollowing: () => {
+      const session = store.get(gridSessionAtom);
+      return gridController.requestWindowAt(session.windowStart + session.items.length);
+    },
     view: () => (quickLookSessionRef.current ? 'quicklook' : 'detail'),
     shownItemId: (view) =>
       (view === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current)?.currentItemId ?? null,

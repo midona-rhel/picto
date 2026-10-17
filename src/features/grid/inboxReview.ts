@@ -13,8 +13,12 @@ import type { InboxReviewDecision } from '../viewer/InboxReviewControls';
 export type ReviewView = 'quicklook' | 'detail';
 
 export interface InboxReviewHost {
-  /** The items in view order. */
+  /** The loaded items in view order (a window of the whole list). */
   items(): readonly { root_id: number }[];
+  /** More items follow the loaded window. */
+  hasFollowing(): boolean;
+  /** Load the window that follows the loaded one. */
+  loadFollowing(): Promise<void>;
   /** The view the review happens in. */
   view(): ReviewView;
   /** The item `view` shows, or null when it is closed. */
@@ -43,35 +47,58 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
   // not dropped yet: the review must not land on them again.
   const inFlight = new Set<number>();
   const leaving = new Set<number>();
-  let latest: { view: ReviewView; itemId: number | null } | null = null;
+  let latest: { itemId: number | null; moved: boolean } | null = null;
 
   const isListed = (itemId: number) => host.items().some((item) => item.root_id === itemId);
 
   function review(itemId: number, decision: InboxReviewDecision): boolean {
     if (host.isAsking() || inFlight.has(itemId)) return false;
-    const items = host.items();
-    const index = items.findIndex((item) => item.root_id === itemId);
     const open = (item: { root_id: number }) =>
       item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
-    const nextItemId = index < 0
-      ? null
-      : items.slice(index + 1).find(open)?.root_id
-        ?? items.slice(0, index).reverse().find(open)?.root_id
-        ?? null;
+    const following = () => {
+      const items = host.items();
+      const index = items.findIndex((item) => item.root_id === itemId);
+      return index < 0 ? undefined : items.slice(index + 1).find(open)?.root_id;
+    };
+    const preceding = () => {
+      const items = host.items();
+      const index = items.findIndex((item) => item.root_id === itemId);
+      return index < 0 ? undefined : items.slice(0, index).reverse().find(open)?.root_id;
+    };
     inFlight.add(itemId);
 
     const view = host.view();
-    host.suppressScrollMomentum();
-    host.show(view, nextItemId);
-    // With nothing left to show, the departing item must not stay selected
-    // while it saves; a failed save reselects it when it comes back.
-    if (nextItemId == null) host.clearSelection();
-    const destination = { view, itemId: nextItemId };
+    // Where this review left the view; null until it has moved on.
+    const destination: { itemId: number | null; moved: boolean } = { itemId: null, moved: false };
     latest = destination;
+    const moveOn = (nextItemId: number | null) => {
+      if (latest !== destination || destination.moved) return;
+      destination.itemId = nextItemId;
+      destination.moved = true;
+      host.suppressScrollMomentum();
+      host.show(view, nextItemId);
+      // With nothing left to show, the departing item must not stay selected
+      // while it saves; a failed save reselects it when it comes back.
+      if (nextItemId == null) host.clearSelection();
+    };
+
+    const next = following();
+    if (next != null || !host.hasFollowing()) moveOn(next ?? preceding() ?? null);
+    else {
+      // The item is the last one loaded but not the last in the list: the
+      // next one is in the following window, not behind.
+      host.loadFollowing()
+        .catch(() => {})
+        .then(() => {
+          // Only while the view is still on the reviewed item.
+          if (host.shownItemId(view) === itemId) moveOn(following() ?? preceding() ?? null);
+        });
+    }
 
     const returnToItem = () => {
       if (latest !== destination) return;
       latest = null;
+      if (!destination.moved) return;
       // The last item closes the view, so "still there" is "still closed".
       if (host.shownItemId(view) === destination.itemId && isListed(itemId)) host.show(view, itemId);
     };
