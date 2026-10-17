@@ -466,10 +466,9 @@ fn post_media(
     post_id: &str,
     canonical_url: &str,
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
+    // The cover is a thumbnail of the post, not part of it: only the post's
+    // own images and files are its media.
     let mut candidates = Vec::new();
-    if let Some(url) = text(post, "coverImageUrl") {
-        candidates.push((None, original_cover_url(url), None));
-    }
     let body = post.get("body");
     for key in ["images", "files"] {
         if let Some(values) = body
@@ -586,14 +585,6 @@ fn safe_html_media_url(raw: &str, kind: HtmlMediaKind) -> Option<String> {
     trusted.then(|| url.to_string())
 }
 
-fn original_cover_url(raw: &str) -> String {
-    static TRANSFORM: OnceLock<Regex> = OnceLock::new();
-    TRANSFORM
-        .get_or_init(|| Regex::new(r"/c/[0-9A-Za-z_]+/").expect("valid FANBOX transform regex"))
-        .replace(raw, "/")
-        .into_owned()
-}
-
 fn push_media_candidate(
     candidates: &mut Vec<(Option<String>, String, Option<String>)>,
     value: &Value,
@@ -700,7 +691,7 @@ fn file_name_from_url(raw: &str) -> Option<String> {
 }
 
 fn html_media_regex() -> &'static Regex {
-    static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
         Regex::new(r#"(?:href=\"([^\"]+)\"|data-src-original=\"([^\"]+)\")"#)
             .expect("valid FANBOX media regex")
@@ -863,13 +854,10 @@ mod tests {
         .unwrap();
         let post = normalize_post(discovered, fixture).unwrap();
         assert_eq!(post.name.as_deref(), Some("A FANBOX post"));
-        assert_eq!(post.media.len(), 4);
+        assert_eq!(post.media.len(), 3);
         assert_eq!(post.media[0].position, 0);
-        assert_eq!(
-            post.media[0].url,
-            "https://downloads.fanbox.cc/images/cover.jpg"
-        );
-        assert_eq!(post.media[3].position, 3);
+        assert!(post.media.iter().all(|media| !media.url.contains("cover")));
+        assert_eq!(post.media[2].position, 2);
         assert!(!crate::media::is_unsupported_archive("attachment.zip"));
         assert!(crate::media::is_unsupported_archive("attachment.rar"));
         assert!(post
