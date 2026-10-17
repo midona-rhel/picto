@@ -467,8 +467,10 @@ fn post_media(
     canonical_url: &str,
 ) -> Result<Vec<crate::MediaDescriptor>, SourceError> {
     // The cover is a thumbnail of the post, not part of it: only the post's
-    // own images and files are its media.
+    // own images and files are its media. It used to come first, so media
+    // without their own id keep the keys they had, counted after its slot.
     let mut candidates = Vec::new();
+    let former_cover_slot = usize::from(text(post, "coverImageUrl").is_some());
     let body = post.get("body");
     for key in ["images", "files"] {
         if let Some(values) = body
@@ -524,7 +526,7 @@ fn post_media(
         let stable_id = source_id
             .filter(|id| !id.trim().is_empty())
             .map(|id| format!("fanbox:{post_id}:{id}"))
-            .unwrap_or_else(|| format!("fanbox:{post_id}:{}", media.len()));
+            .unwrap_or_else(|| format!("fanbox:{post_id}:{}", media.len() + former_cover_slot));
         media.push(
             MediaDescriptorBuilder::new(stable_id, media.len() as u32, url)
                 .canonical_url(canonical_url)
@@ -857,6 +859,11 @@ mod tests {
         assert_eq!(post.media.len(), 3);
         assert_eq!(post.media[0].position, 0);
         assert!(post.media.iter().all(|media| !media.url.contains("cover")));
+        // Media without their own id keep the keys they had with the cover.
+        assert_eq!(
+            post.media.iter().map(|media| media.stable_id.as_str()).collect::<Vec<_>>(),
+            vec!["fanbox:112233:image-1", "fanbox:112233:file-1", "fanbox:112233:3"]
+        );
         assert_eq!(post.media[2].position, 2);
         assert!(!crate::media::is_unsupported_archive("attachment.zip"));
         assert!(crate::media::is_unsupported_archive("attachment.rar"));
