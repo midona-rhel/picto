@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconX } from '@tabler/icons-react';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
-import { showErrorNotification } from '../../shared/lib/notifications';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import styles from './InboxReviewControls.module.css';
@@ -24,95 +23,74 @@ export function resolveInboxReviewItemId(
 
 interface InboxReviewControlsProps {
   itemId: number;
-  onCommit: (itemId: number, decision: InboxReviewDecision) => Promise<boolean>;
-  onAdvance: () => void;
+  /**
+   * Review the item. The owner moves on to the next item at once and saves
+   * in the background, coming back to this item if the save does not happen.
+   */
+  onReview: (itemId: number, decision: InboxReviewDecision) => void;
 }
 
-// Match reviewFlash and the pill's exit transition in the stylesheet.
-const PULSE_DURATION_MS = 360;
-const EXIT_DURATION_MS = 120;
+// Matches reviewFlash in the stylesheet.
+const FLASH_DURATION_MS = 360;
 
-export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReviewControlsProps) {
-  const [decision, setDecision] = useState<InboxReviewDecision | null>(null);
-  const [leaving, setLeaving] = useState(false);
-  const inFlight = useRef(false);
-  const latestItemId = useRef(itemId);
+/**
+ * Accept and Reject for the item being viewed. The controls stay put from
+ * one item to the next; a press only flashes the button it hit.
+ */
+export function InboxReviewControls({ itemId, onReview }: InboxReviewControlsProps) {
+  const [flash, setFlash] = useState<{ decision: InboxReviewDecision; key: number } | null>(null);
+  // The item last reviewed, until the owner moves on: a second press (or a
+  // press racing the next render) must not review it twice.
+  const reviewedItemId = useRef<number | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const acceptShortcut = getShortcut('inbox.accept')!;
   const rejectShortcut = getShortcut('inbox.reject')!;
 
   useEffect(() => {
-    latestItemId.current = itemId;
-    // Reconciliation can select the next item before this review has advanced.
-    if (inFlight.current) return;
-    setDecision(null);
-    setLeaving(false);
+    // Moving to an item (including back to one whose save failed) makes it
+    // reviewable.
+    if (reviewedItemId.current !== itemId) reviewedItemId.current = null;
   }, [itemId]);
 
-  const review = useCallback(async (nextDecision: InboxReviewDecision) => {
-    if (inFlight.current || decision) return;
-    inFlight.current = true;
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    setDecision(nextDecision);
-    try {
-      const [committed] = await Promise.all([
-        onCommit(itemId, nextDecision),
-        reducedMotion ? Promise.resolve() : new Promise<void>((resolve) => setTimeout(resolve, PULSE_DURATION_MS)),
-      ]);
-      if (!committed) {
-        setDecision(null);
-        setLeaving(false);
-        return;
-      }
-      setLeaving(true);
-      if (!reducedMotion) {
-        await new Promise<void>((resolve) => setTimeout(resolve, EXIT_DURATION_MS));
-      }
-      onAdvance();
-    } catch (reason) {
-      setDecision(null);
-      setLeaving(false);
-      showErrorNotification({
-        title: nextDecision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
-        message: reason instanceof Error ? reason.message : String(reason),
-      });
-    } finally {
-      inFlight.current = false;
-      if (latestItemId.current !== itemId) {
-        setDecision(null);
-        setLeaving(false);
-      }
-    }
-  }, [decision, itemId, onAdvance, onCommit]);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+
+  const review = useCallback((decision: InboxReviewDecision) => {
+    if (reviewedItemId.current === itemId) return;
+    reviewedItemId.current = itemId;
+    setFlash((current) => ({ decision, key: (current?.key ?? 0) + 1 }));
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), FLASH_DURATION_MS);
+    onReview(itemId, decision);
+  }, [itemId, onReview]);
 
   useShortcutScope((event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     if (matchesShortcutDef(event, acceptShortcut)) {
       event.preventDefault();
-      void review('accept');
+      review('accept');
       return true;
     }
     if (matchesShortcutDef(event, rejectShortcut)) {
       event.preventDefault();
-      void review('reject');
+      review('reject');
       return true;
     }
   }, { priority: 90 });
 
   return createPortal(
     <div
-      className={`${styles.pill} floatingGlassSurface ${leaving ? styles.leaving : ''}`}
+      className={`${styles.pill} floatingGlassSurface`}
       data-inbox-review-controls
-      data-review-decision={decision ?? 'idle'}
+      data-review-decision={flash?.decision ?? 'idle'}
     >
       <KbdTooltip label={t("Accept")} shortcutId="inbox.accept" position="top">
         <button
           type="button"
-          className={`${styles.action} ${styles.accept} ${decision === 'accept' ? styles.chosen : ''}`}
+          className={`${styles.action} ${styles.accept} ${flash?.decision === 'accept' ? styles.chosen : ''}`}
           aria-label={t("Accept item")}
-          disabled={decision != null}
-          onClick={() => { void review('accept'); }}
+          onClick={() => review('accept')}
         >
-          <span className={styles.glow} aria-hidden="true" />
+          <span key={flash?.decision === 'accept' ? flash.key : 0} className={styles.glow} aria-hidden="true" />
           <IconCheck size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>
@@ -120,12 +98,11 @@ export function InboxReviewControls({ itemId, onCommit, onAdvance }: InboxReview
       <KbdTooltip label={t("Reject")} shortcutId="inbox.reject" position="top">
         <button
           type="button"
-          className={`${styles.action} ${styles.reject} ${decision === 'reject' ? styles.chosen : ''}`}
+          className={`${styles.action} ${styles.reject} ${flash?.decision === 'reject' ? styles.chosen : ''}`}
           aria-label={t("Reject item")}
-          disabled={decision != null}
-          onClick={() => { void review('reject'); }}
+          onClick={() => review('reject')}
         >
-          <span className={styles.glow} aria-hidden="true" />
+          <span key={flash?.decision === 'reject' ? flash.key : 0} className={styles.glow} aria-hidden="true" />
           <IconX size={28} stroke={2} aria-hidden="true" />
         </button>
       </KbdTooltip>
