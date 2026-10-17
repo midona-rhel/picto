@@ -106,7 +106,6 @@ pub struct ProviderRegistry {
 impl ProviderRegistry {
     pub fn native() -> Self {
         let mut registry = Self::default();
-        registry.register(crate::providers::baraag::adapter());
         registry.register(crate::providers::danbooru::adapter());
         registry.register(crate::providers::deviantart::adapter());
         registry.register(crate::providers::e621::adapter());
@@ -115,8 +114,6 @@ impl ProviderRegistry {
         registry.register(crate::providers::furaffinity::adapter());
         registry.register(crate::providers::gelbooru::adapter());
         registry.register(crate::providers::hentaifoundry::adapter());
-        registry.register(crate::providers::idolcomplex::adapter());
-        registry.register(crate::providers::konachan::adapter());
         registry.register(crate::providers::newgrounds::adapter());
         registry.register(crate::providers::onlyfans::adapter());
         registry.register(crate::providers::pawchive::adapter());
@@ -125,7 +122,6 @@ impl ProviderRegistry {
         registry.register(crate::providers::pixivuser::adapter());
         registry.register(crate::providers::rule34::adapter());
         registry.register(crate::providers::safebooru::adapter());
-        registry.register(crate::providers::sankaku::adapter());
         registry.register(crate::providers::subscribestar::adapter());
         registry.register(crate::providers::twitter::adapter());
         registry.register(crate::providers::yandere::adapter());

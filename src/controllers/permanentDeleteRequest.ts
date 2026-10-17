@@ -23,6 +23,17 @@ export function permanentDeleteMessage(count: number | null, undoLimit: number):
   });
 }
 
+// The confirm modal shows one question at a time. Requests that arrive while
+// one is open (or still being prepared) wait their turn instead of replacing
+// it, which would leave the first request unanswered for good.
+let confirmationTurn: Promise<unknown> = Promise.resolve();
+
+function askInTurn(ask: (resolve: (confirmed: boolean) => void) => void): Promise<boolean> {
+  const answer = confirmationTurn.then(() => new Promise<boolean>(ask));
+  confirmationTurn = answer.catch(() => false);
+  return answer;
+}
+
 export async function requestPermanentDelete(
   target: EntityTarget,
   _count: number | null,
@@ -41,7 +52,7 @@ export async function requestPermanentDelete(
     const count = summary.selected_count;
     const remove = options.remove ?? permanentlyDeleteTarget;
     const requireUndoable = undoLimit > 0 && summary.media_count <= undoLimit;
-    const confirm = (message: string) => new Promise<boolean>((resolve) => {
+    const confirm = (message: string) => askInTurn((resolve) => {
       getDefaultStore().set(confirmModalAtom, {
         open: true,
         title: options.emptyTrash

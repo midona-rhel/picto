@@ -577,6 +577,11 @@ impl Library {
         )
     }
 
+    /// Roots in the Inbox, read from the resident projection (no query).
+    pub fn inbox_count(&self) -> u64 {
+        self.projections.snapshot().lifecycle(Lifecycle::Inbox).len()
+    }
+
     pub fn counts(&self) -> Result<LibraryCounts> {
         Ok(crate::query::counts(&self.projections.snapshot()))
     }

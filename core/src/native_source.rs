@@ -57,7 +57,10 @@ impl NativeSourceRunner {
         let adapter = self.registry.get(&query.site_id).ok_or_else(|| {
             RunnerFailure::terminal(
                 RunnerFailureKind::InvalidQuery,
-                format!("No native source adapter exists for {}", query.site_id),
+                match crate::subscriptions::retired_sites::retired_site_name(&query.site_id) {
+                    Some(name) => crate::subscriptions::retired_sites::retired_site_message(name),
+                    None => format!("No native source adapter exists for {}", query.site_id),
+                },
             )
         })?;
         let descriptor = adapter.descriptor();
@@ -1043,7 +1046,7 @@ mod tests {
 
         let oauth = stored_request_credentials(
             SiteCredential {
-                site_category: "baraag".into(),
+                site_category: "deviantart".into(),
                 credential_type: CredentialType::OAuthToken,
                 username: None,
                 password: Some("token-secret".into()),
@@ -1054,8 +1057,8 @@ mod tests {
                 )])),
                 oauth_token: Some("access-token".into()),
             },
-            "baraag",
-            "baraag.net",
+            "deviantart",
+            "deviantart.com",
         );
         assert_eq!(oauth.oauth_token.as_deref(), Some("access-token"));
         assert_eq!(oauth.oauth_token_secret.as_deref(), Some("token-secret"));

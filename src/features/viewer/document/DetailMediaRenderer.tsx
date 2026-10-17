@@ -90,6 +90,11 @@ function DocumentPagePreview({ hash, kind, rendererSnapshot = false }: { hash: s
   );
 }
 
+/** Renderers that load before they draw, and report it with `onReady`. */
+const ASYNC_RENDERER_KINDS = new Set<string>([
+  'audio', 'video', 'jpeg-xl', 'pdf', 'text-document', 'docx', 'pptx', 'epub', 'cbz', 'djvu', 'font', 'flash',
+]);
+
 export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlaybackChange, onFlashContextMenu, onFrameCaptureChange, onPdfZoomControlsChange, onPdfZoomPercentChange, mediaKeyboardShortcutsEnabled = true, mediaAutoPlay, mediaLoop, mediaMuted, onReady }: Props) {
   const kind = detailRendererKind(mimeType);
   const src = mediaFileUrl(hash, mimeType);
@@ -106,6 +111,11 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
     || kind === 'epub'
     || kind === 'cbz'
     || kind === 'djvu';
+  // Renderers that draw at once (or draw nothing) have no load to wait for.
+  const settlesAtOnce = !ASYNC_RENDERER_KINDS.has(kind);
+  useEffect(() => {
+    if (settlesAtOnce) onReady?.();
+  }, [identity, onReady, settlesAtOnce]);
   let renderer: ReactNode;
   if (kind === 'audio') {
     renderer = <VideoPlayer key={hash} kind="audio" src={src} waveformSrc={mediaThumbnailUrl(hash)} autoPlay={mediaAutoPlay} loop={mediaLoop} muted={mediaMuted ?? false} keyboardShortcutsEnabled={mediaKeyboardShortcutsEnabled} onReady={markReady} />;

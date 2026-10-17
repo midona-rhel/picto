@@ -227,14 +227,19 @@ pub fn delete_credential(site_category: &str) -> Result<(), String> {
 fn delete_platform_credential(site_category: &str) -> Result<(), String> {
     use security_framework::os::macos::passwords::find_generic_password;
 
-    match find_generic_password(None, SERVICE_NAME, site_category) {
-        Ok((_password, item)) => {
-            item.delete();
-            Ok(())
+    // `delete` reports nothing, so look again until no item matches: old
+    // builds could leave duplicates, and a refused delete must surface, or
+    // callers would drop their record of a secret the keychain still holds.
+    // Up to 32 deletes, then one last look to confirm none remain.
+    for attempt in 0..=32 {
+        match find_generic_password(None, SERVICE_NAME, site_category) {
+            Ok((_password, item)) if attempt < 32 => item.delete(),
+            Ok(_) => break,
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(()),
+            Err(error) => return Err(format!("Keyring delete error: {error}")),
         }
-        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-        Err(error) => Err(format!("Keyring delete error: {error}")),
     }
+    Err("Keyring delete error: the keychain kept the item".to_string())
 }
 
 #[cfg(not(target_os = "macos"))]

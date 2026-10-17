@@ -723,7 +723,6 @@ fn validate_evidence(root: &Path, site_id: &str, evidence: &Evidence) -> Result<
         "pixiv"
             | "pixivuser"
             | "hentaifoundry"
-            | "baraag"
             | "deviantart"
             | "tumblr"
             | "furaffinity"

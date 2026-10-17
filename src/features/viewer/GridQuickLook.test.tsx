@@ -120,6 +120,27 @@ describe('GridQuickLook', () => {
     expectImage('portrait', 800, 1600, 0.375);
   });
 
+  it('reports the item on screen only once its image is decoded', async () => {
+    const items = [portrait, landscape];
+    const onDisplayedItemChange = vi.fn();
+    const props = { ...callbacks, items, onDisplayedItemChange };
+    const { rerender, unmount } = render(<GridQuickLook {...props} currentIndex={0} />);
+    // Nothing is shown until the first image has drawn.
+    expect(onDisplayedItemChange).not.toHaveBeenCalledWith(portrait.root_id);
+    await decodeThumbnail('portrait');
+    expect(onDisplayedItemChange).toHaveBeenLastCalledWith(portrait.root_id);
+
+    rerender(<GridQuickLook {...props} currentIndex={1} />);
+    expect(onDisplayedItemChange).toHaveBeenLastCalledWith(portrait.root_id);
+    await decodeThumbnail('landscape');
+    await decodeThumbnail('landscape');
+    expect(onDisplayedItemChange).toHaveBeenLastCalledWith(landscape.root_id);
+
+    // Closing leaves nothing shown.
+    unmount();
+    expect(onDisplayedItemChange).toHaveBeenLastCalledWith(null);
+  });
+
   it('keeps the previous image at its own size until the next image thumbnail is decoded', async () => {
     const items = [portrait, landscape];
     const { rerender } = render(<GridQuickLook {...callbacks} items={items} currentIndex={0} />);

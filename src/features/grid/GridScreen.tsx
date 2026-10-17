@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
+import { createInboxReviewer, type InboxReviewer } from './inboxReview';
 import { getShortcut, gridRemovalAction, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import {
   activeNodeIdAtom,
@@ -86,6 +87,7 @@ import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
 import { tagsController } from '../../controllers/tagsController';
 import { tagName } from '../tags/tagContextMenu';
+import { suppressScrollMomentum } from '../../shared/lib/scrollMomentum';
 import { allowTaskAction, taskGate, useTaskGate } from '../../runtime/taskGate';
 import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, openPictoPackImport, pasteImport, pictoPackPathFromDrop, requestMediaImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
@@ -748,22 +750,6 @@ export function GridScreen({
   const quickLookIndex = quickLookSession ? resolveViewerIndex(quickLookSession, items) : -1;
   const quickLookItem = quickLookIndex >= 0 ? items[quickLookIndex] ?? null : null;
   const inboxReviewItemId = resolveInboxReviewItemId(viewerItem, quickLookItem);
-  const inboxReviewNextItemIdRef = useRef<number | null>(null);
-  const inboxReviewModeRef = useRef<'detail' | 'quicklook'>('detail');
-
-  const commitInboxReview = useCallback(async (itemId: number, decision: InboxReviewDecision) => {
-    const currentItems = itemsRef.current;
-    const currentIndex = currentItems.findIndex((item) => item.root_id === itemId);
-    inboxReviewNextItemIdRef.current = currentIndex < 0
-      ? null
-      : currentItems[currentIndex + 1]?.root_id ?? currentItems[currentIndex - 1]?.root_id ?? null;
-    inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
-    const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
-    if (decision === 'reject') return entityMutations.rejectTarget(target);
-    await entityMutations.setTargetLifecycle(target, 'active');
-    return true;
-  }, []);
-
   const resolveRootNeighbor = useCallback(async (session: NonNullable<typeof viewerSession>, delta: number) => {
     const current = store.get(gridSessionAtom);
     const index = current.items.findIndex(item => item.root_id === session.currentItemId);
@@ -825,37 +811,87 @@ export function GridScreen({
     scrollToItem(items.findIndex((item) => item.root_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
-  const advanceAfterInboxReview = useCallback(() => {
-    const nextItemId = inboxReviewNextItemIdRef.current;
-    inboxReviewNextItemIdRef.current = null;
-    if (nextItemId == null) {
-      if (inboxReviewModeRef.current === 'quicklook') closeQuickLook();
-      else closeRootDetail();
-      return;
-    }
+  const reviewPaused = useAtomValue(confirmModalAtom).open;
+  // Quick Look and the viewers keep drawing the previous item until the next
+  // one has drawn (an image decoded, a player or document ready, a
+  // collection's details loaded); the review waits for it so a press never
+  // reviews an item that is not on screen yet.
+  const [quickLookShownId, setQuickLookShownId] = useState<number | null>(null);
+  const [detailShownId, setDetailShownId] = useState<number | null>(null);
+  const viewerItemId = viewerItem?.root_id ?? null;
+  const markDetailCollectionShown = useCallback(
+    (shown: boolean) => setDetailShownId(shown ? viewerItemId : null),
+    [viewerItemId],
+  );
+  const reviewReady = quickLookSession
+    ? quickLookShownId === quickLookSession.currentItemId
+    : !viewerSession || detailShownId === viewerSession.currentItemId;
 
-    const next = createViewerSession(itemsRef.current, nextItemId);
+  /** Show `itemId` in the review's view (Quick Look or detail), or close it. */
+  const showReviewItem = useCallback((mode: 'quicklook' | 'detail', itemId: number | null) => {
+    const loaded = store.get(gridSessionAtom).items;
+    const next = itemId == null ? null : createViewerSession(loaded, itemId);
     if (!next) {
-      if (inboxReviewModeRef.current === 'quicklook') closeQuickLook();
+      if (mode === 'quicklook') closeQuickLook();
       else closeRootDetail();
       return;
     }
-
-    const nextItem = itemsRef.current.find((item) => item.root_id === next.currentItemId);
-    if (!nextItem) return;
-    afterViewerItemReady(nextItem, () => {
-      if (inboxReviewModeRef.current === 'quicklook') setQuickLookSession(next);
-      else {
-        setGroupInitialMode('reader');
-        setViewerSession(next);
-      }
-      dispatchSelection({
-        type: 'replace_items',
-        itemIds: new Set([next.currentItemId]),
-        anchor: next.currentItemId,
-      });
+    const nextItem = loaded.find((item) => item.root_id === next.currentItemId);
+    // A collection's details load while it opens instead of before.
+    if (nextItem?.kind === 'collection') void viewerController.prefetchItemDetails(nextItem.root_id).catch(() => {});
+    if (mode === 'quicklook') setQuickLookSession(next);
+    else {
+      setGroupInitialMode('reader');
+      setViewerSession(next);
+    }
+    dispatchSelection({
+      type: 'replace_items',
+      itemIds: new Set([next.currentItemId]),
+      anchor: next.currentItemId,
     });
-  }, [afterViewerItemReady, closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
+  }, [closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
+
+  const showReviewItemRef = useRef(showReviewItem);
+  showReviewItemRef.current = showReviewItem;
+  const reviewerRef = useRef<InboxReviewer | null>(null);
+  reviewerRef.current ??= createInboxReviewer({
+    // The store, not the last render: a window loaded for the review is
+    // there before it renders.
+    items: () => store.get(gridSessionAtom).items,
+    hasFollowing: () => {
+      const session = store.get(gridSessionAtom);
+      return session.windowStart + session.items.length < (session.totalCount ?? 0);
+    },
+    loadFollowing: () => {
+      const session = store.get(gridSessionAtom);
+      return gridController.requestWindowAt(session.windowStart + session.items.length);
+    },
+    view: () => (quickLookSessionRef.current ? 'quicklook' : 'detail'),
+    shownItemId: (view) =>
+      (view === 'quicklook' ? quickLookSessionRef.current : viewerSessionRef.current)?.currentItemId ?? null,
+    show: (view, itemId) => showReviewItemRef.current(view, itemId),
+    clearSelection: () => entityMutations.settleSelectionAfterMutation(),
+    isAsking: () => store.get(confirmModalAtom).open,
+    suppressScrollMomentum,
+    save: (itemId, decision) => {
+      const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
+      // The selection already moved on; the save leaves it there.
+      return decision === 'reject'
+        ? entityMutations.rejectTarget(target, { keepSelection: true })
+        : entityMutations.setTargetLifecycle(target, 'active', { keepSelection: true }).then(() => true);
+    },
+    reportFailure: (decision, reason) => showErrorNotification({
+      title: decision === 'accept' ? t('Unable to accept item') : t('Unable to reject item'),
+      message: reason instanceof Error ? reason.message : String(reason),
+    }),
+  });
+  const reviewer = reviewerRef.current;
+  useEffect(() => { reviewer.itemsChanged(); }, [items, reviewer]);
+  /** Accept or reject the item under review (see `inboxReview.ts`). */
+  const reviewInboxItem = useCallback(
+    (itemId: number, decision: InboxReviewDecision) => reviewer.review(itemId, decision),
+    [reviewer],
+  );
 
   const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
     const canImport = gridScope.kind !== 'trash'
@@ -1633,6 +1669,7 @@ export function GridScreen({
           onNavigateRoot={navigateRootDetail}
           onClose={() => closeRootDetail(viewerItem.root_id)}
           recordItemId={gridScope.kind === 'recently_viewed' ? null : viewerItem.root_id}
+          onShownChange={markDetailCollectionShown}
         />
       ) : null}
 
@@ -1653,6 +1690,7 @@ export function GridScreen({
           recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateRootDetail}
           onClose={closeRootDetail}
+          onDisplayedItemChange={setDetailShownId}
         />
       )}
 
@@ -1665,14 +1703,16 @@ export function GridScreen({
           recordItemId={gridScope.kind === 'recently_viewed' ? null : undefined}
           onNavigate={navigateQuickLook}
           onClose={closeQuickLook}
+          onDisplayedItemChange={setQuickLookShownId}
         />
       ) : null}
 
       {inboxReviewItemId != null && (viewerSession || quickLookSession) ? (
         <InboxReviewControls
           itemId={inboxReviewItemId}
-          onCommit={commitInboxReview}
-          onAdvance={advanceAfterInboxReview}
+          onReview={reviewInboxItem}
+          paused={reviewPaused}
+          ready={reviewReady}
         />
       ) : null}
 
