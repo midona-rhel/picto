@@ -36,6 +36,9 @@ pub fn retired_site_message(name: &str) -> String {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RetiredSitesSettled {
     pub paused_queries: usize,
+    /// Run entries for retired queries that were still waiting, now cancelled
+    /// so their runs can finish.
+    pub cancelled_run_queries: usize,
     pub removed_credentials: usize,
 }
 
@@ -98,6 +101,8 @@ fn settle_retired_sites_with(
                            AND NOT (paused = 1 AND last_failure_message IS ?2)",
                         rusqlite::params![site_id, message, now, RETIRED_FAILURE_KIND],
                     )?;
+                    settled.cancelled_run_queries +=
+                        cancel_waiting_runs(transaction, site_id, &message, &now)?;
                 }
                 for site_id in &removable {
                     settled.removed_credentials +=
@@ -108,6 +113,59 @@ fn settle_retired_sites_with(
         )
         .map_err(|error| error.to_string())?;
     Ok(settled.map(|(settled, _)| settled).unwrap_or_default())
+}
+
+/// A paused query is never claimed, so a run still waiting on one would
+/// never finish and would keep its subscription busy. Cancel those entries
+/// (and their unfinished posts) and let each run settle.
+fn cancel_waiting_runs(
+    transaction: &rusqlite::Transaction<'_>,
+    site_id: &str,
+    message: &str,
+    now: &str,
+) -> picto_library::Result<usize> {
+    let waiting = {
+        let mut statement = transaction.prepare(
+            "SELECT run_query.run_query_id, run_query.run_id
+             FROM subscription_run_query run_query
+             JOIN subscription_query query USING(query_id)
+             WHERE query.site_id = ?1 AND run_query.status IN ('pending', 'running')",
+        )?;
+        let rows = statement
+            .query_map([site_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut runs = std::collections::BTreeSet::new();
+    for (run_query_id, run_id) in &waiting {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET status = 'cancelled', finished_at = ?1,
+                 failure_kind = ?2, error_message = ?3
+             WHERE run_query_id = ?4",
+            rusqlite::params![now, RETIRED_FAILURE_KIND, message, run_query_id],
+        )?;
+        transaction.execute(
+            "UPDATE source_post_attempt
+             SET state = 'cancelled', terminal_reason = 'source_retired', settled_at = ?1
+             WHERE run_query_id = ?2
+               AND state NOT IN ('added', 'skipped', 'failed', 'cancelled')",
+            rusqlite::params![now, run_query_id],
+        )?;
+        transaction.execute(
+            "UPDATE source_file_attempt SET staged_path = NULL
+             WHERE attempt_id IN (
+                 SELECT attempt_id FROM source_post_attempt
+                 WHERE run_query_id = ?1 AND state = 'cancelled'
+             )",
+            [run_query_id],
+        )?;
+        runs.insert(*run_id);
+    }
+    for run_id in runs {
+        crate::library_subscription_state::settle_run(transaction, run_id, now)?;
+    }
+    Ok(waiting.len())
 }
 
 #[cfg(test)]
@@ -148,6 +206,15 @@ mod tests {
                              (query_key, subscription_id, site_id, domain_key, query_kind, query_text)
                          VALUES ('retired', 1, 'sankaku', 'sankaku.app', 'search', 'solo'),
                                 ('kept', 1, 'yandere', 'yande.re', 'search', 'landscape');
+                         INSERT INTO subscription (subscription_id, subscription_key, name, created_at)
+                         VALUES (2, 'only-retired', 'Only retired', '2026-10-01T00:00:00Z');
+                         INSERT INTO subscription_query
+                             (query_id, query_key, subscription_id, site_id, domain_key, query_kind, query_text)
+                         VALUES (9, 'only-retired', 2, 'konachan', 'konachan.com', 'search', 'sky');
+                         INSERT INTO subscription_run (run_id, subscription_id, requested_by, status, created_at)
+                         VALUES (1, 2, 'schedule', 'pending', '2026-10-01T00:00:00Z');
+                         INSERT INTO subscription_run_query (run_id, query_id, status, available_at)
+                         VALUES (1, 9, 'pending', '2026-10-01T00:00:00Z');
                          INSERT INTO credential (site_id, credential_type, created_at)
                          VALUES ('sankaku', 'cookies', '2026-10-01T00:00:00Z'),
                                 ('yandere', 'cookies', '2026-10-01T00:00:00Z');",
@@ -161,7 +228,8 @@ mod tests {
         assert_eq!(
             settle_retired_sites_with(&application, |_| Err("keychain locked".into())).unwrap(),
             RetiredSitesSettled {
-                paused_queries: 1,
+                paused_queries: 2,
+                cancelled_run_queries: 1,
                 removed_credentials: 0,
             }
         );
@@ -174,6 +242,7 @@ mod tests {
             .unwrap(),
             RetiredSitesSettled {
                 paused_queries: 0,
+                cancelled_run_queries: 0,
                 removed_credentials: 1,
             }
         );
@@ -183,6 +252,24 @@ mod tests {
             (true, Some(retired_site_message("Sankaku")))
         );
         assert_eq!(query_state(&application, "yandere"), (false, None));
+        // The run that was waiting on the retired query finishes instead of
+        // keeping its subscription busy for good.
+        let run: (String, String) = application
+            .library()
+            .auxiliary_read(
+                picto_library::database::WorkPriority::VisibleRead,
+                |connection| {
+                    Ok(connection.query_row(
+                        "SELECT run.status, run_query.status
+                         FROM subscription_run run JOIN subscription_run_query run_query USING(run_id)
+                         WHERE run.run_id = 1",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )?)
+                },
+            )
+            .unwrap();
+        assert_eq!(run, ("cancelled".to_string(), "cancelled".to_string()));
         let credentials = application
             .library()
             .auxiliary_read(
