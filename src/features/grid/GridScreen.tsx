@@ -874,6 +874,9 @@ export function GridScreen({
     // A scroll still coasting through this item must not carry into the next.
     suppressScrollMomentum();
     showReviewItem(mode, nextItemId);
+    // With nothing left to show, the departing item must not stay selected
+    // while it saves; a failed save reselects it when it comes back.
+    if (nextItemId == null) entityMutations.settleSelectionAfterMutation();
     // Where this review left the view. Only while the view is still there
     // (and this is still the latest review) may a failed save bring the item back.
     const destination = { mode, itemId: nextItemId };
