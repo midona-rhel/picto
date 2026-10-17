@@ -15,6 +15,8 @@ export type ReviewView = 'quicklook' | 'detail';
 export interface InboxReviewHost {
   /** The loaded items in view order (a window of the whole list). */
   items(): readonly { root_id: number }[];
+  /** Where the loaded window starts in the whole list. */
+  windowStart(): number;
   /** More items follow the loaded window. */
   hasFollowing(): boolean;
   /** Load the window that follows the loaded one. */
@@ -55,15 +57,25 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
     if (host.isAsking() || inFlight.has(itemId)) return false;
     const open = (item: { root_id: number }) =>
       item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
-    const following = () => {
+    // The reviewed item's place in the whole list. A window loaded after its
+    // save landed no longer holds it, but its successor then takes its place.
+    const loadedIndex = host.items().findIndex((item) => item.root_id === itemId);
+    const position = loadedIndex < 0 ? null : host.windowStart() + loadedIndex;
+    /** Where the item is, or would be, in the loaded window, and whether it is there. */
+    const place = () => {
       const items = host.items();
       const index = items.findIndex((item) => item.root_id === itemId);
-      return index < 0 ? undefined : items.slice(index + 1).find(open)?.root_id;
+      if (index >= 0) return { items, index, present: true };
+      if (position == null) return null;
+      return { items, index: Math.max(0, position - host.windowStart()), present: false };
+    };
+    const following = () => {
+      const at = place();
+      return at?.items.slice(at.present ? at.index + 1 : at.index).find(open)?.root_id;
     };
     const preceding = () => {
-      const items = host.items();
-      const index = items.findIndex((item) => item.root_id === itemId);
-      return index < 0 ? undefined : items.slice(0, index).reverse().find(open)?.root_id;
+      const at = place();
+      return at?.items.slice(0, at.index).reverse().find(open)?.root_id;
     };
     inFlight.add(itemId);
 
