@@ -33,14 +33,18 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const contentIndex = retainedIndex >= 0 || !currentItem ? displayedIndex : 0;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
-  // Nothing counts as shown until the first image has drawn.
   const contentReady = currentItem?.kind === 'collection' || mediaReady;
-  const shownItemId = contentReady ? displayedItem?.root_id ?? null : null;
+  // What the content reports as on screen: the item under review counts as
+  // shown only once it has drawn.
+  const [shownItemId, setShownItemId] = useState<number | null>(null);
+  const markCollectionShown = useCallback(
+    (shown: boolean) => setShownItemId(shown ? currentItem?.root_id ?? null : null),
+    [currentItem?.root_id],
+  );
   const { onDisplayedItemChange } = props;
   useEffect(() => {
     onDisplayedItemChange?.(shownItemId);
   }, [shownItemId, onDisplayedItemChange]);
-  // Closing leaves nothing shown, so a reopened viewer starts not ready.
   useEffect(() => () => onDisplayedItemChange?.(null), [onDisplayedItemChange]);
 
   useEffect(() => {
@@ -111,6 +115,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
           onNavigate={props.onNavigate}
           onClose={() => props.onClose(currentItem.root_id)}
           recordItemId={props.recordItemId === null ? null : currentItem.root_id}
+          onShownChange={markCollectionShown}
         />
       ) : (
         <QuickLookContent
@@ -124,6 +129,7 @@ export function GridQuickLook(props: GridQuickLookProps) {
             ? decodedThumbnailUrl ?? undefined
             : undefined}
           onReady={markMediaReady}
+          onShownItemChange={setShownItemId}
         />
       )}
     </QuickLookHost>

@@ -45,6 +45,8 @@ export interface GroupSurfaceProps {
   onClose: () => void;
   /** Root recorded as recently viewed. Use null when history itself is being browsed. */
   recordItemId?: number | null;
+  /** Whether the collection is on screen: false until its details arrive, and on close. */
+  onShownChange?: (shown: boolean) => void;
 }
 
 function memberToGridItem(details: CanonicalEntityDetails, media: MediaRecord): CanonicalEntityGridItem {
@@ -265,12 +267,16 @@ export function GroupSurface({
   onNavigateRoot,
   onClose,
   recordItemId,
+  onShownChange,
 }: GroupSurfaceProps) {
   useRecordMediaView(recordItemId === undefined ? groupId : recordItemId);
   const [details, setDetails] = useState<CanonicalEntityDetails | null>(
     () => viewerController.takePrefetchedItemDetails?.(groupId) ?? null,
   );
   const skipInitialRefreshRef = useRef(details !== null);
+  const hasDetails = details !== null;
+  useEffect(() => { onShownChange?.(hasDetails); }, [hasDetails, onShownChange]);
+  useEffect(() => () => onShownChange?.(false), [onShownChange]);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState(initialMode);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
