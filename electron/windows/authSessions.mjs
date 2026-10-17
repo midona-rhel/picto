@@ -422,19 +422,10 @@ function createOAuthAdapter(site, fetchImpl) {
       if (site.strategy === 'oauth2') {
         oauthState = randomUUID();
         const redirectUri = site.redirectUrl ?? OAUTH_CALLBACK_URL;
-        if (site.clientId && site.clientSecret) {
-          clientId = site.clientId;
-          clientSecret = site.clientSecret;
-        } else {
-          const registration = await responseJson(await fetchImpl(site.registerUrl, {
-            method: 'POST',
-            headers: { accept: 'application/json', 'content-type': 'application/json' },
-            body: JSON.stringify({ client_name: 'Picto', redirect_uris: redirectUri, scopes: site.scope ?? 'read' }),
-          }), `${site.label} application registration`);
-          clientId = registration.client_id;
-          clientSecret = registration.client_secret;
-        }
-        if (!clientId || !clientSecret) throw new Error(`${site.label} application registration returned no client credentials.`);
+        // OAuth 2 sites sign in with a fixed public client.
+        clientId = site.clientId;
+        clientSecret = site.clientSecret;
+        if (!clientId || !clientSecret) throw new Error(`${site.label} has no OAuth client configured.`);
         authorizationUrl = `${site.authorizeUrl}?${formBody({
           client_id: clientId,
           redirect_uri: redirectUri,
