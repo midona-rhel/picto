@@ -274,10 +274,12 @@ export function GroupSurface({
     () => viewerController.takePrefetchedItemDetails?.(groupId) ?? null,
   );
   const skipInitialRefreshRef = useRef(details !== null);
-  const hasDetails = details !== null;
-  useEffect(() => { onShownChange?.(hasDetails); }, [hasDetails, onShownChange]);
-  useEffect(() => () => onShownChange?.(false), [onShownChange]);
+
   const [error, setError] = useState<string | null>(null);
+  // On screen once its details arrive, or once it shows why they could not.
+  const settled = details !== null || error !== null;
+  useEffect(() => { onShownChange?.(settled); }, [settled, onShownChange]);
+  useEffect(() => () => onShownChange?.(false), [onShownChange]);
   const [mode, setMode] = useState(initialMode);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
   const [selectionAnchorId, setSelectionAnchorId] = useState<number | null>(null);
