@@ -852,7 +852,6 @@ export function GridScreen({
     // The store, not the last render: a window loaded for the review is
     // there before it renders.
     items: () => store.get(gridSessionAtom).items,
-    windowStart: () => store.get(gridSessionAtom).windowStart,
     hasFollowing: () => {
       const session = store.get(gridSessionAtom);
       return session.windowStart + session.items.length < (session.totalCount ?? 0);

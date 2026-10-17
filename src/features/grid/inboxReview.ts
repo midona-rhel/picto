@@ -15,8 +15,6 @@ export type ReviewView = 'quicklook' | 'detail';
 export interface InboxReviewHost {
   /** The loaded items in view order (a window of the whole list). */
   items(): readonly { root_id: number }[];
-  /** Where the loaded window starts in the whole list. */
-  windowStart(): number;
   /** More items follow the loaded window. */
   hasFollowing(): boolean;
   /** Load the window that follows the loaded one. */
@@ -57,25 +55,15 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
     if (host.isAsking() || inFlight.has(itemId)) return false;
     const open = (item: { root_id: number }) =>
       item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
-    // The reviewed item's place in the whole list. A window loaded after its
-    // save landed no longer holds it, but its successor then takes its place.
-    const loadedIndex = host.items().findIndex((item) => item.root_id === itemId);
-    const position = loadedIndex < 0 ? null : host.windowStart() + loadedIndex;
-    /** Where the item is, or would be, in the loaded window, and whether it is there. */
-    const place = () => {
+    const following = () => {
       const items = host.items();
       const index = items.findIndex((item) => item.root_id === itemId);
-      if (index >= 0) return { items, index, present: true };
-      if (position == null) return null;
-      return { items, index: Math.max(0, position - host.windowStart()), present: false };
-    };
-    const following = () => {
-      const at = place();
-      return at?.items.slice(at.present ? at.index + 1 : at.index).find(open)?.root_id;
+      return index < 0 ? undefined : items.slice(index + 1).find(open)?.root_id;
     };
     const preceding = () => {
-      const at = place();
-      return at?.items.slice(0, at.index).reverse().find(open)?.root_id;
+      const items = host.items();
+      const index = items.findIndex((item) => item.root_id === itemId);
+      return index < 0 ? undefined : items.slice(0, index).reverse().find(open)?.root_id;
     };
     inFlight.add(itemId);
 
@@ -94,19 +82,6 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
       if (nextItemId == null) host.clearSelection();
     };
 
-    const next = following();
-    if (next != null || !host.hasFollowing()) moveOn(next ?? preceding() ?? null);
-    else {
-      // The item is the last one loaded but not the last in the list: the
-      // next one is in the following window, not behind.
-      host.loadFollowing()
-        .catch(() => {})
-        .then(() => {
-          // Only while the view is still on the reviewed item.
-          if (host.shownItemId(view) === itemId) moveOn(following() ?? preceding() ?? null);
-        });
-    }
-
     const returnToItem = () => {
       if (latest !== destination) return;
       latest = null;
@@ -114,17 +89,38 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
       // The last item closes the view, so "still there" is "still closed".
       if (host.shownItemId(view) === destination.itemId && isListed(itemId)) host.show(view, itemId);
     };
-    host.save(itemId, decision)
-      .then((committed) => {
-        inFlight.delete(itemId);
-        if (!committed) returnToItem();
-        else if (isListed(itemId)) leaving.add(itemId);
-      })
-      .catch((reason: unknown) => {
-        inFlight.delete(itemId);
-        returnToItem();
-        host.reportFailure(decision, reason);
-      });
+    const save = () => {
+      host.save(itemId, decision)
+        .then((committed) => {
+          inFlight.delete(itemId);
+          if (!committed) returnToItem();
+          else if (isListed(itemId)) leaving.add(itemId);
+        })
+        .catch((reason: unknown) => {
+          inFlight.delete(itemId);
+          returnToItem();
+          host.reportFailure(decision, reason);
+        });
+    };
+
+    const next = following();
+    if (next != null || !host.hasFollowing()) {
+      moveOn(next ?? preceding() ?? null);
+      save();
+    } else {
+      // The item is the last one loaded but not the last in the list: the
+      // next one is in the following window, not behind. Load it before
+      // saving, so the item is still listed to find its successor from (the
+      // loaded window starts before the requested place) and a delete
+      // cannot close the view before the review has moved on.
+      host.loadFollowing()
+        .catch(() => {})
+        .then(() => {
+          // Only while the view is still on the reviewed item.
+          if (host.shownItemId(view) === itemId) moveOn(following() ?? preceding() ?? null);
+          save();
+        });
+    }
     return true;
   }
 

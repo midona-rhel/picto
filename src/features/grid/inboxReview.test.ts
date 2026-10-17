@@ -6,18 +6,15 @@ function setup(ids: number[], view: ReviewView = 'quicklook', following: number[
   let items = ids.map((root_id) => ({ root_id }));
   let pendingWindow = following.map((root_id) => ({ root_id }));
   let finishLoad: (() => void) | null = null;
-  let windowStart = 0;
-  let loadResolve: (() => void) | null = null;
+
   let shown: number | null = ids[0] ?? null;
   let selected: number | null = shown;
   let asking = false;
   const saves = new Map<number, { resolve: (committed: boolean) => void; reject: (reason: unknown) => void }>();
   const host: InboxReviewHost = {
     items: () => items,
-    windowStart: () => windowStart,
     hasFollowing: () => pendingWindow.length > 0,
     loadFollowing: vi.fn(() => new Promise<void>((resolve) => {
-      loadResolve = resolve;
       finishLoad = () => {
         items = [...items, ...pendingWindow];
         pendingWindow = [];
@@ -45,18 +42,6 @@ function setup(ids: number[], view: ReviewView = 'quicklook', following: number[
     navigate(itemId: number | null) { shown = itemId; selected = itemId; },
     ask(value: boolean) { asking = value; },
     async loadWindow() { finishLoad?.(); await settle(); },
-    /** The next window arrives after the save landed: it starts at the
-     *  reviewed item's place, which its successor has taken. */
-    async loadWindowWithout(gone: number) {
-      const position = items.findIndex((item) => item.root_id === gone);
-      const start = windowStart + position;
-      finishLoad = null;
-      items = [...items.slice(position + 1), ...pendingWindow];
-      pendingWindow = [];
-      windowStart = start;
-      loadResolve?.();
-      await settle();
-    },
     /** The list drops saved items, as a refresh after the save does. */
     drop(...gone: number[]) {
       items = items.filter((item) => !gone.includes(item.root_id));
@@ -162,12 +147,16 @@ describe('createInboxReviewer', () => {
     expect(review.shown).toBe(3);
   });
 
-  it('finds the next item even when the new window no longer holds the reviewed one', async () => {
+  it('saves an edge item only after the following window is loaded', async () => {
     const review = setup([1, 2], 'quicklook', [3, 4]);
     review.navigate(2);
-    review.reviewer.review(2, 'accept');
-    await review.loadWindowWithout(2);
+    review.reviewer.review(2, 'reject');
+    // Saving first could drop the item from the new window, or close the
+    // view on a delete, before the review has found where to go.
+    expect(review.host.save).not.toHaveBeenCalled();
+    await review.loadWindow();
     expect(review.shown).toBe(3);
+    expect(review.host.save).toHaveBeenCalledWith(2, 'reject');
   });
 
   it('stays where the user went while the following window loads', async () => {
