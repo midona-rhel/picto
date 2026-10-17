@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "已将 1 个项目评为 1 星",
   "Rated {value0} items 1 star": "已将 {value0} 个项目评为 1 星",
   "Delete undo is disabled. This cannot be undone.": "删除撤销已禁用。此操作无法撤销。",
-  "This delete can no longer be undone. Delete permanently anyway?": "此次删除已无法撤销。仍要永久删除吗？"
+  "This delete can no longer be undone. Delete permanently anyway?": "此次删除已无法撤销。仍要永久删除吗？",
+  "The next items could not be loaded.": "无法加载后续项目。"
 }

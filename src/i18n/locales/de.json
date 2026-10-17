@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "Ein Element mit 1 Stern bewertet",
   "Rated {value0} items 1 star": "{value0} Elemente mit 1 Stern bewertet",
   "Delete undo is disabled. This cannot be undone.": "Das Rückgängigmachen von Löschvorgängen ist deaktiviert. Dies kann nicht rückgängig gemacht werden.",
-  "This delete can no longer be undone. Delete permanently anyway?": "Dieser Löschvorgang kann nicht mehr rückgängig gemacht werden. Trotzdem endgültig löschen?"
+  "This delete can no longer be undone. Delete permanently anyway?": "Dieser Löschvorgang kann nicht mehr rückgängig gemacht werden. Trotzdem endgültig löschen?",
+  "The next items could not be loaded.": "Die nächsten Elemente konnten nicht geladen werden."
 }

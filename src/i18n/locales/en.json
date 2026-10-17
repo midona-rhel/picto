@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "Rated an item 1 star",
   "Rated {value0} items 1 star": "Rated {value0} items 1 star",
   "Delete undo is disabled. This cannot be undone.": "Delete undo is disabled. This cannot be undone.",
-  "This delete can no longer be undone. Delete permanently anyway?": "This delete can no longer be undone. Delete permanently anyway?"
+  "This delete can no longer be undone. Delete permanently anyway?": "This delete can no longer be undone. Delete permanently anyway?",
+  "The next items could not be loaded.": "The next items could not be loaded."
 }

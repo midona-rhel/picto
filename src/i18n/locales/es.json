@@ -1614,5 +1614,6 @@
   "Rated an item 1 star": "Se valoró un elemento con 1 estrella",
   "Rated {value0} items 1 star": "Se valoraron {value0} elementos con 1 estrella",
   "Delete undo is disabled. This cannot be undone.": "La opción de deshacer eliminaciones está desactivada. Esto no se puede deshacer.",
-  "This delete can no longer be undone. Delete permanently anyway?": "Esta eliminación ya no se puede deshacer. ¿Eliminar permanentemente de todos modos?"
+  "This delete can no longer be undone. Delete permanently anyway?": "Esta eliminación ya no se puede deshacer. ¿Eliminar permanentemente de todos modos?",
+  "The next items could not be loaded.": "No se pudieron cargar los siguientes elementos."
 }

@@ -159,6 +159,19 @@ describe('createInboxReviewer', () => {
     expect(review.host.save).toHaveBeenCalledWith(2, 'reject');
   });
 
+  it('stays on an edge item, unsaved, when the next items fail to load', async () => {
+    const review = setup([1, 2], 'quicklook', [3]);
+    review.navigate(2);
+    vi.mocked(review.host.loadFollowing).mockResolvedValueOnce(undefined);
+    review.reviewer.review(2, 'accept');
+    await review.settle();
+    expect(review.shown).toBe(2);
+    expect(review.host.save).not.toHaveBeenCalled();
+    expect(review.host.reportFailure).toHaveBeenCalled();
+    // It can be reviewed again.
+    expect(review.reviewer.review(2, 'accept')).toBe(true);
+  });
+
   it('stays where the user went while the following window loads', async () => {
     const review = setup([1, 2], 'quicklook', [3]);
     review.navigate(2);

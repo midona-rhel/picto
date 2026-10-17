@@ -8,6 +8,7 @@
  * If the save fails or is cancelled, the view goes back to the item, but only
  * while it is still where this review left it.
  */
+import { t } from '../../i18n';
 import type { InboxReviewDecision } from '../viewer/InboxReviewControls';
 
 export type ReviewView = 'quicklook' | 'detail';
@@ -116,8 +117,17 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
       host.loadFollowing()
         .catch(() => {})
         .then(() => {
+          const loaded = following();
+          if (loaded == null && host.hasFollowing()) {
+            // The next items did not load: stay on the item, unsaved, so the
+            // review can be tried again rather than walking backwards.
+            inFlight.delete(itemId);
+            if (latest === destination) latest = null;
+            host.reportFailure(decision, new Error(t('The next items could not be loaded.')));
+            return;
+          }
           // Only while the view is still on the reviewed item.
-          if (host.shownItemId(view) === itemId) moveOn(following() ?? preceding() ?? null);
+          if (host.shownItemId(view) === itemId) moveOn(loaded ?? preceding() ?? null);
           save();
         });
     }
