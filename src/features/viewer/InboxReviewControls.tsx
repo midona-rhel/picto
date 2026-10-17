@@ -35,6 +35,13 @@ interface InboxReviewControlsProps {
    * the controls take no input, and their shortcuts reach nothing else.
    */
   paused?: boolean;
+  /**
+   * False while the view still shows the previous item (Quick Look keeps it
+   * until the next image is decoded): input is ignored, so a press never
+   * reviews an item that is not on screen yet. Unlike `paused`, nothing
+   * changes visibly, since this lasts only moments.
+   */
+  ready?: boolean;
 }
 
 // Matches reviewFlash in the stylesheet.
@@ -44,7 +51,7 @@ const FLASH_DURATION_MS = 360;
  * Accept and Reject for the item being viewed. The controls stay put from
  * one item to the next; a press only flashes the button it hit.
  */
-export function InboxReviewControls({ itemId, onReview, paused = false }: InboxReviewControlsProps) {
+export function InboxReviewControls({ itemId, onReview, paused = false, ready = true }: InboxReviewControlsProps) {
   const [flash, setFlash] = useState<{ decision: InboxReviewDecision; key: number } | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const acceptShortcut = getShortcut('inbox.accept')!;
@@ -54,11 +61,11 @@ export function InboxReviewControls({ itemId, onReview, paused = false }: InboxR
 
   const review = useCallback((decision: InboxReviewDecision) => {
     // The owner refuses a second review of an item it is still saving.
-    if (paused || !onReview(itemId, decision)) return;
+    if (paused || !ready || !onReview(itemId, decision)) return;
     setFlash((current) => ({ decision, key: (current?.key ?? 0) + 1 }));
     clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), FLASH_DURATION_MS);
-  }, [itemId, onReview, paused]);
+  }, [itemId, onReview, paused, ready]);
 
   useShortcutScope((event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;

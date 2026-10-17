@@ -14,6 +14,8 @@ interface GridQuickLookProps {
   recordItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
+  /** The item on screen, which trails `currentIndex` until its image is decoded. */
+  onDisplayedItemChange?: (itemId: number | null) => void;
 }
 
 export function GridQuickLook(props: GridQuickLookProps) {
@@ -31,6 +33,10 @@ export function GridQuickLook(props: GridQuickLookProps) {
   const contentIndex = retainedIndex >= 0 || !currentItem ? displayedIndex : 0;
   const [mediaReady, setMediaReady] = useState(false);
   const markMediaReady = useCallback(() => setMediaReady(true), []);
+  const { onDisplayedItemChange } = props;
+  useEffect(() => {
+    onDisplayedItemChange?.(displayedItem?.root_id ?? null);
+  }, [displayedItem?.root_id, onDisplayedItemChange]);
 
   useEffect(() => {
     const requestedItem = props.items[props.currentIndex] ?? null;

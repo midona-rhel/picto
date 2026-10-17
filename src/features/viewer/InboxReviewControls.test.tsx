@@ -105,6 +105,20 @@ describe('InboxReviewControls', () => {
     expect(onReview).toHaveBeenCalledWith(43, 'accept');
   });
 
+  it('ignores input until the item is on screen, without looking disabled', () => {
+    const onReview = vi.fn(() => true);
+    const { rerender } = render(<InboxReviewControls itemId={43} onReview={onReview} ready={false} />);
+
+    fireEvent.keyDown(window, { key: 'z' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject item' }));
+    expect(onReview).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Reject item' })).toBeEnabled();
+
+    rerender(<InboxReviewControls itemId={43} onReview={onReview} ready />);
+    fireEvent.keyDown(window, { key: 'z' });
+    expect(onReview).toHaveBeenCalledWith(43, 'accept');
+  });
+
   it('ignores repeated and modified key presses', () => {
     const onReview = vi.fn(() => true);
     render(<InboxReviewControls itemId={42} onReview={onReview} />);
