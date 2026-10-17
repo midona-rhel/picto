@@ -118,10 +118,15 @@ export function MediaView({
     neighborHashes,
   });
 
-  // Shown once its thumbnail has decoded (or failed, showing its broken state).
-  const shownItemId = currentHash && pipeline.displayedHash === currentHash && pipeline.thumbSettled
-    ? currentItemId
-    : null;
+  // An image is shown once its thumbnail has decoded (or failed, showing its
+  // broken state); other media once their renderer reports ready.
+  const [rendererReadyHash, setRendererReadyHash] = useState<string | null>(null);
+  const markRendererReady = useCallback(() => setRendererReadyHash(currentHash), [currentHash]);
+  const shownItemId = !currentHash
+    ? null
+    : isImage
+      ? (pipeline.displayedHash === currentHash && pipeline.thumbSettled ? currentItemId : null)
+      : (rendererReadyHash === currentHash ? currentItemId : null);
   useEffect(() => {
     onDisplayedItemChange?.(shownItemId);
   }, [shownItemId, onDisplayedItemChange]);
@@ -277,6 +282,7 @@ export function MediaView({
             onFlashPlaybackChange={setFlashPlayback}
             onFlashContextMenu={contextMenu.open}
             onFrameCaptureChange={handleFrameCaptureChange}
+            onReady={markRendererReady}
           />
         </div>
       ) : !isImage ? (
@@ -291,6 +297,7 @@ export function MediaView({
           onPdfZoomPercentChange={setPdfZoomPercent}
           mediaAutoPlay={rendererKind === 'video' ? previewPreferences.videoAutoPlay : undefined}
           mediaLoop={rendererKind === 'video' ? previewPreferences.videoLoop : undefined}
+          onReady={markRendererReady}
         />
       ) : (
         <div ref={containerRef} className={`${styles.zoomContainer} ${zoom.isDragging ? styles.dragging : ''}`}

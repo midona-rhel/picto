@@ -42,6 +42,18 @@ describe('DetailMediaRenderer', () => {
     expect(container.querySelector('[data-progressive-media-content]')).toHaveAttribute('data-visible', 'true');
   });
 
+  it('reports ready when a renderer loads, and at once when there is nothing to load', () => {
+    const onReady = vi.fn();
+    render(<DetailMediaRenderer hash="audio-hash" mimeType="audio/mpeg" displayName="Track" onReady={onReady} />);
+    expect(onReady).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('audio-renderer'));
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    const unsupported = vi.fn();
+    render(<DetailMediaRenderer hash="other-hash" mimeType="application/x-unknown" displayName="Other" onReady={unsupported} />);
+    expect(unsupported).toHaveBeenCalled();
+  });
+
   it('shows the truthful unsupported-type surface without a fake loading phase', () => {
     const { container } = render(
       <DetailMediaRenderer hash="binary-hash" mimeType="application/octet-stream" displayName="Data" />,

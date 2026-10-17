@@ -97,8 +97,9 @@ export function QuickLookContent({
   });
 
   useEffect(() => {
-    if (!isImage || thumbnailReady || pipeline.thumbLoaded || pipeline.fullVisible) onReady();
-  }, [isImage, onReady, pipeline.fullVisible, pipeline.thumbLoaded, thumbnailReady]);
+    // A failed load is settled too: it shows its broken state.
+    if (!isImage || thumbnailReady || pipeline.thumbLoaded || pipeline.thumbSettled || pipeline.fullVisible) onReady();
+  }, [isImage, onReady, pipeline.fullVisible, pipeline.thumbLoaded, pipeline.thumbSettled, thumbnailReady]);
 
   // Image size from displayed item
   const displayedItem = pipeline.displayedHash
