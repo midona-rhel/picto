@@ -25,8 +25,8 @@ import { createSiteIconService } from './services/siteIconService.mjs';
 import { createUpdateService } from './services/updateService.mjs';
 import {
   createSubscriptionNotificationService,
-  installDockBadgeClearing,
 } from './services/subscriptionNotificationService.mjs';
+import { createInboxBadgeService } from './services/inboxBadgeService.mjs';
 import { associatedFilesFromArguments } from './services/associatedFileService.mjs';
 
 installConsoleForwarding();
@@ -260,6 +260,8 @@ let currentLibraryRoot = null;
 const getCurrentLibraryRoot = () => currentLibraryRoot;
 const setCurrentLibraryRoot = (nextRoot) => {
   currentLibraryRoot = nextRoot;
+  // The badge follows the open library's Inbox (or clears with none open).
+  void inboxBadge.refresh();
 };
 
 const flashThumbnail = createFlashThumbnailService({
@@ -342,9 +344,8 @@ const subscriptionNotifications = createSubscriptionNotificationService({
   app,
   invokeSerialized,
   getCurrentLibraryRoot,
-  isAppFocused: () => BrowserWindow.getFocusedWindow() != null,
 });
-installDockBadgeClearing({ app });
+const inboxBadge = createInboxBadgeService({ app, invokeSerialized, getCurrentLibraryRoot });
 
 let buildAppMenu = () => {};
 
@@ -499,6 +500,7 @@ function wireNativeEvents() {
       mediaProtocol.invalidateThumbnail(payload.fileHash);
     }
     subscriptionNotifications.handleNativeEvent(name, payload);
+    inboxBadge.handleNativeEvent(name);
     windowManager.sendToAllWindows(name, payload);
   });
 }
@@ -614,6 +616,7 @@ app.whenReady().then(async () => {
   await bootstrapApplication();
   updateService.start();
   void subscriptionNotifications.refresh();
+  void inboxBadge.refresh();
 
   // Auto theme: broadcast OS dark/light mode changes to all windows
   nativeTheme.on('updated', () => {

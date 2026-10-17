@@ -68,6 +68,9 @@ have **Accept** and **Reject** too.
 In the media view or Quick Look, Accept (✓) and Reject (✗) buttons float over the item. After each
 decision the viewer moves to the next Inbox item and closes when none are left.
 
+The number on the app icon (the macOS Dock, and Linux launchers that show one) is how many items
+are in the Inbox, like an unread count. It changes as items arrive and as you accept or reject them.
+
 Subscriptions pause when the Inbox holds too many items (1,000 by default; change it in
 **Settings → Subscriptions → Inbox Capacity**).
 

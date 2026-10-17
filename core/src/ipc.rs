@@ -95,6 +95,7 @@ pub fn dispatch_library(
             read(application.collection_note_draft(&input.target)?)
         }
         "sidebar.counts" => read(application.sidebar_counts()?),
+        "library.inbox_count" => read(application.inbox_count()),
         "library.stats" => read(application.library_statistics()?),
         "navigation.get" => read(application.navigation()?),
         "tags.list" => {
