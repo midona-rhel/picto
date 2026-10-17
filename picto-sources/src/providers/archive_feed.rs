@@ -1328,4 +1328,75 @@ mod tests {
         assert_eq!(unavailable.resume_cursor_after, resume_cursor);
         assert!(unavailable.media.is_empty());
     }
+
+    #[tokio::test]
+    async fn files_download_from_a_host_that_refuses_browsers() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        // Stands in for file.pawchive.pw: a browser User-Agent gets 403.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            let browser = request
+                .lines()
+                .any(|line| line.starts_with("user-agent:") && line.contains("mozilla"));
+            let (status, body) = if browser {
+                ("403 Forbidden", b"forbidden".as_slice())
+            } else {
+                ("200 OK", b"file-bytes".as_slice())
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+
+        let post = serde_json::json!({
+            "file": {
+                "name": "page.png",
+                "path": "/dc/ec/dcec2c01aa7a799a43e257b274ede5ec8325523e9fca25e6d633ff4f3911ec4a.png"
+            }
+        });
+        let mut media = post_media(
+            ARCHIVE_FIXTURE,
+            &post,
+            &serde_json::json!({}),
+            "1",
+            "https://pawchive.pw/patreon/user/1/post/1",
+        )
+        .unwrap();
+        assert_eq!(media.len(), 1);
+        let mut descriptor = media.remove(0);
+        descriptor.url = format!("http://{address}/data/page.png");
+
+        let runtime = crate::HttpRuntime::new(crate::HttpPolicy {
+            maximum_concurrency: 1,
+            minimum_interval: std::time::Duration::ZERO,
+            maximum_interval: std::time::Duration::ZERO,
+            request_timeout: std::time::Duration::from_secs(2),
+            retries: 0,
+        })
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("page.png");
+        runtime
+            .download(
+                &descriptor,
+                &RequestCredentials::default(),
+                &destination,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"file-bytes");
+    }
 }
