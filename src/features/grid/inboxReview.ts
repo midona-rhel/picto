@@ -37,7 +37,7 @@ export interface InboxReviewHost {
 }
 
 export interface InboxReviewer {
-  /** False when the review was not taken (a question is open, or it is already saving). */
+  /** False when the review was not taken (a question is open, or the item is already reviewed). */
   review(itemId: number, decision: InboxReviewDecision): boolean;
   /** Call when the list changes, so saved items stop being skipped once gone. */
   itemsChanged(): void;
@@ -53,7 +53,8 @@ export function createInboxReviewer(host: InboxReviewHost): InboxReviewer {
   const isListed = (itemId: number) => host.items().some((item) => item.root_id === itemId);
 
   function review(itemId: number, decision: InboxReviewDecision): boolean {
-    if (host.isAsking() || inFlight.has(itemId)) return false;
+    // Saving, or saved and about to leave the list: it is already reviewed.
+    if (host.isAsking() || inFlight.has(itemId) || leaving.has(itemId)) return false;
     const open = (item: { root_id: number }) =>
       item.root_id !== itemId && !inFlight.has(item.root_id) && !leaving.has(item.root_id);
     const following = () => {

@@ -122,6 +122,9 @@ describe('createInboxReviewer', () => {
     review.reviewer.review(3, 'accept');
     // 2 is saved but still listed, so the review goes to 1.
     expect(review.shown).toBe(1);
+    // Nor can it be reviewed again if the user goes back to it.
+    review.navigate(2);
+    expect(review.reviewer.review(2, 'reject')).toBe(false);
     review.drop(2, 3);
   });
 
