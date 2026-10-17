@@ -102,6 +102,15 @@ describe('setTargetLifecycle', () => {
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
+  it.each(['trash', 'delete'] as const)('leaves a review\'s moved-on selection alone (%s)', async (rejectAction) => {
+    vi.mocked(getSettings).mockResolvedValue({ rejectAction, undoDeleteLimit: 500 } as Awaited<ReturnType<typeof getSettings>>);
+
+    await rejectTarget({ kind: 'explicit', root_ids: [4] }, { keepSelection: true });
+    await setTargetLifecycle({ kind: 'explicit', root_ids: [9] }, 'active', { keepSelection: true });
+
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
+  });
+
   it('clears selection after restoring selected items from Trash', async () => {
     await setTargetLifecycle({ kind: 'explicit', root_ids: [4, 7] }, 'active');
 

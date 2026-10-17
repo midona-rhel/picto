@@ -880,9 +880,10 @@ export function GridScreen({
     reviewDestinationRef.current = destination;
 
     const target: EntityTarget = { kind: 'explicit', root_ids: [itemId] };
+    // The selection already moved to the next item; the save leaves it there.
     const saved = decision === 'reject'
-      ? entityMutations.rejectTarget(target)
-      : entityMutations.setTargetLifecycle(target, 'active').then(() => true);
+      ? entityMutations.rejectTarget(target, { keepSelection: true })
+      : entityMutations.setTargetLifecycle(target, 'active', { keepSelection: true }).then(() => true);
     const returnToItem = () => {
       if (reviewDestinationRef.current !== destination) return;
       reviewDestinationRef.current = null;
