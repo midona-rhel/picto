@@ -140,7 +140,10 @@ impl NativeSourceAdapter for ArchiveSource {
                             Some(current) if next == cursor.offset => current,
                             _ => page(next, false).await?,
                         };
-                        if page_len(&following) == 0 {
+                        let posts = page_posts(&following).ok_or_else(|| {
+                            invalid_response(self.0, "creator response is missing its posts")
+                        })?;
+                        if posts.is_empty() {
                             return Ok(DiscoveryBatch {
                                 posts: Vec::new(),
                                 exhausted: true,
