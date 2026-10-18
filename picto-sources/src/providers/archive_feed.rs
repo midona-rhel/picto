@@ -233,7 +233,8 @@ fn page_posts(page: &Value) -> Option<&Vec<Value>> {
         .or_else(|| page.get("posts").and_then(Value::as_array))
 }
 
-/// A listing's posts, or why the response isn't a page.
+/// A listing's posts, or why the response isn't a page: posts present, at
+/// most a page of them, each with an id.
 fn checked_page(provider: ArchiveProvider, page: &Value) -> Result<&Vec<Value>, SourceError> {
     let posts = page_posts(page)
         .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
@@ -242,6 +243,10 @@ fn checked_page(provider: ArchiveProvider, page: &Value) -> Result<&Vec<Value>, 
             provider,
             "creator response exceeded the fixed page bound",
         ));
+    }
+    // Every post must carry an id: the resume lookup finds posts by id.
+    for post in posts {
+        required_component(provider, post, "id", 256, "post")?;
     }
     Ok(posts)
 }
