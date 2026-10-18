@@ -104,13 +104,8 @@ impl NativeSourceAdapter for ArchiveSource {
                 let mut current = None;
                 loop {
                     let listing = page(offset, offset == cursor.offset && resuming).await?;
-                    // Only a real page can show that the listing shifted.
-                    if page_posts(&listing).is_none() {
-                        return Err(invalid_response(
-                            self.0,
-                            "creator response is missing its posts",
-                        ));
-                    }
+                    // Only a well-formed page can show that the listing shifted.
+                    checked_page(self.0, &listing)?;
                     let next_index = (!anchor.next_id.is_empty())
                         .then(|| anchor_position(&listing, &anchor.next_id))
                         .flatten();
@@ -147,10 +142,7 @@ impl NativeSourceAdapter for ArchiveSource {
                             Some(current) if next == cursor.offset => current,
                             _ => page(next, false).await?,
                         };
-                        let posts = page_posts(&following).ok_or_else(|| {
-                            invalid_response(self.0, "creator response is missing its posts")
-                        })?;
-                        if posts.is_empty() {
+                        if checked_page(self.0, &following)?.is_empty() {
                             return Ok(DiscoveryBatch {
                                 posts: Vec::new(),
                                 exhausted: true,
@@ -239,6 +231,19 @@ impl NativeSourceAdapter for ArchiveSource {
 fn page_posts(page: &Value) -> Option<&Vec<Value>> {
     page.as_array()
         .or_else(|| page.get("posts").and_then(Value::as_array))
+}
+
+/// A listing's posts, or why the response isn't a page.
+fn checked_page(provider: ArchiveProvider, page: &Value) -> Result<&Vec<Value>, SourceError> {
+    let posts = page_posts(page)
+        .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
+    if posts.len() > PAGE_LENGTH as usize {
+        return Err(invalid_response(
+            provider,
+            "creator response exceeded the fixed page bound",
+        ));
+    }
+    Ok(posts)
 }
 
 fn anchor_position(page: &Value, after_id: &str) -> Option<usize> {
@@ -597,14 +602,7 @@ pub(super) fn normalize_page(
     response: Value,
 ) -> Result<DiscoveryBatch, SourceError> {
     let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?;
-    let posts = page_posts(&response)
-        .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
-    if posts.len() > PAGE_LENGTH as usize {
-        return Err(invalid_response(
-            provider,
-            "creator response exceeded the fixed page bound",
-        ));
-    }
+    let posts = checked_page(provider, &response)?;
     if posts.is_empty() {
         if anchor
             .as_ref()
