@@ -101,6 +101,11 @@ export interface GridMenuContext {
   onOrganizeGroup?: () => void;
   onEditGroup?: () => void;
   onUngroup?: () => void;
+  /**
+   * Collections among the selected items; null when the selection reaches
+   * past the loaded tiles, so the count is known only once resolved.
+   */
+  collectionCount?: number | null;
   onNewFolder?: () => void;
   onNewSmartFolder?: () => void;
   onImportFiles?: () => void;
@@ -112,6 +117,30 @@ export interface GridMenuContext {
   sortFields?: readonly ContentSortField[];
   grayscale?: boolean;
   onToggleGrayscale?: () => void;
+}
+
+/**
+ * Ungroup for `count` selected collections; null while the count is being
+ * resolved (a selection reaching past the loaded tiles), until the entry is
+ * replaced with the counted one, or removed.
+ */
+export function ungroupMenuEntry(count: number | null, action: (() => void) | undefined): MenuItem {
+  return item(count === null
+    ? t("Ungroup Collections...")
+    : count > 1
+      ? t("Ungroup {value0} Collections...", { value0: count.toLocaleString() })
+      : t("Ungroup..."), {
+    icon: <GroupRemoveIcon size={15} />,
+    action,
+  });
+}
+
+/** Group, which merges any selected collections into one. */
+export function groupMenuEntry(mayMerge: boolean, action: (() => void) | undefined): MenuItem {
+  return item(mayMerge ? t("Merge into One Group...") : t("Group..."), {
+    icon: <GroupCreateIcon size={15} />,
+    action,
+  });
 }
 
 function sep(): MenuSeparator {
@@ -416,20 +445,22 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       }));
     }
     if (selectionCount > 1 && ctx.onOrganizeGroup) {
-      entries.push(item(t("Group..."), {
-        icon: <GroupCreateIcon size={15} />,
-        action: ctx.onOrganizeGroup,
-      }));
+      // Grouping merges any selected collections into one. When the selection
+      // reaches past the loaded tiles it may hold some, so say merge then too.
+      const mayMerge = ctx.containsGroup || ctx.collectionCount === null || (ctx.collectionCount ?? 0) > 0;
+      entries.push(groupMenuEntry(Boolean(mayMerge), ctx.onOrganizeGroup));
     }
     if (singleSelected && ctx.singleKind === 'collection') {
       entries.push(item(t("Edit Group"), {
         icon: <GroupEditIcon size={15} />,
         action: ctx.onEditGroup,
       }));
-      entries.push(item(t("Ungroup..."), {
-        icon: <GroupRemoveIcon size={15} />,
-        action: ctx.onUngroup,
-      }));
+    }
+    const collectionCount = ctx.collectionCount === undefined
+      ? (singleSelected && ctx.singleKind === 'collection' ? 1 : 0)
+      : ctx.collectionCount;
+    if ((collectionCount === null || collectionCount > 0) && ctx.onUngroup) {
+      entries.push(ungroupMenuEntry(collectionCount, ctx.onUngroup));
     }
     entries.push(sep());
   }

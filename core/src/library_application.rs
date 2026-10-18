@@ -292,6 +292,15 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn selection_collection_count(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<u64, String> {
+        self.library
+            .selection_collection_count(target)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn collection_note_draft(
         &self,
         target: &picto_library::selection::SelectionTarget,
@@ -411,13 +420,13 @@ impl LibraryApplication {
         })
     }
 
-    pub fn ungroup_collection(
+    pub fn ungroup_selection(
         &self,
-        collection_id: RootId,
+        target: &picto_library::selection::SelectionTarget,
     ) -> Result<picto_library::CollectionRootsResult, String> {
         let (root_ids, receipt) = self
             .library
-            .ungroup_collection(collection_id, chrono::Utc::now().timestamp_millis())
+            .ungroup_selection(target, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())?;
         Ok(picto_library::CollectionRootsResult { root_ids, receipt })
     }

@@ -2677,6 +2677,17 @@
     }
   ],
   [
+    "items.selection_collection_count",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          5
+        ]
+      }
+    }
+  ],
+  [
     "items.selection_summary",
     {
       "target": {
@@ -3224,7 +3235,13 @@
   [
     "items.ungroup",
     {
-      "collection_id": 5
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          5,
+          6
+        ]
+      }
     }
   ],
   [

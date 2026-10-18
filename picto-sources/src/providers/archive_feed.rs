@@ -13,6 +13,10 @@ use crate::{
 };
 
 const PAGE_LENGTH: u32 = 50;
+/// How many pages back a resume looks for its anchor before starting over.
+/// A shift of more than this many pages between two runs is rare; starting
+/// over is always safe, only slower.
+const MAX_LOOK_BACK_PAGES: u32 = 4;
 const MAX_CURSOR_BYTES: usize = 1_024;
 
 #[derive(Clone, Copy)]
@@ -72,19 +76,121 @@ impl NativeSourceAdapter for ArchiveSource {
             if request.cursor.as_deref().is_none_or(str::is_empty) {
                 self.2.clear().await;
             }
-            let url = listing_url(self.0, &creator, cursor.offset)?;
-            let response = self
-                .1
-                .get_or_fetch(
-                    url.as_str(),
-                    &credentials,
-                    request
-                        .cursor
-                        .as_deref()
-                        .is_some_and(|cursor| !cursor.is_empty()),
-                    http.get_json::<Value>(url.clone(), &credentials, cancel),
-                )
-                .await?;
+            let resuming = request
+                .cursor
+                .as_deref()
+                .is_some_and(|cursor| !cursor.is_empty());
+            let page = |offset: u32, reuse: bool| {
+                let (credentials, creator) = (&credentials, &creator);
+                async move {
+                    let url = listing_url(self.0, creator, offset)?;
+                    self.1
+                        .get_or_fetch(
+                            url.as_str(),
+                            credentials,
+                            reuse,
+                            http.get_json::<Value>(url.clone(), credentials, cancel),
+                        )
+                        .await
+                }
+            };
+            // Resuming: the cursor names the next post (when it was known) and
+            // the last one handled. The listing may have shifted since, by
+            // any amount, so find them again, walking back from the cursor's
+            // page with fresh copies, and continue from there.
+            if let Some(anchor) = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?
+            {
+                let mut offset = cursor.offset;
+                let mut current = None;
+                loop {
+                    let listing = page(offset, offset == cursor.offset && resuming).await?;
+                    // Only a well-formed page can show that the listing shifted.
+                    checked_page(self.0, &creator, &listing)?;
+                    let next_index = (!anchor.next_id.is_empty())
+                        .then(|| anchor_position(&listing, &anchor.next_id))
+                        .flatten();
+                    let after_index = anchor_position(&listing, &anchor.after_id);
+                    if let Some(index) = next_index.or_else(|| {
+                        after_index
+                            .map(|index| index + 1)
+                            .filter(|index| *index < page_len(&listing))
+                    }) {
+                        let index = index as u32;
+                        let resume = resume_at(self.0, &creator, request, offset, index, &listing)?;
+                        return normalize_page(
+                            self.0,
+                            &resume,
+                            &creator,
+                            CursorState { offset, index },
+                            listing,
+                        );
+                    }
+                    if after_index.is_some() {
+                        // The last post handled ends this page. A short page
+                        // is the end of the listing; otherwise continue on the
+                        // next one.
+                        if page_len(&listing) < PAGE_LENGTH as usize {
+                            return Ok(DiscoveryBatch {
+                                posts: Vec::new(),
+                                exhausted: true,
+                            });
+                        }
+                        let next = offset
+                            .checked_add(PAGE_LENGTH)
+                            .ok_or_else(|| invalid_cursor(self.0))?;
+                        let following = match current.take() {
+                            Some(current) if next == cursor.offset => current,
+                            _ => page(next, false).await?,
+                        };
+                        if checked_page(self.0, &creator, &following)?.is_empty() {
+                            return Ok(DiscoveryBatch {
+                                posts: Vec::new(),
+                                exhausted: true,
+                            });
+                        }
+                        // The next post is the first on that page, whatever
+                        // the cursor named before: anchor the resume to it.
+                        let resume = resume_at(self.0, &creator, request, next, 0, &following)?;
+                        return normalize_page(
+                            self.0,
+                            &resume,
+                            &creator,
+                            CursorState {
+                                offset: next,
+                                index: 0,
+                            },
+                            following,
+                        );
+                    }
+                    if offset == cursor.offset {
+                        current = Some(listing);
+                    }
+                    if offset == 0 || cursor.offset - offset >= MAX_LOOK_BACK_PAGES * PAGE_LENGTH {
+                        break;
+                    }
+                    offset -= PAGE_LENGTH;
+                }
+                // Both posts are gone (or moved further back than we look), so
+                // where the next post went can't be known. Start over from the
+                // first post: posts already seen are seen again, which is
+                // harmless, and none is lost.
+                let first = page(0, false).await?;
+                let restart = DiscoveryRequest {
+                    cursor: None,
+                    ..request.clone()
+                };
+                return normalize_page(
+                    self.0,
+                    &restart,
+                    &creator,
+                    CursorState {
+                        offset: 0,
+                        index: 0,
+                    },
+                    first,
+                );
+            }
+            let response = page(cursor.offset, resuming).await?;
             normalize_page(self.0, request, &creator, cursor, response)
         })
     }
@@ -119,6 +225,74 @@ impl NativeSourceAdapter for ArchiveSource {
             normalize_detail(self.0, post, &locator, detail, profile)
         })
     }
+}
+
+/// A listing's posts: the API answers with a bare array or `{"posts": [...]}`.
+fn page_posts(page: &Value) -> Option<&Vec<Value>> {
+    page.as_array()
+        .or_else(|| page.get("posts").and_then(Value::as_array))
+}
+
+/// A listing's posts, or why the response isn't a page: posts present, at
+/// most a page of them, each with an id and from this creator.
+fn checked_page<'a>(
+    provider: ArchiveProvider,
+    creator: &CreatorLocator,
+    page: &'a Value,
+) -> Result<&'a Vec<Value>, SourceError> {
+    let posts = page_posts(page)
+        .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
+    if posts.len() > PAGE_LENGTH as usize {
+        return Err(invalid_response(
+            provider,
+            "creator response exceeded the fixed page bound",
+        ));
+    }
+    // Every post must carry an id (the resume lookup finds posts by id) and
+    // belong to this creator.
+    for post in posts {
+        required_component(provider, post, "id", 256, "post")?;
+        validate_post_owner(provider, post, creator)?;
+    }
+    Ok(posts)
+}
+
+fn anchor_position(page: &Value, after_id: &str) -> Option<usize> {
+    page_posts(page)?
+        .iter()
+        .position(|post| text(post, "id") == Some(after_id))
+}
+
+fn page_len(page: &Value) -> usize {
+    page_posts(page).map_or(0, Vec::len)
+}
+
+/// The request with its cursor pointing at `index` of the page at `offset`,
+/// so the anchor lookup lands there.
+fn resume_at(
+    provider: ArchiveProvider,
+    creator: &CreatorLocator,
+    request: &DiscoveryRequest,
+    offset: u32,
+    index: u32,
+    page: &Value,
+) -> Result<DiscoveryRequest, SourceError> {
+    let posts = page_posts(page)
+        .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
+    let next_id = required_component(provider, &posts[index as usize], "id", 256, "post")?;
+    let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?
+        .ok_or_else(|| invalid_cursor(provider))?;
+    let cursor = encode_anchored_cursor(
+        provider,
+        creator,
+        CursorState { offset, index },
+        &anchor.after_id,
+        next_id,
+    )?;
+    Ok(DiscoveryRequest {
+        cursor: Some(cursor),
+        ..request.clone()
+    })
 }
 
 fn post_without_detail(mut post: SourcePost) -> SourcePost {
@@ -413,9 +587,22 @@ pub(super) fn decode_cursor(
     let index = parts[4]
         .parse::<u32>()
         .map_err(|_| invalid_cursor(provider))?;
-    let cursor = CursorState { offset, index };
-    encode_anchored_cursor(provider, creator, cursor, parts[5], parts[6])?;
-    Ok(cursor)
+    encode_anchored_cursor(
+        provider,
+        creator,
+        CursorState { offset, index },
+        parts[5],
+        parts[6],
+    )?;
+    // Older cursors moved to the next page one post early (offset 49, 98...),
+    // which the API now refuses. The same position, on a page boundary:
+    let position = offset
+        .checked_add(index)
+        .ok_or_else(|| invalid_cursor(provider))?;
+    Ok(CursorState {
+        offset: position / PAGE_LENGTH * PAGE_LENGTH,
+        index: position % PAGE_LENGTH,
+    })
 }
 
 pub(super) fn normalize_page(
@@ -426,16 +613,7 @@ pub(super) fn normalize_page(
     response: Value,
 ) -> Result<DiscoveryBatch, SourceError> {
     let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?;
-    let posts = response
-        .as_array()
-        .or_else(|| response.get("posts").and_then(Value::as_array))
-        .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
-    if posts.len() > PAGE_LENGTH as usize {
-        return Err(invalid_response(
-            provider,
-            "creator response exceeded the fixed page bound",
-        ));
-    }
+    let posts = checked_page(provider, creator, &response)?;
     if posts.is_empty() {
         if anchor
             .as_ref()
@@ -498,12 +676,14 @@ pub(super) fn normalize_page(
             index: (summary_index + 1) as u32,
         })
     } else if posts.len() == PAGE_LENGTH as usize {
+        // The API accepts only offsets that are multiples of the page length.
+        // The next page is found by the anchor (this post), not by overlap.
         Some(CursorState {
             offset: cursor
                 .offset
-                .checked_add(PAGE_LENGTH - 1)
+                .checked_add(PAGE_LENGTH)
                 .ok_or_else(|| invalid_cursor(provider))?,
-            index: 1,
+            index: 0,
         })
     } else {
         None
@@ -1178,9 +1358,16 @@ mod tests {
             state = decode_cursor(ARCHIVE_FIXTURE, &creator, cursor.as_deref()).unwrap();
         }
         let boundary_cursor = cursor.unwrap();
-        assert_eq!(state.offset, PAGE_LENGTH - 1);
+        // The next page starts at a multiple of the page length.
+        assert_eq!(
+            state,
+            CursorState {
+                offset: PAGE_LENGTH,
+                index: 0
+            }
+        );
 
-        let unchanged = Value::Array(all[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let unchanged = Value::Array(all[PAGE_LENGTH as usize..].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor.clone())),
@@ -1195,7 +1382,7 @@ mod tests {
         let mut new_post = template.clone();
         new_post["id"] = Value::String("post-new".into());
         inserted.insert(0, new_post);
-        let inserted_page = Value::Array(inserted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let inserted_page = Value::Array(inserted[PAGE_LENGTH as usize..].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor.clone())),
@@ -1206,18 +1393,55 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.posts[0].stable_id, "post-050");
 
+        // A deletion ahead shifts post-050 back onto the first page; the
+        // adapter then resumes from that page, where the anchor finds it.
         let mut deleted = all;
         deleted.remove(0);
-        let deleted_page = Value::Array(deleted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let previous_page = Value::Array(deleted[..PAGE_LENGTH as usize].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor)),
             &creator,
-            state,
-            deleted_page,
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
+            previous_page,
         )
         .unwrap();
         assert_eq!(resumed.posts[0].stable_id, "post-050");
+    }
+
+    #[test]
+    fn cursors_from_before_whole_page_offsets_resume_at_the_same_post() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        // Older builds stepped to the next page one post early.
+        let boundary = decode_cursor(
+            ARCHIVE_FIXTURE,
+            &creator,
+            Some("v1|patreon|90822862|49|1|post-049|"),
+        )
+        .unwrap();
+        assert_eq!(
+            boundary,
+            CursorState {
+                offset: 50,
+                index: 0
+            }
+        );
+        let within = decode_cursor(
+            ARCHIVE_FIXTURE,
+            &creator,
+            Some("v1|patreon|90822862|98|5|post-102|post-103"),
+        )
+        .unwrap();
+        assert_eq!(
+            within,
+            CursorState {
+                offset: 100,
+                index: 3
+            }
+        );
     }
 
     #[test]
@@ -1398,5 +1622,210 @@ mod tests {
             .unwrap();
         server.join().unwrap();
         assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"file-bytes");
+    }
+
+    /// Serves a creator's posts the way the archive API does: pages of 50 at
+    /// offsets that are multiples of 50, from a list a test can change.
+    fn archive_server(posts: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut request = [0_u8; 4096];
+                let count = stream.read(&mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..count]);
+                let offset = request
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|path| path.split("o=").nth(1))
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let (status, body) = if !offset.is_multiple_of(50) {
+                    (
+                        "400 Bad Request",
+                        r#"{"error":"offset not multiple of 50"}"#.to_string(),
+                    )
+                } else {
+                    let posts = posts.lock().unwrap();
+                    let page = posts
+                        .iter()
+                        .skip(offset)
+                        .take(50)
+                        .map(|id| {
+                            serde_json::json!({
+                                "id": id, "user": "90822862", "service": "patreon", "title": id,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    // Every other page wrapped, as the API may answer either way.
+                    let body = if (offset / 50) % 2 == 1 {
+                        serde_json::json!({ "posts": page }).to_string()
+                    } else {
+                        Value::Array(page).to_string()
+                    };
+                    ("200 OK", body)
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        port
+    }
+
+    /// Walk a creator post by post through `discover`, changing the listing
+    /// once `change_after` posts have been seen. Returns the posts seen, in order.
+    async fn walk(
+        posts: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        change_after: usize,
+        change: impl FnOnce(&mut Vec<String>),
+    ) -> Vec<String> {
+        let port = archive_server(posts.clone());
+        let root: &'static str = Box::leak(format!("http://127.0.0.1:{port}").into_boxed_str());
+        let api: &'static str = Box::leak(format!("{root}/api/v1").into_boxed_str());
+        let provider = ArchiveProvider {
+            domain: "127.0.0.1",
+            query_domains: &["127.0.0.1"],
+            site_root: root,
+            api_root: api,
+            media_root: root,
+            ..ARCHIVE_FIXTURE
+        };
+        let mut adapter = archive_adapter(provider);
+        let http = crate::HttpRuntime::new(crate::HttpPolicy {
+            maximum_concurrency: 1,
+            minimum_interval: std::time::Duration::ZERO,
+            maximum_interval: std::time::Duration::ZERO,
+            request_timeout: std::time::Duration::from_secs(5),
+            retries: 0,
+        })
+        .unwrap();
+        let credentials = RequestCredentials::default();
+        let cancel = CancellationToken::new();
+        let mut change = Some(change);
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        for _ in 0..1_000 {
+            if seen.len() == change_after {
+                if let Some(change) = change.take() {
+                    change(&mut posts.lock().unwrap());
+                    // Resume as a later run does, without the pages cached
+                    // before the change.
+                    adapter = archive_adapter(provider);
+                }
+            }
+            let batch = adapter
+                .discover(&request(cursor.clone()), &credentials, &http, &cancel)
+                .await
+                .unwrap();
+            let Some(post) = batch.posts.into_iter().next() else {
+                break;
+            };
+            seen.push(post.stable_id.clone());
+            cursor = post.resume_cursor_after.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        seen
+    }
+
+    fn listing(count: usize) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            (0..count).map(|index| format!("post-{index:03}")).collect(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn discovery_pages_through_whole_pages_without_skipping_when_the_listing_changes() {
+        let expected = |range: std::ops::Range<usize>| {
+            range
+                .map(|index| format!("post-{index:03}"))
+                .collect::<Vec<_>>()
+        };
+
+        // Nothing changes: every post once, in order, across three pages.
+        assert_eq!(
+            walk(listing(120), usize::MAX, |_| {}).await,
+            expected(0..120)
+        );
+
+        // Posts are deleted ahead of the cursor at the page boundary: the
+        // listing shifts back, and nothing after the cursor is skipped.
+        let seen = walk(listing(120), 50, |posts| {
+            posts.remove(0);
+            posts.remove(0);
+        })
+        .await;
+        assert_eq!(seen, expected(0..120));
+
+        // A post is added ahead of the cursor: nothing is repeated or skipped.
+        let seen = walk(listing(120), 50, |posts| posts.insert(0, "post-new".into())).await;
+        assert_eq!(seen, expected(0..120));
+
+        // The last post handled is deleted along with an earlier one: every
+        // later post is still seen (some earlier ones may be seen twice).
+        let seen = walk(listing(120), 50, |posts| {
+            posts.retain(|id| id != "post-000" && id != "post-049");
+        })
+        .await;
+        for id in expected(50..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // More than a page of posts is deleted ahead at a later boundary: the
+        // anchor and what follows it move back two pages.
+        let seen = walk(listing(150), 100, |posts| {
+            posts.drain(0..=50);
+        })
+        .await;
+        for id in expected(100..150) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // A shift further back than the look-back limit: the walk starts
+        // over and still sees every later post.
+        let seen = walk(listing(400), 300, |posts| {
+            posts.drain(0..=250);
+        })
+        .await;
+        for id in expected(300..400) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // Mid-page, posts are deleted ahead so the cursor's next post moves
+        // back onto the previous page: it is found there, nothing skipped.
+        let seen = walk(listing(120), 52, |posts| {
+            posts.drain(0..=5);
+        })
+        .await;
+        for id in expected(52..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // Mid-page, the next post is deleted while a post added ahead pushes
+        // the last one handled to the end of its page: the walk continues on
+        // the next page instead of stopping.
+        let seen = walk(listing(120), 49, |posts| {
+            posts.retain(|id| id != "post-049");
+            posts.insert(0, "post-new".into());
+        })
+        .await;
+        for id in expected(50..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // The next post is deleted and the last one handled ends the listing:
+        // the walk ends without an error (the page fetched just before may
+        // still show the deleted post, which is harmless).
+        let seen = walk(listing(60), 59, |posts| {
+            posts.pop();
+        })
+        .await;
+        assert_eq!(seen[..59], expected(0..59)[..]);
     }
 }

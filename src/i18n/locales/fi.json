@@ -1615,5 +1615,13 @@
   "Rated {value0} items 1 star": "Arvioitiin {value0} kohdetta yhdellä tähdellä",
   "Delete undo is disabled. This cannot be undone.": "Poistojen kumoaminen on poistettu käytöstä. Tätä ei voi kumota.",
   "This delete can no longer be undone. Delete permanently anyway?": "Tätä poistoa ei voi enää kumota. Poistetaanko silti pysyvästi?",
-  "The next items could not be loaded.": "Seuraavia kohteita ei voitu ladata."
+  "The next items could not be loaded.": "Seuraavia kohteita ei voitu ladata.",
+  "Ungroup {value0} collections?": "Puretaanko {value0} kokoelmaa?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "Näiden kokoelmien jokainen kohde palaa kirjastoon erillisenä kohteena. Muut valitut kohteet pysyvät ennallaan. Tiedostoja ja metatietoja ei poisteta.",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Jokainen kohde palaa kirjastoon erillisenä kohteena. Tiedostoja ja metatietoja ei poisteta.",
+  "Merge into One Group...": "Yhdistä yhdeksi ryhmäksi...",
+  "Ungroup {value0} Collections...": "Pura {value0} kokoelmaa...",
+  "Ungrouped {value0} collections": "Purettiin {value0} kokoelmaa",
+  "Ungroup Collections...": "Pura kokoelmat...",
+  "Ungroup the selected collections?": "Puretaanko valitut kokoelmat?"
 }

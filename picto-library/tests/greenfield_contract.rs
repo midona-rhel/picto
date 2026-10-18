@@ -5954,3 +5954,91 @@ fn metadata_patch_history_describes_the_fields_the_renderer_changed() {
         assert_eq!(entry.detail.as_deref(), expected);
     }
 }
+
+#[test]
+fn several_collections_ungroup_as_one_change_with_their_own_tags() {
+    let directory = TempDir::new().unwrap();
+    let library = Library::create(directory.path().join("library.sqlite")).unwrap();
+    let roots = library
+        .ingest_batch(&[
+            imported("ungroup-a1", Lifecycle::Active, &["alpha"]),
+            imported("ungroup-a2", Lifecycle::Active, &["alpha"]),
+            imported("ungroup-b1", Lifecycle::Active, &["beta"]),
+            imported("ungroup-b2", Lifecycle::Active, &["beta"]),
+            imported("ungroup-loose", Lifecycle::Active, &[]),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|(root, _)| root)
+        .collect::<Vec<_>>();
+    let group = |members: &[picto_library::RootId], at: i64| {
+        library
+            .organize_into_collection(&GroupRequest {
+                target: SelectionTarget::Explicit {
+                    root_ids: members.to_vec(),
+                },
+                cover_root_id: members[0],
+                winning_collection_id: None,
+                name: None,
+                notes: None,
+                modified_at_ms: at,
+            })
+            .unwrap()
+            .0
+    };
+    let first = group(&roots[0..2], 1_700_000_005_000);
+    let second = group(&roots[2..4], 1_700_000_005_100);
+    let first_tags = library.details(first).unwrap().tag_ids;
+    let second_tags = library.details(second).unwrap().tag_ids;
+    assert_ne!(first_tags, second_tags);
+
+    let (released, _) = library
+        .ungroup_collections(&[second, first, second], 1_700_000_005_200)
+        .unwrap();
+    assert_eq!(released.len(), 4);
+    assert!(library.details(first).is_err());
+    assert!(library.details(second).is_err());
+    for root in &roots[0..2] {
+        assert_eq!(library.details(*root).unwrap().tag_ids, first_tags);
+    }
+    for root in &roots[2..4] {
+        assert_eq!(library.details(*root).unwrap().tag_ids, second_tags);
+    }
+    assert!(library.details(roots[4]).unwrap().tag_ids.is_empty());
+    let undo = library.history().state().undo.unwrap();
+    assert_eq!(undo.command, "collections.ungroup");
+    assert_eq!(undo.count, 2);
+
+    // One undo brings both collections back.
+    library.undo().unwrap().unwrap();
+    assert_eq!(library.details(first).unwrap().tag_ids, first_tags);
+    assert_eq!(library.details(second).unwrap().tag_ids, second_tags);
+    library.redo().unwrap().unwrap();
+    assert!(library.details(first).is_err());
+
+    assert!(library
+        .ungroup_collections(&[roots[4]], 1_700_000_005_300)
+        .is_err());
+
+    // Through a selection: only its collections are ungrouped.
+    library.undo().unwrap().unwrap();
+    let (released, _) = library
+        .ungroup_selection(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first, roots[4]],
+            },
+            1_700_000_005_400,
+        )
+        .unwrap();
+    assert_eq!(released.len(), 2);
+    assert!(library.details(first).is_err());
+    assert_eq!(library.details(second).unwrap().tag_ids, second_tags);
+    assert!(library
+        .ungroup_selection(
+            &SelectionTarget::Explicit {
+                root_ids: vec![roots[4]],
+            },
+            1_700_000_005_500,
+        )
+        .is_err());
+}
