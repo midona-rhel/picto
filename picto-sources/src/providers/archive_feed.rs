@@ -140,9 +140,18 @@ impl NativeSourceAdapter for ArchiveSource {
                             Some(current) if next == cursor.offset => current,
                             _ => page(next, false).await?,
                         };
+                        if page_len(&following) == 0 {
+                            return Ok(DiscoveryBatch {
+                                posts: Vec::new(),
+                                exhausted: true,
+                            });
+                        }
+                        // The next post is the first on that page, whatever
+                        // the cursor named before: anchor the resume to it.
+                        let resume = resume_at(self.0, &creator, request, next, 0, &following)?;
                         return normalize_page(
                             self.0,
-                            request,
+                            &resume,
                             &creator,
                             CursorState {
                                 offset: next,
@@ -1658,7 +1667,7 @@ mod tests {
             media_root: root,
             ..ARCHIVE_FIXTURE
         };
-        let adapter = archive_adapter(provider);
+        let mut adapter = archive_adapter(provider);
         let http = crate::HttpRuntime::new(crate::HttpPolicy {
             maximum_concurrency: 1,
             minimum_interval: std::time::Duration::ZERO,
@@ -1676,6 +1685,9 @@ mod tests {
             if seen.len() == change_after {
                 if let Some(change) = change.take() {
                     change(&mut posts.lock().unwrap());
+                    // Resume as a later run does, without the pages cached
+                    // before the change.
+                    adapter = archive_adapter(provider);
                 }
             }
             let batch = adapter
@@ -1764,6 +1776,18 @@ mod tests {
         })
         .await;
         for id in expected(52..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // Mid-page, the next post is deleted while a post added ahead pushes
+        // the last one handled to the end of its page: the walk continues on
+        // the next page instead of stopping.
+        let seen = walk(listing(120), 49, |posts| {
+            posts.retain(|id| id != "post-049");
+            posts.insert(0, "post-new".into());
+        })
+        .await;
+        for id in expected(50..120) {
             assert!(seen.contains(&id), "{id} was skipped");
         }
 
