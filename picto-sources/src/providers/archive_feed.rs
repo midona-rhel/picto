@@ -104,6 +104,13 @@ impl NativeSourceAdapter for ArchiveSource {
                 let mut current = None;
                 loop {
                     let listing = page(offset, offset == cursor.offset && resuming).await?;
+                    // Only a real page can show that the listing shifted.
+                    if page_posts(&listing).is_none() {
+                        return Err(invalid_response(
+                            self.0,
+                            "creator response is missing its posts",
+                        ));
+                    }
                     let next_index = (!anchor.next_id.is_empty())
                         .then(|| anchor_position(&listing, &anchor.next_id))
                         .flatten();
