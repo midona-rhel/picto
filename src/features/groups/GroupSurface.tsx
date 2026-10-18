@@ -609,7 +609,7 @@ export function GroupSurface({
       message: 'The media will return to the library as separate items. Files and metadata will not be deleted.',
       confirmLabel: t("Ungroup"),
       onConfirm: () => {
-        void ungroup(groupId)
+        void ungroup({ kind: 'explicit', root_ids: [groupId] })
           .then(() => announceUndoableMutation('collections.ungroup'))
           .then(onClose)
           .catch((reason) => {
