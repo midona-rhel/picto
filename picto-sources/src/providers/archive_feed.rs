@@ -225,14 +225,20 @@ impl NativeSourceAdapter for ArchiveSource {
     }
 }
 
+/// A listing's posts: the API answers with a bare array or `{"posts": [...]}`.
+fn page_posts(page: &Value) -> Option<&Vec<Value>> {
+    page.as_array()
+        .or_else(|| page.get("posts").and_then(Value::as_array))
+}
+
 fn anchor_position(page: &Value, after_id: &str) -> Option<usize> {
-    page.as_array()?
+    page_posts(page)?
         .iter()
         .position(|post| text(post, "id") == Some(after_id))
 }
 
 fn page_len(page: &Value) -> usize {
-    page.as_array().map_or(0, Vec::len)
+    page_posts(page).map_or(0, Vec::len)
 }
 
 /// The request with its cursor pointing at `index` of the page at `offset`,
@@ -245,8 +251,7 @@ fn resume_at(
     index: u32,
     page: &Value,
 ) -> Result<DiscoveryRequest, SourceError> {
-    let posts = page
-        .as_array()
+    let posts = page_posts(page)
         .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
     let next_id = required_component(provider, &posts[index as usize], "id", 256, "post")?;
     let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?
@@ -582,9 +587,7 @@ pub(super) fn normalize_page(
     response: Value,
 ) -> Result<DiscoveryBatch, SourceError> {
     let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?;
-    let posts = response
-        .as_array()
-        .or_else(|| response.get("posts").and_then(Value::as_array))
+    let posts = page_posts(&response)
         .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
     if posts.len() > PAGE_LENGTH as usize {
         return Err(invalid_response(
@@ -1637,7 +1640,13 @@ mod tests {
                             })
                         })
                         .collect::<Vec<_>>();
-                    ("200 OK", Value::Array(page).to_string())
+                    // Every other page wrapped, as the API may answer either way.
+                    let body = if (offset / 50) % 2 == 1 {
+                        serde_json::json!({ "posts": page }).to_string()
+                    } else {
+                        Value::Array(page).to_string()
+                    };
+                    ("200 OK", body)
                 };
                 let _ = write!(
                     stream,
