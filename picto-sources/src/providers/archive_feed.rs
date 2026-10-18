@@ -448,7 +448,13 @@ pub(super) fn decode_cursor(
     let index = parts[4]
         .parse::<u32>()
         .map_err(|_| invalid_cursor(provider))?;
-    encode_anchored_cursor(provider, creator, CursorState { offset, index }, parts[5], parts[6])?;
+    encode_anchored_cursor(
+        provider,
+        creator,
+        CursorState { offset, index },
+        parts[5],
+        parts[6],
+    )?;
     // Older cursors moved to the next page one post early (offset 49, 98...),
     // which the API now refuses. The same position, on a page boundary:
     let position = offset
@@ -1223,7 +1229,13 @@ mod tests {
         }
         let boundary_cursor = cursor.unwrap();
         // The next page starts at a multiple of the page length.
-        assert_eq!(state, CursorState { offset: PAGE_LENGTH, index: 0 });
+        assert_eq!(
+            state,
+            CursorState {
+                offset: PAGE_LENGTH,
+                index: 0
+            }
+        );
 
         let unchanged = Value::Array(all[PAGE_LENGTH as usize..].to_vec());
         let resumed = normalize_page(
@@ -1260,7 +1272,10 @@ mod tests {
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor)),
             &creator,
-            CursorState { offset: 0, index: 0 },
+            CursorState {
+                offset: 0,
+                index: 0,
+            },
             previous_page,
         )
         .unwrap();
@@ -1269,7 +1284,13 @@ mod tests {
 
     #[test]
     fn a_resume_looks_back_only_when_its_anchor_moved_up_a_page() {
-        let page = |ids: &[&str]| Value::Array(ids.iter().map(|id| serde_json::json!({ "id": id })).collect());
+        let page = |ids: &[&str]| {
+            Value::Array(
+                ids.iter()
+                    .map(|id| serde_json::json!({ "id": id }))
+                    .collect(),
+            )
+        };
         // Unchanged: the anchor is still the previous page's last post.
         assert!(!shifted_back(&page(&["a", "b", "anchor"]), "anchor"));
         // Deleted ahead: the anchor moved up, with the next post after it.
@@ -1282,10 +1303,32 @@ mod tests {
     fn cursors_from_before_whole_page_offsets_resume_at_the_same_post() {
         let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
         // Older builds stepped to the next page one post early.
-        let boundary = decode_cursor(ARCHIVE_FIXTURE, &creator, Some("v1|patreon|90822862|49|1|post-049|")).unwrap();
-        assert_eq!(boundary, CursorState { offset: 50, index: 0 });
-        let within = decode_cursor(ARCHIVE_FIXTURE, &creator, Some("v1|patreon|90822862|98|5|post-102|post-103")).unwrap();
-        assert_eq!(within, CursorState { offset: 100, index: 3 });
+        let boundary = decode_cursor(
+            ARCHIVE_FIXTURE,
+            &creator,
+            Some("v1|patreon|90822862|49|1|post-049|"),
+        )
+        .unwrap();
+        assert_eq!(
+            boundary,
+            CursorState {
+                offset: 50,
+                index: 0
+            }
+        );
+        let within = decode_cursor(
+            ARCHIVE_FIXTURE,
+            &creator,
+            Some("v1|patreon|90822862|98|5|post-102|post-103"),
+        )
+        .unwrap();
+        assert_eq!(
+            within,
+            CursorState {
+                offset: 100,
+                index: 3
+            }
+        );
     }
 
     #[test]
