@@ -94,33 +94,45 @@ impl NativeSourceAdapter for ArchiveSource {
                         .await
                 }
             };
-            // Resuming at the start of a page, after the last post handled
-            // (the anchor), which ended the previous page. The listing may
-            // have shifted since, by any amount: find the anchor again,
-            // walking back from this page with fresh copies, and continue
-            // right after it.
-            let anchor = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?;
-            if let Some(anchor) = anchor.filter(|anchor| {
-                anchor.next_id.is_empty() && cursor.index == 0 && cursor.offset >= PAGE_LENGTH
-            }) {
+            // Resuming: the cursor names the next post (when it was known) and
+            // the last one handled. The listing may have shifted since, by
+            // any amount, so find them again, walking back from the cursor's
+            // page with fresh copies, and continue from there.
+            if let Some(anchor) = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?
+            {
                 let mut offset = cursor.offset;
                 let mut current = None;
                 loop {
                     let listing = page(offset, offset == cursor.offset && resuming).await?;
-                    if let Some(index) = anchor_position(&listing, &anchor.after_id) {
-                        if index + 1 < page_len(&listing) {
-                            let index = (index + 1) as u32;
-                            let resume =
-                                resume_at(self.0, &creator, request, offset, index, &listing)?;
-                            return normalize_page(
-                                self.0,
-                                &resume,
-                                &creator,
-                                CursorState { offset, index },
-                                listing,
-                            );
+                    let next_index = (!anchor.next_id.is_empty())
+                        .then(|| anchor_position(&listing, &anchor.next_id))
+                        .flatten();
+                    let after_index = anchor_position(&listing, &anchor.after_id);
+                    if let Some(index) = next_index.or_else(|| {
+                        after_index
+                            .map(|index| index + 1)
+                            .filter(|index| *index < page_len(&listing))
+                    }) {
+                        let index = index as u32;
+                        let resume = resume_at(self.0, &creator, request, offset, index, &listing)?;
+                        return normalize_page(
+                            self.0,
+                            &resume,
+                            &creator,
+                            CursorState { offset, index },
+                            listing,
+                        );
+                    }
+                    if after_index.is_some() {
+                        // The last post handled ends this page. A short page
+                        // is the end of the listing; otherwise continue on the
+                        // next one.
+                        if page_len(&listing) < PAGE_LENGTH as usize {
+                            return Ok(DiscoveryBatch {
+                                posts: Vec::new(),
+                                exhausted: true,
+                            });
                         }
-                        // The anchor ends this page: continue on the next one.
                         let next = offset
                             .checked_add(PAGE_LENGTH)
                             .ok_or_else(|| invalid_cursor(self.0))?;
@@ -147,9 +159,9 @@ impl NativeSourceAdapter for ArchiveSource {
                     }
                     offset -= PAGE_LENGTH;
                 }
-                // The anchor was deleted (or moved further back than we look),
-                // so where the next post went can't be known. Start over from
-                // the first post: posts already seen are seen again, which is
+                // Both posts are gone (or moved further back than we look), so
+                // where the next post went can't be known. Start over from the
+                // first post: posts already seen are seen again, which is
                 // harmless, and none is lost.
                 let first = page(0, false).await?;
                 let restart = DiscoveryRequest {
@@ -1744,5 +1756,24 @@ mod tests {
         for id in expected(300..400) {
             assert!(seen.contains(&id), "{id} was skipped");
         }
+
+        // Mid-page, posts are deleted ahead so the cursor's next post moves
+        // back onto the previous page: it is found there, nothing skipped.
+        let seen = walk(listing(120), 52, |posts| {
+            posts.drain(0..=5);
+        })
+        .await;
+        for id in expected(52..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // The next post is deleted and the last one handled ends the listing:
+        // the walk ends without an error (the page fetched just before may
+        // still show the deleted post, which is harmless).
+        let seen = walk(listing(60), 59, |posts| {
+            posts.pop();
+        })
+        .await;
+        assert_eq!(seen[..59], expected(0..59)[..]);
     }
 }
