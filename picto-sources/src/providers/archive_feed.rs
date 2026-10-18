@@ -196,9 +196,10 @@ enum BoundaryResume {
 ///   after it moved back with it; continue right after it there.
 /// - On the current page: posts were added ahead; the anchor lookup
 ///   continues after it.
-/// - Gone (it was deleted itself): its successor moved into the previous
-///   page's last slot. Continue there; at worst one post is seen twice,
-///   which is harmless, where skipping one would lose it.
+/// - Gone (it was deleted itself, perhaps with others): where its successor
+///   now sits can't be known. Start over at the top of the previous page:
+///   posts already seen are seen again, which is harmless, where skipping
+///   one would lose it. This only happens when the anchor post is deleted.
 fn boundary_resume(previous: &Value, current: Option<&Value>, after_id: &str) -> BoundaryResume {
     let previous_len = page_len(previous);
     match anchor_position(previous, after_id) {
@@ -209,9 +210,7 @@ fn boundary_resume(previous: &Value, current: Option<&Value>, after_id: &str) ->
         None if current.is_some_and(|current| anchor_position(current, after_id).is_some()) => {
             BoundaryResume::Current
         }
-        None if previous_len > 0 => BoundaryResume::Previous {
-            index: (previous_len - 1) as u32,
-        },
+        None if previous_len > 0 => BoundaryResume::Previous { index: 0 },
         None => BoundaryResume::Current,
     }
 }
@@ -1403,14 +1402,14 @@ mod tests {
             ),
             BoundaryResume::Current
         );
-        // The anchor itself was deleted: its successor took the last slot.
+        // The anchor itself was deleted: start over on the previous page.
         assert_eq!(
             boundary_resume(
                 &page(&["a", "b", "next"]),
                 Some(&page(&["after-next"])),
                 "anchor"
             ),
-            BoundaryResume::Previous { index: 2 }
+            BoundaryResume::Previous { index: 0 }
         );
     }
 
@@ -1624,5 +1623,150 @@ mod tests {
             .unwrap();
         server.join().unwrap();
         assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"file-bytes");
+    }
+
+    /// Serves a creator's posts the way the archive API does: pages of 50 at
+    /// offsets that are multiples of 50, from a list a test can change.
+    fn archive_server(posts: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut request = [0_u8; 4096];
+                let count = stream.read(&mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..count]);
+                let offset = request
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|path| path.split("o=").nth(1))
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let (status, body) = if !offset.is_multiple_of(50) {
+                    (
+                        "400 Bad Request",
+                        r#"{"error":"offset not multiple of 50"}"#.to_string(),
+                    )
+                } else {
+                    let posts = posts.lock().unwrap();
+                    let page = posts
+                        .iter()
+                        .skip(offset)
+                        .take(50)
+                        .map(|id| {
+                            serde_json::json!({
+                                "id": id, "user": "90822862", "service": "patreon", "title": id,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    ("200 OK", Value::Array(page).to_string())
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        port
+    }
+
+    /// Walk a creator post by post through `discover`, changing the listing
+    /// once `change_after` posts have been seen. Returns the posts seen, in order.
+    async fn walk(
+        posts: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        change_after: usize,
+        change: impl FnOnce(&mut Vec<String>),
+    ) -> Vec<String> {
+        let port = archive_server(posts.clone());
+        let root: &'static str = Box::leak(format!("http://127.0.0.1:{port}").into_boxed_str());
+        let api: &'static str = Box::leak(format!("{root}/api/v1").into_boxed_str());
+        let provider = ArchiveProvider {
+            domain: "127.0.0.1",
+            query_domains: &["127.0.0.1"],
+            site_root: root,
+            api_root: api,
+            media_root: root,
+            ..ARCHIVE_FIXTURE
+        };
+        let adapter = archive_adapter(provider);
+        let http = crate::HttpRuntime::new(crate::HttpPolicy {
+            maximum_concurrency: 1,
+            minimum_interval: std::time::Duration::ZERO,
+            maximum_interval: std::time::Duration::ZERO,
+            request_timeout: std::time::Duration::from_secs(5),
+            retries: 0,
+        })
+        .unwrap();
+        let credentials = RequestCredentials::default();
+        let cancel = CancellationToken::new();
+        let mut change = Some(change);
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        for _ in 0..400 {
+            if seen.len() == change_after {
+                if let Some(change) = change.take() {
+                    change(&mut posts.lock().unwrap());
+                }
+            }
+            let batch = adapter
+                .discover(&request(cursor.clone()), &credentials, &http, &cancel)
+                .await
+                .unwrap();
+            let Some(post) = batch.posts.into_iter().next() else {
+                break;
+            };
+            seen.push(post.stable_id.clone());
+            cursor = post.resume_cursor_after.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        seen
+    }
+
+    fn listing(count: usize) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            (0..count).map(|index| format!("post-{index:03}")).collect(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn discovery_pages_through_whole_pages_without_skipping_when_the_listing_changes() {
+        let expected = |range: std::ops::Range<usize>| {
+            range
+                .map(|index| format!("post-{index:03}"))
+                .collect::<Vec<_>>()
+        };
+
+        // Nothing changes: every post once, in order, across three pages.
+        assert_eq!(
+            walk(listing(120), usize::MAX, |_| {}).await,
+            expected(0..120)
+        );
+
+        // Posts are deleted ahead of the cursor at the page boundary: the
+        // listing shifts back, and nothing after the cursor is skipped.
+        let seen = walk(listing(120), 50, |posts| {
+            posts.remove(0);
+            posts.remove(0);
+        })
+        .await;
+        assert_eq!(seen, expected(0..120));
+
+        // A post is added ahead of the cursor: nothing is repeated or skipped.
+        let seen = walk(listing(120), 50, |posts| posts.insert(0, "post-new".into())).await;
+        assert_eq!(seen, expected(0..120));
+
+        // The last post handled is deleted along with an earlier one: every
+        // later post is still seen (some earlier ones may be seen twice).
+        let seen = walk(listing(120), 50, |posts| {
+            posts.retain(|id| id != "post-000" && id != "post-049");
+        })
+        .await;
+        for id in expected(50..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
     }
 }
