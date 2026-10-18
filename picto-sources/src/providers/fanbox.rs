@@ -861,8 +861,15 @@ mod tests {
         assert!(post.media.iter().all(|media| !media.url.contains("cover")));
         // Media without their own id keep the keys they had with the cover.
         assert_eq!(
-            post.media.iter().map(|media| media.stable_id.as_str()).collect::<Vec<_>>(),
-            vec!["fanbox:112233:image-1", "fanbox:112233:file-1", "fanbox:112233:3"]
+            post.media
+                .iter()
+                .map(|media| media.stable_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "fanbox:112233:image-1",
+                "fanbox:112233:file-1",
+                "fanbox:112233:3"
+            ]
         );
         assert_eq!(post.media[2].position, 2);
         assert!(!crate::media::is_unsupported_archive("attachment.zip"));
