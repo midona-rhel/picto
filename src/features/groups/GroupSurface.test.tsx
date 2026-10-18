@@ -600,7 +600,7 @@ describe('GroupSurface', () => {
     const confirm = getDefaultStore().get((await import('../../state/modals')).confirmModalAtom);
     expect(confirm).toMatchObject({ open: true, confirmLabel: 'Ungroup' });
     await act(async () => { confirm.onConfirm(); });
-    await waitFor(() => expect(mocks.ungroup).toHaveBeenCalledWith(7));
+    await waitFor(() => expect(mocks.ungroup).toHaveBeenCalledWith({ kind: 'explicit', root_ids: [7] }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 

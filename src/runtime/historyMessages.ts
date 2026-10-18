@@ -44,7 +44,7 @@ const DESCRIPTIONS: Record<string, Describe> = {
   'items.rename_many': (count) => (count === 1 ? t('Renamed an item') : t('Renamed {value0} items', { value0: count.toLocaleString(getLocale()) })),
   'items.clear_recent_views': () => t('Cleared recently viewed'),
   'collections.organize': (count) => (count === 1 ? t('Made a collection') : t('Grouped {value0} items into a collection', { value0: count.toLocaleString(getLocale()) })),
-  'collections.ungroup': () => t('Ungrouped a collection'),
+  'collections.ungroup': (count) => (count > 1 ? t('Ungrouped {value0} collections', { value0: count.toLocaleString(getLocale()) }) : t('Ungrouped a collection')),
   'collections.detach': (count) => (count === 1 ? t('Removed an item from a collection') : t('Removed {value0} items from a collection', { value0: count.toLocaleString(getLocale()) })),
   'collections.reorder': () => t('Reordered a collection'),
   'collections.set_cover': () => t('Changed a collection’s cover'),

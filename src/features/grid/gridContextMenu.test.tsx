@@ -663,6 +663,37 @@ describe('buildTileContextMenu', () => {
     expect(onOrganizeGroup).toHaveBeenCalledOnce();
   });
 
+  it('ungroups every selected collection and names merging when collections are selected', () => {
+    const onUngroup = vi.fn();
+    const base = {
+      selectionCount: 5,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'system' as const,
+      statusFilter: 'active' as const,
+      loadedCount: 5,
+      onOrganizeGroup: vi.fn(),
+      onUngroup,
+    };
+    const labelsFor = (collectionCount: number) => buildTileContextMenu({ ...base, collectionCount })
+      .flatMap((entry) => ('label' in entry ? [entry.label] : []));
+
+    expect(labelsFor(3)).toContain('Ungroup 3 Collections...');
+    expect(labelsFor(3)).toContain('Merge into One Group...');
+    expect(labelsFor(1)).toContain('Ungroup...');
+    expect(labelsFor(0)).toContain('Group...');
+    expect(labelsFor(0).some((label) => label.startsWith('Ungroup'))).toBe(false);
+    // A selection reaching past the loaded tiles: the count is resolved later.
+    expect(labelsFor(null as unknown as number)).toContain('Ungroup Collections...');
+
+    const entry = buildTileContextMenu({ ...base, collectionCount: 3 }).find(
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Ungroup 3 Collections...',
+    );
+    entry!.action();
+    expect(onUngroup).toHaveBeenCalledOnce();
+  });
+
   it('treats a group as a library item rather than its cover file', () => {
     const onUngroup = vi.fn();
     const onOpenNewWindow = vi.fn();

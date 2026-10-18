@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// What an ungroup acts on: listed collections, or a selection's collections.
+enum UngroupTarget {
+    Collections(Vec<RootId>),
+    Selection(crate::selection::SelectionTarget),
+}
+
 impl Library {
     pub fn organize_into_collection(
         &self,
@@ -62,61 +68,153 @@ impl Library {
         collection_id: RootId,
         modified_at_ms: i64,
     ) -> Result<(Vec<RootId>, MutationReceipt)> {
-        let (roots, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let mut affected = snapshot
-                .collection_orders
-                .get(&collection_id)
-                .ok_or_else(|| {
-                    LibraryError::InvalidInput(format!(
-                        "root {collection_id} is not a collection"
-                    ))
-                })?
-                .iter()
-                .map(|media| media.0)
-                .collect::<RoaringBitmap>();
-            affected.insert(collection_id.0);
-            let before = capture_structure(transaction, &snapshot, &affected, None)?;
-            // Members inherit the collection's tags and gain no others.
-            let tags = captured_tags(&before);
-            let output = crate::group::ungroup(
-                transaction,
-                revision,
-                (*snapshot).clone(),
-                collection_id,
-                modified_at_ms,
-                Some(&tags),
-            )?;
-            let mut next = output.snapshot;
-            crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-            let after = capture_structure(transaction, &next, &output.affected, Some(&tags))?;
-            let receipt = PublicationCoordinator::receipt(
-                revision,
-                vec![
-                    "roots".into(),
-                    "collections".into(),
-                    "tags".into(),
-                    "folders".into(),
-                    "sidebar".into(),
-                ],
-                output.affected.iter().map(RootId),
-            );
-            Ok((
-                (output.roots, receipt.clone()),
-                PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: Some(HistoryEntry::for_command(
-                        "collections.ungroup",
-                        "Ungroup collection",
-                        SemanticChange::Structure {
-                            affected: Arc::new(output.affected),
-                            before,
-                            after,
-                        },
-                    )),
-                },
-            ))
-        })?;
+        self.ungroup_collections(&[collection_id], modified_at_ms)
+    }
+
+    /// Ungroup every collection in `collection_ids` as one change with one
+    /// undo step. Each collection's members inherit that collection's tags.
+    pub fn ungroup_collections(
+        &self,
+        collection_ids: &[RootId],
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
+        self.ungroup(UngroupTarget::Collections(collection_ids.to_vec()), modified_at_ms)
+    }
+
+    /// Ungroup the collections a selection holds (other selected items are
+    /// left alone), as one change with one undo step. The selection is
+    /// resolved here, so it may reach past what the caller has loaded.
+    pub fn ungroup_selection(
+        &self,
+        target: &crate::selection::SelectionTarget,
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
+        self.ungroup(UngroupTarget::Selection(target.clone()), modified_at_ms)
+    }
+
+    fn ungroup(
+        &self,
+        target: UngroupTarget,
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
+        let (roots, receipt) = self.publish(
+            WorkPriority::ForegroundMutation,
+            |transaction, revision, snapshot| {
+                let mut collection_ids = match &target {
+                    UngroupTarget::Collections(ids) => ids.clone(),
+                    UngroupTarget::Selection(selection) => {
+                        let selected = crate::selection::resolve_with(
+                            transaction,
+                            &snapshot,
+                            selection,
+                            Some((&self.match_cache, &self.order_cache)),
+                        )?;
+                        snapshot
+                            .root_kinds
+                            .get(&RootKind::Collection)
+                            .map_or_else(RoaringBitmap::new, |collections| collections & &selected)
+                            .iter()
+                            .map(RootId)
+                            .collect()
+                    }
+                };
+                collection_ids.sort_unstable();
+                collection_ids.dedup();
+                if collection_ids.is_empty() {
+                    return Err(LibraryError::InvalidInput(
+                        "The selection has no collections.".into(),
+                    ));
+                }
+                let mut affected = RoaringBitmap::new();
+                for collection_id in &collection_ids {
+                    let members =
+                        snapshot
+                            .collection_orders
+                            .get(collection_id)
+                            .ok_or_else(|| {
+                                LibraryError::InvalidInput(format!(
+                                    "root {collection_id} is not a collection"
+                                ))
+                            })?;
+                    affected.extend(members.iter().map(|media| media.0));
+                    affected.insert(collection_id.0);
+                }
+                let before = capture_structure(transaction, &snapshot, &affected, None)?;
+                let mut next = (*snapshot).clone();
+                let mut changed = RoaringBitmap::new();
+                let mut roots = Vec::new();
+                let mut all_tags = std::collections::BTreeSet::new();
+                for collection_id in &collection_ids {
+                    // Members inherit their own collection's tags and gain no
+                    // others; read them from the one capture above rather than
+                    // scanning every tag again per collection.
+                    let mut own = snapshot
+                        .collection_orders
+                        .get(collection_id)
+                        .map(|members| {
+                            members
+                                .iter()
+                                .map(|media| media.0)
+                                .collect::<RoaringBitmap>()
+                        })
+                        .unwrap_or_default();
+                    own.insert(collection_id.0);
+                    let tags = before
+                        .memberships
+                        .iter()
+                        .filter(|(key, ids)| {
+                            key.domain == BitmapDomain::Tag && !ids.is_disjoint(&own)
+                        })
+                        .map(|(key, _)| crate::TagId(key.key_id))
+                        .collect::<Vec<_>>();
+                    let output = crate::group::ungroup(
+                        transaction,
+                        revision,
+                        next,
+                        *collection_id,
+                        modified_at_ms,
+                        Some(&tags),
+                    )?;
+                    next = output.snapshot;
+                    changed |= output.affected;
+                    roots.extend(output.roots);
+                    all_tags.extend(tags);
+                }
+                crate::smart::settle_affected(transaction, &mut next, &changed)?;
+                let all_tags = all_tags.into_iter().collect::<Vec<_>>();
+                let after = capture_structure(transaction, &next, &changed, Some(&all_tags))?;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "roots".into(),
+                        "collections".into(),
+                        "tags".into(),
+                        "folders".into(),
+                        "sidebar".into(),
+                    ],
+                    changed.iter().map(RootId),
+                );
+                Ok((
+                    (roots, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(
+                            HistoryEntry::for_command(
+                                "collections.ungroup",
+                                "Ungroup collection",
+                                SemanticChange::Structure {
+                                    affected: Arc::new(changed),
+                                    before,
+                                    after,
+                                },
+                            )
+                            .about(collection_ids.len() as u64, None),
+                        ),
+                    },
+                ))
+            },
+        )?;
         Ok((roots, receipt))
     }
 

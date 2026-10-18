@@ -130,8 +130,17 @@ export function detachItems(input: DetachCollectionInput): Promise<MutationRecei
   return invoke<MutationReceipt>('items.detach', { ...input });
 }
 
-export function ungroup(collectionId: number): Promise<MutationReceipt> {
-  return invoke<MutationReceipt>('items.ungroup', { collection_id: collectionId });
+/** How many collections `target` holds (a cheap check; no full summary). */
+export function getSelectionCollectionCount(target: EntityTarget): Promise<number> {
+  return invoke<number>('items.selection_collection_count', { target });
+}
+
+/**
+ * Ungroup the collections in `target` (other items in it are left alone) as
+ * one change, undone in one step. The backend resolves the selection.
+ */
+export function ungroup(target: EntityTarget): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.ungroup', { target });
 }
 
 export function reorderGroup(input: ReorderCollectionInput): Promise<MutationReceipt> {

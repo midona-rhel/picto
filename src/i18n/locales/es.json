@@ -1615,5 +1615,13 @@
   "Rated {value0} items 1 star": "Se valoraron {value0} elementos con 1 estrella",
   "Delete undo is disabled. This cannot be undone.": "La opción de deshacer eliminaciones está desactivada. Esto no se puede deshacer.",
   "This delete can no longer be undone. Delete permanently anyway?": "Esta eliminación ya no se puede deshacer. ¿Eliminar permanentemente de todos modos?",
-  "The next items could not be loaded.": "No se pudieron cargar los siguientes elementos."
+  "The next items could not be loaded.": "No se pudieron cargar los siguientes elementos.",
+  "Ungroup {value0} collections?": "¿Desagrupar {value0} colecciones?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "Cada elemento de estas colecciones volverá a la biblioteca como un elemento independiente. Los demás elementos seleccionados no cambian. No se eliminarán archivos ni metadatos.",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Cada elemento volverá a la biblioteca como un elemento independiente. No se eliminarán archivos ni metadatos.",
+  "Merge into One Group...": "Combinar en un grupo...",
+  "Ungroup {value0} Collections...": "Desagrupar {value0} colecciones...",
+  "Ungrouped {value0} collections": "Se desagruparon {value0} colecciones",
+  "Ungroup Collections...": "Desagrupar colecciones...",
+  "Ungroup the selected collections?": "¿Desagrupar las colecciones seleccionadas?"
 }

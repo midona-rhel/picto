@@ -1615,5 +1615,13 @@
   "Rated {value0} items 1 star": "{value0} éléments notés 1 étoile",
   "Delete undo is disabled. This cannot be undone.": "L’annulation des suppressions est désactivée. Cette action ne peut pas être annulée.",
   "This delete can no longer be undone. Delete permanently anyway?": "Cette suppression ne peut plus être annulée. Supprimer définitivement quand même ?",
-  "The next items could not be loaded.": "Impossible de charger les éléments suivants."
+  "The next items could not be loaded.": "Impossible de charger les éléments suivants.",
+  "Ungroup {value0} collections?": "Dissocier {value0} collections ?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "Chaque élément de ces collections reviendra dans la bibliothèque comme élément distinct. Les autres éléments sélectionnés restent inchangés. Les fichiers et métadonnées ne seront pas supprimés.",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Chaque élément reviendra dans la bibliothèque comme élément distinct. Les fichiers et métadonnées ne seront pas supprimés.",
+  "Merge into One Group...": "Fusionner en un seul groupe...",
+  "Ungroup {value0} Collections...": "Dissocier {value0} collections...",
+  "Ungrouped {value0} collections": "{value0} collections dissociées",
+  "Ungroup Collections...": "Dissocier les collections...",
+  "Ungroup the selected collections?": "Dissocier les collections sélectionnées ?"
 }

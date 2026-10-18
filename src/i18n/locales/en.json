@@ -1615,5 +1615,13 @@
   "Rated {value0} items 1 star": "Rated {value0} items 1 star",
   "Delete undo is disabled. This cannot be undone.": "Delete undo is disabled. This cannot be undone.",
   "This delete can no longer be undone. Delete permanently anyway?": "This delete can no longer be undone. Delete permanently anyway?",
-  "The next items could not be loaded.": "The next items could not be loaded."
+  "The next items could not be loaded.": "The next items could not be loaded.",
+  "Ungroup {value0} collections?": "Ungroup {value0} collections?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Every member will return to the library as a separate item. Files and metadata will not be deleted.",
+  "Merge into One Group...": "Merge into One Group...",
+  "Ungroup {value0} Collections...": "Ungroup {value0} Collections...",
+  "Ungrouped {value0} collections": "Ungrouped {value0} collections",
+  "Ungroup Collections...": "Ungroup Collections...",
+  "Ungroup the selected collections?": "Ungroup the selected collections?"
 }
