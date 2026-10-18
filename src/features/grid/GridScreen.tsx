@@ -96,7 +96,7 @@ import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 import type { CanonicalEntityGridItem, EntityTarget, Lifecycle } from '../../shared/types/canonical';
-import { showErrorNotification } from '../../shared/lib/notifications';
+import { showErrorNotification, showInfoNotification } from '../../shared/lib/notifications';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
@@ -1384,11 +1384,11 @@ export function GridScreen({
           // Derive context for menu builder
           const selCount = effectiveSelectionCount;
           const selectedItems = items.filter((it) => effectiveItemIds.has(it.root_id));
-          // Ungroup acts on the collections it can see, so not on a select-all
-          // that reaches past the loaded window.
-          const selectedCollectionIds = effectiveQuerySelectionActive
-            ? []
-            : selectedItems.filter((it) => it.kind === 'collection').map((it) => it.root_id);
+          // The loaded tiles may be only part of the selection (a select-all,
+          // or a range across windows); then how many collections it holds is
+          // only known once the backend resolves it.
+          const loadedCollectionCount = selectedItems.filter((it) => it.kind === 'collection').length;
+          const selectionLoaded = !effectiveQuerySelectionActive && selectedItems.length === selCount;
           const singleItem = effectiveSelectionMode === 'explicit'
             && selCount === 1
             && effectiveItemIds.has(item.root_id)
@@ -1501,21 +1501,39 @@ export function GridScreen({
             onEditGroup: singleItem?.kind === 'collection'
               ? () => openGridItem(singleItem, items, 'editor')
               : undefined,
-            collectionCount: selectedCollectionIds.length,
-            onUngroup: selectedCollectionIds.length > 0
-              ? () => {
-                  const many = selectedCollectionIds.length > 1;
+            collectionCount: selectionLoaded ? loadedCollectionCount : null,
+            onUngroup: effectiveTarget && (loadedCollectionCount > 0 || !selectionLoaded)
+              ? () => { void (async () => {
+                  let collectionIds: number[];
+                  try {
+                    const summary = await entityMutations.getTargetSelectionSummary(effectiveTarget);
+                    collectionIds = summary.collection_candidates.map((candidate) => candidate.collection_id);
+                  } catch (reason) {
+                    showErrorNotification({
+                      title: t("Could not ungroup items"),
+                      message: reason instanceof Error ? reason.message : String(reason),
+                    });
+                    return;
+                  }
+                  if (collectionIds.length === 0) {
+                    showInfoNotification({
+                      title: t("No collections are selected"),
+                      message: t("Ungroup works on collections; the selected items are single items."),
+                    });
+                    return;
+                  }
+                  const many = collectionIds.length > 1;
                   store.set(confirmModalAtom, {
                     open: true,
                     title: many
-                      ? t("Ungroup {value0} collections?", { value0: selectedCollectionIds.length.toLocaleString() })
+                      ? t("Ungroup {value0} collections?", { value0: collectionIds.length.toLocaleString() })
                       : t("Ungroup?"),
                     message: many
                       ? t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.")
                       : t("Every member will return to the library as a separate item. Files and metadata will not be deleted."),
                     confirmLabel: t("Ungroup"),
                     onConfirm: () => {
-                      void ungroup(selectedCollectionIds)
+                      void ungroup(collectionIds)
                         .then(() => announceUndoableMutation('collections.ungroup'))
                         .then(() => clearSelection())
                         .catch((reason) => showErrorNotification({
@@ -1524,7 +1542,7 @@ export function GridScreen({
                         }));
                     },
                   });
-                }
+                })(); }
               : undefined,
             onRegenerateThumbnails: () => {
               const hashes = selectedItems.map((selected) => selected.content_hash);

@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "各項目は個別の項目としてライブラリに戻ります。ファイルとメタデータは削除されません。",
   "Merge into One Group...": "1つのグループに統合...",
   "Ungroup {value0} Collections...": "{value0} 個のコレクションのグループを解除...",
-  "Ungrouped {value0} collections": "{value0} 個のコレクションのグループを解除しました"
+  "Ungrouped {value0} collections": "{value0} 個のコレクションのグループを解除しました",
+  "Ungroup Collections...": "コレクションのグループを解除...",
+  "No collections are selected": "コレクションが選択されていません",
+  "Ungroup works on collections; the selected items are single items.": "グループ解除はコレクションに対して行います。選択した項目は単独の項目です。"
 }

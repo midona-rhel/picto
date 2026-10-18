@@ -103,8 +103,10 @@ impl Library {
                 let mut roots = Vec::new();
                 let mut all_tags = std::collections::BTreeSet::new();
                 for collection_id in &collection_ids {
-                    // Members inherit their own collection's tags and gain no others.
-                    let mut own = next
+                    // Members inherit their own collection's tags and gain no
+                    // others; read them from the one capture above rather than
+                    // scanning every tag again per collection.
+                    let mut own = snapshot
                         .collection_orders
                         .get(collection_id)
                         .map(|members| {
@@ -115,7 +117,14 @@ impl Library {
                         })
                         .unwrap_or_default();
                     own.insert(collection_id.0);
-                    let tags = captured_tags(&capture_structure(transaction, &next, &own, None)?);
+                    let tags = before
+                        .memberships
+                        .iter()
+                        .filter(|(key, ids)| {
+                            key.domain == BitmapDomain::Tag && !ids.is_disjoint(&own)
+                        })
+                        .map(|(key, _)| crate::TagId(key.key_id))
+                        .collect::<Vec<_>>();
                     let output = crate::group::ungroup(
                         transaction,
                         revision,

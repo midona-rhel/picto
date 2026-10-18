@@ -684,6 +684,8 @@ describe('buildTileContextMenu', () => {
     expect(labelsFor(1)).toContain('Ungroup...');
     expect(labelsFor(0)).toContain('Group...');
     expect(labelsFor(0).some((label) => label.startsWith('Ungroup'))).toBe(false);
+    // A selection reaching past the loaded tiles: the count is resolved later.
+    expect(labelsFor(null as unknown as number)).toContain('Ungroup Collections...');
 
     const entry = buildTileContextMenu({ ...base, collectionCount: 3 }).find(
       (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Ungroup 3 Collections...',

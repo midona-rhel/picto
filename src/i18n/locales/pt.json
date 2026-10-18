@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Cada membro voltará à biblioteca como um item separado. Arquivos e metadados não serão excluídos.",
   "Merge into One Group...": "Mesclar em um grupo...",
   "Ungroup {value0} Collections...": "Desagrupar {value0} coleções...",
-  "Ungrouped {value0} collections": "{value0} coleções desagrupadas"
+  "Ungrouped {value0} collections": "{value0} coleções desagrupadas",
+  "Ungroup Collections...": "Desagrupar coleções...",
+  "No collections are selected": "Nenhuma coleção selecionada",
+  "Ungroup works on collections; the selected items are single items.": "Desagrupar funciona com coleções; os itens selecionados são itens avulsos."
 }

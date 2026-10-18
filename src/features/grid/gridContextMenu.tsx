@@ -101,8 +101,11 @@ export interface GridMenuContext {
   onOrganizeGroup?: () => void;
   onEditGroup?: () => void;
   onUngroup?: () => void;
-  /** Collections among the selected items. */
-  collectionCount?: number;
+  /**
+   * Collections among the selected items; null when the selection reaches
+   * past the loaded tiles, so the count is known only once resolved.
+   */
+  collectionCount?: number | null;
   onNewFolder?: () => void;
   onNewSmartFolder?: () => void;
   onImportFiles?: () => void;
@@ -419,7 +422,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     }
     if (selectionCount > 1 && ctx.onOrganizeGroup) {
       // Grouping a selection that holds collections merges them into one.
-      entries.push(item((ctx.collectionCount ?? 0) > 0 ? t("Merge into One Group...") : t("Group..."), {
+      entries.push(item(ctx.containsGroup || (ctx.collectionCount ?? 0) > 0 ? t("Merge into One Group...") : t("Group..."), {
         icon: <GroupCreateIcon size={15} />,
         action: ctx.onOrganizeGroup,
       }));
@@ -430,11 +433,15 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         action: ctx.onEditGroup,
       }));
     }
-    const collectionCount = ctx.collectionCount ?? (singleSelected && ctx.singleKind === 'collection' ? 1 : 0);
-    if (collectionCount > 0 && ctx.onUngroup) {
-      entries.push(item(collectionCount > 1
-        ? t("Ungroup {value0} Collections...", { value0: collectionCount.toLocaleString() })
-        : t("Ungroup..."), {
+    const collectionCount = ctx.collectionCount === undefined
+      ? (singleSelected && ctx.singleKind === 'collection' ? 1 : 0)
+      : ctx.collectionCount;
+    if ((collectionCount === null || collectionCount > 0) && ctx.onUngroup) {
+      entries.push(item(collectionCount === null
+        ? t("Ungroup Collections...")
+        : collectionCount > 1
+          ? t("Ungroup {value0} Collections...", { value0: collectionCount.toLocaleString() })
+          : t("Ungroup..."), {
         icon: <GroupRemoveIcon size={15} />,
         action: ctx.onUngroup,
       }));

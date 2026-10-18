@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "每个成员都会作为单独项目回到资料库。文件和元数据不会被删除。",
   "Merge into One Group...": "合并为一个分组...",
   "Ungroup {value0} Collections...": "取消 {value0} 个合集的分组...",
-  "Ungrouped {value0} collections": "已取消 {value0} 个合集的分组"
+  "Ungrouped {value0} collections": "已取消 {value0} 个合集的分组",
+  "Ungroup Collections...": "取消合集分组...",
+  "No collections are selected": "未选择任何合集",
+  "Ungroup works on collections; the selected items are single items.": "取消分组仅适用于合集;所选项目都是单个项目。"
 }

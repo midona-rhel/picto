@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Jokainen kohde palaa kirjastoon erillisenä kohteena. Tiedostoja ja metatietoja ei poisteta.",
   "Merge into One Group...": "Yhdistä yhdeksi ryhmäksi...",
   "Ungroup {value0} Collections...": "Pura {value0} kokoelmaa...",
-  "Ungrouped {value0} collections": "Purettiin {value0} kokoelmaa"
+  "Ungrouped {value0} collections": "Purettiin {value0} kokoelmaa",
+  "Ungroup Collections...": "Pura kokoelmat...",
+  "No collections are selected": "Kokoelmia ei ole valittu",
+  "Ungroup works on collections; the selected items are single items.": "Purku toimii kokoelmille; valitut kohteet ovat yksittäisiä kohteita."
 }

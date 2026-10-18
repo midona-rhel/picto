@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Chaque élément reviendra dans la bibliothèque comme élément distinct. Les fichiers et métadonnées ne seront pas supprimés.",
   "Merge into One Group...": "Fusionner en un seul groupe...",
   "Ungroup {value0} Collections...": "Dissocier {value0} collections...",
-  "Ungrouped {value0} collections": "{value0} collections dissociées"
+  "Ungrouped {value0} collections": "{value0} collections dissociées",
+  "Ungroup Collections...": "Dissocier les collections...",
+  "No collections are selected": "Aucune collection n'est sélectionnée",
+  "Ungroup works on collections; the selected items are single items.": "La dissociation s'applique aux collections ; les éléments sélectionnés sont des éléments seuls."
 }

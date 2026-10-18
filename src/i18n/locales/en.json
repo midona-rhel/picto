@@ -1621,5 +1621,8 @@
   "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "Every member will return to the library as a separate item. Files and metadata will not be deleted.",
   "Merge into One Group...": "Merge into One Group...",
   "Ungroup {value0} Collections...": "Ungroup {value0} Collections...",
-  "Ungrouped {value0} collections": "Ungrouped {value0} collections"
+  "Ungrouped {value0} collections": "Ungrouped {value0} collections",
+  "Ungroup Collections...": "Ungroup Collections...",
+  "No collections are selected": "No collections are selected",
+  "Ungroup works on collections; the selected items are single items.": "Ungroup works on collections; the selected items are single items."
 }
