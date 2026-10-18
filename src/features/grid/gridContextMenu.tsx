@@ -119,6 +119,30 @@ export interface GridMenuContext {
   onToggleGrayscale?: () => void;
 }
 
+/**
+ * Ungroup for `count` selected collections; null while the count is being
+ * resolved (a selection reaching past the loaded tiles), until the entry is
+ * replaced with the counted one, or removed.
+ */
+export function ungroupMenuEntry(count: number | null, action: (() => void) | undefined): MenuItem {
+  return item(count === null
+    ? t("Ungroup Collections...")
+    : count > 1
+      ? t("Ungroup {value0} Collections...", { value0: count.toLocaleString() })
+      : t("Ungroup..."), {
+    icon: <GroupRemoveIcon size={15} />,
+    action,
+  });
+}
+
+/** Group, which merges any selected collections into one. */
+export function groupMenuEntry(mayMerge: boolean, action: (() => void) | undefined): MenuItem {
+  return item(mayMerge ? t("Merge into One Group...") : t("Group..."), {
+    icon: <GroupCreateIcon size={15} />,
+    action,
+  });
+}
+
 function sep(): MenuSeparator {
   return { separator: true };
 }
@@ -424,10 +448,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       // Grouping merges any selected collections into one. When the selection
       // reaches past the loaded tiles it may hold some, so say merge then too.
       const mayMerge = ctx.containsGroup || ctx.collectionCount === null || (ctx.collectionCount ?? 0) > 0;
-      entries.push(item(mayMerge ? t("Merge into One Group...") : t("Group..."), {
-        icon: <GroupCreateIcon size={15} />,
-        action: ctx.onOrganizeGroup,
-      }));
+      entries.push(groupMenuEntry(Boolean(mayMerge), ctx.onOrganizeGroup));
     }
     if (singleSelected && ctx.singleKind === 'collection') {
       entries.push(item(t("Edit Group"), {
@@ -439,14 +460,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       ? (singleSelected && ctx.singleKind === 'collection' ? 1 : 0)
       : ctx.collectionCount;
     if ((collectionCount === null || collectionCount > 0) && ctx.onUngroup) {
-      entries.push(item(collectionCount === null
-        ? t("Ungroup Collections...")
-        : collectionCount > 1
-          ? t("Ungroup {value0} Collections...", { value0: collectionCount.toLocaleString() })
-          : t("Ungroup..."), {
-        icon: <GroupRemoveIcon size={15} />,
-        action: ctx.onUngroup,
-      }));
+      entries.push(ungroupMenuEntry(collectionCount, ctx.onUngroup));
     }
     entries.push(sep());
   }

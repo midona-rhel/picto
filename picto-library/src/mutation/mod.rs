@@ -772,6 +772,28 @@ impl Library {
         )
     }
 
+    /// How many collections a selection holds: a cheap check (no tag or
+    /// folder scan) for offering collection actions on a selection that
+    /// reaches past what the renderer has loaded.
+    pub fn selection_collection_count(&self, target: &SelectionTarget) -> Result<u64> {
+        self.database.read_consistent(
+            WorkPriority::VisibleRead,
+            |revision| self.capture_revision(revision),
+            |connection, snapshot| {
+                let selected = crate::selection::resolve_with(
+                    connection,
+                    &snapshot,
+                    target,
+                    Some((&self.match_cache, &self.order_cache)),
+                )?;
+                Ok(snapshot
+                    .root_kinds
+                    .get(&RootKind::Collection)
+                    .map_or(0, |collections| collections.intersection_len(&selected)))
+            },
+        )
+    }
+
     pub fn collection_note_draft(
         &self,
         target: &SelectionTarget,

@@ -292,6 +292,15 @@ impl LibraryApplication {
             .map_err(|error| error.to_string())
     }
 
+    pub fn selection_collection_count(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> Result<u64, String> {
+        self.library
+            .selection_collection_count(target)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn collection_note_draft(
         &self,
         target: &picto_library::selection::SelectionTarget,

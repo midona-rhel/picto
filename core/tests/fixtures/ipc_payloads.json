@@ -2677,6 +2677,17 @@
     }
   ],
   [
+    "items.selection_collection_count",
+    {
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          5
+        ]
+      }
+    }
+  ],
+  [
     "items.selection_summary",
     {
       "target": {

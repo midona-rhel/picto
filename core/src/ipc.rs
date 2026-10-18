@@ -90,6 +90,10 @@ pub fn dispatch_library(
             let input: TargetInput = parse(args_json)?;
             read(application.ordered_image_selection(&input.target)?)
         }
+        "items.selection_collection_count" => {
+            let input: TargetInput = parse(args_json)?;
+            read(application.selection_collection_count(&input.target)?)
+        }
         "items.collection_note_draft" => {
             let input: TargetInput = parse(args_json)?;
             read(application.collection_note_draft(&input.target)?)
@@ -383,7 +387,7 @@ pub fn dispatch_library(
             read(application.detach_items(input)?)
         }
         "items.ungroup" => {
-            let input: SelectionTargetInput = parse(args_json)?;
+            let input: TargetInput = parse(args_json)?;
             read(application.ungroup_selection(&input.target)?)
         }
         "items.reorder_collection" => {
@@ -971,11 +975,6 @@ struct RenameRootsInput {
 struct PatchMetadataInput {
     target: picto_library::selection::SelectionTarget,
     patch: picto_library::RootMetadataPatch,
-}
-
-#[derive(Deserialize)]
-struct SelectionTargetInput {
-    target: picto_library::selection::SelectionTarget,
 }
 
 #[derive(Deserialize)]

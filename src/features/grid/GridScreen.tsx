@@ -68,12 +68,12 @@ import { CanvasGrid } from './canvas/CanvasGrid';
 import type { GridLayoutConfig } from './canvas/gridLayoutModel';
 import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
-import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntries } from './gridContextMenu';
+import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntries, groupMenuEntry, ungroupMenuEntry } from './gridContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchInitial, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
-import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
+import { getSelectionCollectionCount, organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
 import { GridQuickLook } from '../viewer/GridQuickLook';
@@ -1389,6 +1389,32 @@ export function GridScreen({
           // only known once the backend resolves it.
           const loadedCollectionCount = selectedItems.filter((it) => it.kind === 'collection').length;
           const selectionLoaded = !effectiveQuerySelectionActive && selectedItems.length === selCount;
+          // The backend resolves the selection, so collections beyond the
+          // loaded tiles are included; `count` is null when not yet known.
+          const confirmUngroup = (count: number | null) => {
+            if (!effectiveTarget) return;
+            store.set(confirmModalAtom, {
+              open: true,
+              title: count === 1
+                ? t("Ungroup?")
+                : count === null
+                  ? t("Ungroup the selected collections?")
+                  : t("Ungroup {value0} collections?", { value0: count.toLocaleString() }),
+              message: count === 1 && selCount === 1
+                ? t("Every member will return to the library as a separate item. Files and metadata will not be deleted.")
+                : t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."),
+              confirmLabel: t("Ungroup"),
+              onConfirm: () => {
+                void ungroup(effectiveTarget)
+                  .then(() => announceUndoableMutation('collections.ungroup'))
+                  .then(() => clearSelection())
+                  .catch((reason) => showErrorNotification({
+                    title: t("Could not ungroup items"),
+                    message: reason instanceof Error ? reason.message : String(reason),
+                  }));
+              },
+            });
+          };
           const singleItem = effectiveSelectionMode === 'explicit'
             && selCount === 1
             && effectiveItemIds.has(item.root_id)
@@ -1503,33 +1529,7 @@ export function GridScreen({
               : undefined,
             collectionCount: selectionLoaded ? loadedCollectionCount : null,
             onUngroup: effectiveTarget && (loadedCollectionCount > 0 || !selectionLoaded)
-              ? () => {
-                  // The backend resolves the selection, so collections beyond
-                  // the loaded tiles are included; the count is known only
-                  // when every selected tile is loaded.
-                  const count = selectionLoaded ? loadedCollectionCount : null;
-                  store.set(confirmModalAtom, {
-                    open: true,
-                    title: count === 1
-                      ? t("Ungroup?")
-                      : count === null
-                        ? t("Ungroup the selected collections?")
-                        : t("Ungroup {value0} collections?", { value0: count.toLocaleString() }),
-                    message: count === 1 && selCount === 1
-                      ? t("Every member will return to the library as a separate item. Files and metadata will not be deleted.")
-                      : t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."),
-                    confirmLabel: t("Ungroup"),
-                    onConfirm: () => {
-                      void ungroup(effectiveTarget)
-                        .then(() => announceUndoableMutation('collections.ungroup'))
-                        .then(() => clearSelection())
-                        .catch((reason) => showErrorNotification({
-                          title: t("Could not ungroup items"),
-                          message: reason instanceof Error ? reason.message : String(reason),
-                        }));
-                    },
-                  });
-                }
+              ? () => confirmUngroup(selectionLoaded ? loadedCollectionCount : null)
               : undefined,
             onRegenerateThumbnails: () => {
               const hashes = selectedItems.map((selected) => selected.content_hash);
@@ -1642,6 +1642,27 @@ export function GridScreen({
             onReject: () => { if (effectiveTarget) void entityMutations.rejectTarget(effectiveTarget); },
           });
           const menuId = contextMenu.openAt(pos, entries);
+          if (!selectionLoaded && effectiveTarget) {
+            // Whether the selection holds collections is known once the
+            // backend resolves it: then show the counted Ungroup (or none),
+            // and plain Group when there is nothing to merge.
+            void getSelectionCollectionCount(effectiveTarget)
+              .then((count) => {
+                contextMenu.replaceEntry(
+                  menuId,
+                  ungroupMenuEntry(null, undefined).label,
+                  count > 0 ? [ungroupMenuEntry(count, () => confirmUngroup(count))] : [],
+                );
+                if (count === 0 && loadedCollectionCount === 0 && selCount > 1) {
+                  contextMenu.replaceEntry(
+                    menuId,
+                    groupMenuEntry(true, undefined).label,
+                    [groupMenuEntry(false, () => { void organizeSelection(effectiveTarget, selectedItems[0]?.root_id ?? item.root_id); })],
+                  );
+                }
+              })
+              .catch((reason) => console.warn('[grid] collection count lookup failed', reason));
+          }
           if (openWithPending && singleItem?.content_hash) {
             const hash = singleItem.content_hash;
             void filesController.getOpenWithOptionsForHash(hash)
