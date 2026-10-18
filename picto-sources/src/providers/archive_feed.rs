@@ -72,19 +72,43 @@ impl NativeSourceAdapter for ArchiveSource {
             if request.cursor.as_deref().is_none_or(str::is_empty) {
                 self.2.clear().await;
             }
-            let url = listing_url(self.0, &creator, cursor.offset)?;
-            let response = self
-                .1
-                .get_or_fetch(
-                    url.as_str(),
-                    &credentials,
-                    request
-                        .cursor
-                        .as_deref()
-                        .is_some_and(|cursor| !cursor.is_empty()),
-                    http.get_json::<Value>(url.clone(), &credentials, cancel),
-                )
-                .await?;
+            let resuming = request
+                .cursor
+                .as_deref()
+                .is_some_and(|cursor| !cursor.is_empty());
+            let page = |offset: u32| {
+                let (credentials, creator) = (&credentials, &creator);
+                async move {
+                    let url = listing_url(self.0, creator, offset)?;
+                    self.1
+                        .get_or_fetch(
+                            url.as_str(),
+                            credentials,
+                            resuming,
+                            http.get_json::<Value>(url.clone(), credentials, cancel),
+                        )
+                        .await
+                }
+            };
+            // Resuming at the start of a page after the previous page's last
+            // post: if posts ahead of it were deleted, the listing shifted
+            // back and that post (and what follows it) is now on the
+            // previous page. Look there first so nothing is skipped.
+            let anchor = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?;
+            if let Some(anchor) = anchor.filter(|anchor| {
+                anchor.next_id.is_empty() && cursor.index == 0 && cursor.offset >= PAGE_LENGTH
+            }) {
+                let previous_offset = cursor.offset - PAGE_LENGTH;
+                let previous = page(previous_offset).await?;
+                if shifted_back(&previous, &anchor.after_id) {
+                    let previous_cursor = CursorState {
+                        offset: previous_offset,
+                        index: 0,
+                    };
+                    return normalize_page(self.0, request, &creator, previous_cursor, previous);
+                }
+            }
+            let response = page(cursor.offset).await?;
             normalize_page(self.0, request, &creator, cursor, response)
         })
     }
@@ -119,6 +143,17 @@ impl NativeSourceAdapter for ArchiveSource {
             normalize_detail(self.0, post, &locator, detail, profile)
         })
     }
+}
+
+/// Whether the anchor post now sits before the end of the previous page,
+/// with posts after it there: posts ahead of it were deleted.
+fn shifted_back(previous_page: &Value, after_id: &str) -> bool {
+    previous_page.as_array().is_some_and(|posts| {
+        posts
+            .iter()
+            .position(|post| text(post, "id") == Some(after_id))
+            .is_some_and(|index| index + 1 < posts.len())
+    })
 }
 
 fn post_without_detail(mut post: SourcePost) -> SourcePost {
@@ -413,9 +448,16 @@ pub(super) fn decode_cursor(
     let index = parts[4]
         .parse::<u32>()
         .map_err(|_| invalid_cursor(provider))?;
-    let cursor = CursorState { offset, index };
-    encode_anchored_cursor(provider, creator, cursor, parts[5], parts[6])?;
-    Ok(cursor)
+    encode_anchored_cursor(provider, creator, CursorState { offset, index }, parts[5], parts[6])?;
+    // Older cursors moved to the next page one post early (offset 49, 98...),
+    // which the API now refuses. The same position, on a page boundary:
+    let position = offset
+        .checked_add(index)
+        .ok_or_else(|| invalid_cursor(provider))?;
+    Ok(CursorState {
+        offset: position / PAGE_LENGTH * PAGE_LENGTH,
+        index: position % PAGE_LENGTH,
+    })
 }
 
 pub(super) fn normalize_page(
@@ -498,12 +540,14 @@ pub(super) fn normalize_page(
             index: (summary_index + 1) as u32,
         })
     } else if posts.len() == PAGE_LENGTH as usize {
+        // The API accepts only offsets that are multiples of the page length.
+        // The next page is found by the anchor (this post), not by overlap.
         Some(CursorState {
             offset: cursor
                 .offset
-                .checked_add(PAGE_LENGTH - 1)
+                .checked_add(PAGE_LENGTH)
                 .ok_or_else(|| invalid_cursor(provider))?,
-            index: 1,
+            index: 0,
         })
     } else {
         None
@@ -1178,9 +1222,10 @@ mod tests {
             state = decode_cursor(ARCHIVE_FIXTURE, &creator, cursor.as_deref()).unwrap();
         }
         let boundary_cursor = cursor.unwrap();
-        assert_eq!(state.offset, PAGE_LENGTH - 1);
+        // The next page starts at a multiple of the page length.
+        assert_eq!(state, CursorState { offset: PAGE_LENGTH, index: 0 });
 
-        let unchanged = Value::Array(all[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let unchanged = Value::Array(all[PAGE_LENGTH as usize..].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor.clone())),
@@ -1195,7 +1240,7 @@ mod tests {
         let mut new_post = template.clone();
         new_post["id"] = Value::String("post-new".into());
         inserted.insert(0, new_post);
-        let inserted_page = Value::Array(inserted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let inserted_page = Value::Array(inserted[PAGE_LENGTH as usize..].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor.clone())),
@@ -1206,18 +1251,41 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.posts[0].stable_id, "post-050");
 
+        // A deletion ahead shifts post-050 back onto the first page; the
+        // adapter then resumes from that page, where the anchor finds it.
         let mut deleted = all;
         deleted.remove(0);
-        let deleted_page = Value::Array(deleted[(PAGE_LENGTH - 1) as usize..].to_vec());
+        let previous_page = Value::Array(deleted[..PAGE_LENGTH as usize].to_vec());
         let resumed = normalize_page(
             ARCHIVE_FIXTURE,
             &request(Some(boundary_cursor)),
             &creator,
-            state,
-            deleted_page,
+            CursorState { offset: 0, index: 0 },
+            previous_page,
         )
         .unwrap();
         assert_eq!(resumed.posts[0].stable_id, "post-050");
+    }
+
+    #[test]
+    fn a_resume_looks_back_only_when_its_anchor_moved_up_a_page() {
+        let page = |ids: &[&str]| Value::Array(ids.iter().map(|id| serde_json::json!({ "id": id })).collect());
+        // Unchanged: the anchor is still the previous page's last post.
+        assert!(!shifted_back(&page(&["a", "b", "anchor"]), "anchor"));
+        // Deleted ahead: the anchor moved up, with the next post after it.
+        assert!(shifted_back(&page(&["b", "anchor", "next"]), "anchor"));
+        // Inserted ahead: the anchor moved onto the following page.
+        assert!(!shifted_back(&page(&["x", "a", "b"]), "anchor"));
+    }
+
+    #[test]
+    fn cursors_from_before_whole_page_offsets_resume_at_the_same_post() {
+        let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
+        // Older builds stepped to the next page one post early.
+        let boundary = decode_cursor(ARCHIVE_FIXTURE, &creator, Some("v1|patreon|90822862|49|1|post-049|")).unwrap();
+        assert_eq!(boundary, CursorState { offset: 50, index: 0 });
+        let within = decode_cursor(ARCHIVE_FIXTURE, &creator, Some("v1|patreon|90822862|98|5|post-102|post-103")).unwrap();
+        assert_eq!(within, CursorState { offset: 100, index: 3 });
     }
 
     #[test]
