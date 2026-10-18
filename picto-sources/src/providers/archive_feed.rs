@@ -13,6 +13,10 @@ use crate::{
 };
 
 const PAGE_LENGTH: u32 = 50;
+/// How many pages back a resume looks for its anchor before starting over.
+/// A shift of more than this many pages between two runs is rare; starting
+/// over is always safe, only slower.
+const MAX_LOOK_BACK_PAGES: u32 = 4;
 const MAX_CURSOR_BYTES: usize = 1_024;
 
 #[derive(Clone, Copy)]
@@ -138,14 +142,15 @@ impl NativeSourceAdapter for ArchiveSource {
                     if offset == cursor.offset {
                         current = Some(listing);
                     }
-                    if offset == 0 {
+                    if offset == 0 || cursor.offset - offset >= MAX_LOOK_BACK_PAGES * PAGE_LENGTH {
                         break;
                     }
                     offset -= PAGE_LENGTH;
                 }
-                // The anchor was deleted, so where the next post went can't
-                // be known. Start over from the first post: posts already
-                // seen are seen again, which is harmless, and none is lost.
+                // The anchor was deleted (or moved further back than we look),
+                // so where the next post went can't be known. Start over from
+                // the first post: posts already seen are seen again, which is
+                // harmless, and none is lost.
                 let first = page(0, false).await?;
                 let restart = DiscoveryRequest {
                     cursor: None,
@@ -1655,7 +1660,7 @@ mod tests {
         let mut change = Some(change);
         let mut seen = Vec::new();
         let mut cursor = None;
-        for _ in 0..400 {
+        for _ in 0..1_000 {
             if seen.len() == change_after {
                 if let Some(change) = change.take() {
                     change(&mut posts.lock().unwrap());
@@ -1727,6 +1732,16 @@ mod tests {
         })
         .await;
         for id in expected(100..150) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // A shift further back than the look-back limit: the walk starts
+        // over and still sees every later post.
+        let seen = walk(listing(400), 300, |posts| {
+            posts.drain(0..=250);
+        })
+        .await;
+        for id in expected(300..400) {
             assert!(seen.contains(&id), "{id} was skipped");
         }
     }
