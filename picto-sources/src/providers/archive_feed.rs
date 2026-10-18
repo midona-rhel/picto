@@ -90,48 +90,77 @@ impl NativeSourceAdapter for ArchiveSource {
                         .await
                 }
             };
-            // Resuming at the start of a page after the previous page's last
-            // post. The listing may have shifted since: work out from a fresh
-            // copy of the previous page where the next post is now.
+            // Resuming at the start of a page, after the last post handled
+            // (the anchor), which ended the previous page. The listing may
+            // have shifted since, by any amount: find the anchor again,
+            // walking back from this page with fresh copies, and continue
+            // right after it.
             let anchor = decode_cursor_anchor(self.0, &creator, request.cursor.as_deref())?;
             if let Some(anchor) = anchor.filter(|anchor| {
                 anchor.next_id.is_empty() && cursor.index == 0 && cursor.offset >= PAGE_LENGTH
             }) {
-                let previous_offset = cursor.offset - PAGE_LENGTH;
-                let previous = page(previous_offset, false).await?;
-                let moved_back = anchor_position(&previous, &anchor.after_id)
-                    .is_some_and(|index| index + 1 < page_len(&previous));
-                let current = if moved_back {
-                    None
-                } else {
-                    Some(page(cursor.offset, resuming).await?)
-                };
-                match boundary_resume(&previous, current.as_ref(), &anchor.after_id) {
-                    BoundaryResume::Previous { index } => {
-                        let resume = resume_at(
-                            self.0,
-                            &creator,
-                            request,
-                            previous_offset,
-                            index,
-                            &previous,
-                        )?;
+                let mut offset = cursor.offset;
+                let mut current = None;
+                loop {
+                    let listing = page(offset, offset == cursor.offset && resuming).await?;
+                    if let Some(index) = anchor_position(&listing, &anchor.after_id) {
+                        if index + 1 < page_len(&listing) {
+                            let index = (index + 1) as u32;
+                            let resume =
+                                resume_at(self.0, &creator, request, offset, index, &listing)?;
+                            return normalize_page(
+                                self.0,
+                                &resume,
+                                &creator,
+                                CursorState { offset, index },
+                                listing,
+                            );
+                        }
+                        // The anchor ends this page: continue on the next one.
+                        let next = offset
+                            .checked_add(PAGE_LENGTH)
+                            .ok_or_else(|| invalid_cursor(self.0))?;
+                        let following = match current.take() {
+                            Some(current) if next == cursor.offset => current,
+                            _ => page(next, false).await?,
+                        };
                         return normalize_page(
                             self.0,
-                            &resume,
+                            request,
                             &creator,
                             CursorState {
-                                offset: previous_offset,
-                                index,
+                                offset: next,
+                                index: 0,
                             },
-                            previous,
+                            following,
                         );
                     }
-                    BoundaryResume::Current => {
-                        let current = current.expect("the current page is loaded to resume on it");
-                        return normalize_page(self.0, request, &creator, cursor, current);
+                    if offset == cursor.offset {
+                        current = Some(listing);
                     }
+                    if offset == 0 {
+                        break;
+                    }
+                    offset -= PAGE_LENGTH;
                 }
+                // The anchor was deleted, so where the next post went can't
+                // be known. Start over from the first post: posts already
+                // seen are seen again, which is harmless, and none is lost.
+                let first = page(0, false).await?;
+                let restart = DiscoveryRequest {
+                    cursor: None,
+                    ..request.clone()
+                };
+                return normalize_page(
+                    self.0,
+                    &restart,
+                    &creator,
+                    CursorState {
+                        offset: 0,
+                        index: 0,
+                    },
+                    first,
+                );
             }
             let response = page(cursor.offset, resuming).await?;
             normalize_page(self.0, request, &creator, cursor, response)
@@ -180,43 +209,8 @@ fn page_len(page: &Value) -> usize {
     page.as_array().map_or(0, Vec::len)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum BoundaryResume {
-    /// Continue on the previous page at this index.
-    Previous { index: u32 },
-    /// Continue on the current page, after the anchor if it is there.
-    Current,
-}
-
-/// Where a resume across a page boundary continues. The anchor (the last
-/// post handled) was the previous page's final post when the cursor was
-/// saved.
-/// - Still there: nothing moved ahead of it; continue on the current page.
-/// - Earlier on the previous page: posts ahead were deleted, and the posts
-///   after it moved back with it; continue right after it there.
-/// - On the current page: posts were added ahead; the anchor lookup
-///   continues after it.
-/// - Gone (it was deleted itself, perhaps with others): where its successor
-///   now sits can't be known. Start over at the top of the previous page:
-///   posts already seen are seen again, which is harmless, where skipping
-///   one would lose it. This only happens when the anchor post is deleted.
-fn boundary_resume(previous: &Value, current: Option<&Value>, after_id: &str) -> BoundaryResume {
-    let previous_len = page_len(previous);
-    match anchor_position(previous, after_id) {
-        Some(index) if index + 1 < previous_len => BoundaryResume::Previous {
-            index: (index + 1) as u32,
-        },
-        Some(_) => BoundaryResume::Current,
-        None if current.is_some_and(|current| anchor_position(current, after_id).is_some()) => {
-            BoundaryResume::Current
-        }
-        None if previous_len > 0 => BoundaryResume::Previous { index: 0 },
-        None => BoundaryResume::Current,
-    }
-}
-
-/// The request with its cursor pointing at `index` of the previous page, so
-/// the anchor lookup lands there.
+/// The request with its cursor pointing at `index` of the page at `offset`,
+/// so the anchor lookup lands there.
 fn resume_at(
     provider: ArchiveProvider,
     creator: &CreatorLocator,
@@ -1371,49 +1365,6 @@ mod tests {
     }
 
     #[test]
-    fn a_boundary_resume_neither_skips_nor_loses_the_next_post() {
-        let page = |ids: &[&str]| {
-            Value::Array(
-                ids.iter()
-                    .map(|id| serde_json::json!({ "id": id }))
-                    .collect(),
-            )
-        };
-        // Unchanged: the anchor is still the previous page's last post.
-        assert_eq!(
-            boundary_resume(
-                &page(&["a", "b", "anchor"]),
-                Some(&page(&["next"])),
-                "anchor"
-            ),
-            BoundaryResume::Current
-        );
-        // Deleted ahead: the anchor moved up, with the next post after it.
-        assert_eq!(
-            boundary_resume(&page(&["b", "anchor", "next"]), None, "anchor"),
-            BoundaryResume::Previous { index: 2 }
-        );
-        // Inserted ahead: the anchor moved onto the current page.
-        assert_eq!(
-            boundary_resume(
-                &page(&["x", "a", "b"]),
-                Some(&page(&["anchor", "next"])),
-                "anchor"
-            ),
-            BoundaryResume::Current
-        );
-        // The anchor itself was deleted: start over on the previous page.
-        assert_eq!(
-            boundary_resume(
-                &page(&["a", "b", "next"]),
-                Some(&page(&["after-next"])),
-                "anchor"
-            ),
-            BoundaryResume::Previous { index: 0 }
-        );
-    }
-
-    #[test]
     fn cursors_from_before_whole_page_offsets_resume_at_the_same_post() {
         let creator = normalize_creator_query(ARCHIVE_FIXTURE, "patreon:90822862").unwrap();
         // Older builds stepped to the next page one post early.
@@ -1766,6 +1717,16 @@ mod tests {
         })
         .await;
         for id in expected(50..120) {
+            assert!(seen.contains(&id), "{id} was skipped");
+        }
+
+        // More than a page of posts is deleted ahead at a later boundary: the
+        // anchor and what follows it move back two pages.
+        let seen = walk(listing(150), 100, |posts| {
+            posts.drain(0..=50);
+        })
+        .await;
+        for id in expected(100..150) {
             assert!(seen.contains(&id), "{id} was skipped");
         }
     }
