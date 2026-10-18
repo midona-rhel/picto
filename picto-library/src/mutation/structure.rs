@@ -62,61 +62,108 @@ impl Library {
         collection_id: RootId,
         modified_at_ms: i64,
     ) -> Result<(Vec<RootId>, MutationReceipt)> {
-        let (roots, receipt) = self.publish(WorkPriority::ForegroundMutation, |transaction, revision, snapshot| {
-            let mut affected = snapshot
-                .collection_orders
-                .get(&collection_id)
-                .ok_or_else(|| {
-                    LibraryError::InvalidInput(format!(
-                        "root {collection_id} is not a collection"
-                    ))
-                })?
-                .iter()
-                .map(|media| media.0)
-                .collect::<RoaringBitmap>();
-            affected.insert(collection_id.0);
-            let before = capture_structure(transaction, &snapshot, &affected, None)?;
-            // Members inherit the collection's tags and gain no others.
-            let tags = captured_tags(&before);
-            let output = crate::group::ungroup(
-                transaction,
-                revision,
-                (*snapshot).clone(),
-                collection_id,
-                modified_at_ms,
-                Some(&tags),
-            )?;
-            let mut next = output.snapshot;
-            crate::smart::settle_affected(transaction, &mut next, &output.affected)?;
-            let after = capture_structure(transaction, &next, &output.affected, Some(&tags))?;
-            let receipt = PublicationCoordinator::receipt(
-                revision,
-                vec![
-                    "roots".into(),
-                    "collections".into(),
-                    "tags".into(),
-                    "folders".into(),
-                    "sidebar".into(),
-                ],
-                output.affected.iter().map(RootId),
-            );
-            Ok((
-                (output.roots, receipt.clone()),
-                PublishedDelta {
-                    snapshot: next,
-                    receipt,
-                    history: Some(HistoryEntry::for_command(
-                        "collections.ungroup",
-                        "Ungroup collection",
-                        SemanticChange::Structure {
-                            affected: Arc::new(output.affected),
-                            before,
-                            after,
-                        },
-                    )),
-                },
-            ))
-        })?;
+        self.ungroup_collections(&[collection_id], modified_at_ms)
+    }
+
+    /// Ungroup every collection in `collection_ids` as one change with one
+    /// undo step. Each collection's members inherit that collection's tags.
+    pub fn ungroup_collections(
+        &self,
+        collection_ids: &[RootId],
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
+        let mut collection_ids = collection_ids.to_vec();
+        collection_ids.sort_unstable();
+        collection_ids.dedup();
+        if collection_ids.is_empty() {
+            return Err(LibraryError::InvalidInput(
+                "no collection to ungroup".into(),
+            ));
+        }
+        let (roots, receipt) = self.publish(
+            WorkPriority::ForegroundMutation,
+            |transaction, revision, snapshot| {
+                let mut affected = RoaringBitmap::new();
+                for collection_id in &collection_ids {
+                    let members =
+                        snapshot
+                            .collection_orders
+                            .get(collection_id)
+                            .ok_or_else(|| {
+                                LibraryError::InvalidInput(format!(
+                                    "root {collection_id} is not a collection"
+                                ))
+                            })?;
+                    affected.extend(members.iter().map(|media| media.0));
+                    affected.insert(collection_id.0);
+                }
+                let before = capture_structure(transaction, &snapshot, &affected, None)?;
+                let mut next = (*snapshot).clone();
+                let mut changed = RoaringBitmap::new();
+                let mut roots = Vec::new();
+                let mut all_tags = std::collections::BTreeSet::new();
+                for collection_id in &collection_ids {
+                    // Members inherit their own collection's tags and gain no others.
+                    let mut own = next
+                        .collection_orders
+                        .get(collection_id)
+                        .map(|members| {
+                            members
+                                .iter()
+                                .map(|media| media.0)
+                                .collect::<RoaringBitmap>()
+                        })
+                        .unwrap_or_default();
+                    own.insert(collection_id.0);
+                    let tags = captured_tags(&capture_structure(transaction, &next, &own, None)?);
+                    let output = crate::group::ungroup(
+                        transaction,
+                        revision,
+                        next,
+                        *collection_id,
+                        modified_at_ms,
+                        Some(&tags),
+                    )?;
+                    next = output.snapshot;
+                    changed |= output.affected;
+                    roots.extend(output.roots);
+                    all_tags.extend(tags);
+                }
+                crate::smart::settle_affected(transaction, &mut next, &changed)?;
+                let all_tags = all_tags.into_iter().collect::<Vec<_>>();
+                let after = capture_structure(transaction, &next, &changed, Some(&all_tags))?;
+                let receipt = PublicationCoordinator::receipt(
+                    revision,
+                    vec![
+                        "roots".into(),
+                        "collections".into(),
+                        "tags".into(),
+                        "folders".into(),
+                        "sidebar".into(),
+                    ],
+                    changed.iter().map(RootId),
+                );
+                Ok((
+                    (roots, receipt.clone()),
+                    PublishedDelta {
+                        snapshot: next,
+                        receipt,
+                        history: Some(
+                            HistoryEntry::for_command(
+                                "collections.ungroup",
+                                "Ungroup collection",
+                                SemanticChange::Structure {
+                                    affected: Arc::new(changed),
+                                    before,
+                                    after,
+                                },
+                            )
+                            .about(collection_ids.len() as u64, None),
+                        ),
+                    },
+                ))
+            },
+        )?;
         Ok((roots, receipt))
     }
 

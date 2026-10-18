@@ -3224,7 +3224,10 @@
   [
     "items.ungroup",
     {
-      "collection_id": 5
+      "collection_ids": [
+        5,
+        6
+      ]
     }
   ],
   [

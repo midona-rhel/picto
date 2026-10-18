@@ -101,6 +101,8 @@ export interface GridMenuContext {
   onOrganizeGroup?: () => void;
   onEditGroup?: () => void;
   onUngroup?: () => void;
+  /** Collections among the selected items. */
+  collectionCount?: number;
   onNewFolder?: () => void;
   onNewSmartFolder?: () => void;
   onImportFiles?: () => void;
@@ -416,7 +418,8 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       }));
     }
     if (selectionCount > 1 && ctx.onOrganizeGroup) {
-      entries.push(item(t("Group..."), {
+      // Grouping a selection that holds collections merges them into one.
+      entries.push(item((ctx.collectionCount ?? 0) > 0 ? t("Merge into One Group...") : t("Group..."), {
         icon: <GroupCreateIcon size={15} />,
         action: ctx.onOrganizeGroup,
       }));
@@ -426,7 +429,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         icon: <GroupEditIcon size={15} />,
         action: ctx.onEditGroup,
       }));
-      entries.push(item(t("Ungroup..."), {
+    }
+    const collectionCount = ctx.collectionCount ?? (singleSelected && ctx.singleKind === 'collection' ? 1 : 0);
+    if (collectionCount > 0 && ctx.onUngroup) {
+      entries.push(item(collectionCount > 1
+        ? t("Ungroup {value0} Collections...", { value0: collectionCount.toLocaleString() })
+        : t("Ungroup..."), {
         icon: <GroupRemoveIcon size={15} />,
         action: ctx.onUngroup,
       }));

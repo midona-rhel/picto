@@ -1615,5 +1615,11 @@
   "Rated {value0} items 1 star": "{value0} 件を星 1 つに評価しました",
   "Delete undo is disabled. This cannot be undone.": "削除の取り消しは無効です。この操作は取り消せません。",
   "This delete can no longer be undone. Delete permanently anyway?": "この削除は取り消せなくなりました。それでも完全に削除しますか？",
-  "The next items could not be loaded.": "次の項目を読み込めませんでした。"
+  "The next items could not be loaded.": "次の項目を読み込めませんでした。",
+  "Ungroup {value0} collections?": "{value0} 個のコレクションのグループを解除しますか?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "これらのコレクションの各項目は、個別の項目としてライブラリに戻ります。選択中のほかの項目はそのままです。ファイルとメタデータは削除されません。",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "各項目は個別の項目としてライブラリに戻ります。ファイルとメタデータは削除されません。",
+  "Merge into One Group...": "1つのグループに統合...",
+  "Ungroup {value0} Collections...": "{value0} 個のコレクションのグループを解除...",
+  "Ungrouped {value0} collections": "{value0} 個のコレクションのグループを解除しました"
 }

@@ -346,7 +346,7 @@ const CASES: Record<string, () => unknown> = {
     await entityApi.detachItems({ collection_id: 5, media_ids: [10, 11], target_lifecycle: null });
     await entityApi.detachItems({ collection_id: 5, media_ids: [10], target_lifecycle: 'inbox' });
   },
-  'entityApi.ungroup': () => entityApi.ungroup(5),
+  'entityApi.ungroup': () => entityApi.ungroup([5, 6]),
   'entityApi.reorderGroup': () => entityApi.reorderGroup({ collection_id: 5, media_ids: [11, 10] }),
 
   'folderApi.createFolder': async () => {

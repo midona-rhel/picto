@@ -1384,6 +1384,11 @@ export function GridScreen({
           // Derive context for menu builder
           const selCount = effectiveSelectionCount;
           const selectedItems = items.filter((it) => effectiveItemIds.has(it.root_id));
+          // Ungroup acts on the collections it can see, so not on a select-all
+          // that reaches past the loaded window.
+          const selectedCollectionIds = effectiveQuerySelectionActive
+            ? []
+            : selectedItems.filter((it) => it.kind === 'collection').map((it) => it.root_id);
           const singleItem = effectiveSelectionMode === 'explicit'
             && selCount === 1
             && effectiveItemIds.has(item.root_id)
@@ -1496,15 +1501,21 @@ export function GridScreen({
             onEditGroup: singleItem?.kind === 'collection'
               ? () => openGridItem(singleItem, items, 'editor')
               : undefined,
-            onUngroup: singleItem?.kind === 'collection'
+            collectionCount: selectedCollectionIds.length,
+            onUngroup: selectedCollectionIds.length > 0
               ? () => {
+                  const many = selectedCollectionIds.length > 1;
                   store.set(confirmModalAtom, {
                     open: true,
-                    title: t("Ungroup?"),
-                    message: 'Every member will return to the library as a separate item. Files and metadata will not be deleted.',
+                    title: many
+                      ? t("Ungroup {value0} collections?", { value0: selectedCollectionIds.length.toLocaleString() })
+                      : t("Ungroup?"),
+                    message: many
+                      ? t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.")
+                      : t("Every member will return to the library as a separate item. Files and metadata will not be deleted."),
                     confirmLabel: t("Ungroup"),
                     onConfirm: () => {
-                      void ungroup(singleItem.root_id)
+                      void ungroup(selectedCollectionIds)
                         .then(() => announceUndoableMutation('collections.ungroup'))
                         .then(() => clearSelection())
                         .catch((reason) => showErrorNotification({

@@ -1615,5 +1615,11 @@
   "Rated {value0} items 1 star": "已将 {value0} 个项目评为 1 星",
   "Delete undo is disabled. This cannot be undone.": "删除撤销已禁用。此操作无法撤销。",
   "This delete can no longer be undone. Delete permanently anyway?": "此次删除已无法撤销。仍要永久删除吗？",
-  "The next items could not be loaded.": "无法加载后续项目。"
+  "The next items could not be loaded.": "无法加载后续项目。",
+  "Ungroup {value0} collections?": "取消 {value0} 个合集的分组?",
+  "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.": "这些合集的每个成员都会作为单独项目回到资料库。其他选中的项目保持不变。文件和元数据不会被删除。",
+  "Every member will return to the library as a separate item. Files and metadata will not be deleted.": "每个成员都会作为单独项目回到资料库。文件和元数据不会被删除。",
+  "Merge into One Group...": "合并为一个分组...",
+  "Ungroup {value0} Collections...": "取消 {value0} 个合集的分组...",
+  "Ungrouped {value0} collections": "已取消 {value0} 个合集的分组"
 }

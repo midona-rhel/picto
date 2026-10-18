@@ -411,13 +411,13 @@ impl LibraryApplication {
         })
     }
 
-    pub fn ungroup_collection(
+    pub fn ungroup_collections(
         &self,
-        collection_id: RootId,
+        collection_ids: &[RootId],
     ) -> Result<picto_library::CollectionRootsResult, String> {
         let (root_ids, receipt) = self
             .library
-            .ungroup_collection(collection_id, chrono::Utc::now().timestamp_millis())
+            .ungroup_collections(collection_ids, chrono::Utc::now().timestamp_millis())
             .map_err(|error| error.to_string())?;
         Ok(picto_library::CollectionRootsResult { root_ids, receipt })
     }
