@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "{value0} Sammlungen auflösen...",
   "Ungrouped {value0} collections": "{value0} Sammlungen aufgelöst",
   "Ungroup Collections...": "Sammlungen auflösen...",
-  "No collections are selected": "Keine Sammlungen ausgewählt",
-  "Ungroup works on collections; the selected items are single items.": "Auflösen funktioniert bei Sammlungen; die ausgewählten Elemente sind Einzelelemente."
+  "Ungroup the selected collections?": "Ausgewählte Sammlungen auflösen?"
 }

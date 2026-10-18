@@ -96,7 +96,7 @@ import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 import type { CanonicalEntityGridItem, EntityTarget, Lifecycle } from '../../shared/types/canonical';
-import { showErrorNotification, showInfoNotification } from '../../shared/lib/notifications';
+import { showErrorNotification } from '../../shared/lib/notifications';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
@@ -1503,37 +1503,24 @@ export function GridScreen({
               : undefined,
             collectionCount: selectionLoaded ? loadedCollectionCount : null,
             onUngroup: effectiveTarget && (loadedCollectionCount > 0 || !selectionLoaded)
-              ? () => { void (async () => {
-                  let collectionIds: number[];
-                  try {
-                    const summary = await entityMutations.getTargetSelectionSummary(effectiveTarget);
-                    collectionIds = summary.collection_candidates.map((candidate) => candidate.collection_id);
-                  } catch (reason) {
-                    showErrorNotification({
-                      title: t("Could not ungroup items"),
-                      message: reason instanceof Error ? reason.message : String(reason),
-                    });
-                    return;
-                  }
-                  if (collectionIds.length === 0) {
-                    showInfoNotification({
-                      title: t("No collections are selected"),
-                      message: t("Ungroup works on collections; the selected items are single items."),
-                    });
-                    return;
-                  }
-                  const many = collectionIds.length > 1;
+              ? () => {
+                  // The backend resolves the selection, so collections beyond
+                  // the loaded tiles are included; the count is known only
+                  // when every selected tile is loaded.
+                  const count = selectionLoaded ? loadedCollectionCount : null;
                   store.set(confirmModalAtom, {
                     open: true,
-                    title: many
-                      ? t("Ungroup {value0} collections?", { value0: collectionIds.length.toLocaleString() })
-                      : t("Ungroup?"),
-                    message: many
-                      ? t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.")
-                      : t("Every member will return to the library as a separate item. Files and metadata will not be deleted."),
+                    title: count === 1
+                      ? t("Ungroup?")
+                      : count === null
+                        ? t("Ungroup the selected collections?")
+                        : t("Ungroup {value0} collections?", { value0: count.toLocaleString() }),
+                    message: count === 1 && selCount === 1
+                      ? t("Every member will return to the library as a separate item. Files and metadata will not be deleted.")
+                      : t("Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."),
                     confirmLabel: t("Ungroup"),
                     onConfirm: () => {
-                      void ungroup(collectionIds)
+                      void ungroup(effectiveTarget)
                         .then(() => announceUndoableMutation('collections.ungroup'))
                         .then(() => clearSelection())
                         .catch((reason) => showErrorNotification({
@@ -1542,7 +1529,7 @@ export function GridScreen({
                         }));
                     },
                   });
-                })(); }
+                }
               : undefined,
             onRegenerateThumbnails: () => {
               const hashes = selectedItems.map((selected) => selected.content_hash);

@@ -421,8 +421,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       }));
     }
     if (selectionCount > 1 && ctx.onOrganizeGroup) {
-      // Grouping a selection that holds collections merges them into one.
-      entries.push(item(ctx.containsGroup || (ctx.collectionCount ?? 0) > 0 ? t("Merge into One Group...") : t("Group..."), {
+      // Grouping merges any selected collections into one. When the selection
+      // reaches past the loaded tiles it may hold some, so say merge then too.
+      const mayMerge = ctx.containsGroup || ctx.collectionCount === null || (ctx.collectionCount ?? 0) > 0;
+      entries.push(item(mayMerge ? t("Merge into One Group...") : t("Group..."), {
         icon: <GroupCreateIcon size={15} />,
         action: ctx.onOrganizeGroup,
       }));

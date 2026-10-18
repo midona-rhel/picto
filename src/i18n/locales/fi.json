@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "Pura {value0} kokoelmaa...",
   "Ungrouped {value0} collections": "Purettiin {value0} kokoelmaa",
   "Ungroup Collections...": "Pura kokoelmat...",
-  "No collections are selected": "Kokoelmia ei ole valittu",
-  "Ungroup works on collections; the selected items are single items.": "Purku toimii kokoelmille; valitut kohteet ovat yksittäisiä kohteita."
+  "Ungroup the selected collections?": "Puretaanko valitut kokoelmat?"
 }

@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// What an ungroup acts on: listed collections, or a selection's collections.
+enum UngroupTarget {
+    Collections(Vec<RootId>),
+    Selection(crate::selection::SelectionTarget),
+}
+
 impl Library {
     pub fn organize_into_collection(
         &self,
@@ -72,17 +78,53 @@ impl Library {
         collection_ids: &[RootId],
         modified_at_ms: i64,
     ) -> Result<(Vec<RootId>, MutationReceipt)> {
-        let mut collection_ids = collection_ids.to_vec();
-        collection_ids.sort_unstable();
-        collection_ids.dedup();
-        if collection_ids.is_empty() {
-            return Err(LibraryError::InvalidInput(
-                "no collection to ungroup".into(),
-            ));
-        }
+        self.ungroup(UngroupTarget::Collections(collection_ids.to_vec()), modified_at_ms)
+    }
+
+    /// Ungroup the collections a selection holds (other selected items are
+    /// left alone), as one change with one undo step. The selection is
+    /// resolved here, so it may reach past what the caller has loaded.
+    pub fn ungroup_selection(
+        &self,
+        target: &crate::selection::SelectionTarget,
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
+        self.ungroup(UngroupTarget::Selection(target.clone()), modified_at_ms)
+    }
+
+    fn ungroup(
+        &self,
+        target: UngroupTarget,
+        modified_at_ms: i64,
+    ) -> Result<(Vec<RootId>, MutationReceipt)> {
         let (roots, receipt) = self.publish(
             WorkPriority::ForegroundMutation,
             |transaction, revision, snapshot| {
+                let mut collection_ids = match &target {
+                    UngroupTarget::Collections(ids) => ids.clone(),
+                    UngroupTarget::Selection(selection) => {
+                        let selected = crate::selection::resolve_with(
+                            transaction,
+                            &snapshot,
+                            selection,
+                            Some((&self.match_cache, &self.order_cache)),
+                        )?;
+                        snapshot
+                            .root_kinds
+                            .get(&RootKind::Collection)
+                            .map_or_else(RoaringBitmap::new, |collections| collections & &selected)
+                            .iter()
+                            .map(RootId)
+                            .collect()
+                    }
+                };
+                collection_ids.sort_unstable();
+                collection_ids.dedup();
+                if collection_ids.is_empty() {
+                    return Err(LibraryError::InvalidInput(
+                        "The selection has no collections.".into(),
+                    ));
+                }
                 let mut affected = RoaringBitmap::new();
                 for collection_id in &collection_ids {
                     let members =

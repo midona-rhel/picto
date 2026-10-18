@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "Ungroup {value0} Collections...",
   "Ungrouped {value0} collections": "Ungrouped {value0} collections",
   "Ungroup Collections...": "Ungroup Collections...",
-  "No collections are selected": "No collections are selected",
-  "Ungroup works on collections; the selected items are single items.": "Ungroup works on collections; the selected items are single items."
+  "Ungroup the selected collections?": "Ungroup the selected collections?"
 }

@@ -6019,4 +6019,26 @@ fn several_collections_ungroup_as_one_change_with_their_own_tags() {
     assert!(library
         .ungroup_collections(&[roots[4]], 1_700_000_005_300)
         .is_err());
+
+    // Through a selection: only its collections are ungrouped.
+    library.undo().unwrap().unwrap();
+    let (released, _) = library
+        .ungroup_selection(
+            &SelectionTarget::Explicit {
+                root_ids: vec![first, roots[4]],
+            },
+            1_700_000_005_400,
+        )
+        .unwrap();
+    assert_eq!(released.len(), 2);
+    assert!(library.details(first).is_err());
+    assert_eq!(library.details(second).unwrap().tag_ids, second_tags);
+    assert!(library
+        .ungroup_selection(
+            &SelectionTarget::Explicit {
+                root_ids: vec![roots[4]],
+            },
+            1_700_000_005_500,
+        )
+        .is_err());
 }

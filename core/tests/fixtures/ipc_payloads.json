@@ -3224,10 +3224,13 @@
   [
     "items.ungroup",
     {
-      "collection_ids": [
-        5,
-        6
-      ]
+      "target": {
+        "kind": "explicit",
+        "root_ids": [
+          5,
+          6
+        ]
+      }
     }
   ],
   [

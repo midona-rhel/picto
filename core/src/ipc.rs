@@ -383,8 +383,8 @@ pub fn dispatch_library(
             read(application.detach_items(input)?)
         }
         "items.ungroup" => {
-            let input: CollectionsInput = parse(args_json)?;
-            read(application.ungroup_collections(&input.collection_ids)?)
+            let input: SelectionTargetInput = parse(args_json)?;
+            read(application.ungroup_selection(&input.target)?)
         }
         "items.reorder_collection" => {
             let input: picto_library::ReorderCollectionInput = parse(args_json)?;
@@ -974,8 +974,8 @@ struct PatchMetadataInput {
 }
 
 #[derive(Deserialize)]
-struct CollectionsInput {
-    collection_ids: Vec<picto_library::RootId>,
+struct SelectionTargetInput {
+    target: picto_library::selection::SelectionTarget,
 }
 
 #[derive(Deserialize)]

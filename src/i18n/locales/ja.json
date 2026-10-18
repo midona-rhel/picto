@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "{value0} 個のコレクションのグループを解除...",
   "Ungrouped {value0} collections": "{value0} 個のコレクションのグループを解除しました",
   "Ungroup Collections...": "コレクションのグループを解除...",
-  "No collections are selected": "コレクションが選択されていません",
-  "Ungroup works on collections; the selected items are single items.": "グループ解除はコレクションに対して行います。選択した項目は単独の項目です。"
+  "Ungroup the selected collections?": "選択したコレクションのグループを解除しますか?"
 }

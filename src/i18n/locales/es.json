@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "Desagrupar {value0} colecciones...",
   "Ungrouped {value0} collections": "Se desagruparon {value0} colecciones",
   "Ungroup Collections...": "Desagrupar colecciones...",
-  "No collections are selected": "No hay colecciones seleccionadas",
-  "Ungroup works on collections; the selected items are single items.": "Desagrupar funciona con colecciones; los elementos seleccionados son elementos sueltos."
+  "Ungroup the selected collections?": "¿Desagrupar las colecciones seleccionadas?"
 }

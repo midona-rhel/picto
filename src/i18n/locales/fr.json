@@ -1623,6 +1623,5 @@
   "Ungroup {value0} Collections...": "Dissocier {value0} collections...",
   "Ungrouped {value0} collections": "{value0} collections dissociées",
   "Ungroup Collections...": "Dissocier les collections...",
-  "No collections are selected": "Aucune collection n'est sélectionnée",
-  "Ungroup works on collections; the selected items are single items.": "La dissociation s'applique aux collections ; les éléments sélectionnés sont des éléments seuls."
+  "Ungroup the selected collections?": "Dissocier les collections sélectionnées ?"
 }
