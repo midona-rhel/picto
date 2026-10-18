@@ -105,7 +105,7 @@ impl NativeSourceAdapter for ArchiveSource {
                 loop {
                     let listing = page(offset, offset == cursor.offset && resuming).await?;
                     // Only a well-formed page can show that the listing shifted.
-                    checked_page(self.0, &listing)?;
+                    checked_page(self.0, &creator, &listing)?;
                     let next_index = (!anchor.next_id.is_empty())
                         .then(|| anchor_position(&listing, &anchor.next_id))
                         .flatten();
@@ -142,7 +142,7 @@ impl NativeSourceAdapter for ArchiveSource {
                             Some(current) if next == cursor.offset => current,
                             _ => page(next, false).await?,
                         };
-                        if checked_page(self.0, &following)?.is_empty() {
+                        if checked_page(self.0, &creator, &following)?.is_empty() {
                             return Ok(DiscoveryBatch {
                                 posts: Vec::new(),
                                 exhausted: true,
@@ -234,8 +234,12 @@ fn page_posts(page: &Value) -> Option<&Vec<Value>> {
 }
 
 /// A listing's posts, or why the response isn't a page: posts present, at
-/// most a page of them, each with an id.
-fn checked_page(provider: ArchiveProvider, page: &Value) -> Result<&Vec<Value>, SourceError> {
+/// most a page of them, each with an id and from this creator.
+fn checked_page<'a>(
+    provider: ArchiveProvider,
+    creator: &CreatorLocator,
+    page: &'a Value,
+) -> Result<&'a Vec<Value>, SourceError> {
     let posts = page_posts(page)
         .ok_or_else(|| invalid_response(provider, "creator response is missing its posts"))?;
     if posts.len() > PAGE_LENGTH as usize {
@@ -244,9 +248,11 @@ fn checked_page(provider: ArchiveProvider, page: &Value) -> Result<&Vec<Value>, 
             "creator response exceeded the fixed page bound",
         ));
     }
-    // Every post must carry an id: the resume lookup finds posts by id.
+    // Every post must carry an id (the resume lookup finds posts by id) and
+    // belong to this creator.
     for post in posts {
         required_component(provider, post, "id", 256, "post")?;
+        validate_post_owner(provider, post, creator)?;
     }
     Ok(posts)
 }
@@ -607,7 +613,7 @@ pub(super) fn normalize_page(
     response: Value,
 ) -> Result<DiscoveryBatch, SourceError> {
     let anchor = decode_cursor_anchor(provider, creator, request.cursor.as_deref())?;
-    let posts = checked_page(provider, &response)?;
+    let posts = checked_page(provider, creator, &response)?;
     if posts.is_empty() {
         if anchor
             .as_ref()
