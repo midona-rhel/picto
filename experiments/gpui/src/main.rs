@@ -2,9 +2,11 @@ mod backend;
 mod demo;
 mod document;
 mod flash;
-mod grid;
+mod format;
 mod input;
 mod inspector;
+mod layout;
+mod prefs;
 mod surface;
 mod theme;
 mod thumbnails;
@@ -70,9 +72,10 @@ struct Browser {
     columns: usize,
 
     scroll: ScrollHandle,
-    tiles: Vec<grid::PositionedTile>,
-    visibility: grid::VisibilityIndex,
-    layout_key: (u32, u32, usize),
+    layout: layout::Layout,
+    layout_key: Option<(u32, u32, usize, u32, layout::ViewMode, u32)>,
+    prefs: prefs::ViewPrefs,
+    prefs_scope: Option<usize>,
     thumbnails: Entity<thumbnails::Thumbnails>,
     generation: u64,
     search_text: String,
@@ -170,9 +173,10 @@ impl Browser {
             columns: 4,
 
             scroll: ScrollHandle::new(),
-            tiles: vec![],
-            visibility: grid::VisibilityIndex::default(),
-            layout_key: (0, 0, 0),
+            layout: layout::Layout::default(),
+            layout_key: None,
+            prefs: prefs::ViewPrefs::default(),
+            prefs_scope: None,
             thumbnails: cx.new(thumbnails::Thumbnails::new),
             generation: 0,
             search_text: String::new(),
@@ -211,7 +215,16 @@ impl Browser {
                     self.tags = tags.into_iter().map(|tag| (tag.tag_id.0, tag)).collect();
                     self.query(false, cx);
                 }
-                Reply::Page(generation, append, page) if generation == self.generation => {
+                Reply::Page(generation, append, page, prefs) if generation == self.generation => {
+                    // A scope opens at its saved zoom. Searching inside it keeps
+                    // whatever the zoom control was moved to since.
+                    if self.prefs_scope != Some(self.scope) {
+                        self.prefs_scope = Some(self.scope);
+                        self.tile = prefs.target_size;
+                        self.zoom
+                            .update(cx, |zoom, cx| zoom.show(prefs.target_size, cx));
+                    }
+                    self.prefs = prefs;
                     self.total = page.total;
                     self.cursor = page.next_cursor;
                     self.loading = false;
@@ -222,7 +235,7 @@ impl Browser {
                         self.selected = 0;
                         self.details = None;
                         self.scroll.set_offset(point(px(0.), px(0.)));
-                        self.layout_key = (0, 0, 0);
+                        self.layout_key = None;
                         self.select(0, cx);
                     }
                 }
@@ -266,7 +279,7 @@ impl Browser {
             self.member = 0;
             self.details = None;
             let _ = self.sender.send(Request::Details(item.root_id));
-            if let Some(tile) = self.tiles.get(index) {
+            if let Some(tile) = self.layout.tiles.get(index) {
                 let top = -f32::from(self.scroll.offset().y);
                 if tile.y < top || tile.y > top + 600. {
                     self.scroll.set_offset(point(px(0.), px(-tile.y)));
@@ -305,6 +318,204 @@ impl Browser {
             .hover(|s| s.bg(rgb(0x41444a)))
             .cursor_pointer()
             .child(label.into())
+    }
+    /// One grid tile, drawn to the rules of the Electron canvas grid
+    /// (`drawBase.ts`): the media rect, its hairline ring, badges inside the
+    /// rect, the selection stroke outside it, and optional text rows below.
+    fn tile_element(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let tile = self.layout.tiles[index];
+        let item = &self.items[index];
+        let prefs = &self.prefs;
+        let selected = index == self.selected;
+        let image_height = tile.h - prefs.text_height();
+        let timed = item.mime.starts_with("video/") || item.mime.starts_with("audio/");
+        // Letterboxed media keeps its own rect inside the tile; badges and the
+        // selection stroke follow that rect, not the tile.
+        let (x, y, w, h) = if !prefs.fit_cover || timed {
+            let aspect = match (item.width, item.height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => w as f32 / h as f32,
+                _ => 1.,
+            };
+            let scale = (tile.w / aspect).min(image_height);
+            let (w, h) = (aspect * scale, scale);
+            ((tile.w - w) / 2., (image_height - h) / 2., w, h)
+        } else {
+            (0., 0., tile.w, image_height)
+        };
+        let mut cell = div()
+            .id(index)
+            .absolute()
+            .left(px(tile.x))
+            .top(px(tile.y))
+            .w(px(tile.w))
+            .h(px(tile.h));
+        if selected {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .left(px(x - layout::SELECTION_EXTENT))
+                    .top(px(y - layout::SELECTION_EXTENT))
+                    .w(px(w + 2. * layout::SELECTION_EXTENT))
+                    .h(px(h + 2. * layout::SELECTION_EXTENT))
+                    .rounded(px(theme::TILE_RADIUS + layout::SELECTION_EXTENT))
+                    .border_2()
+                    .border_color(rgb(theme::ACCENT)),
+            );
+        }
+        cell = cell.child(
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w))
+                .h(px(h))
+                .rounded(px(theme::TILE_RADIUS))
+                .bg(rgb(theme::PLACEHOLDER))
+                .child(
+                    img(self.thumbnail(&item.content_hash))
+                        .image_cache(&self.thumbnails)
+                        .size_full()
+                        .rounded(px(theme::TILE_RADIUS))
+                        .object_fit(ObjectFit::Cover),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(theme::TILE_RADIUS))
+                        .border_1()
+                        .border_color(rgba(theme::HAIRLINE)),
+                ),
+        );
+        let collection = item.kind == picto_library::RootKind::Collection;
+        if prefs.show_extension_label {
+            let label = format::format_label(&item.mime);
+            if collection {
+                cell = cell.child(
+                    Self::badge(0.)
+                        .w(px(18.))
+                        .justify_center()
+                        .left(px(x + 5.))
+                        .top(px(y + 5.))
+                        .child(
+                            svg()
+                                .path("folders")
+                                .size(px(12.))
+                                .text_color(rgba(theme::BADGE_TEXT)),
+                        ),
+                );
+            } else if !label.is_empty() {
+                cell = cell.child(
+                    Self::badge(4.)
+                        .left(px(x + 5.))
+                        .top(px(y + 5.))
+                        .child(label),
+                );
+            }
+        }
+        let animated = item.mime == "image/gif" && item.frame_count.unwrap_or(0) > 1;
+        if let Some(duration) = item.duration_ms.filter(|ms| *ms > 0 && (timed || animated)) {
+            cell = cell.child(
+                Self::badge(2.)
+                    .right(px(tile.w - x - w + 5.))
+                    .top(px(y + 5.))
+                    .child(format::format_duration(duration)),
+            );
+        }
+        if prefs.show_item_count && collection {
+            cell = cell.child(
+                Self::badge(4.)
+                    .left(px(x + 5.))
+                    .top(px(y + h - 18. - 5.))
+                    .child(item.media_count.to_string()),
+            );
+        }
+        if prefs.show_name {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(image_height + 7.))
+                    .h(px(15.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .max_w_full()
+                            .px(px(3.))
+                            .rounded(px(2.))
+                            .bg(if selected {
+                                rgb(theme::ACCENT)
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .line_height(px(15.))
+                            .child(item.name.clone()),
+                    ),
+            );
+        }
+        if prefs.show_resolution
+            && let (Some(width), Some(height)) = (item.width, item.height)
+        {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(image_height
+                        + prefs.show_name as u8 as f32 * layout::TEXT_ROW_HEIGHT
+                        + 5.))
+                    .h(px(15.))
+                    .flex()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .line_height(px(15.))
+                    .text_color(rgba(theme::TEXT_TERTIARY))
+                    .child(format!("{width} × {height}")),
+            );
+        }
+        cell.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            this.select(index, cx);
+            if event.click_count() == 2 {
+                this.preview = true;
+                this.update_surface(cx);
+            }
+            window.focus(&this.focus, cx);
+            cx.notify();
+        }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.select(index, cx);
+                let size = window.viewport_size();
+                this.menu = Some(point(
+                    event.position.x.min(size.width - px(278.)),
+                    event.position.y.min(size.height - px(120.)),
+                ));
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }),
+        )
+    }
+    /// The grid's translucent label chip (`drawBadge`).
+    fn badge(padding: f32) -> Div {
+        div()
+            .absolute()
+            .h(px(18.))
+            .px(px(padding))
+            .flex()
+            .items_center()
+            .rounded(px(theme::TILE_RADIUS))
+            .bg(rgba(0x00000080))
+            .border_1()
+            .border_color(rgba(0x00000033))
+            .text_size(px(10.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgba(theme::BADGE_TEXT))
     }
     fn update_surface(&mut self, cx: &mut Context<Self>) {
         if !self.preview {
@@ -345,18 +556,31 @@ impl Render for Browser {
             self.surface.update(cx, |surface, _| surface.stop());
         }
         let width = (f32::from(window.viewport_size().width) - 580.).max(100.);
-        let key = (width as u32, self.tile as u32, self.items.len());
+        let text_height = self.prefs.text_height();
+        let key = Some((
+            width as u32,
+            self.tile as u32,
+            self.items.len(),
+            self.prefs.gap as u32,
+            self.prefs.mode,
+            text_height as u32,
+        ));
         if key != self.layout_key {
             let aspects = self
                 .items
                 .iter()
                 .map(|i| i.width.unwrap_or(1) as f32 / i.height.unwrap_or(1).max(1) as f32)
                 .collect::<Vec<_>>();
-            self.tiles = grid::waterfall(&aspects, width, self.tile);
-            self.visibility = grid::VisibilityIndex::new(&self.tiles);
-
+            self.layout = layout::Layout::compute(
+                &aspects,
+                width,
+                self.tile,
+                self.prefs.gap,
+                self.prefs.mode,
+                text_height,
+            );
             self.layout_key = key;
-            self.columns = (width / self.tile).round().max(1.) as usize;
+            self.columns = self.layout.column_count.max(1);
         }
         let selected = self.items.get(self.selected).cloned();
         let name = self
@@ -569,7 +793,7 @@ impl Render for Browser {
                             .min_w(px(36.))
                             .text_right()
                             .text_color(rgb(if self.scope == i { theme::TEXT } else { MUTED }))
-                            .child(entry.count.to_string()),
+                            .child(format::grouped(entry.count)),
                     ),
             );
         }
@@ -713,96 +937,13 @@ impl Render for Browser {
             center = center.child({
                 let top = -f32::from(self.scroll.offset().y);
                 let viewport = f32::from(window.viewport_size().height) - 80.;
-                let height = self.visibility.height;
+                let height = self.layout.total_height;
                 if top + viewport + 1000. >= height && self.cursor.is_some() && !self.loading {
                     self.query(true, cx);
                 }
                 let mut content = div().relative().w_full().h(px(height));
-                for tile_index in
-                    self.visibility
-                        .visible(&self.tiles, top - 500., top + viewport + 500.)
-                {
-                    let tile = &self.tiles[tile_index];
-                    let index = tile.index;
-                    let item = &self.items[index];
-                    let badge = item
-                        .mime
-                        .split('/')
-                        .next_back()
-                        .unwrap_or("file")
-                        .to_uppercase();
-                    let mut cell = div()
-                        .id(index)
-                        .absolute()
-                        .left(px(tile.x))
-                        .top(px(tile.y))
-                        .w(px(tile.width))
-                        .h(px(tile.height))
-                        .rounded(px(4.))
-                        .overflow_hidden()
-                        .bg(rgb(0x222326))
-                        .border_2()
-                        .border_color(rgb(if index == self.selected {
-                            theme::ACCENT
-                        } else {
-                            BG
-                        }))
-                        .child(
-                            img(self.thumbnail(&item.content_hash))
-                                .image_cache(&self.thumbnails)
-                                .w(px(tile.width - 4.))
-                                .h(px(tile.height - 4.))
-                                .object_fit(ObjectFit::Contain),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(5.))
-                                .top(px(5.))
-                                .px_1()
-                                .rounded(px(3.))
-                                .bg(rgba(0x00000080))
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(badge),
-                        );
-                    if item.media_count > 1 {
-                        cell = cell.child(
-                            div()
-                                .absolute()
-                                .right(px(5.))
-                                .bottom(px(5.))
-                                .px_1()
-                                .rounded(px(3.))
-                                .bg(rgba(0x00000099))
-                                .text_size(px(11.))
-                                .child(item.media_count.to_string()),
-                        );
-                    }
-                    cell =
-                        cell.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            this.select(index, cx);
-                            if event.click_count() == 2 {
-                                this.preview = true;
-                                this.update_surface(cx);
-                            }
-                            window.focus(&this.focus, cx);
-                            cx.notify();
-                        }));
-                    cell = cell.on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.select(index, cx);
-                            let size = window.viewport_size();
-                            this.menu = Some(point(
-                                event.position.x.min(size.width - px(278.)),
-                                event.position.y.min(size.height - px(120.)),
-                            ));
-                            window.focus(&this.focus, cx);
-                            cx.notify();
-                        }),
-                    );
-                    content = content.child(cell);
+                for index in self.layout.visible(top - 500., top + viewport + 500.) {
+                    content = content.child(self.tile_element(index, cx));
                 }
                 div()
                     .id("media-grid")
@@ -827,7 +968,7 @@ impl Render for Browser {
                 .child(
                     self.error
                         .clone()
-                        .unwrap_or_else(|| format!("{} items", self.total)),
+                        .unwrap_or_else(|| format!("{} items", format::grouped(self.total))),
                 ),
         );
         let inspector = self.inspector(cx);

@@ -14,6 +14,12 @@ impl Zoom {
             dragging: false,
         }
     }
+    /// Moves the control to a value that came from elsewhere, without
+    /// reporting it back as a user change.
+    pub fn show(&mut self, value: f32, cx: &mut Context<Self>) {
+        self.value = value.clamp(100., 450.);
+        cx.notify();
+    }
     fn set(&mut self, value: f32, cx: &mut Context<Self>) {
         self.value = value.clamp(100., 450.);
         cx.emit(Changed(self.value));

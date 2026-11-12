@@ -4907,6 +4907,7 @@ dependencies = [
  "ruffle_core",
  "ruffle_frontend_utils",
  "ruffle_render_wgpu",
+ "serde_json",
  "smallvec",
  "tempfile",
  "unicode-segmentation",

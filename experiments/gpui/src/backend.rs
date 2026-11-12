@@ -25,7 +25,7 @@ pub enum Request {
 }
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
-    Page(u64, bool, RootPage),
+    Page(u64, bool, RootPage, crate::prefs::ViewPrefs),
     Details(RootId, RootDetails),
     Error(String),
 }
@@ -146,6 +146,8 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                 .collect::<Vec<_>>();
             append_tree(&smart, None, None, &mut nav);
             replies.send(Reply::Ready(nav, library.tags()?))?;
+            // One seed per session keeps a random sort stable while paging.
+            let seed = now_ms().to_string();
             for request in requests {
                 let result = match request {
                     Request::Name(id, name) => library
@@ -164,16 +166,34 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         .map(|details| Reply::Details(id, details)),
                     Request::Query(generation, scope, filter, cursor) => {
                         let append = cursor.is_some();
-                        let query = RootQuery {
-                            scope,
-                            view: picto_library::predicate::ViewQuerySpec {
-                                filter,
-                                ..Default::default()
-                            },
+                        // The scope's saved view decides the sort, exactly as it
+                        // does for the Electron grid reading the same rows.
+                        let saved = |key: &str| {
+                            library.read_auxiliary_json("view_pref", key).map(|row| {
+                                row.and_then(|json| serde_json::from_str(&json).ok())
+                                    .unwrap_or_else(|| serde_json::json!({}))
+                            })
                         };
-                        library
-                            .query(&query, &PageRequest { limit: 500, cursor })
-                            .map(|page| Reply::Page(generation, append, page))
+                        saved("grid:defaults")
+                            .and_then(|defaults| {
+                                saved(&crate::prefs::scope_key(&scope))
+                                    .map(|overrides| (defaults, overrides))
+                            })
+                            .and_then(|(defaults, overrides)| {
+                                let prefs = crate::prefs::ViewPrefs::resolve(
+                                    &scope, &defaults, &overrides, &seed,
+                                );
+                                let query = RootQuery {
+                                    scope,
+                                    view: picto_library::predicate::ViewQuerySpec {
+                                        filter,
+                                        sort: prefs.sort.clone(),
+                                    },
+                                };
+                                library
+                                    .query(&query, &PageRequest { limit: 500, cursor })
+                                    .map(|page| Reply::Page(generation, append, page, prefs))
+                            })
                     }
                     Request::Rate(id, rating) => library
                         .set_rating(

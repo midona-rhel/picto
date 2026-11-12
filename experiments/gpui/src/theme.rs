@@ -5,6 +5,14 @@ pub const RAIL: u32 = 0x1f2023;
 pub const TEXT: u32 = 0xf8f9fb;
 pub const ACCENT: u32 = 0x3297ff;
 pub const ROW_HEIGHT: f32 = 27.;
+/// `--color-surface-2`: 5% contrast over the background.
+pub const PLACEHOLDER: u32 = 0x232427;
+/// `--color-border-primary`: 10% contrast.
+pub const HAIRLINE: u32 = 0xf8f9fb1a;
+/// `--color-text-tertiary`: 60% text.
+pub const TEXT_TERTIARY: u32 = 0xf8f9fb99;
+pub const BADGE_TEXT: u32 = 0xffffffcc;
+pub const TILE_RADIUS: f32 = 4.;
 pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
