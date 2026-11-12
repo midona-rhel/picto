@@ -162,3 +162,10 @@ Word fixture were regenerated using the original recipes. Cargo.lock was regener
 from available dependencies, so dependency resolution may differ from November 7.
 The older visual/runtime observations above are historical evidence, not a claim
 that every behavior was retested after recovery. This remains an unfinished experiment.
+
+Recovery validation on November 12 (macOS): locked offline compile check and all
+six regular tests pass. The explicitly enabled Word render/cleanup test passes
+(two-page generated fixture), as does the native Ruffle GPU-frame/ActionScript
+mouse-input test. The real-library mutation test was not rerun; no actual library
+was opened during recovery. Formatting and launcher shell syntax pass. These
+checks do not close the visual, performance or cross-platform acceptance gaps.
