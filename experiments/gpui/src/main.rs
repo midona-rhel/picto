@@ -6,6 +6,7 @@ mod input;
 mod inspector;
 mod layout;
 mod motion;
+mod nav;
 mod prefs;
 mod reveal;
 mod shell;
@@ -30,6 +31,10 @@ actions!(
         Previous,
         Down,
         Up,
+        First,
+        Last,
+        PageUp,
+        PageDown,
         Preview,
         ClosePreview,
         Undo,
@@ -75,7 +80,8 @@ struct Browser {
     fixtures: tempfile::TempDir,
     member: usize,
     tile: f32,
-    columns: usize,
+    /// The grid's size at the last paint, for keyboard paging and scrolling.
+    grid_size: (f32, f32),
 
     scroll: ScrollHandle,
     layout: layout::Layout,
@@ -189,7 +195,7 @@ impl Browser {
             fixtures: demo::fixtures().expect("create disposable media fixtures"),
             member: 0,
             tile: 200.,
-            columns: 4,
+            grid_size: (0., 0.),
 
             scroll: ScrollHandle::new(),
             layout: layout::Layout::default(),
@@ -327,23 +333,34 @@ impl Browser {
             self.member = 0;
             self.details = None;
             let _ = self.sender.send(Request::Details(item.root_id));
-            if let Some(tile) = self.layout.tiles.get(index) {
-                let top = -f32::from(self.scroll.offset().y);
-                if tile.y < top || tile.y > top + 600. {
-                    self.scroll.set_offset(point(px(0.), px(-tile.y)));
-                }
-            }
             cx.notify();
         }
     }
-    fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if !self.items.is_empty() {
-            self.select(
-                self.selected
-                    .saturating_add_signed(delta)
-                    .min(self.items.len() - 1),
-                cx,
-            );
+    /// Moves the selection as the Electron grid's keyboard navigation does and
+    /// scrolls the new selection into view.
+    fn move_selection(&mut self, action: nav::Move, cx: &mut Context<Self>) {
+        let (width, height) = self.grid_size;
+        let action = match action {
+            // With the preview open only the item changes, one at a time.
+            nav::Move::Left | nav::Move::Right => action,
+            _ if self.preview => return,
+            _ => action,
+        };
+        let Some(target) = nav::target(
+            action,
+            self.selected,
+            self.items.len(),
+            nav::column_count(width, self.tile, self.prefs.gap),
+            nav::visible_rows(height, self.tile, self.prefs.gap),
+        ) else {
+            return;
+        };
+        self.select(target, cx);
+        if let Some(tile) = self.layout.tiles.get(target) {
+            let top = -f32::from(self.scroll.offset().y);
+            if let Some(offset) = nav::scroll_into_view(tile, top, height, self.prefs.gap) {
+                self.scroll.set_offset(point(px(0.), px(-offset)));
+            }
         }
     }
     fn thumbnail(&self, hash: &str) -> PathBuf {
@@ -635,6 +652,7 @@ impl Render for Browser {
             self.surface.update(cx, |surface, _| surface.stop());
         }
         let width = (f32::from(window.viewport_size().width) - 580.).max(100.);
+        self.grid_size = (width, f32::from(window.viewport_size().height) - 80.);
         let text_height = self.prefs.text_height();
         let key = Some((
             width as u32,
@@ -659,7 +677,6 @@ impl Render for Browser {
                 text_height,
             );
             self.layout_key = key;
-            self.columns = self.layout.column_count.max(1);
         }
         let selected = self.items.get(self.selected).cloned();
         let name = self
@@ -729,14 +746,12 @@ impl Render for Browser {
                                 .text_ellipsis()
                                 .child(name.clone()),
                         )
-                        .child(
-                            self.button("previous", "Previous")
-                                .on_click(cx.listener(|this, _, _, cx| this.step(-1, cx))),
-                        )
-                        .child(
-                            self.button("next", "Next")
-                                .on_click(cx.listener(|this, _, _, cx| this.step(1, cx))),
-                        ),
+                        .child(self.button("previous", "Previous").on_click(
+                            cx.listener(|this, _, _, cx| this.move_selection(nav::Move::Left, cx)),
+                        ))
+                        .child(self.button("next", "Next").on_click(
+                            cx.listener(|this, _, _, cx| this.move_selection(nav::Move::Right, cx)),
+                        )),
                 )
                 .child(div().flex_1().min_h_0().p_3().child(self.surface.clone()));
             if count > 1 {
@@ -865,10 +880,30 @@ impl Render for Browser {
                     let _ = this.sender.send(Request::Redo(item.root_id));
                 }
             }))
-            .on_action(cx.listener(|this, _: &Next, _, cx| this.step(1, cx)))
-            .on_action(cx.listener(|this, _: &Previous, _, cx| this.step(-1, cx)))
-            .on_action(cx.listener(|this, _: &Down, _, cx| this.step(this.columns as isize, cx)))
-            .on_action(cx.listener(|this, _: &Up, _, cx| this.step(-(this.columns as isize), cx)))
+            .on_action(
+                cx.listener(|this, _: &Next, _, cx| this.move_selection(nav::Move::Right, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Previous, _, cx| this.move_selection(nav::Move::Left, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Down, _, cx| this.move_selection(nav::Move::Down, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Up, _, cx| this.move_selection(nav::Move::Up, cx)))
+            .on_action(
+                cx.listener(|this, _: &First, _, cx| this.move_selection(nav::Move::First, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Last, _, cx| this.move_selection(nav::Move::Last, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PageUp, _, cx| this.move_selection(nav::Move::PageUp, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PageDown, _, cx| {
+                    this.move_selection(nav::Move::PageDown, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &Preview, _, cx| {
                 this.preview = !this.preview;
                 this.update_surface(cx);
@@ -1006,10 +1041,19 @@ fn main() {
             cx.bind_keys([
                 KeyBinding::new("cmd-z", Undo, Some("Browser && !TextInput")),
                 KeyBinding::new("cmd-shift-z", Redo, Some("Browser && !TextInput")),
+                // Arrows and WASD, Home/End and paging: `shortcuts.ts` grid.*.
                 KeyBinding::new("right", Next, Some("Browser && !TextInput")),
+                KeyBinding::new("d", Next, Some("Browser && !TextInput")),
                 KeyBinding::new("left", Previous, Some("Browser && !TextInput")),
+                KeyBinding::new("a", Previous, Some("Browser && !TextInput")),
                 KeyBinding::new("down", Down, Some("Browser && !TextInput")),
+                KeyBinding::new("s", Down, Some("Browser && !TextInput")),
                 KeyBinding::new("up", Up, Some("Browser && !TextInput")),
+                KeyBinding::new("w", Up, Some("Browser && !TextInput")),
+                KeyBinding::new("home", First, Some("Browser && !TextInput")),
+                KeyBinding::new("end", Last, Some("Browser && !TextInput")),
+                KeyBinding::new("pageup", PageUp, Some("Browser && !TextInput")),
+                KeyBinding::new("pagedown", PageDown, Some("Browser && !TextInput")),
                 KeyBinding::new("space", Preview, Some("Browser && !TextInput")),
                 KeyBinding::new("enter", Preview, Some("Browser && !TextInput")),
                 KeyBinding::new("escape", ClosePreview, Some("Browser")),

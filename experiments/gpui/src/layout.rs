@@ -29,6 +29,8 @@ pub struct Tile {
 pub struct Layout {
     pub tiles: Vec<Tile>,
     pub total_height: f32,
+    /// Read by the geometry tests; navigation computes its own step.
+    #[cfg(test)]
     pub column_count: usize,
     bands: Vec<Vec<u32>>,
 }
@@ -110,6 +112,7 @@ impl Layout {
         Self {
             tiles,
             total_height,
+            #[cfg(test)]
             column_count: geometry.column_count,
             bands,
         }
