@@ -64,7 +64,9 @@ impl MediaSurface {
             self.flash = Some(crate::flash::Flash::open(path));
             self.flash_task = Some(cx.spawn(async move |entity, cx| {
                 loop {
-                    Timer::after(Duration::from_millis(16)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
                     let keep = entity.update(cx, |this, cx| {
                         if this.key != key {
                             return false;
@@ -206,7 +208,7 @@ impl Render for MediaSurface {
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     if let Some(flash) = &this.flash {
                         if let Some(focus) = &this.focus {
-                            window.focus(focus);
+                            window.focus(focus, cx);
                         }
                         cx.stop_propagation();
                         let (x, y) = this.flash_position(event.position);

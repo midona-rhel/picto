@@ -16,7 +16,11 @@ opt-level = 1
 opt-level = 2
 
 [dependencies]
-gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+# Weekly crates.io snapshots of upstream GPUI (zed-industries/zed). The official
+# `gpui` crate has not been published since 0.2.2 (October 2025). Pin exactly:
+# GPUI makes no API stability promise between snapshots.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 picto_library = { path = "../../picto-library" }
 unicode-segmentation = "1"
 anyhow = "1"

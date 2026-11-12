@@ -113,7 +113,9 @@ impl Browser {
         });
         cx.spawn(async move |entity, cx| {
             loop {
-                Timer::after(Duration::from_millis(30)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(30))
+                    .await;
                 if entity
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()
@@ -124,7 +126,7 @@ impl Browser {
         })
         .detach();
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         let surface = cx.new(|_| surface::MediaSurface::default());
         let zoom = cx.new(|_| zoom::Zoom::new());
         let zoom_observer = cx.subscribe(&zoom, |this, _, event: &zoom::Changed, cx| {
@@ -521,7 +523,7 @@ impl Render for Browser {
                         this.scope = i;
                         this.preview = false;
                         this.query(false, cx);
-                        window.focus(&this.focus);
+                        window.focus(&this.focus, cx);
                     }))
                     .child(
                         div()
@@ -784,7 +786,7 @@ impl Render for Browser {
                                 this.preview = true;
                                 this.update_surface(cx);
                             }
-                            window.focus(&this.focus);
+                            window.focus(&this.focus, cx);
                             cx.notify();
                         }));
                     cell = cell.on_mouse_down(
@@ -796,7 +798,7 @@ impl Render for Browser {
                                 event.position.x.min(size.width - px(278.)),
                                 event.position.y.min(size.height - px(120.)),
                             ));
-                            window.focus(&this.focus);
+                            window.focus(&this.focus, cx);
                             cx.notify();
                         }),
                     );
@@ -808,7 +810,7 @@ impl Render for Browser {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                    .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
                     .child(content)
             });
         }
@@ -962,7 +964,7 @@ fn main() {
         database.parent().unwrap().join(".gpui-snapshot").is_file(),
         "Only a marked disposable snapshot is accepted"
     );
-    Application::new()
+    gpui_platform::application()
         .with_assets(theme::Assets)
         .run(move |cx: &mut App| {
             cx.text_system()
@@ -992,6 +994,7 @@ fn main() {
                 Menu {
                     name: "Picto GPUI".into(),
                     items: vec![MenuItem::action("Quit", Quit)],
+                    disabled: false,
                 },
                 Menu {
                     name: "Media Examples".into(),
@@ -1000,6 +1003,7 @@ fn main() {
                         MenuItem::action("Flash (Ruffle)", DemoFlash),
                         MenuItem::action("Word", DemoWord),
                     ],
+                    disabled: false,
                 },
             ]);
             let bounds = Bounds::centered(None, size(px(1320.), px(850.)), cx);

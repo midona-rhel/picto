@@ -109,7 +109,7 @@ impl TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        _window.focus(&self.focus_handle);
+        _window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
 
         if event.modifiers.shift {
@@ -554,8 +554,15 @@ impl Element for TextElement {
             window.paint_quad(selection)
         }
         let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+        line.paint(
+            bounds.origin,
+            window.line_height(),
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        )
+        .unwrap();
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -592,11 +599,11 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|this, _: &Commit, window, cx| {
                 this.commit(cx);
-                window.blur();
+                window.blur(cx);
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
                 this.content = this.original.clone();
-                window.blur();
+                window.blur(cx);
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
