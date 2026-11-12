@@ -69,6 +69,8 @@ struct Browser {
     details: Option<RootDetails>,
     preview: bool,
     menu: Option<Point<Pixels>>,
+    /// A dismissed menu, still on screen while it fades out.
+    menu_closing: Option<(Point<Pixels>, std::time::Instant)>,
     demo: Option<(&'static str, &'static str)>,
     fixtures: tempfile::TempDir,
     member: usize,
@@ -181,6 +183,7 @@ impl Browser {
             details: None,
             preview: false,
             menu: None,
+            menu_closing: None,
             demo: None,
             fixtures: demo::fixtures().expect("create disposable media fixtures"),
             member: 0,
@@ -577,6 +580,17 @@ impl Browser {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgba(theme::BADGE_TEXT))
     }
+    /// Dismisses the context menu, leaving it to fade out. Returns whether one
+    /// was open.
+    fn close_menu(&mut self) -> bool {
+        match self.menu.take() {
+            Some(position) => {
+                self.menu_closing = Some((position, std::time::Instant::now()));
+                true
+            }
+            None => false,
+        }
+    }
     fn update_surface(&mut self, cx: &mut Context<Self>) {
         if !self.preview {
             return;
@@ -605,7 +619,7 @@ impl Browser {
     fn show_demo(&mut self, name: &'static str, mime: &'static str, cx: &mut Context<Self>) {
         self.demo = Some((name, mime));
         self.preview = true;
-        self.menu = None;
+        self.close_menu();
         self.update_surface(cx);
         cx.notify();
     }
@@ -859,7 +873,7 @@ impl Render for Browser {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
-                if this.menu.take().is_none() {
+                if !this.close_menu() {
                     this.preview = false;
                 }
                 cx.notify();
@@ -867,17 +881,33 @@ impl Render for Browser {
             .child(sidebar)
             .child(center)
             .child(inspector);
-        if let Some(position) = self.menu {
+        // `menuOut`: a dismissed menu fades over 80 ms and takes no more input.
+        let closing = self.menu_closing.and_then(|(position, started)| {
+            let progress = motion::progress(started.elapsed(), motion::MENU_OUT);
+            (progress < 1.).then(|| (position, 1. - motion::EASE_IN.ease(progress)))
+        });
+        if closing.is_none() {
+            self.menu_closing = None;
+        }
+        let interactive = self.menu.is_some();
+        if let Some((position, opacity)) = self.menu.map(|position| (position, 1.)).or(closing) {
+            // The floating glass surface of `surfaces.css`, without its blur.
             let mut menu = div()
                 .absolute()
                 .left(position.x)
                 .top(position.y)
                 .w(px(270.))
-                .p_1()
+                .p(px(4.))
+                .gap(px(2.))
                 .rounded(px(8.))
                 .border_1()
-                .border_color(rgb(0x47484b))
-                .bg(rgb(0x292a2d))
+                .border_color(rgba(0xffffff26))
+                .bg(rgba(theme::GLASS))
+                .shadow(vec![
+                    BoxShadow::new(px(0.), px(12.), rgba(0x0000004d).into()).blur_radius(px(24.)),
+                    BoxShadow::new(px(0.), px(0.), rgba(0x00000080).into()).spread_radius(px(1.)),
+                ])
+                .opacity(opacity)
                 .flex()
                 .flex_col();
             for (index, label) in ["Quick Look", "Copy Name", "Copy File Path"]
@@ -887,15 +917,18 @@ impl Render for Browser {
                 menu = menu.child(
                     div()
                         .id(("context-action", index))
-                        .h(px(28.))
+                        .h(px(26.))
                         .px(px(6.))
                         .flex()
                         .items_center()
-                        .rounded(px(5.))
-                        .hover(|s| s.bg(rgb(0x424348)))
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(rgba(0xf8f9fb14)))
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.menu = None;
+                            // A menu that is fading out no longer acts.
+                            if !this.close_menu() {
+                                return;
+                            }
                             match index {
                                 0 => {
                                     this.preview = true;
@@ -922,8 +955,8 @@ impl Render for Browser {
                         })),
                 );
             }
-            root = root
-                .child(
+            if interactive {
+                root = root.child(
                     div()
                         .id("menu-backdrop")
                         .absolute()
@@ -931,15 +964,16 @@ impl Render for Browser {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
-                                this.menu = None;
+                                this.close_menu();
                                 cx.notify();
                             }),
                         ),
-                )
-                .child(menu);
+                );
+            }
+            root = root.child(menu);
         }
         // Keep painting while a fade or a thumbnail reveal is in motion.
-        if self.transition.animating() || self.reveal.active(now) {
+        if self.transition.animating() || self.reveal.active(now) || self.menu_closing.is_some() {
             window.request_animation_frame();
         }
         root

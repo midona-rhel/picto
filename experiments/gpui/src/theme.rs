@@ -12,6 +12,8 @@ pub const HAIRLINE: u32 = 0xf8f9fb1a;
 /// `--color-text-tertiary`: 60% text.
 pub const TEXT_TERTIARY: u32 = 0xf8f9fb99;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
+/// `--glass-bg`: the background at 92%.
+pub const GLASS: u32 = 0x18191ceb;
 pub const TILE_RADIUS: f32 = 4.;
 pub struct Assets;
 /// Embeds `assets/<name>.svg` for each listed icon name.

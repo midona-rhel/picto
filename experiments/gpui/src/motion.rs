@@ -4,6 +4,10 @@ use std::time::Duration;
 
 /// `--ease-default`
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
+/// CSS `ease-in`.
+pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// `menuOut`: a dismissed context menu fades for this long.
+pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
 
