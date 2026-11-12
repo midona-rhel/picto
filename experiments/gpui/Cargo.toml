@@ -1,0 +1,32 @@
+[package]
+name = "picto-gpui-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Keep experimental dependencies and lockfile out of the production workspace.
+[workspace]
+
+# This standalone workspace does not inherit Picto's optimized debug profile.
+# Keep symbols/checks while optimizing the rendering and decoding hot paths.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[dependencies]
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+picto_library = { path = "../../picto-library" }
+unicode-segmentation = "1"
+anyhow = "1"
+futures = "0.3"
+tempfile = "3"
+image = "0.25"
+smallvec = "1"
+url = "2"
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", features = ["audio", "mp3", "aac", "lzma"] }
+ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", default-features = false, features = ["cpal"] }
+ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
+wgpu = "27.0.1"
