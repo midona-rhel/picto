@@ -24,11 +24,4 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 printf 'Snapshot: %s\nApp: %s\n' "$snapshot" "$app"
 printf '%s\n' "$snapshot" > target/last-snapshot
-document_env=()
-for name in SOFFICE PDFTOPPM; do
-  variable="PICTO_$name"
-  command_name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
-  executable="${!variable:-$(command -v "$command_name" || true)}"
-  if [[ -n "$executable" ]]; then document_env+=(--env "$variable=$executable"); fi
-done
-open -n "${document_env[@]}" "$app" --args "$snapshot/library.sqlite" "$source_library/blobs"
+open -n "$app" --args "$snapshot/library.sqlite" "$source_library/blobs"

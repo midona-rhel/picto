@@ -445,6 +445,14 @@ impl Element for TextElement {
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), hsla(0., 0., 0.6, 1.))
+        } else if content.contains(['\n', '\r']) {
+            // This element shapes one line, and a line break panics the shaper.
+            // A space is the same byte length, so cursor offsets stay valid and
+            // the stored value keeps its real line breaks.
+            (
+                SharedString::from(content.replace(['\n', '\r'], " ")),
+                style.color,
+            )
         } else {
             (content, style.color)
         };
