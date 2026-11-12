@@ -7,7 +7,7 @@ snapshot="$(mktemp -d /tmp/picto-gpui-library.XXXXXX)"
 # SQLite's online backup includes committed WAL data without touching the live DB.
 sqlite3 -readonly "$source_library/library.sqlite" ".backup '$snapshot/library.sqlite'"
 touch "$snapshot/.gpui-snapshot"
-cargo build --offline
+cargo build --locked
 app="$PWD/target/Picto GPUI.app"
 mkdir -p "$app/Contents/MacOS"
 cp target/debug/picto-gpui-spike "$app/Contents/MacOS/PictoGPUI"
