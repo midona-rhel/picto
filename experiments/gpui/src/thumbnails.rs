@@ -32,6 +32,14 @@ impl Thumbnails {
         }
     }
 }
+impl Thumbnails {
+    /// Whether this thumbnail is decoded and ready to paint.
+    pub fn is_loaded(&self, resource: &Resource) -> bool {
+        self.entries
+            .get(resource)
+            .is_some_and(|item| matches!(item.get(), Some(Ok(_))))
+    }
+}
 impl ImageCache for Thumbnails {
     fn load(
         &mut self,

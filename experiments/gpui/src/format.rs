@@ -66,6 +66,32 @@ pub fn grouped(count: u64) -> String {
     out
 }
 
+/// A palette entry as an sRGB colour (`labToHex` in `labColor.ts`).
+pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
+    let fy = (l + 16.) / 116.;
+    let fx = a / 500. + fy;
+    let fz = fy - b / 200.;
+    let inverse = |part: f32| {
+        if part.powi(3) > 0.008856 {
+            part.powi(3)
+        } else {
+            (part - 16. / 116.) / 7.787
+        }
+    };
+    let (x, y, z) = (0.95047 * inverse(fx), inverse(fy), 1.08883 * inverse(fz));
+    let channel = |linear: f32| {
+        let encoded = if linear <= 0.0031308 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1. / 2.4) - 0.055
+        };
+        (encoded.clamp(0., 1.) * 255.).round() as u32
+    };
+    channel(x * 3.2406 + y * -1.5372 + z * -0.4986) << 16
+        | channel(x * -0.9689 + y * 1.8758 + z * 0.0415) << 8
+        | channel(x * 0.0557 + y * -0.204 + z * 1.057)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +116,14 @@ mod tests {
         assert_eq!(grouped(2673), "2,673");
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1_000_000), "1,000,000");
+    }
+
+    #[test]
+    fn lab_colours_convert_to_srgb() {
+        assert_eq!(lab_to_rgb(0., 0., 0.), 0x000000);
+        assert_eq!(lab_to_rgb(100., 0., 0.), 0xffffff);
+        // sRGB primaries in CIE Lab (D65).
+        assert_eq!(lab_to_rgb(53.2408, 80.0925, 67.2032), 0xff0000);
+        assert_eq!(lab_to_rgb(32.2970, 79.1875, -107.8602), 0x0000ff);
     }
 }

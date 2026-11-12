@@ -1,9 +1,40 @@
 //! The sidebar and the grid toolbar, following `Sidebar.tsx` and
 //! `GridToolbar.tsx`: the same rows in the same order, the same section
 //! headers, and Picto's own toolbar glyphs.
-use crate::{Browser, MUTED, PANEL, format, theme};
+use crate::{Browser, MUTED, PANEL, format, motion, theme};
 use gpui::*;
 use picto_library::query::ItemScope;
+use std::time::Instant;
+
+/// Changing destination, as `WorkspaceSurface.tsx` stages it: the current grid
+/// fades out, the surface stays hidden until the destination is ready, then
+/// the destination fades in.
+#[derive(Clone, Copy)]
+pub(crate) enum Transition {
+    Idle,
+    FadingOut(Instant),
+    Waiting,
+    FadingIn(Instant),
+}
+
+impl Transition {
+    /// Opacity of the grid surface and the scope title.
+    pub(crate) fn opacity(&self) -> f32 {
+        let eased = |started: &Instant| {
+            motion::EASE_DEFAULT.ease(motion::progress(started.elapsed(), motion::SCOPE_FADE))
+        };
+        match self {
+            Transition::Idle => 1.,
+            Transition::FadingOut(started) => 1. - eased(started),
+            Transition::Waiting => 0.,
+            Transition::FadingIn(started) => eased(started),
+        }
+    }
+
+    pub(crate) fn animating(&self) -> bool {
+        matches!(self, Transition::FadingOut(_) | Transition::FadingIn(_))
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Section {
@@ -61,22 +92,62 @@ impl Browser {
     fn open(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.scope = index;
         self.preview = false;
-        if self.nav.get(index).is_some_and(|entry| entry.screen) {
-            // Not a grid: drop the previous scope's results and any reply still
-            // on its way for them.
+        self.pending_page = None;
+        let screen = self.nav.get(index).is_some_and(|entry| entry.screen);
+        self.transition = match self.transition {
+            // Further clicks while the surface is fading out or already hidden
+            // only retarget where it lands.
+            Transition::FadingOut(_) | Transition::Waiting => self.transition,
+            // Turning around mid fade-in continues from the current opacity.
+            Transition::FadingIn(started) => {
+                let shown = motion::progress(started.elapsed(), motion::SCOPE_FADE);
+                Transition::FadingOut(Instant::now() - motion::SCOPE_FADE.mul_f32(1. - shown))
+            }
+            Transition::Idle => Transition::FadingOut(Instant::now()),
+        };
+        if screen {
+            // Not a grid: nothing to fetch, and any reply still on its way for
+            // the previous scope no longer applies.
             self.generation += 1;
-            self.items.clear();
-            self.selected = 0;
-            self.details = None;
-            self.total = 0;
-            self.cursor = None;
             self.loading = false;
-            self.layout_key = None;
+            if matches!(self.transition, Transition::Waiting) {
+                self.commit_screen();
+            }
             cx.notify();
         } else {
             self.query(false, cx);
         }
         window.focus(&self.focus, cx);
+    }
+
+    /// Shows a destination that is a screen, not a grid, on the hidden surface.
+    fn commit_screen(&mut self) {
+        self.items.clear();
+        self.selected = 0;
+        self.details = None;
+        self.total = 0;
+        self.cursor = None;
+        self.layout_key = None;
+        self.displayed = self.scope;
+        self.transition = Transition::FadingIn(Instant::now());
+    }
+
+    /// Moves a scope change along once its current stage has run its time.
+    pub(crate) fn advance_transition(&mut self, cx: &mut Context<Self>) {
+        match self.transition {
+            Transition::FadingOut(started) if started.elapsed() >= motion::SCOPE_FADE => {
+                self.transition = Transition::Waiting;
+                if self.nav.get(self.scope).is_some_and(|entry| entry.screen) {
+                    self.commit_screen();
+                } else if let Some((page, prefs)) = self.pending_page.take() {
+                    self.apply_page(false, page, prefs, cx);
+                }
+            }
+            Transition::FadingIn(started) if started.elapsed() >= motion::SCOPE_FADE => {
+                self.transition = Transition::Idle;
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn sidebar(&self, avatar: AnyElement, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -329,9 +400,10 @@ impl Browser {
                     .w(px(160.))
                     .overflow_hidden()
                     .text_ellipsis()
+                    .opacity(self.transition.opacity())
                     .child(
                         self.nav
-                            .get(self.scope)
+                            .get(self.displayed)
                             .map(|n| n.label.clone())
                             .unwrap_or_else(|| "Opening library...".into()),
                     ),

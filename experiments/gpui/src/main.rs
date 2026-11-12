@@ -5,7 +5,9 @@ mod format;
 mod input;
 mod inspector;
 mod layout;
+mod motion;
 mod prefs;
+mod reveal;
 mod shell;
 mod surface;
 mod theme;
@@ -78,6 +80,15 @@ struct Browser {
     layout_key: Option<(u32, u32, usize, u32, layout::ViewMode, u32)>,
     prefs: prefs::ViewPrefs,
     prefs_scope: Option<usize>,
+    reveal: reveal::RevealTracker,
+    /// The steady clock the reveal timings are measured on.
+    clock: std::time::Instant,
+    transition: shell::Transition,
+    /// The destination shown in the grid and title; trails `scope` while the
+    /// previous one fades out.
+    displayed: usize,
+    /// A destination's first page that arrived before the fade-out finished.
+    pending_page: Option<(picto_library::query::RootPage, prefs::ViewPrefs)>,
     thumbnails: Entity<thumbnails::Thumbnails>,
     generation: u64,
     search_text: String,
@@ -181,6 +192,11 @@ impl Browser {
             layout_key: None,
             prefs: prefs::ViewPrefs::default(),
             prefs_scope: None,
+            reveal: reveal::RevealTracker::default(),
+            clock: std::time::Instant::now(),
+            transition: shell::Transition::Idle,
+            displayed: 0,
+            pending_page: None,
             thumbnails: cx.new(thumbnails::Thumbnails::new),
             generation: 0,
             search_text: String::new(),
@@ -224,27 +240,12 @@ impl Browser {
                     self.query(false, cx);
                 }
                 Reply::Page(generation, append, page, prefs) if generation == self.generation => {
-                    // A scope opens at its saved zoom. Searching inside it keeps
-                    // whatever the zoom control was moved to since.
-                    if self.prefs_scope != Some(self.scope) {
-                        self.prefs_scope = Some(self.scope);
-                        self.tile = prefs.target_size;
-                        self.zoom
-                            .update(cx, |zoom, cx| zoom.show(prefs.target_size, cx));
-                    }
-                    self.prefs = prefs;
-                    self.total = page.total;
-                    self.cursor = page.next_cursor;
-                    self.loading = false;
-                    if append {
-                        self.items.extend(page.items);
+                    if !append && matches!(self.transition, shell::Transition::FadingOut(_)) {
+                        // The previous grid is still fading out. Hold the
+                        // destination until it is gone.
+                        self.pending_page = Some((page, prefs));
                     } else {
-                        self.items = page.items;
-                        self.selected = 0;
-                        self.details = None;
-                        self.scroll.set_offset(point(px(0.), px(0.)));
-                        self.layout_key = None;
-                        self.select(0, cx);
+                        self.apply_page(append, page, prefs, cx);
                     }
                 }
                 Reply::Details(id, details)
@@ -272,6 +273,40 @@ impl Browser {
                 _ => {}
             }
             cx.notify();
+        }
+    }
+    pub(crate) fn apply_page(
+        &mut self,
+        append: bool,
+        page: picto_library::query::RootPage,
+        prefs: prefs::ViewPrefs,
+        cx: &mut Context<Self>,
+    ) {
+        // A scope opens at its saved zoom. Searching inside it keeps
+        // whatever the zoom control was moved to since.
+        if self.prefs_scope != Some(self.scope) {
+            self.prefs_scope = Some(self.scope);
+            self.tile = prefs.target_size;
+            self.zoom
+                .update(cx, |zoom, cx| zoom.show(prefs.target_size, cx));
+        }
+        self.prefs = prefs;
+        self.total = page.total;
+        self.cursor = page.next_cursor;
+        self.loading = false;
+        if append {
+            self.items.extend(page.items);
+        } else {
+            self.items = page.items;
+            self.selected = 0;
+            self.details = None;
+            self.scroll.set_offset(point(px(0.), px(0.)));
+            self.layout_key = None;
+            self.displayed = self.scope;
+            if matches!(self.transition, shell::Transition::Waiting) {
+                self.transition = shell::Transition::FadingIn(std::time::Instant::now());
+            }
+            self.select(0, cx);
         }
     }
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -330,7 +365,7 @@ impl Browser {
     /// One grid tile, drawn to the rules of the Electron canvas grid
     /// (`drawBase.ts`): the media rect, its hairline ring, badges inside the
     /// rect, the selection stroke outside it, and optional text rows below.
-    fn tile_element(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn tile_element(&self, index: usize, now: f64, cx: &mut Context<Self>) -> Stateful<Div> {
         let tile = self.layout.tiles[index];
         let item = &self.items[index];
         let prefs = &self.prefs;
@@ -350,6 +385,15 @@ impl Browser {
         } else {
             (0., 0., tile.w, image_height)
         };
+        // The image fades in over its dominant colour, then that colour fades
+        // away beneath it, which matters for images with transparency.
+        let placeholder = item
+            .palette
+            .first()
+            .map(|color| format::lab_to_rgb(color.l, color.a, color.b))
+            .unwrap_or(theme::PLACEHOLDER);
+        let (image_alpha, placeholder_alpha) =
+            reveal::alphas(self.reveal.progress(item.root_id.0, now));
         let mut cell = div()
             .id(index)
             .absolute()
@@ -378,13 +422,21 @@ impl Browser {
                 .w(px(w))
                 .h(px(h))
                 .rounded(px(theme::TILE_RADIUS))
-                .bg(rgb(theme::PLACEHOLDER))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(theme::TILE_RADIUS))
+                        .bg(rgb(placeholder))
+                        .opacity(placeholder_alpha),
+                )
                 .child(
                     img(self.thumbnail(&item.content_hash))
                         .image_cache(&self.thumbnails)
                         .size_full()
                         .rounded(px(theme::TILE_RADIUS))
-                        .object_fit(ObjectFit::Cover),
+                        .object_fit(ObjectFit::Cover)
+                        .opacity(image_alpha),
                 )
                 .child(
                     div()
@@ -560,6 +612,9 @@ impl Browser {
 }
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.advance_transition(cx);
+        let fade = self.transition.opacity();
+        let now = self.clock.elapsed().as_secs_f64() * 1000.;
         if !self.preview {
             self.surface.update(cx, |surface, _| surface.stop());
         }
@@ -700,8 +755,9 @@ impl Render for Browser {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .opacity(fade)
                     .text_color(rgb(MUTED))
-                    .child(match self.nav.get(self.scope) {
+                    .child(match self.nav.get(self.displayed) {
                         Some(entry) if entry.screen => {
                             format!("{} is not part of this prototype yet", entry.label)
                         }
@@ -718,13 +774,32 @@ impl Render for Browser {
                     self.query(true, cx);
                 }
                 let mut content = div().relative().w_full().h(px(height));
-                for index in self.layout.visible(top - 500., top + viewport + 500.) {
-                    content = content.child(self.tile_element(index, cx));
+                let visible = self
+                    .layout
+                    .visible(top - reveal::MARGIN, top + viewport + reveal::MARGIN);
+                let decoded = {
+                    let thumbnails = self.thumbnails.read(cx);
+                    visible
+                        .iter()
+                        .map(|&index| {
+                            let item = &self.items[index];
+                            let thumbnail = self.thumbnail(&item.content_hash);
+                            (
+                                item.root_id.0,
+                                thumbnails.is_loaded(&Resource::Path(thumbnail.into())),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                self.reveal.update(&decoded, now);
+                for index in visible {
+                    content = content.child(self.tile_element(index, now, cx));
                 }
                 div()
                     .id("media-grid")
                     .flex_1()
                     .min_h_0()
+                    .opacity(fade)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
@@ -862,6 +937,10 @@ impl Render for Browser {
                         ),
                 )
                 .child(menu);
+        }
+        // Keep painting while a fade or a thumbnail reveal is in motion.
+        if self.transition.animating() || self.reveal.active(now) {
+            window.request_animation_frame();
         }
         root
     }
