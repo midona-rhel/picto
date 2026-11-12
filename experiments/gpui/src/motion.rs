@@ -52,6 +52,65 @@ impl CubicBezier {
     }
 }
 
+/// `--sidebar-list-highlight-transition`: a sidebar row's highlight fade.
+pub const SIDEBAR_HOVER: Duration = Duration::from_millis(50);
+/// `iconButton.module.css`: an icon button's hover fade.
+pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
+
+/// Where a fade that set off from `from` toward 0 or 1 has got to.
+fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
+    let target = if hovered { 1. } else { 0. };
+    from + (target - from) * EASE_DEFAULT.ease(progress(elapsed, duration))
+}
+
+struct HoverFade {
+    hovered: bool,
+    since: std::time::Instant,
+    from: f32,
+    duration: Duration,
+}
+
+/// Hover highlights that fade as CSS transitions do: toward the new state on
+/// the default curve, starting from wherever the previous fade had reached.
+#[derive(Default)]
+pub struct HoverFades {
+    fades: std::collections::HashMap<(&'static str, usize), HoverFade>,
+}
+
+impl HoverFades {
+    pub fn set(&mut self, key: (&'static str, usize), hovered: bool, duration: Duration) {
+        let from = self.value(key);
+        self.fades
+            .retain(|_, fade| fade.hovered || fade.since.elapsed() < fade.duration);
+        self.fades.insert(
+            key,
+            HoverFade {
+                hovered,
+                since: std::time::Instant::now(),
+                from,
+                duration,
+            },
+        );
+    }
+
+    /// The highlight's strength, 0 at rest and 1 fully hovered.
+    pub fn value(&self, key: (&'static str, usize)) -> f32 {
+        self.fades.get(&key).map_or(0., |fade| {
+            fade_value(fade.from, fade.hovered, fade.since.elapsed(), fade.duration)
+        })
+    }
+
+    pub fn hovered(&self, key: (&'static str, usize)) -> bool {
+        self.fades.get(&key).is_some_and(|fade| fade.hovered)
+    }
+
+    pub fn animating(&self) -> bool {
+        self.fades
+            .values()
+            .any(|fade| fade.since.elapsed() < fade.duration)
+    }
+}
+
 /// Progress of an animation that began `elapsed` ago, in `0..=1`.
 pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
     (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.)
@@ -84,6 +143,21 @@ mod tests {
         // Slow start, fast finish: under the diagonal early, over it late.
         assert!(EASE_DEFAULT.ease(0.1) < 0.1);
         assert!(EASE_DEFAULT.ease(0.6) > 0.6);
+    }
+
+    #[test]
+    fn a_reversed_hover_fade_continues_from_where_it_was() {
+        let duration = Duration::from_millis(150);
+        assert_eq!(fade_value(0., true, Duration::ZERO, duration), 0.);
+        assert_eq!(fade_value(0., true, duration, duration), 1.);
+        let halfway = fade_value(0., true, Duration::from_millis(75), duration);
+        assert!(halfway > 0. && halfway < 1.);
+        // The pointer leaves mid-fade: the fade-out starts at that strength.
+        assert_eq!(
+            fade_value(halfway, false, Duration::ZERO, duration),
+            halfway
+        );
+        assert_eq!(fade_value(halfway, false, duration, duration), 0.);
     }
 
     #[test]

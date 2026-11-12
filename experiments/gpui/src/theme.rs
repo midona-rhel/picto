@@ -38,6 +38,7 @@ icons!(
     "trash",
     "folder",
     "folders",
+    "folder-open",
     "tag",
     "search",
     "layout-grid",
@@ -72,21 +73,19 @@ pub fn icon(name: &'static str) -> impl IntoElement {
 }
 /// `--color-text-secondary`: 70% text.
 pub const TEXT_SECONDARY: u32 = 0xf8f9fbb3;
-/// A 24px toolbar button holding one 16px glyph.
-pub fn icon_button(id: &'static str, name: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .size(px(24.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.))
-        .hover(|style| style.bg(rgba(0xf8f9fb14)))
-        .child(
-            svg()
-                .path(name)
-                .size(px(16.))
-                .text_color(rgba(TEXT_SECONDARY)),
-        )
+/// `--color-surface-hover`: 5% contrast.
+pub const SURFACE_HOVER: u32 = 0xf8f9fb0d;
+/// `--color-surface-active`: 10% contrast.
+pub const SURFACE_ACTIVE: u32 = 0xf8f9fb1a;
+/// `--color-hover-overlay`: 8% contrast.
+pub const HOVER_OVERLAY: u32 = 0xf8f9fb14;
+/// `--color-active-overlay`: 14% contrast.
+pub const ACTIVE_OVERLAY: u32 = 0xf8f9fb24;
+/// A sidebar row glyph: 19px, dimmed until its row is hovered or active.
+pub fn sidebar_icon(name: &'static str, lit: bool) -> impl IntoElement {
+    svg()
+        .path(name)
+        .size(px(19.))
+        .text_color(rgb(TEXT))
+        .opacity(if lit { 1. } else { 0.8 })
 }

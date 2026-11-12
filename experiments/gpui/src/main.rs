@@ -83,6 +83,7 @@ struct Browser {
     prefs: prefs::ViewPrefs,
     prefs_scope: Option<usize>,
     reveal: reveal::RevealTracker,
+    hover: motion::HoverFades,
     /// The steady clock the reveal timings are measured on.
     clock: std::time::Instant,
     transition: shell::Transition,
@@ -196,6 +197,7 @@ impl Browser {
             prefs: prefs::ViewPrefs::default(),
             prefs_scope: None,
             reveal: reveal::RevealTracker::default(),
+            hover: motion::HoverFades::default(),
             clock: std::time::Instant::now(),
             transition: shell::Transition::Idle,
             displayed: 0,
@@ -973,7 +975,11 @@ impl Render for Browser {
             root = root.child(menu);
         }
         // Keep painting while a fade or a thumbnail reveal is in motion.
-        if self.transition.animating() || self.reveal.active(now) || self.menu_closing.is_some() {
+        if self.transition.animating()
+            || self.reveal.active(now)
+            || self.menu_closing.is_some()
+            || self.hover.animating()
+        {
             window.request_animation_frame();
         }
         root

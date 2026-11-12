@@ -109,7 +109,7 @@ impl Render for Zoom {
                         svg()
                             .path("toolbar-minus")
                             .size(px(16.))
-                            .text_color(rgba(0xf8f9fbb3)),
+                            .text_color(rgba(crate::theme::TEXT_SECONDARY)),
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value - 50., cx))),
             )
@@ -130,7 +130,7 @@ impl Render for Zoom {
                         svg()
                             .path("toolbar-plus")
                             .size(px(16.))
-                            .text_color(rgba(0xf8f9fbb3)),
+                            .text_color(rgba(crate::theme::TEXT_SECONDARY)),
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value + 50., cx))),
             )

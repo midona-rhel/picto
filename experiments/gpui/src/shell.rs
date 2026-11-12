@@ -225,6 +225,7 @@ impl Browser {
             }
             let icon = entry.icon.unwrap_or(match entry.scope {
                 ItemScope::SmartFolder { .. } if entry.parent.is_none() => "layout-grid",
+                _ if has_children && !self.collapsed.contains(&i) => "folder-open",
                 _ => "folder",
             });
             let active = self.scope == i;
@@ -240,7 +241,14 @@ impl Browser {
                 .pr(px(2.))
                 .rounded_md()
                 .on_click(cx.listener(move |this, _, window, cx| this.navigate(i, window, cx)))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    this.hover
+                        .set(("sidebar-row", i), *hovered, motion::SIDEBAR_HOVER);
+                    cx.notify();
+                }))
                 .child(
+                    // The row highlight: solid when active, otherwise fading
+                    // with the pointer.
                     div()
                         .absolute()
                         .left(px(16. + entry.depth as f32 * 20.))
@@ -248,12 +256,16 @@ impl Browser {
                         .top_0()
                         .bottom(px(1.))
                         .rounded(px(6.))
-                        .bg(if active {
-                            rgba(0xffffff14)
+                        .bg(rgba(if active {
+                            theme::SURFACE_ACTIVE
                         } else {
-                            rgba(0x00000000)
-                        })
-                        .group_hover("sidebar-row", |s| s.bg(rgba(0xffffff0d))),
+                            theme::SURFACE_HOVER
+                        }))
+                        .opacity(if active {
+                            1.
+                        } else {
+                            self.hover.value(("sidebar-row", i))
+                        }),
                 )
                 .child(disclosure)
                 .child(
@@ -264,7 +276,10 @@ impl Browser {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(theme::icon(icon)),
+                        .child(theme::sidebar_icon(
+                            icon,
+                            active || self.hover.hovered(("sidebar-row", i)),
+                        )),
                 )
                 .child(
                     div()
@@ -315,8 +330,8 @@ impl Browser {
                     .items_center()
                     .justify_end()
                     .gap(px(2.))
-                    .child(theme::icon_button("open-settings", "settings"))
-                    .child(theme::icon_button("toggle-sidebar", "toolbar-panel")),
+                    .child(self.icon_button("open-settings", "settings", true, cx))
+                    .child(self.icon_button("toggle-sidebar", "toolbar-panel", true, cx)),
             )
             .child(
                 div()
@@ -370,6 +385,46 @@ impl Browser {
             )
     }
 
+    /// The shared 24px icon button of `iconButton.module.css`: the glyph at
+    /// 94%, lifting to full strength over a hover overlay that fades in.
+    fn icon_button(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let button = div()
+            .id(id)
+            .relative()
+            .size(px(24.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.));
+        let glyph = svg().path(icon).size(px(16.)).text_color(rgb(theme::TEXT));
+        if !enabled {
+            return button.opacity(0.2).child(glyph);
+        }
+        let hover = self.hover.value((id, 0));
+        button
+            .active(|style| style.bg(rgba(theme::ACTIVE_OVERLAY)))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hover.set((id, 0), *hovered, motion::BUTTON_HOVER);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(4.))
+                    .bg(rgba(theme::HOVER_OVERLAY))
+                    .opacity(hover),
+            )
+            .child(glyph.opacity(0.94 + 0.06 * hover))
+    }
+
     pub(crate) fn toolbar(&self, cx: &mut Context<Self>) -> Div {
         let can_go = |delta: isize| {
             self.history_index
@@ -377,11 +432,9 @@ impl Browser {
                 .is_some_and(|target| target < self.history.len())
         };
         let history = |id, icon, delta: isize, cx: &mut Context<Self>| {
-            theme::icon_button(id, icon)
-                .opacity(if can_go(delta) { 1. } else { 0.35 })
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.step_history(delta, window, cx)),
-                )
+            self.icon_button(id, icon, can_go(delta), cx).on_click(
+                cx.listener(move |this, _, window, cx| this.step_history(delta, window, cx)),
+            )
         };
         div()
             .h(px(48.))
@@ -415,8 +468,8 @@ impl Browser {
                     .justify_center()
                     .child(self.zoom.clone()),
             )
-            .child(theme::icon_button("view-options", "toolbar-layout"))
-            .child(theme::icon_button("filter-library", "toolbar-filter"))
+            .child(self.icon_button("view-options", "toolbar-layout", true, cx))
+            .child(self.icon_button("filter-library", "toolbar-filter", true, cx))
             .child(
                 div()
                     .ml(px(4.))
