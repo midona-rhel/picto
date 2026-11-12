@@ -52,6 +52,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   an old result replacing a newer query.
 - Real paginated results (500 per page, loaded near the end), viewport-only
   tiles, bounded thumbnail cache (192 entries, four concurrent decodes).
+- Motion with the Electron timings. Thumbnails follow the reveal contract of
+  `thumbnailRevealTracker.ts`: 100 ms after entering the 500px margin, a 500 ms
+  reveal in which the image fades in over its dominant colour and that colour
+  then fades out. Changing destination follows `WorkspaceSurface.tsx`: 170 ms
+  fade-out on `--ease-default`, hidden until the first page is ready, 170 ms
+  fade-in; clicks during the fade-out retarget it.
 - Metadata inspector: dimensions, MIME, size, media count, tags, notes, rating.
 - Space/Enter/double-click preview, Escape back, previous/next item, and
   navigation through members of a collection. Thumbnail-first preview with
@@ -71,8 +77,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   scroll surface. Preview is embedded, not the three production shells.
 - No drag and drop, range or multi-selection, complete context menus,
   import/export, subscriptions, cloud, localization or site login.
-- No animations, glass surfaces or window vibrancy yet. In-app backdrop blur
-  needs a renderer patch; two open-source implementations exist to port.
+- Motion still to port: context menu and modal enter/exit, hover fades,
+  inspector rail slide and fade, sidebar collapse, toasts, the viewer's
+  thumbnail-to-original crossfade and its zoom and pan tween, smooth paging,
+  progress and spinner loops. A scope change does not yet restore the previous
+  scroll position as the Electron grid does.
+- No glass surfaces or window vibrancy yet. In-app backdrop blur needs a
+  renderer patch; two open-source implementations exist to port. GPUI cannot
+  scale or rotate arbitrary elements, so the menu and modal scale-in needs a
+  substitute.
 - Sidebar expansion, sidebar width and view changes are not persisted.
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
@@ -92,7 +105,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
 
 The regular tests cover the three layout modes against hand-computed geometry,
 banded visibility against a full scan of 20,000 tiles in every mode, view
-preference fallbacks, grid labels, tree ordering and the text-search gates. The
+preference fallbacks, grid labels, the reveal timeline, the easing curve
+against the sampled bezier, tree ordering and the text-search gates. The
 ignored tests need a real snapshot or a GPU and are run explicitly.
 
 `pixel_diff.py` (needs Pillow) produces an unscaled overlay, amplified RGB
@@ -104,8 +118,9 @@ to conceal layout errors.
 
 `backend.rs` is the small adapter to the existing Rust owners; it does not
 implement SQL or duplicate ingestion rules. `layout.rs` is the grid geometry,
-`prefs.rs` the saved view, `format.rs` the grid labels, `shell.rs` the sidebar
-and toolbar, `inspector.rs` the inspector, `surface.rs` image and Flash
+`prefs.rs` the saved view, `format.rs` the grid labels, `reveal.rs` and
+`motion.rs` the thumbnail reveal and easing, `shell.rs` the sidebar, toolbar
+and scope transition, `inspector.rs` the inspector, `surface.rs` image and Flash
 presentation, `input.rs` native text input, `theme.rs` design tokens and icons,
 and `main.rs` the window and grid. Production integration should reuse the
 application service layer for jobs and events rather than growing a second
