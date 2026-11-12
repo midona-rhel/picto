@@ -9,13 +9,20 @@ use std::{
 #[derive(Clone)]
 pub struct Navigation {
     pub label: String,
-    pub count: u64,
+    /// Rows without a count (Random, Subscriptions) show none.
+    pub count: Option<u64>,
     pub scope: ItemScope,
+    /// A destination that is its own screen, not a grid of this scope.
+    pub screen: bool,
+    /// The All scope in a shuffled order.
+    pub random: bool,
+    pub icon: Option<&'static str>,
     pub depth: usize,
     pub parent: Option<usize>,
 }
 pub enum Request {
-    Query(u64, ItemScope, FilterExpr, Option<String>),
+    /// Generation, scope, filter, cursor, and whether to shuffle.
+    Query(u64, ItemScope, FilterExpr, Option<String>, bool),
     Details(RootId),
     Rate(RootId, picto_library::Rating),
     Name(RootId, String),
@@ -61,49 +68,51 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
             let library = Library::open(database)?;
             let counts = library.sidebar_counts()?;
+            let tags = library.tags()?;
+            let system = |label: &str, icon, count, scope| Navigation {
+                label: label.into(),
+                count,
+                scope,
+                screen: false,
+                random: false,
+                icon: Some(icon),
+                depth: 0,
+                parent: None,
+            };
+            let screen = |label: &str, icon, count| Navigation {
+                screen: true,
+                ..system(label, icon, count, ItemScope::All)
+            };
+            // The order of the Electron sidebar's system rows.
             let mut nav = vec![
+                system("All", "photo", Some(counts.all), ItemScope::All),
+                system("Inbox", "inbox", Some(counts.inbox), ItemScope::Inbox),
+                system(
+                    "Recently Viewed",
+                    "clock",
+                    Some(counts.recently_viewed),
+                    ItemScope::RecentlyViewed,
+                ),
+                system(
+                    "Uncategorized",
+                    "folder-question",
+                    Some(counts.uncategorized),
+                    ItemScope::Uncategorized,
+                ),
+                system(
+                    "Untagged",
+                    "bookmark-question",
+                    Some(counts.untagged),
+                    ItemScope::Untagged,
+                ),
+                screen("Tags", "bookmark", Some(tags.len() as u64)),
                 Navigation {
-                    label: "All".into(),
-                    count: counts.all,
-                    scope: ItemScope::All,
-                    depth: 0,
-                    parent: None,
+                    random: true,
+                    ..system("Random", "arrows-shuffle", None, ItemScope::All)
                 },
-                Navigation {
-                    label: "Inbox".into(),
-                    count: counts.inbox,
-                    scope: ItemScope::Inbox,
-                    depth: 0,
-                    parent: None,
-                },
-                Navigation {
-                    label: "Recently Viewed".into(),
-                    count: counts.recently_viewed,
-                    scope: ItemScope::RecentlyViewed,
-                    depth: 0,
-                    parent: None,
-                },
-                Navigation {
-                    label: "Uncategorized".into(),
-                    count: counts.uncategorized,
-                    scope: ItemScope::Uncategorized,
-                    depth: 0,
-                    parent: None,
-                },
-                Navigation {
-                    label: "Untagged".into(),
-                    count: counts.untagged,
-                    scope: ItemScope::Untagged,
-                    depth: 0,
-                    parent: None,
-                },
-                Navigation {
-                    label: "Trash".into(),
-                    count: counts.trash,
-                    scope: ItemScope::Trash,
-                    depth: 0,
-                    parent: None,
-                },
+                screen("Subscriptions", "download", None),
+                screen("Duplicates", "copy", Some(counts.duplicates)),
+                system("Trash", "trash", Some(counts.trash), ItemScope::Trash),
             ];
             let folders = library
                 .folders()?
@@ -114,10 +123,13 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         f.parent_id.map(|p| p.0),
                         Navigation {
                             label: f.name,
-                            count: f.count,
+                            count: Some(f.count),
                             scope: ItemScope::FolderTree {
                                 folder_id: f.folder_id,
                             },
+                            screen: false,
+                            random: false,
+                            icon: None,
                             depth: 0,
                             parent: None,
                         },
@@ -134,10 +146,13 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         f.parent_id.map(|p| p.0),
                         Navigation {
                             label: f.name,
-                            count: f.count,
+                            count: Some(f.count),
                             scope: ItemScope::SmartFolder {
                                 smart_folder_id: f.smart_folder_id,
                             },
+                            screen: false,
+                            random: false,
+                            icon: None,
                             depth: 0,
                             parent: None,
                         },
@@ -145,7 +160,7 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                 })
                 .collect::<Vec<_>>();
             append_tree(&smart, None, None, &mut nav);
-            replies.send(Reply::Ready(nav, library.tags()?))?;
+            replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
             let seed = now_ms().to_string();
             for request in requests {
@@ -164,7 +179,7 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         )
                         .and_then(|_| library.details(id))
                         .map(|details| Reply::Details(id, details)),
-                    Request::Query(generation, scope, filter, cursor) => {
+                    Request::Query(generation, scope, filter, cursor, shuffle) => {
                         let append = cursor.is_some();
                         // The scope's saved view decides the sort, exactly as it
                         // does for the Electron grid reading the same rows.
@@ -180,9 +195,16 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                                     .map(|overrides| (defaults, overrides))
                             })
                             .and_then(|(defaults, overrides)| {
-                                let prefs = crate::prefs::ViewPrefs::resolve(
+                                let mut prefs = crate::prefs::ViewPrefs::resolve(
                                     &scope, &defaults, &overrides, &seed,
                                 );
+                                if shuffle {
+                                    prefs.sort = picto_library::predicate::ItemSort {
+                                        field: picto_library::predicate::SortField::Random,
+                                        direction: prefs.sort.direction,
+                                        random_seed: Some(seed.clone()),
+                                    };
+                                }
                                 let query = RootQuery {
                                     scope,
                                     view: picto_library::predicate::ViewQuerySpec {
@@ -250,8 +272,11 @@ mod acceptance {
     fn hierarchy_keeps_children_with_parent() {
         let node = |name: &str| Navigation {
             label: name.into(),
-            count: 0,
+            count: Some(0),
             scope: ItemScope::All,
+            screen: false,
+            random: false,
+            icon: None,
             depth: 0,
             parent: None,
         };

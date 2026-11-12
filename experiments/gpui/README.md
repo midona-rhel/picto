@@ -1,6 +1,7 @@
-# Picto GPUI browser MVP (#163)
+# Picto GPUI frontend experiment (#163)
 
-An interactive native media-browser experiment, not an Electron replacement yet.
+A native GPUI frontend for Picto, built to reach the same behavior and look as
+the Electron app. It is not a replacement yet.
 Issue: https://github.com/midona-rhel/picto/issues/163
 
 ## Run safely
@@ -10,162 +11,111 @@ experiments/gpui/run.sh /path/to/Main.library
 ```
 
 The launcher uses SQLite's online backup to create a disposable database under
-`/tmp/picto-gpui-library.*`. It reads existing thumbnails and originals without
-copying or changing blobs. The app refuses databases without the snapshot marker.
-Rating edits and undo/redo affect only that copy. The original library and the
-main checkout are not modified. Keep the snapshot until the app is closed.
+`/tmp/picto-gpui-library.*`. It reads existing thumbnails and originals in place
+without copying or changing blobs. The app refuses databases without the
+snapshot marker. Edits and undo/redo affect only that copy. The original library
+and the main checkout are not modified. Keep the snapshot until the app is closed.
 
 The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
-The experiment uses its own Cargo workspace and lockfile, pinned to GPUI 0.2.2.
-It now uses the locally available committed dev baseline `84d90552`, whose schema
-matches current libraries, rather than the original older scaffold baseline.
+
+## Toolchain and GPUI version
+
+The experiment has its own Cargo workspace and lockfile. It depends on
+`gpui-pre` and `gpui-pre-platform` `=0.3.12`, the 9 November 2026 crates.io
+snapshot of upstream GPUI (`zed-industries/zed`). The official `gpui` crate has
+not been published since 0.2.2 (October 2025). GPUI promises no API stability
+between snapshots, so the version is pinned exactly and upgraded deliberately.
+
+The snapshot needs Rust 1.98, the version `rust-toolchain.toml` pins. Without
+rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
+`.toolchain/` in this directory is ignored by Git for that purpose.
 
 ## Implemented
 
-- Existing `picto_library` query, details, smart-folder, rating and undo owners.
-  Database work runs on one worker thread, never in the rendering callback.
-- Real paginated library results (500 per page, automatic loading near the end),
-  viewport-virtualized waterfall tiles, adjustable tile size, selection and navigation.
-- Bounded thumbnail cache (192 entries, four concurrent background decodes).
-  Full-original decoding also runs off the UI thread, only while preview is open.
-- Bundled Roboto inspector font, centered icon controls, Books library avatar,
-  and a right-click menu for Quick Look and copying names or file paths.
-- SVG originals use GPUI's native SVG image loader, not a browser surface.
-- All, Inbox, Untagged, Uncategorized, Trash, folders and smart folders, including
-  hierarchy, nested indentation, collapse controls and counts.
-- Native editable search with selection, clipboard and IME plumbing from GPUI's
-  official input example. Fewer than three trimmed characters leave filtering off.
-  Query generations prevent an old successful result replacing a newer query.
-- Real metadata inspector: dimensions, MIME, size, media count, tags and notes.
-- Rating editing on the snapshot; Cmd+Z undo and Cmd+Shift+Z redo.
-- Space/Enter/double-click preview, Escape back, previous/next item, and navigation
-  through members of a collection.
-- Thumbnail-first preview with asynchronous decoding. The old presented frame is
-  retained until the new thumbnail arrives. In-flight loads are cancelled/replaced
-  and stale results fenced.
-- Picto's resolved dark-theme colors, SF Pro Text, 13px body text, 27px sidebar
-  rows, selection accent, and the same Tabler outline icon assets.
-
-## Verification performed
-
-On macOS, in the actual bundled app against the disposable snapshot:
-
-- Library grid and inspector display real thumbnails and metadata.
-- Native search accepts input and returns matching library results.
-- Smart-folder clicks change the query and count.
-- Tile-size controls change column density.
-- Click selection and Space preview work; Escape returns to the grid.
-- A multi-image collection advances between its members.
-- Left/right navigation returns to the matching item and metadata.
-- Sidebar disclosure collapses a subtree without changing the query.
-- Rating click changes the persisted snapshot rating; Cmd+Z restores it.
-
-Automated checks:
-
-```sh
-cargo test --offline --manifest-path experiments/gpui/Cargo.toml
-PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
-  cargo test --offline --manifest-path experiments/gpui/Cargo.toml -- --ignored
-```
-
-Six regular tests pass, including indexed visibility against a full scan of 20,000
-mixed-size tiles, stable pagination, tree ordering and the text-search gates.
-The explicitly enabled real-snapshot integration test passes: query, details,
-smart-folder counts, rating mutation, undo, redo, then restoring the original rating.
-Build and formatting checks pass. GPUI's upstream `block 0.1.6` dependency emits
-an existing future-compatibility warning.
+- Existing `picto_library` query, details, smart-folder, rating, rename, notes
+  and undo owners. Database work runs on one worker thread, never in the
+  rendering callback.
+- Grid geometry ported from `layoutMath.ts` (waterfall, grid, justified). Each
+  scope opens with its saved view from the library's `view_pref` rows: sort,
+  zoom, spacing, layout mode and which labels show. On the same library and
+  window size, tiles land where the Electron grid puts them.
+- Tiles drawn to the rules of `drawBase.ts`: media rect with hairline ring,
+  format, duration and collection-count badges, selection stroke outside the
+  rect, optional name and resolution rows.
+- Sidebar with the Electron row order (All, Inbox, Recently Viewed,
+  Uncategorized, Untagged, Tags, Random, Subscriptions, Duplicates, Trash),
+  Folders and Smart Folders sections with counts, hierarchy, collapse controls
+  and a filter. Random shuffles the All scope with one seed per session.
+- Toolbar with Back and Forward over visited destinations, zoom, Picto's own
+  16px glyphs, and native editable search (selection, clipboard, IME). Fewer
+  than three trimmed characters leave filtering off. Query generations prevent
+  an old result replacing a newer query.
+- Real paginated results (500 per page, loaded near the end), viewport-only
+  tiles, bounded thumbnail cache (192 entries, four concurrent decodes).
+- Metadata inspector: dimensions, MIME, size, media count, tags, notes, rating.
+- Space/Enter/double-click preview, Escape back, previous/next item, and
+  navigation through members of a collection. Thumbnail-first preview with
+  asynchronous full decode; stale loads are fenced.
+- SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
+  (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-This is a useful browser/editing slice, not visual/behavioral parity certification.
-In particular:
+- Tags, Subscriptions and Duplicates are sidebar rows without screens. The
+  toolbar's view-options and filter buttons, and the sidebar's settings and
+  panel buttons, are drawn but not wired.
+- No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
+  viewers yet. Word and PowerPoint viewing is out of scope: those files import,
+  keep their embedded thumbnail and open in the default application.
+- Collection members use previous/next controls, not the continuous collection
+  scroll surface. Preview is embedded, not the three production shells.
+- No drag and drop, range or multi-selection, complete context menus,
+  import/export, subscriptions, cloud, localization or site login.
+- No animations, glass surfaces or window vibrancy yet. In-app backdrop blur
+  needs a renderer patch; two open-source implementations exist to port.
+- Sidebar expansion, sidebar width and view changes are not persisted.
+- The grid lays out every loaded item; the Electron grid's windowed model for
+  very large libraries is not ported.
+- Accessibility exposes the native window but not the control tree.
+- No frame-time, decode-latency or memory benchmark has been completed. Do not
+  call the prototype faster, flicker-free or memory-bounded on this evidence.
+- Windows and Linux are not built or tested. The Ruffle frame path reads back
+  from the GPU and uploads again; it is not zero-copy.
 
-- Collection members currently use previous/next controls, not Picto's continuous
-  collection scroll surface. Preview is embedded, not all three production shells.
-- No drag/drop, range/multi-selection, complete context menus, import/export, subscriptions,
-  cloud UI, localization or browser authentication integration yet.
-- Video playback and comprehensive media-format parity remain unimplemented.
-- Hover states work, but complete animation/easing, glass effects, inspector font
-  metrics and all production layout modes still need side-by-side verification.
-- Sidebar expansion and layout preferences are not persisted across launches.
-- Accessibility exposes the native window but not the full GPUI control tree.
-- No frame-time, decode-latency or texture-memory benchmark has been completed.
-  Do not call the prototype faster, flicker-free, or memory-bounded on this evidence.
-- Windows and Linux are not tested.
+## Checks
 
-## Architecture and next decision
+```sh
+cargo test --manifest-path experiments/gpui/Cargo.toml
+PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
+  cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
+```
 
-All media paths must work on macOS, Windows and Linux. No WebKit surface is used.
-Native Ruffle 0.5.0 uses wgpu offscreen rendering, mouse/keyboard forwarding and
-optional CPAL audio. Word uses isolated LibreOffice-to-PDF conversion and Poppler
-page rendering. Both paths were exercised in the actual macOS GPUI window using
-the bundled fixtures. The SWF test also verifies its ActionScript rollover handler;
-the Word test checks two rendered pages and temporary-directory cleanup.
-These are not Windows/Linux packaging results or comprehensive format certification.
-Audio is wired but not audibly verified. Flash external networking is not enabled.
-The GPU readback/upload path is not zero-copy. Word requires `soffice` and `pdftoppm`
-on PATH, or `PICTO_SOFFICE` and `PICTO_PDFTOPPM`; redistributing those runtimes is
-still packaging work. Media Examples in the menu opens SVG, Flash and Word fixtures.
+The regular tests cover the three layout modes against hand-computed geometry,
+banded visibility against a full scan of 20,000 tiles in every mode, view
+preference fallbacks, grid labels, tree ordering and the text-search gates. The
+ignored tests need a real snapshot or a GPU and are run explicitly.
 
-## Visual and performance checks
+`pixel_diff.py` (needs Pillow) produces an unscaled overlay, amplified RGB
+difference, threshold mask and numeric report for two equal-size captures.
+Compare equal content, scale, focus and scroll state; do not stretch screenshots
+to conceal layout errors.
 
-`pixel_diff.py` uses Pillow to produce an unscaled overlay, amplified RGB difference,
-threshold mask and numeric report. It rejects unequal capture dimensions unless
-explicit crops are provided. Compare equal content, scale, focus and scroll state;
-do not stretch screenshots to conceal layout errors.
+## Structure
 
-On November 7, the top-sidebar 600x440 physical-pixel comparison against installed
-Picto changed from 15.51% to 8.11% differing pixels at a 16/255 channel threshold.
-This is a **remaining mismatch**, not acceptance: snapshot counts and avatar crop
-differ, and navigation/actions are incomplete. Captures are local under
-`/tmp/picto-gpui-visual`, not committed library screenshots.
-
-The standalone Cargo workspace now explicitly optimizes debug dependencies rather
-than silently losing the parent workspace's decode optimizations. Visibility uses
-a per-column index. `benches/visibility.rs` compares it with the previous full scan;
-at 20,000 tiles the local lookup measured 538 ns versus 6978 ns. This measures only
-geometry lookup, **not frame time**. Full-shell invalidation during scrolling still
-needs separation, and smoothness/p95/p99 frame-time acceptance remains open.
-
-`backend.rs` is the small adapter to existing Rust owners; it does not implement
-SQL or duplicate ingestion business rules. `surface.rs` owns image presentation,
-`input.rs` native text input, `theme.rs` copied visual tokens and icon assets, and
-`main.rs` the prototype shell. Production integration should reuse the application
-service layer for jobs/events rather than growing a second application backend.
-
-Before a migration decision, compare both renderers on the same images and viewport:
-p50/p95/p99 frame times, input latency, blank transition frames, cold launch, peak
-memory and memory after repeated scrolling. Then prove media coverage, desktop
-integration, authentication, accessibility and three-platform packaging separately.
-
-GPUI's `runtime_shaders` feature avoids requiring a separately downloaded Metal
-compiler for the experiment. Cold-launch shader compilation must be measured.
+`backend.rs` is the small adapter to the existing Rust owners; it does not
+implement SQL or duplicate ingestion rules. `layout.rs` is the grid geometry,
+`prefs.rs` the saved view, `format.rs` the grid labels, `shell.rs` the sidebar
+and toolbar, `inspector.rs` the inspector, `surface.rs` image and Flash
+presentation, `input.rs` native text input, `theme.rs` design tokens and icons,
+and `main.rs` the window and grid. Production integration should reuse the
+application service layer for jobs and events rather than growing a second
+application backend.
 
 ## Attribution
 
 `input.rs` adapts GPUI 0.2.2's official `examples/input.rs`, Apache-2.0; see
-`LICENSE-gpui`. Icons are Tabler Icons, MIT; see `assets/LICENSE-tabler`.
-Official references: https://gpui.rs/ and
-https://github.com/zed-industries/zed/tree/main/crates/gpui/examples .
-
+`LICENSE-gpui`. Sidebar icons are Tabler Icons, MIT; see `assets/LICENSE-tabler`.
+Toolbar glyphs are Picto's own, from `src/shared/ui/icons/toolbar-icons.tsx`.
 `assets/fixtures/interactive.swf` comes from Ruffle's
 `tests/tests/swfs/avm1/button_goto/test.swf` at the pinned Ruffle revision in
-Cargo.toml; see `assets/LICENSE-Ruffle.md`. The SVG and Word fixtures are generated
-test documents. Custom question-mark icons use Picto's existing sidebar SVG paths.
-
-## Recovery checkpoint (November 12)
-
-The uncommitted temporary checkout was lost. Source files were reconstructed from
-recorded source-writing commands and patches, rather than decompiled from binaries.
-Public icon/SWF assets were restored from their original packages; fonts and the
-Word fixture were regenerated using the original recipes. Cargo.lock was regenerated
-from available dependencies, so dependency resolution may differ from November 7.
-The older visual/runtime observations above are historical evidence, not a claim
-that every behavior was retested after recovery. This remains an unfinished experiment.
-
-Recovery validation on November 12 (macOS): locked offline compile check and all
-six regular tests pass. The explicitly enabled Word render/cleanup test passes
-(two-page generated fixture), as does the native Ruffle GPU-frame/ActionScript
-mouse-input test. The real-library mutation test was not rerun; no actual library
-was opened during recovery. Formatting and launcher shell syntax pass. These
-checks do not close the visual, performance or cross-platform acceptance gaps.
+Cargo.toml; see `assets/LICENSE-Ruffle.md`.

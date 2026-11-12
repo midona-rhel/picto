@@ -11,8 +11,6 @@ pub struct MediaSurface {
     full_key: String,
     thumbnail_task: Option<Task<()>>,
     full_task: Option<Task<()>>,
-    pages: Option<crate::document::Pages>,
-    document_task: Option<Task<()>>,
     flash: Option<crate::flash::Flash>,
     flash_task: Option<Task<()>>,
     opened: String,
@@ -39,28 +37,9 @@ impl MediaSurface {
         }
         self.show(key.clone(), thumbnail, None, cx);
         self.opened = key.clone();
-        self.pages = None;
-        self.document_task = None;
         self.error = None;
         self.stop();
-        if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
-            let load = cx
-                .background_executor()
-                .spawn(async move { crate::document::render(&path) });
-            self.document_task = Some(cx.spawn(async move |entity, cx| {
-                let result = load.await;
-                let _ = entity.update(cx, |this, cx| {
-                    if this.key != key {
-                        return;
-                    }
-                    match result {
-                        Ok(pages) => this.pages = Some(pages),
-                        Err(error) => this.error = Some(format!("{error:#}")),
-                    }
-                    cx.notify();
-                });
-            }));
-        } else if mime == "application/x-shockwave-flash" {
+        if mime == "application/x-shockwave-flash" {
             self.flash = Some(crate::flash::Flash::open(path));
             self.flash_task = Some(cx.spawn(async move |entity, cx| {
                 loop {
@@ -78,11 +57,11 @@ impl MediaSurface {
                         if let Some(frame) = frame {
                             match frame {
                                 Ok(mut rgba) => {
-                                    for pixel in rgba.chunks_exact_mut(4) {
+                                    for pixel in rgba.as_chunks_mut::<4>().0 {
                                         pixel.swap(0, 2);
                                     }
                                     if let Some(old) = this.full.take() {
-                                        let _ = cx.drop_image(old, None);
+                                        cx.drop_image(old, None);
                                     }
                                     this.full =
                                         Some(Arc::new(RenderImage::new(smallvec::smallvec![
@@ -117,8 +96,6 @@ impl MediaSurface {
         if self.key != key {
             self.key = key.clone();
             self.full_task = None;
-            self.document_task = None;
-            self.pages = None;
             self.stop();
             self.error = None;
             let load = ImageAssetLoader::load(Resource::Path(thumbnail.into()), cx);
@@ -158,24 +135,6 @@ impl Render for MediaSurface {
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let width = (f32::from(window.viewport_size().width) - 604.).max(1.);
         let height = (f32::from(window.viewport_size().height) - 210.).max(1.);
-        if let Some(pages) = &self.pages {
-            let mut content = div()
-                .id("document-pages")
-                .size_full()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(16.));
-            for path in &pages.paths {
-                content = content.child(
-                    img(path.clone())
-                        .w(px(width))
-                        .h(px(width * 1.414))
-                        .object_fit(ObjectFit::Contain),
-                );
-            }
-            return content.into_any_element();
-        }
         let entity = cx.entity().downgrade();
         let mut surface = div()
             .id("media-surface")
@@ -293,18 +252,18 @@ impl Render for MediaSurface {
                     .child(error.clone()),
             );
         }
-        if let Some(flash) = &self.flash {
-            if let Some(trace) = flash.traces.lock().unwrap().back() {
-                surface = surface.child(
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .px_2()
-                        .text_size(px(11.))
-                        .bg(rgb(0x292a2d))
-                        .child(format!("Ruffle: {trace}")),
-                );
-            }
+        if let Some(flash) = &self.flash
+            && let Some(trace) = flash.traces.lock().unwrap().back()
+        {
+            surface = surface.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .px_2()
+                    .text_size(px(11.))
+                    .bg(rgb(0x292a2d))
+                    .child(format!("Ruffle: {trace}")),
+            );
         }
         surface.into_any_element()
     }

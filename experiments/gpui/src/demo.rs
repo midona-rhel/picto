@@ -10,10 +10,6 @@ pub fn fixtures() -> anyhow::Result<tempfile::TempDir> {
             "interactive.swf",
             include_bytes!("../assets/fixtures/interactive.swf").as_slice(),
         ),
-        (
-            "document.docx",
-            include_bytes!("../assets/fixtures/document.docx").as_slice(),
-        ),
     ] {
         std::fs::write(directory.path().join(name), data)?;
     }

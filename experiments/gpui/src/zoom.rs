@@ -105,7 +105,12 @@ impl Render for Zoom {
                     .text_size(px(18.))
                     .rounded_md()
                     .hover(|s| s.bg(rgb(0x303134)))
-                    .child("−")
+                    .child(
+                        svg()
+                            .path("toolbar-minus")
+                            .size(px(16.))
+                            .text_color(rgba(0xf8f9fbb3)),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value - 50., cx))),
             )
             .child(slider)
@@ -121,7 +126,12 @@ impl Render for Zoom {
                     .text_size(px(18.))
                     .rounded_md()
                     .hover(|s| s.bg(rgb(0x303134)))
-                    .child("+")
+                    .child(
+                        svg()
+                            .path("toolbar-plus")
+                            .size(px(16.))
+                            .text_color(rgba(0xf8f9fbb3)),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value + 50., cx))),
             )
     }

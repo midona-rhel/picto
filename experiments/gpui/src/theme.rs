@@ -14,27 +14,52 @@ pub const TEXT_TERTIARY: u32 = 0xf8f9fb99;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 pub const TILE_RADIUS: f32 = 4.;
 pub struct Assets;
+/// Embeds `assets/<name>.svg` for each listed icon name.
+macro_rules! icons {
+    ($($name:literal),* $(,)?) => {
+        fn icon_bytes(path: &str) -> Option<&'static [u8]> {
+            match path {
+                $($name => Some(include_bytes!(concat!("../assets/", $name, ".svg")).as_slice()),)*
+                _ => None,
+            }
+        }
+    };
+}
+icons!(
+    // Tabler outline icons, as the Electron sidebar uses them.
+    "books",
+    "photo",
+    "clock",
+    "folder-question",
+    "bookmark-question",
+    "inbox",
+    "trash",
+    "folder",
+    "folders",
+    "tag",
+    "search",
+    "layout-grid",
+    "chevron-right",
+    "chevron-left",
+    "chevron-down",
+    "bookmark",
+    "arrows-shuffle",
+    "download",
+    "copy",
+    "settings",
+    "selector",
+    // Picto's own 16px toolbar glyphs, from src/shared/ui/icons/toolbar-icons.tsx.
+    "toolbar-filter",
+    "toolbar-layout",
+    "toolbar-panel",
+    "history-back",
+    "history-forward",
+    "toolbar-plus",
+    "toolbar-minus",
+);
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        let bytes: &'static [u8] = match path {
-            "books" => include_bytes!("../assets/books.svg"),
-            "photo" => include_bytes!("../assets/photo.svg"),
-            "clock" => include_bytes!("../assets/clock.svg"),
-            "folder-question" => include_bytes!("../assets/folder-question.svg"),
-            "bookmark-question" => include_bytes!("../assets/bookmark-question.svg"),
-            "inbox" => include_bytes!("../assets/inbox.svg"),
-            "trash" => include_bytes!("../assets/trash.svg"),
-            "folder" => include_bytes!("../assets/folder.svg"),
-            "folders" => include_bytes!("../assets/folders.svg"),
-            "tag" => include_bytes!("../assets/tag.svg"),
-            "search" => include_bytes!("../assets/search.svg"),
-            "layout-grid" => include_bytes!("../assets/layout-grid.svg"),
-            "chevron-right" => include_bytes!("../assets/chevron-right.svg"),
-            "chevron-left" => include_bytes!("../assets/chevron-left.svg"),
-            "chevron-down" => include_bytes!("../assets/chevron-down.svg"),
-            _ => return Ok(None),
-        };
-        Ok(Some(std::borrow::Cow::Borrowed(bytes)))
+        Ok(icon_bytes(path).map(std::borrow::Cow::Borrowed))
     }
     fn list(&self, _: &str) -> anyhow::Result<Vec<SharedString>> {
         Ok(vec![])
@@ -42,4 +67,24 @@ impl AssetSource for Assets {
 }
 pub fn icon(name: &'static str) -> impl IntoElement {
     svg().path(name).size(px(16.)).text_color(rgb(TEXT))
+}
+/// `--color-text-secondary`: 70% text.
+pub const TEXT_SECONDARY: u32 = 0xf8f9fbb3;
+/// A 24px toolbar button holding one 16px glyph.
+pub fn icon_button(id: &'static str, name: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(24.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .hover(|style| style.bg(rgba(0xf8f9fb14)))
+        .child(
+            svg()
+                .path(name)
+                .size(px(16.))
+                .text_color(rgba(TEXT_SECONDARY)),
+        )
 }

@@ -1,12 +1,12 @@
 mod backend;
 mod demo;
-mod document;
 mod flash;
 mod format;
 mod input;
 mod inspector;
 mod layout;
 mod prefs;
+mod shell;
 mod surface;
 mod theme;
 mod thumbnails;
@@ -34,8 +34,7 @@ actions!(
         Redo,
         Quit,
         DemoSvg,
-        DemoFlash,
-        DemoWord
+        DemoFlash
     ]
 );
 const BG: u32 = theme::BACKGROUND;
@@ -61,6 +60,9 @@ struct Browser {
     collapsed: std::collections::HashSet<usize>,
     items: Vec<RootSummary>,
     scope: usize,
+    /// Visited sidebar destinations, for Back and Forward.
+    history: Vec<usize>,
+    history_index: usize,
     selected: usize,
     details: Option<RootDetails>,
     preview: bool,
@@ -162,6 +164,8 @@ impl Browser {
             collapsed: Default::default(),
             items: vec![],
             scope: 0,
+            history: vec![0],
+            history_index: 0,
             selected: 0,
             details: None,
             preview: false,
@@ -193,6 +197,9 @@ impl Browser {
         let Some(nav) = self.nav.get(self.scope) else {
             return;
         };
+        if nav.screen {
+            return;
+        }
         self.generation += 1;
         self.loading = true;
         self.error = None;
@@ -204,6 +211,7 @@ impl Browser {
                 self.extra_filter.clone().unwrap_or_default(),
             ]),
             if append { self.cursor.clone() } else { None },
+            nav.random,
         ));
         cx.notify();
     }
@@ -606,242 +614,8 @@ impl Render for Browser {
                 .text_color(rgb(theme::TEXT))
                 .into_any_element()
         };
-        let mut sidebar = div()
-            .id("sidebar")
-            .w(px(300.))
-            .flex_none()
-            .h_full()
-            .bg(rgb(PANEL))
-            .border_r_1()
-            .border_color(rgb(0x353638))
-            .flex()
-            .flex_col()
-            .child(div().h(px(48.)).flex_none())
-            .child(
-                div()
-                    .h(px(48.))
-                    .mt(px(4.))
-                    .mb(px(8.))
-                    .pl(px(20.5))
-                    .pr(px(27.))
-                    .flex()
-                    .items_center()
-                    .text_size(px(14.))
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .size(px(39.))
-                            .rounded_full()
-                            .overflow_hidden()
-                            .bg(rgb(0x303236))
-                            .border_1()
-                            .border_color(rgb(0x48494c))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(avatar),
-                    )
-                    .child("Main"),
-            );
-        let mut nav = div()
-            .id("navigation")
-            .flex_1()
-            .overflow_y_scroll()
-            .pr(px(8.));
-        let filter = self.folder_filter.read(cx).value().to_lowercase();
-        for (i, entry) in self.nav.iter().enumerate() {
-            if !filter.is_empty() && !entry.label.to_lowercase().contains(&filter) {
-                continue;
-            }
-            let mut parent = entry.parent;
-            let mut hidden = false;
-            while let Some(index) = parent {
-                if self.collapsed.contains(&index) {
-                    hidden = true;
-                    break;
-                }
-                parent = self.nav[index].parent;
-            }
-            if hidden {
-                continue;
-            }
-            let section = match entry.scope {
-                picto_library::query::ItemScope::FolderTree { .. } => Some("Folders"),
-                picto_library::query::ItemScope::SmartFolder { .. } => Some("Smart Folders"),
-                _ => None,
-            };
-            let previous_section = i.checked_sub(1).and_then(|p| match self.nav[p].scope {
-                picto_library::query::ItemScope::FolderTree { .. } => Some("Folders"),
-                picto_library::query::ItemScope::SmartFolder { .. } => Some("Smart Folders"),
-                _ => None,
-            });
-            if section.is_some() && section != previous_section {
-                nav = nav.child(
-                    div()
-                        .pl(px(20.))
-                        .mt(px(8.))
-                        .mb(px(2.))
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.))
-                        .text_color(rgb(MUTED))
-                        .child(section.unwrap()),
-                );
-            }
-            let has_children = self.nav.iter().any(|n| n.parent == Some(i));
-            let mut disclosure = div()
-                .id(("disclosure", i))
-                .absolute()
-                .left(px(2. + entry.depth as f32 * 20.))
-                .w(px(14.))
-                .h(px(theme::ROW_HEIGHT))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center();
-            if has_children {
-                disclosure = disclosure
-                    .rounded_sm()
-                    .hover(|s| s.bg(rgb(0x45474b)))
-                    .child(theme::icon(if self.collapsed.contains(&i) {
-                        "chevron-right"
-                    } else {
-                        "chevron-down"
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        if !this.collapsed.remove(&i) {
-                            this.collapsed.insert(i);
-                        }
-                        cx.notify();
-                    }));
-            }
-
-            let icon = match entry.scope {
-                picto_library::query::ItemScope::All => "photo",
-                picto_library::query::ItemScope::Inbox => "inbox",
-                picto_library::query::ItemScope::Trash => "trash",
-                picto_library::query::ItemScope::Untagged => "bookmark-question",
-                picto_library::query::ItemScope::Uncategorized => "folder-question",
-                picto_library::query::ItemScope::RecentlyViewed => "clock",
-                picto_library::query::ItemScope::SmartFolder { .. } if entry.parent.is_none() => {
-                    "layout-grid"
-                }
-                _ => "folder",
-            };
-
-            nav = nav.child(
-                div()
-                    .id(i)
-                    .relative()
-                    .group("sidebar-row")
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(theme::ROW_HEIGHT))
-                    .pl(px(16. + entry.depth as f32 * 20.))
-                    .pr(px(2.))
-                    .rounded_md()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.scope = i;
-                        this.preview = false;
-                        this.query(false, cx);
-                        window.focus(&this.focus, cx);
-                    }))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(16. + entry.depth as f32 * 20.))
-                            .right(px(2.))
-                            .top_0()
-                            .bottom(px(1.))
-                            .rounded(px(6.))
-                            .bg(if self.scope == i {
-                                rgba(0xffffff14)
-                            } else {
-                                rgba(0x00000000)
-                            })
-                            .group_hover("sidebar-row", |s| s.bg(rgba(0xffffff0d))),
-                    )
-                    .child(disclosure)
-                    .child(
-                        div()
-                            .w(px(26.))
-                            .h(px(27.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(theme::icon(icon)),
-                    )
-                    .child(
-                        div().flex_1().overflow_hidden().text_ellipsis().child(
-                            entry
-                                .label
-                                .strip_prefix("Folder / ")
-                                .or_else(|| entry.label.strip_prefix("Smart / "))
-                                .unwrap_or(&entry.label)
-                                .to_owned(),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .px(px(5.))
-                            .text_size(px(11.))
-                            .font_family("SF Mono")
-                            .min_w(px(36.))
-                            .text_right()
-                            .text_color(rgb(if self.scope == i { theme::TEXT } else { MUTED }))
-                            .child(format::grouped(entry.count)),
-                    ),
-            );
-        }
-        sidebar = sidebar.child(nav).child(
-            div().h(px(38.)).px(px(10.)).pb(px(10.)).flex_none().child(
-                div()
-                    .h(px(28.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(0x303236))
-                    .overflow_hidden()
-                    .child(self.folder_filter.clone()),
-            ),
-        );
-        let mut toolbar = div()
-            .h(px(48.))
-            .flex_none()
-            .px_4()
-            .flex()
-            .items_center()
-            .gap_3()
-            .border_b_1()
-            .border_color(rgb(0x303236))
-            .child(
-                div().w(px(120.)).overflow_hidden().text_ellipsis().child(
-                    self.nav
-                        .get(self.scope)
-                        .map(|n| n.label.clone())
-                        .unwrap_or_else(|| "Opening library...".into()),
-                ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .justify_center()
-                    .child(self.zoom.clone()),
-            )
-            .child(
-                div()
-                    .w(px(148.))
-                    .h(px(24.))
-                    .rounded(px(5.))
-                    .border_1()
-                    .border_color(rgb(0x303135))
-                    .overflow_hidden()
-                    .child(self.search.clone()),
-            );
+        let sidebar = self.sidebar(avatar, cx);
+        let mut toolbar = self.toolbar(cx);
         if self.extra_filter.is_some() {
             toolbar = toolbar.child(self.button("clear-filter", "Clear filter").on_click(
                 cx.listener(|this, _, _, cx| {
@@ -927,10 +701,12 @@ impl Render for Browser {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(MUTED))
-                    .child(if self.loading {
-                        "Opening library..."
-                    } else {
-                        "No items match this filter"
+                    .child(match self.nav.get(self.scope) {
+                        Some(entry) if entry.screen => {
+                            format!("{} is not part of this prototype yet", entry.label)
+                        }
+                        _ if self.loading => "Opening library...".into(),
+                        _ => "No items match this filter".to_owned(),
                     }),
             );
         } else {
@@ -987,13 +763,6 @@ impl Render for Browser {
             }))
             .on_action(cx.listener(|this, _: &DemoFlash, _, cx| {
                 this.show_demo("interactive.swf", "application/x-shockwave-flash", cx)
-            }))
-            .on_action(cx.listener(|this, _: &DemoWord, _, cx| {
-                this.show_demo(
-                    "document.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    cx,
-                )
             }))
             .on_action(cx.listener(|this, _: &Undo, _, _| {
                 if let Some(item) = this.items.get(this.selected) {
@@ -1128,7 +897,6 @@ fn main() {
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-1", DemoSvg, Some("Browser")),
                 KeyBinding::new("cmd-2", DemoFlash, Some("Browser")),
-                KeyBinding::new("cmd-3", DemoWord, Some("Browser")),
             ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(vec![
@@ -1142,7 +910,6 @@ fn main() {
                     items: vec![
                         MenuItem::action("SVG", DemoSvg),
                         MenuItem::action("Flash (Ruffle)", DemoFlash),
-                        MenuItem::action("Word", DemoWord),
                     ],
                     disabled: false,
                 },
@@ -1156,7 +923,6 @@ fn main() {
                         title: Some("Picto GPUI · Library snapshot".into()),
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(12.), px(12.))),
-                        ..Default::default()
                     }),
                     ..Default::default()
                 },

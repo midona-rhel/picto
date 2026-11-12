@@ -260,7 +260,7 @@ impl Browser {
             if let Some((index, nav)) = self.nav.iter().enumerate().find(|(_, n)| matches!(n.scope, picto_library::query::ItemScope::FolderTree {folder_id} if folder_id == *folder)) {
                 folders = folders.child(div().id(("inspector-folder", index)).h(px(26.)).px(px(8.)).rounded(px(6.))
                     .border_1().border_color(rgb(0x48494c)).text_size(px(12.)).flex().items_center().child(nav.label.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| { this.scope = index; this.preview = false; this.query(false, cx); })));
+                    .on_click(cx.listener(move |this, _, window, cx| this.navigate(index, window, cx))));
             }
         }
         panel = panel.child(self.section("Folders", folders.into_any_element(), cx));
